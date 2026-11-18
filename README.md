@@ -14,6 +14,8 @@ host hooks, in plain ESM.
   calls to the same tool in one assistant message are one simultaneous batch
   and consume one unit of that tool's budget. Budget and spend by batches, not
   individual calls.
+  For a heavy task, also budget `task`: parallel subagent workers take
+  independent slices at once, and one batch of `task` calls costs one unit.
 - Every tool call other than `scope`, `regret`, `defer`, and `pin` must happen
   inside a scope. It consumes one unit from the innermost scope's budget for
   that tool; same-tool calls in one assistant message share that unit. A tool

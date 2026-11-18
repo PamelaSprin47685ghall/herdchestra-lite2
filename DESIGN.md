@@ -16,6 +16,8 @@ about n tool calls, a moderate scope covers about sqrt(n) of them. Size
 Several calls to the same tool in one assistant message are one batch and
 consume one unit of that tool's budget; budget and spend by batches, not
 individual calls.
+For a heavy task, also budget `task`: parallel subagent workers take
+independent slices at once, and one batch of `task` calls costs one unit.
 
 Scopes nest. Only the innermost scope's budget is consumed.
 

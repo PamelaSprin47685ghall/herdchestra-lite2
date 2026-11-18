@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { activate } from "../src/main.mjs";
-import { installVibeTools } from "../src/host/index.mjs";
+import { installVibeTools, rememberSession } from "../src/host/index.mjs";
 import { finishedReport } from "../src/transcript/index.mjs";
 
 function makeManager() {
@@ -889,28 +889,36 @@ describe("vibe mode", () => {
 describe("same-message scope and command co-dispatch", () => {
 	async function runHostPrepareOrder(host, ctx, message) {
 		const manager = ctx.sessionManager;
+		const agent = {
+			beforeToolCall({ toolCall, args }) {
+				return emit(host.handlers, "tool_call", {
+					type: "tool_call", toolCallId: toolCall.id,
+					toolName: toolCall.name, input: args,
+				}, ctx);
+			},
+		};
+		rememberSession({ sessionManager: manager, agent });
+		await outbound(host, ctx);
 		const decisions = [];
 		for (const block of message.content) {
 			if (block.type !== "toolCall") continue;
-			const decision = await emit(
-				host.handlers,
-				"tool_call",
-				{ type: "tool_call", toolCallId: block.id, toolName: block.name, input: block.arguments },
-				ctx,
-			);
-			decisions.push({ block, decision });
+			const tool = host.tools.get(block.name) ?? {
+				name: block.name,
+				execute: () => ({ content: [{ type: "text", text: `${block.name} ok` }] }),
+			};
+			const decision = await agent.beforeToolCall({
+				assistantMessage: message, toolCall: block, tool, args: block.arguments,
+			});
+			decisions.push({ block, decision, tool });
 		}
 		const results = [];
-		for (const { block, decision } of decisions) {
+		for (const { block, decision, tool } of decisions) {
 			if (decision?.block) {
 				const result = toolResult(block.id, block.name, decision.reason, true);
 				results.push({ result, blocked: true });
 				continue;
 			}
-			const tool = host.tools.get(block.name);
-			const output = tool
-				? await tool.execute(block.id, block.arguments, undefined, undefined, ctx)
-				: { content: [{ type: "text", text: `${block.name} ok` }] };
+			const output = await tool.execute(block.id, block.arguments, undefined, undefined, ctx);
 			const result = toolResult(block.id, block.name, output.content[0].text, Boolean(output.isError));
 			results.push({ result, blocked: false, output });
 		}

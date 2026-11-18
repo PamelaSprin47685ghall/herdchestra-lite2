@@ -17,6 +17,7 @@ import {
 	installVibeTools,
 	rememberSession,
 	rememberTui,
+	sessionFor,
 	tuiFor,
 } from "../src/host/index.mjs";
 import { stateFor } from "../src/station/index.mjs";
@@ -228,7 +229,15 @@ async function start(options = {}) {
 		sessionManager: manager,
 		isGeneratingHandoff: false,
 		calls: [],
-		agent: { state: { messages: [] } },
+		agent: {
+			state: { messages: [] },
+			beforeToolCall({ toolCall, args }) {
+				return emit(host.handlers, "tool_call", {
+					type: "tool_call", toolCallId: toolCall.id,
+					toolName: toolCall.name, input: args,
+				}, ctx);
+			},
+		},
 		settings: {
 			values: new Map([["compaction.keepRecentTokens", 20000]]),
 			sets: [],
@@ -267,7 +276,7 @@ async function start(options = {}) {
 	return { host, ctx, manager, native, session, aborts };
 }
 
-async function runAssistant(host, ctx, message) {
+async function runAssistant(host, ctx, message, { prepareAll = false } = {}) {
 	await emit(
 		host.handlers,
 		"assistant_message",
@@ -276,20 +285,26 @@ async function runAssistant(host, ctx, message) {
 	);
 	ctx.sessionManager.appendMessage(message);
 	ctx.agentMessages.push(message);
+	const calls = message.content.filter((block) => block.type === "toolCall");
+	const runtime = sessionFor(ctx)?.agent;
+	const tools = new Map(calls.map((block) => [block.name, host.tools.get(block.name) ?? {
+		name: block.name,
+		execute: () => ({ content: [{ type: "text", text: `${block.name} ok` }] }),
+	}]));
+	const prepare = (block) => runtime?.beforeToolCall?.({
+		assistantMessage: message, toolCall: block, args: block.arguments,
+		tool: tools.get(block.name),
+	}) ?? emit(host.handlers, "tool_call", {
+		type: "tool_call", toolCallId: block.id,
+		toolName: block.name, input: block.arguments,
+	}, ctx);
+	const decisions = new Map();
+	if (prepareAll) {
+		for (const block of calls) decisions.set(block.id, await prepare(block));
+	}
 	const results = [];
-	for (const block of message.content) {
-		if (block.type !== "toolCall") continue;
-		const decision = await emit(
-			host.handlers,
-			"tool_call",
-			{
-				type: "tool_call",
-				toolCallId: block.id,
-				toolName: block.name,
-				input: block.arguments,
-			},
-			ctx,
-		);
+	for (const block of calls) {
+		const decision = prepareAll ? decisions.get(block.id) : await prepare(block);
 		if (decision?.block) {
 			const result = toolResult(block.id, block.name, decision.reason, true);
 			ctx.sessionManager.appendMessage(result);
@@ -297,10 +312,14 @@ async function runAssistant(host, ctx, message) {
 			results.push({ result, blocked: true });
 			continue;
 		}
-		const tool = host.tools.get(block.name);
-		const output = tool
-			? await tool.execute(block.id, block.arguments, undefined, undefined, ctx)
-			: { content: [{ type: "text", text: `${block.name} ok` }] };
+		let output;
+		try {
+			output = await tools.get(block.name).execute(
+				block.id, block.arguments, undefined, undefined, ctx,
+			);
+		} catch (error) {
+			output = { content: [{ type: "text", text: error.message }], isError: true };
+		}
 		const text = (output.content ?? [])
 			.map((part) => part.text ?? "")
 			.join("");
@@ -559,6 +578,52 @@ describe("relay integration", () => {
 		expect(outsideRead[0].blocked).toBe(true);
 		expect(outsideRead[0].result.content[0].text).toContain("Not in a scope");
 		expect(outsideRead[0].result.content[0].text).toContain("only todo");
+	});
+
+	test("scope barriers preserve todo order when the host prepares the entire batch first", async () => {
+		const { host, ctx } = await start();
+		const open = call("b1", "scope", {
+			begin: { intent: "work", budget: { read: 1 }, elder_report: null },
+		});
+		const [before, outsideRead, opened, insideRead, inside] = await runAssistant(host, ctx, assistant([
+			call("t1", "todo", {
+				op: "init",
+				list: [{ phase: "P", items: ["finish the request"] }],
+			}),
+			call("r1", "read", { path: "outside" }),
+			open,
+			call("r2", "read", { path: "inside" }),
+			call("t2", "todo", { op: "view" }),
+		]), { prepareAll: true });
+		expect(before.output.details.relay.firstEvaluation).toBe("nonempty");
+		expect(outsideRead.result.content[0].text).toContain("Not in a scope");
+		expect(opened.result.content[0].text).toContain("You are now inside this scope.");
+		expect(insideRead.result.content[0].text).toBe("read ok");
+		expect(inside.result.content[0].text).toContain("TODO_OUTSIDE_SCOPE_ONLY");
+
+		const [closed, after, afterRead] = await runAssistant(host, ctx, assistant([
+			call("e1", "scope", { end: true }),
+			call("t3", "todo", { op: "view" }),
+			call("r3", "read", { path: "closed" }),
+		]), { prepareAll: true });
+		expect(closed.result.content[0].text).toContain("You are outside all scopes.");
+		expect(after.output.details.relay.lastLedger.open).toBe(1);
+		expect(afterRead.result.content[0].text).toContain("Not in a scope");
+	});
+
+	test("a handoff requested by todo takes precedence over the next scope opening", async () => {
+		const { host, ctx } = await start();
+		const [todo, scope, read] = await runAssistant(host, ctx, assistant([
+			call("t1", "todo", { op: "init", list: [] }),
+			call("b1", "scope", {
+				begin: { intent: "later", budget: { read: 1 }, elder_report: null },
+			}),
+			call("r1", "read", { path: "must-not-run" }),
+		]), { prepareAll: true });
+		expect(todo.output.details.relay.handoffPending).toBe(true);
+		expect(scope.result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
+		expect(read.result.isError).toBe(true);
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
 	});
 
 	test("the override keeps the native phases and appends relay details", async () => {
@@ -1506,6 +1571,69 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
 		expect(host.messages.length).toBe(1);
 		expect(host.messages[0].text).toContain("You are the relay successor (generation 1)");
+	});
+
+	test("beforeModelCall gate blocks outbound LLM requests until background handoff completes, then injects compacted context and successor prompt", async () => {
+		let resolveHandoff;
+		const handoffGate = new Promise((resolve) => {
+			resolveHandoff = resolve;
+		});
+		const beforeModelCallHooks = [];
+		const { host, ctx, manager, session } = await start({
+			mode: "rpc",
+			handoff: async () => {
+				await handoffGate;
+				manager.appendCompaction("handoff", { focus: "slow" });
+				session.agent.state.messages = [
+					{ role: "user", content: [{ type: "text", text: "compacted summary" }] },
+				];
+				return { ok: true };
+			},
+		});
+		session.agent = {
+			state: { messages: [] },
+			addBeforeModelCallHook: (hook) => {
+				beforeModelCallHooks.push(hook);
+				return () => {};
+			},
+		};
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("t1", "todo", { op: "init", list: [] })]),
+		);
+		// Trigger fire-and-forget handoff via session_stop (returns immediately).
+		const stopResult = await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx);
+		expect(stopResult).toBeUndefined();
+		expect(beforeModelCallHooks.length).toBe(1);
+
+		// Simulate an outbound LLM request starting while handoff is still running.
+		const outboundContext = {
+			messages: [{ role: "user", content: [{ type: "text", text: "stale history" }] }],
+		};
+		let modelCallReleased = false;
+		const gatePromise = Promise.all(
+			beforeModelCallHooks.map((hook) => hook(undefined, outboundContext)),
+		).then(() => {
+			modelCallReleased = true;
+		});
+
+		await sleep(10);
+		expect(modelCallReleased).toBe(false);
+
+		// Complete handoff: the blocked LLM call should now release with updated context.
+		resolveHandoff();
+		await gatePromise;
+		await sleep(10);
+		expect(modelCallReleased).toBe(true);
+		expect(stateFor(ctx).state.relay.generation).toBe(1);
+		expect(outboundContext.messages[0].content[0].text).toBe("compacted summary");
+		expect(outboundContext.messages.at(-1).content[0].text).toContain(
+			"You are the relay successor (generation 1)",
+		);
+		// Consumed directly by the gated model call, so no duplicate user message was sent.
+		expect(host.messages.length).toBe(0);
 	});
 
 	test("Headless TUI Adapter supports /vibe, /vibe <prompt>, /new, /fresh, and arbitrary slash commands uniformly", async () => {

@@ -1,10 +1,22 @@
 // Activation hooks: bind each host event to its station gatekeeper.
 
+import { sessionFor } from "../host/capture.mjs";
+import { installScopeDispatch } from "../host/scope-dispatch.mjs";
+
 export function wireHooks(pi, registry) {
+	const bindDispatch = (ctx) => {
+		const station = registry.stationFor(ctx);
+		installScopeDispatch(
+			sessionFor(ctx),
+			(message, id, name) => station.prepareScopeDispatch(message, id, name),
+			(id, name, toolCtx) => station.admitScopeDispatch(id, name, toolCtx),
+		);
+		return station;
+	};
 	let assistantMessageRegistered = false;
 	try {
 		pi.on("assistant_message", (event, ctx) =>
-			registry.stationFor(ctx).onAssistantMessage(event?.message, ctx),
+			bindDispatch(ctx).onAssistantMessage(event?.message, ctx),
 		);
 		assistantMessageRegistered = true;
 	} catch {
@@ -34,7 +46,7 @@ export function wireHooks(pi, registry) {
 		registry.stationFor(ctx).onToolCall(event, ctx),
 	);
 	pi.on("context", (event, ctx) =>
-		registry.stationFor(ctx).onContext(event?.messages, ctx),
+		bindDispatch(ctx).onContext(event?.messages, ctx),
 	);
 	pi.on("before_agent_start", (event, ctx) =>
 		registry.stationFor(ctx).onBeforeAgentStart(event, ctx),

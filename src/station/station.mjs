@@ -62,7 +62,6 @@ import {
 	handleDeferCall,
 	handlePinCall,
 	handleRegretCall,
-	handleScopeCall,
 } from "./controls.mjs";
 import {
 	directDefer,
@@ -100,7 +99,7 @@ import {
 	onSessionSwitch,
 	onToolCall,
 } from "./gates.mjs";
-import { controlsIn, parseArgs, processedKey, sameTail } from "./messages.mjs";
+import { CONTROL_TOOLS, controlsIn, processedKey, sameTail } from "./messages.mjs";
 import { restoreState, SESSION_STATE_TYPE } from "./restore.mjs";
 import { insideScopeNudge, tailText } from "./texts.mjs";
 
@@ -116,6 +115,10 @@ export class SessionStation {
 		this.processedCalls = new Set();
 		this.processedMessages = new Set();
 		this.callGroups = new Map();
+		this.preparingMessage = null;
+		this.dispatchMessage = null;
+		this.dispatchPositions = new Map();
+		this.dispatchHasScope = false;
 		this.nudged = new WeakSet();
 		this.needsRebase = false;
 		this.lastError = null;
@@ -125,6 +128,9 @@ export class SessionStation {
 		this.relayPromptSentFor = null;
 		this.handoffExecuting = false;
 		this.handoffScheduled = false;
+		this.handoffPromise = null;
+		this.handoffWaiters = 0;
+		this.gatedAgentHooks = new WeakSet();
 		this.handoffSwitched = false;
 		this.handoffSession = null;
 		this.handoffFocus = null;
@@ -376,6 +382,45 @@ export class SessionStation {
 		return { messages, index, message: messages[index] };
 	}
 
+	messageForToolCall(toolCallId) {
+		if (this.dispatchPositions.has(toolCallId)) {
+			return this.dispatchMessage;
+		}
+		if (toolCalls(this.preparingMessage).some((call) => call.id === toolCallId)) {
+			return this.preparingMessage;
+		}
+		return this.assistantForToolCall(toolCallId)?.message;
+	}
+
+	prepareScopeDispatch(message, id, name) {
+		if (this.dispatchMessage !== message) {
+			this.dispatchMessage = message;
+			this.dispatchPositions.clear();
+			let afterScope = false;
+			for (const call of toolCalls(message)) {
+				this.dispatchPositions.set(call.id, { name: call.name, afterScope });
+				if (call.name === "scope") afterScope = true;
+			}
+			this.dispatchHasScope = afterScope;
+			this.rememberCallGroups(message);
+		}
+		const position = this.dispatchPositions.get(id);
+		if (position) position.name = name;
+		return position?.afterScope && !CONTROL_TOOLS.has(name) && name !== "todo";
+	}
+
+	deferScopePreflight(id, name) {
+		const position = this.dispatchPositions.get(id);
+		return position?.name === name && (
+			position.afterScope || (name === "todo" && this.dispatchHasScope)
+		);
+	}
+
+	admitScopeDispatch(id, name, ctx) {
+		if (!this.deferScopePreflight(id, name)) return undefined;
+		return onToolCall(this, { toolCallId: id, toolName: name }, ctx, true);
+	}
+
 	findBeginEntry(beginToolCallId) {
 		return findBeginEntry(this.manager, beginToolCallId);
 	}
@@ -525,26 +570,19 @@ export class SessionStation {
 		const currentPersisted = firstIndex >= 0;
 		const base = currentPersisted ? existing : [...existing, message];
 		const currentIndex = currentPersisted ? firstIndex : base.length - 1;
-		const currentMessage = base[currentIndex] ?? message;
-
+		const calls = toolCalls(message);
+		const barrier = calls.findIndex((call) => call.name === "scope");
+		const earlyControls = barrier < 0 ? controls :
+			calls.slice(0, barrier).filter((call) => CONTROL_TOOLS.has(call.name));
 		let changed = false;
-		for (const call of controls) {
+		for (const call of earlyControls) {
 			if (call.name !== "regret") continue;
 			if (this.processedCalls.has(call.id)) continue;
 			this.setHandled(call.id, handleRegretCall(this, call, base, currentIndex));
 			changed = true;
 		}
 
-		const beginIds = new Set(
-			controls
-				.filter((call) => call.name === "scope" && parseArgs(call).begin != null)
-				.map((call) => call.id),
-		);
-		const hasFunctionalTools = toolCalls(message).some(
-			(call) => !CONTROL_TOOLS.has(call.name),
-		);
-
-		for (const call of controls) {
+		for (const call of earlyControls) {
 			if (call.name === "regret") continue;
 			if (this.processedCalls.has(call.id)) continue;
 			if (call.name === "pin") {
@@ -558,25 +596,9 @@ export class SessionStation {
 				changed = true;
 				continue;
 			}
-			if (hasFunctionalTools && parseArgs(call).end === true) {
-				// Defer closing scope until executeScope so functional tools in the
-				// same message still pass their `tool_call` budget check first.
-				continue;
-			}
-			this.setHandled(
-				call.id,
-				handleScopeCall(this, call, {
-					base,
-					currentMessage,
-					currentPersisted,
-					sameMessageBeginIds: beginIds,
-				}),
-			);
-			this.processedCalls.add(call.id);
-			changed = true;
 		}
 
-		for (const call of controls) {
+		for (const call of earlyControls) {
 			if (call.name === "regret") this.processedCalls.add(call.id);
 		}
 		if (changed) this.persist();
@@ -731,6 +753,21 @@ export class SessionStation {
 
 	markHandoffPending(ctx, options = {}) {
 		return markHandoffPending(this, ctx, options);
+	}
+
+	ensureModelCallGate(ctx, gateTicket, resolvedSession = null) {
+		if (typeof gateTicket !== "function") return false;
+		const session = resolvedSession ?? ctx?.session ?? this.handoffSession ?? null;
+		const agent = session?.agent ?? null;
+		if (!agent || typeof agent.addBeforeModelCallHook !== "function") {
+			return false;
+		}
+		if (this.gatedAgentHooks.has(agent)) return true;
+		this.gatedAgentHooks.add(agent);
+		agent.addBeforeModelCallHook((signal, context) =>
+			gateTicket(this, session, signal, context),
+		);
+		return true;
 	}
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------

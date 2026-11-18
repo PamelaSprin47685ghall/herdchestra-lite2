@@ -1,5 +1,4 @@
-// Station execute cores: the synchronous results a control tool returns.
-// These run after the assistant-message hook has already cached a result.
+// Station execute cores. Scope changes happen only at the execution barrier.
 
 import { findToolCallIndex } from "../transcript/index.mjs";
 import { errorResult } from "../tools/results.mjs";
@@ -54,8 +53,9 @@ function directScope(station, toolCallId, params) {
 		const cached = station.handled.get(toolCallId);
 		if (cached) return cached;
 	}
-	const base = found?.messages ?? station.contextMessages();
-	const currentMessage = found?.message ?? { role: "assistant", content: [], timestamp: Date.now() };
+	const currentMessage = found?.message ?? station.messageForToolCall(toolCallId)
+		?? { role: "assistant", content: [], timestamp: Date.now() };
+	const base = found?.messages ?? [...station.contextMessages(), currentMessage];
 	const controls = currentMessage.role === "assistant" ? controlsIn(currentMessage) : [];
 	const beginIds = new Set(
 		controls

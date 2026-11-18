@@ -30,6 +30,7 @@ export function wireTools(pi, registry) {
 		description: SCOPE_DESCRIPTION,
 		parameters: scopeParameters,
 		executionMode: "sequential",
+		concurrency: "exclusive",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 			scopeTicket(registry.stationFor(ctx), toolCallId, params),
 	});
@@ -74,7 +75,7 @@ export function wireTools(pi, registry) {
 		lenientArgValidation: true,
 		loadMode: "essential",
 		approval: "read",
-		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
+		execute: (_toolCallId, params, _signal, _onUpdate, ctx) =>
 			todoTicket(registry.stationFor(ctx), params, ctx),
 	});
 }

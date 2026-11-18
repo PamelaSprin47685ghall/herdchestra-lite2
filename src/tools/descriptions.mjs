@@ -17,6 +17,8 @@ Call scope({ end: true }) only when the current task is complete or permanently 
 
 When a scope closes, its elder at the same level remains the hot workbench until a new sibling archives it with elder_report. Once archived, older elders strictly behind the hot workbench become foldable; a batch fold collapses them in one branch operation and keeps the hot workbench and any pinned receipts intact. Collapse is local to one sibling chain, not global close order. A parent closing seals its youngest unarchived child and subsumes its still-unfolded descendants.
 
+Scope is an execution barrier in a batch: calls listed before it finish first, and calls listed after it wait for it. Put todo before a scope opening or after the final scope closes.
+
 Provide begin, end: true, or both. With both, close the current scope first, archive it with begin.elder_report, then open the new scope in the same call. end: true outside a scope is rejected, including when begin is also supplied. Do not open a fresh scope and close it in the same assistant message; begin a scope in one message, do the work in later messages, then end it.`;
 
 export const BEGIN_INTENT_DESCRIPTION =

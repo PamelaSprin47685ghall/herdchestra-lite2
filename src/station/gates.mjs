@@ -12,7 +12,6 @@ import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../host/policy.mjs";
 import { injectSystemPrompt, languageSkill } from "../host/prompts.mjs";
 import {
 	firstEvaluationNudge,
-	invalidatePromotion,
 	isTodoView,
 	openLedgerNudge,
 	relayStatusText,
@@ -30,6 +29,7 @@ function onAssistantMessage(station, message, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
 		station.onUsageMessage(message, ctx);
+		station.preparingMessage = message;
 		station.rememberCallGroups(message);
 		station.processAssistantMessage(message, { persisted: false });
 		station.maybeNudge(message, ctx);
@@ -58,12 +58,11 @@ function onMessageEnd(station, event, ctx) {
 	return undefined;
 }
 
-function onToolCall(station, event, ctx) {
+function onToolCall(station, event, ctx, atDispatch = false) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
-		// Controls are processed before tool dispatch so scope executes can
-		// read their cached result. A handoff-pending begin must be stopped
-		// before that processing, or the scope would open despite the block.
+		// Reject a known pending handoff before asking for tool approval.
+		// Scope also checks again at execution, after earlier calls finish.
 		if (event.toolName === "scope" && station.state.relay?.handoffPending) {
 			const args = parseArgs({
 				arguments: event.input ?? event.arguments ?? {},
@@ -75,6 +74,9 @@ function onToolCall(station, event, ctx) {
 						"RELAY_HANDOFF_PENDING: a relay handoff is pending. Do not open a new scope; wait for the successor.",
 				};
 			}
+		}
+		if (!atDispatch && station.deferScopePreflight(event.toolCallId, event.toolName)) {
+			return undefined;
 		}
 		station.processControlsForTool(event.toolCallId);
 		if (event.toolName === "todo") {
@@ -102,29 +104,7 @@ function onToolCall(station, event, ctx) {
 			const args = parseArgs({
 				arguments: event.input ?? event.arguments ?? {},
 			});
-			if (event.toolName === "scope") {
-				const hasBegin = args.begin !== undefined && args.begin !== null;
-				const hasEnd = args.end === true;
-				if (hasBegin) {
-					if (station.state.relay?.handoffPending) {
-						return {
-							block: true,
-							reason:
-								"RELAY_HANDOFF_PENDING: a relay handoff is pending. Do not open a new scope; wait for the successor.",
-						};
-					}
-					if (station.state.relay?.canStop) {
-						station.state.relay = invalidatePromotion(station.state.relay);
-						station.persist();
-					}
-					// In hosts where `tool_call` runs before `assistant_message` /
-					// persistence, opening a begin-only scope here ensures
-					// subsequent tools in the same message see the new scope.
-					if (!hasEnd && !station.handled.has(event.toolCallId)) {
-						station.directScope(event.toolCallId, args);
-					}
-				}
-			} else if (!station.handled.has(event.toolCallId)) {
+			if (!station.handled.has(event.toolCallId)) {
 				if (event.toolName === "regret") {
 					station.directRegret(event.toolCallId, args);
 				} else if (event.toolName === "defer") {
@@ -147,9 +127,8 @@ function onToolCall(station, event, ctx) {
 		const groupKey =
 			station.callGroups.get(event.toolCallId) ??
 			(found ? beatKey(found.message) : undefined);
-		const beatTools = found
-			? toolCalls(found.message).map((call) => call.name)
-			: [];
+		const beatTools = toolCalls(found?.message ?? station.messageForToolCall(event.toolCallId))
+			.map((call) => call.name);
 		const charged = chargeTool(station.state, {
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,

@@ -2,6 +2,7 @@
 
 export { countHandoffCompactions } from "./session.mjs";
 export {
+	modelCallGateTicket,
 	runHandoffInContext,
 	scheduleBackgroundHandoff,
 	sessionStopTicket,

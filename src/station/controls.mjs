@@ -14,6 +14,7 @@ import {
   scopeOrder,
 } from "../scope/index.mjs";
 import { findBegin } from "../transcript/index.mjs";
+import { invalidatePromotion } from "../relay/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
 import { beginText, endText, regretText } from "./texts.mjs";
@@ -96,9 +97,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       { field: "elder_report" },
     );
   }
-  // The assistant_message hook processes controls before tool dispatch. A
-  // handoff-pending begin must be rejected here, otherwise the scope would
-  // open even though the tool result is blocked.
+  // A preceding todo can request handoff after batch preflight.
   if (hasBegin && state.relay?.handoffPending) {
     return errorResult(
       "RELAY_HANDOFF_PENDING",
@@ -164,6 +163,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       budget: args.begin?.budget,
     });
     if (!out.ok) return errorResult(out.code, out.reason);
+    state.relay = invalidatePromotion(state.relay);
     out.scope.preBeginInputTokens =
       Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
     return textResult(beginText(out.scope));
@@ -300,6 +300,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     });
     text += `\n\n${beginText(opened.scope)}`;
     if (opened.ok) {
+      state.relay = invalidatePromotion(state.relay);
       opened.scope.preBeginInputTokens =
         Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
     }

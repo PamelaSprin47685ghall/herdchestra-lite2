@@ -8,7 +8,7 @@
  */
 
 import { errorResult, textResult } from "./results.mjs";
-import { scheduleBackgroundHandoff } from "../handoff/index.mjs";
+import { modelCallGateTicket, scheduleBackgroundHandoff } from "../handoff/index.mjs";
 import { managerOf, safeSession } from "../handoff/session.mjs";
 
 /** Fire-and-forget steer delivery. The scope result already reports the send. */
@@ -78,6 +78,7 @@ export async function pinTicket(station, toolCallId, params) {
  */
 export function contextHandoffTicket(station, ctx, original) {
 	const liveSession = safeSession(ctx) ?? station.handoffSession ?? null;
+	station.ensureModelCallGate(ctx, modelCallGateTicket, liveSession);
 	const liveManager = managerOf(liveSession, ctx);
 	let canSchedule = true;
 	if (liveManager && typeof liveManager.getBranch === "function") {

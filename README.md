@@ -54,6 +54,28 @@ is not a tool call: close every scope first, then write the user-facing final
 report as a normal assistant message and end the turn. `return_markdown` is a
 self-delivery report, not the user-facing answer.
 
+## Status widget
+
+The native working line is never touched: the extension does not call
+`ui.setWorkingMessage`. Usage, the session prefix, and the host label share one
+line in a widget above the editor:
+
+```text
+user@host  ---  Δ: 12.3k × 45.6% → 0.8k [¥𝟬.𝟭𝟮𝟯]; Σ: 120.0k × 50.0% → 8.0k [¥𝟭.𝟮𝟯𝟰];  ---  Herd 2A
+```
+
+The host label and each bracketed `[¥…]` amount use the theme's `accent` role;
+everything else, including the `---` separators, uses `dim`. The host label
+comes first.
+
+The widget is written with
+`ui.setWidget("herd", [line], { placement: "aboveEditor" })`; no `setStatus`
+entry is used. Every update is driven by a real host event (`session_start`,
+`message_start`, `message_end`, `message_update`, and the tool execution
+hooks); there is no polling timer, and an identical line is never written
+twice. Subagents never touch the main UI. Missing `hasUI` or `setWidget`
+degrades silently.
+
 Outside every scope, every request ends with:
 
 ```text
@@ -106,6 +128,8 @@ omp --no-extensions -e ./src/main.mjs
 | `src/transcript.mjs` | Pure beat/regret/collapse/vibe helpers over omp message shapes. |
 | `src/descriptions.mjs` | Tool descriptions and JSON schemas. |
 | `src/prompts.mjs` | Retained repo-aware prompt, language skill, vibe rewrite, prompt injection. |
+| `src/usage.mjs` | Pure usage snapshot, aggregation, and formatting. |
+| `src/status.mjs` | Host hook status line entries (usage, session, host); the native working line is untouched. |
 | `src/runner-capture.mjs` | Optional capture of the live AgentSession for agent-state rebase. |
 | `DESIGN.md` | The implementation contract. |
 

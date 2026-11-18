@@ -24,6 +24,7 @@ import {
 	installHooks,
 	installSystemPrompt,
 } from "./runtime.mjs";
+import { installStatus } from "./status.mjs";
 
 async function installCapture() {
 	try {
@@ -76,6 +77,7 @@ function registerTools(pi) {
 export async function activate(pi) {
 	await installCapture();
 	installHooks(pi);
+	installStatus(pi);
 	installSystemPrompt(pi);
 	registerTools(pi);
 }

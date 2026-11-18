@@ -249,6 +249,41 @@ Export exactly:
   scope; no budget charge; always returns `OK`. Collapse preserves its
   assistant message and tool result after the collapsed scope's end beat.
 
+## Status display (`src/usage.mjs`, `src/status.mjs`)
+
+Ported from Lite's `show-usage!`, `show-session-prefix!`, and `show-host!`.
+
+- The native working line is never modified: never call `ui.setWorkingMessage`.
+  Never call `setHookWidget`.
+- One widget line above the editor: `<user@short-host>  ---  <usage>  ---
+  <session prefix>`, written with
+  `ui.setWidget("herd", [line], { placement: "aboveEditor" })`. Empty parts are
+  omitted. The host label and each bracketed `[¥…]` amount, brackets included,
+  use `ui.theme.fg("accent", text)`; everything else, including the `---`
+  separators, uses `ui.theme.fg("dim", text)`.
+- Text: `Δ: <input> × <cache-read%> → <output> [¥<cost>]; Σ: <same over all
+  sessions>;`, with `k` and one-decimal percentages, cost to three decimals in
+  mathematical bold digits.
+- Snapshot aliases: `input|input_tokens|inputTokens|prompt_tokens|promptTokens`,
+  `cacheRead|cache_read|cache_read_input_tokens|cacheReadInputTokens`,
+  `cacheWrite|cache_write|cache_creation_input_tokens|cacheCreationInputTokens`,
+  `output|output_tokens|outputTokens|completion_tokens|completionTokens`;
+  cost from a number, `cost.total`, or `total_cost|totalCost|cost_total`.
+- Totals accumulate per session. `session_start` also replays assistant and
+  `model_usage` entries from `getBranchView()` / `getBranch()`.
+- The line joins the non-empty parts: usage text, the session prefix
+  (`name NN` from `^(\S+) ([A-Z0-9]{1,6}): .*$`, else the raw name), and
+  `"user@short-host"` from `node:os`.
+- Every write is event-driven: `session_start`, `message_start`, `message_end`,
+  `message_update`, `before_agent_start`, `tool_execution_start`,
+  `tool_execution_update`, `tool_execution_end`. No timer, no polling, no
+  interval; identical text is not re-sent.
+- Subagents (`agent.kind` `sub`/`subagent`, or `agent.depth > 0`) never write
+  the main widget. The latest non-zero subagent snapshot becomes the active
+  `Δ` on the main line.
+- Absent `ctx.hasUI` or `ui.setWidget` is a silent no-op. No exception crosses
+  a hook.
+
 ## Non-goals
 
 No cljs, no sandbox, no S1–S5, no board, no worktrees, no UFSS, no native-tool

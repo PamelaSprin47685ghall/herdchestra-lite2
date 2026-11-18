@@ -4,21 +4,23 @@
 // place. It does NOT create a new session, does NOT emit session_switch, and a
 // manual handoff does not emit auto_compaction_end.
 //
-// The empty-ledger todo only marks the relay pending. The next `context` hook
-// is the interrupt point: it runs the real handoff and returns the post-handoff
-// messages. Replacing the request messages is the interrupt; do not call
-// ctx.abort(), because AgentSession.abort() cancels the in-flight handoff.
+// The empty-ledger todo only marks the relay pending on the SessionStation. The
+// next `context` hook is the interrupt point: it runs the real handoff and
+// returns the post-handoff messages. Replacing the request messages is the
+// interrupt; do not call ctx.abort(), because AgentSession.abort() cancels the
+// in-flight handoff.
 //
 // `session_stop` remains the retry path: after a context failure, or when the
-// host cannot run the call there, the stop hook returns { continue: true,
-// additionalContext } and runs the real handoff. Only canStop returns
-// undefined, which allows the host to stop. The 17.3.5 new-session branch and
-// 18.18.2 auto-compaction events remain as feature-detected evidence.
+// host cannot run the call there, the stop gatekeeper returns a sessionStop
+// ticket that runs the real handoff and yields the one continuation the host
+// accepts. Only canStop returns undefined, which allows the host to stop. The
+// 17.3.5 new-session branch and 18.18.2 auto-compaction events remain as
+// feature-detected evidence handled by station gatekeepers.
 //
-// The live AgentSession is captured at todo time and carried on the record.
+// The live AgentSession is captured at todo time and carried on the station.
 // Some hosts build a fresh extension context for session_stop; relying only on
 // ctx.sessionManager there loses both the relay record and the session. The
-// module-level `pending` record is the unambiguous main-session fallback.
+// station registry's pending station is the unambiguous main-session fallback.
 //
 // TUI debugging is silent by default. Set HERD_RELAY_DEBUG=1 to append JSON
 // lines to /tmp/herd-relay-tui-debug.log:
@@ -31,18 +33,13 @@
 
 import { appendFileSync } from "node:fs";
 
-import { currentScope, truncateForHostBoundary } from "./engine.mjs";
 import {
-	beginGenerationAfterHandoff,
-	firstEvaluationNudge,
 	handoffFailureNudge,
 	handoffFocus,
 	handoffPendingNudge,
-	openLedgerNudge,
-	recordHandoffFailure,
 	successorPrompt,
 } from "./relay.mjs";
-import { agentPolicy, READ_ONLY_SUBAGENT } from "./agent-policy.mjs";
+import { continueFeedback } from "./results.mjs";
 import {
 	handoffFor,
 	interactiveCaptureState,
@@ -53,10 +50,6 @@ import {
 const KEEP_RECENT_KEY = "compaction.keepRecentTokens";
 const DEBUG_LOG_PATH = "/tmp/herd-relay-tui-debug.log";
 const TUI_HANDOFF_FLAG = Symbol.for("herdchestra-lite2.tui-handoff-in-flight");
-
-// The main session's pending handoff. There is one at a time; this survives a
-// session_stop context that cannot resolve the same SessionManager.
-let pending = null;
 
 function debugEnabled() {
 	const value = process.env.HERD_RELAY_DEBUG;
@@ -84,75 +77,6 @@ function safeSession(ctx) {
 	} catch {
 		return null;
 	}
-}
-
-function persist(rec) {
-	try {
-		rec?.persist?.();
-	} catch {
-		// Persistence failure must not turn a real handoff into a fake success.
-	}
-}
-
-/**
- * Deliver the successor prompt through the mode-appropriate channel.
- * A print-mode continuation becomes the hidden next turn, so the process does
- * not exit before the successor evaluates the ledger.
- */
-function deliverSuccessor(rec, ctx, pi) {
-	const target = rec.relayPromptPendingFor;
-	if (!Number.isInteger(target)) {
-		debugLog("successor.skipped", {
-			reason: "no-pending-target",
-			generation: rec.state.relay?.generation ?? null,
-		});
-		return undefined;
-	}
-	if (rec.relayPromptSentFor === target) {
-		debugLog("successor.skipped", { reason: "already-sent", target });
-		return undefined;
-	}
-	const relay = rec.state.relay;
-	if (!relay || relay.generation !== target) {
-		debugLog("successor.skipped", {
-			reason: "generation-mismatch",
-			target,
-			generation: relay?.generation ?? null,
-		});
-		return undefined;
-	}
-	const prompt = successorPrompt(relay, relay.lastLedger ?? null);
-	rec.relayPromptSentFor = target;
-	rec.relayPromptPendingFor = null;
-	debugLog("successor.delivered", {
-		generation: target,
-		promptChars: prompt.length,
-	});
-	return { continue: true, additionalContext: prompt };
-}
-
-function feedback(_ctx, _pi, text) {
-	if (!text) return undefined;
-	return { continue: true, additionalContext: text };
-}
-
-/**
- * Advance exactly once. The awaited handoff call and the 17.3.5 switch event
- * can both reach this function; only the first one increments the generation.
- */
-function advanceRelayForHandoff(rec) {
-	if (rec.handoffAdvanced) return false;
-	const relay = rec.state.relay;
-	if (!relay || !relay.handoffPending || relay.canStop) return false;
-	rec.state.relay = beginGenerationAfterHandoff(relay, {
-		at: Date.now(),
-		fromGeneration: relay.generation,
-	});
-	rec.handoffAdvanced = true;
-	rec.relayPromptPendingFor = rec.state.relay.generation;
-	rec.relayPromptSentFor = null;
-	persist(rec);
-	return true;
 }
 
 function errorText(error) {
@@ -259,7 +183,7 @@ function appendHandoffSignal(manager, ctx, generation) {
  * returns void and may swallow its own errors, so success is decided only by a
  * new `method: "handoff"` compaction entry on the branch.
  */
-async function handoffViaTui(tui, manager, focus, rec) {
+async function handoffViaTui(tui, manager, focus, station) {
 	const before = countHandoffCompactions(manager);
 	const captureBefore = interactiveCaptureState();
 	if (before === null) {
@@ -277,14 +201,14 @@ async function handoffViaTui(tui, manager, focus, rec) {
 		try {
 			tui[TUI_HANDOFF_FLAG] = true;
 		} catch {
-			// The command guard is best effort; rec.handoffExecuting still holds.
+			// The command guard is best effort; station.handoffExecuting still holds.
 		}
 	}
 	let callError = null;
 	let returned = false;
 	debugLog("tui_handoff_call", {
 		before,
-		generation: rec.state.relay?.generation ?? null,
+		generation: station.state.relay?.generation ?? null,
 		focusChars: focus.length,
 	});
 	try {
@@ -310,7 +234,7 @@ async function handoffViaTui(tui, manager, focus, rec) {
 		rendersBefore: captureBefore.renders,
 		rendersAfter: captureAfter.renders,
 		error: callError,
-		generation: rec.state.relay?.generation ?? null,
+		generation: station.state.relay?.generation ?? null,
 	});
 	debugLog("compaction_entry", { path: "tui", before, after });
 	if (callError) debugLog("tui_handoff_error", { error: callError, before, after });
@@ -406,22 +330,22 @@ function appendHandoffCheckpoint(session) {
 	return true;
 }
 
-async function executeHandoff(session, focus, pi, ctx, rec) {
+async function executeHandoff(session, focus, pi, ctx, station) {
 	if (session && session.isGeneratingHandoff === true) {
 		return { ok: true, inProgress: true };
 	}
 	debugLog("handoff.execute", {
 		hasSession: Boolean(session),
-		hasCapturedSession: Boolean(rec.handoffSession),
+		hasCapturedSession: Boolean(station.handoffSession),
 		hasHandoffImpl: typeof pi?.handoffImpl === "function",
-		generation: rec.state.relay?.generation ?? null,
+		generation: station.state.relay?.generation ?? null,
 	});
 	if (typeof pi?.handoffImpl === "function") {
 		debugLog("handoff.call", {
 			target: "handoffImpl",
-			generation: rec.state.relay?.generation ?? null,
+			generation: station.state.relay?.generation ?? null,
 		});
-		const result = await pi.handoffImpl({ session, focus, rec, ctx });
+		const result = await pi.handoffImpl({ session, focus, rec: station, ctx });
 		debugLog("handoff.result", {
 			target: "handoffImpl",
 			resultDefined: result !== undefined,
@@ -432,7 +356,7 @@ async function executeHandoff(session, focus, pi, ctx, rec) {
 		}
 		return { ok: true };
 	}
-	const target = session ?? rec.handoffSession ?? null;
+	const target = session ?? station.handoffSession ?? null;
 	if (!target) {
 		const bound = handoffFor(ctx);
 		if (typeof bound !== "function") {
@@ -445,7 +369,7 @@ async function executeHandoff(session, focus, pi, ctx, rec) {
 		}
 		debugLog("handoff.call", {
 			target: "bound",
-			generation: rec.state.relay?.generation ?? null,
+			generation: station.state.relay?.generation ?? null,
 		});
 		await bound(focus);
 		debugLog("handoff.result", { target: "bound", resultDefined: true });
@@ -463,7 +387,7 @@ async function executeHandoff(session, focus, pi, ctx, rec) {
 		}
 		debugLog("handoff.call", {
 			target: "bound-fallback",
-			generation: rec.state.relay?.generation ?? null,
+			generation: station.state.relay?.generation ?? null,
 		});
 		await bound(focus);
 		debugLog("handoff.result", {
@@ -474,41 +398,72 @@ async function executeHandoff(session, focus, pi, ctx, rec) {
 	}
 	debugLog("handoff.call", {
 		target: "AgentSession.handoff",
-		generation: rec.state.relay?.generation ?? null,
+		generation: station.state.relay?.generation ?? null,
 		focusChars: focus.length,
 	});
 	const result = await callHandoffWithRecovery(target, focus);
 	debugLog("handoff.result", {
 		target: "AgentSession.handoff",
 		resultDefined: result !== undefined,
-		generation: rec.state.relay?.generation ?? null,
+		generation: station.state.relay?.generation ?? null,
 	});
-	if (result === undefined && !rec.handoffAdvanced) {
+	if (result === undefined && !station.handoffAdvanced) {
 		throw new Error("AgentSession.handoff() returned undefined (cancelled or failed).");
 	}
 	return { ok: true };
 }
 
-function insideScopeText(rec) {
-	const scope = currentScope(rec.state);
-	if (!scope) return "";
-	return `You are still inside scope level ${rec.state.scopes.length}: ${JSON.stringify(scope.intent)}. Do not write the final user-facing conclusion. Continue the task or close the scope. todo is forbidden inside every scope; close every scope before evaluating the ledger.`;
+/**
+ * Deliver the successor prompt through the mode-appropriate channel.
+ * A print-mode continuation becomes the hidden next turn, so the process does
+ * not exit before the successor evaluates the ledger.
+ */
+function deliverSuccessor(station, ctx) {
+	const target = station.relayPromptPendingFor;
+	if (!Number.isInteger(target)) {
+		debugLog("successor.skipped", {
+			reason: "no-pending-target",
+			generation: station.state.relay?.generation ?? null,
+		});
+		return undefined;
+	}
+	if (station.relayPromptSentFor === target) {
+		debugLog("successor.skipped", { reason: "already-sent", target });
+		return undefined;
+	}
+	const relay = station.state.relay;
+	if (!relay || relay.generation !== target) {
+		debugLog("successor.skipped", {
+			reason: "generation-mismatch",
+			target,
+			generation: relay?.generation ?? null,
+		});
+		return undefined;
+	}
+	const prompt = successorPrompt(relay, relay.lastLedger ?? null);
+	station.relayPromptSentFor = target;
+	station.relayPromptPendingFor = null;
+	debugLog("successor.delivered", {
+		generation: target,
+		promptChars: prompt.length,
+	});
+	return { continue: true, additionalContext: prompt };
 }
 
-async function performHandoff(rec, ctx, pi, options = {}) {
-	if (rec.handoffExecuting) {
+async function performHandoff(station, ctx, pi, options = {}) {
+	if (station.handoffExecuting) {
 		return { ok: true, inProgress: true };
 	}
 	const focus =
-		typeof rec.handoffFocus === "string" && rec.handoffFocus
-			? rec.handoffFocus
-			: handoffFocus(rec.state.relay);
+		typeof station.handoffFocus === "string" && station.handoffFocus
+			? station.handoffFocus
+			: handoffFocus(station.state.relay);
 	let result;
 	let manager = null;
 	let signalNeeded = false;
-	rec.handoffExecuting = true;
+	station.handoffExecuting = true;
 	try {
-		const session = safeSession(ctx) ?? rec.handoffSession ?? null;
+		const session = safeSession(ctx) ?? station.handoffSession ?? null;
 		manager = managerOf(session, ctx);
 		let tui = null;
 		try {
@@ -525,15 +480,15 @@ async function performHandoff(rec, ctx, pi, options = {}) {
 			canHandoff: canRunTuiCommand,
 			canRender: typeof tui?.renderInitialMessages === "function",
 			capture: interactiveCaptureState(),
-			generation: rec.state.relay?.generation ?? null,
+			generation: station.state.relay?.generation ?? null,
 		});
 		if (canRunTuiCommand) {
-			const viaTui = await handoffViaTui(tui, manager, focus, rec);
+			const viaTui = await handoffViaTui(tui, manager, focus, station);
 			if (viaTui.inProgress) {
-				return feedback(ctx, pi, handoffPendingNudge(rec.state.relay));
+				return continueFeedback(handoffPendingNudge(station.state.relay));
 			}
 			if (viaTui.ok) {
-				debugLog("handoff.path", { path: "tui", generation: rec.state.relay?.generation ?? null });
+				debugLog("handoff.path", { path: "tui", generation: station.state.relay?.generation ?? null });
 				result = { ok: true, viaTui: true };
 			} else {
 				// The built-in command may swallow its own failure. Fall back to the
@@ -545,7 +500,7 @@ async function performHandoff(rec, ctx, pi, options = {}) {
 					after: viaTui.after,
 					error: viaTui.error,
 				});
-				result = await executeHandoff(session, focus, pi, ctx, rec);
+				result = await executeHandoff(session, focus, pi, ctx, station);
 				const rendered = await renderTui(tui);
 				if (!rendered) signalNeeded = true;
 				const afterFallback = countHandoffCompactions(manager);
@@ -569,7 +524,7 @@ async function performHandoff(rec, ctx, pi, options = {}) {
 				}
 			}
 		} else {
-			result = await executeHandoff(session, focus, pi, ctx, rec);
+			result = await executeHandoff(session, focus, pi, ctx, station);
 			const rendered = await renderTui(tui);
 			const after = countHandoffCompactions(manager);
 			debugLog("compaction_entry", { path: "direct", before: null, after });
@@ -580,80 +535,66 @@ async function performHandoff(rec, ctx, pi, options = {}) {
 	} catch (error) {
 		debugLog("handoff.error", {
 			error: errorText(error),
-			generation: rec.state.relay?.generation ?? null,
+			generation: station.state.relay?.generation ?? null,
 		});
 		// "Nothing to hand off (already compacted)" is a terminal success, not a
 		// retryable failure: the host has no compressible tail left, so the
 		// handoff is already done. Advance at most once and clear pending, or
 		// the successor and every tool guarded by handoffPending stay stuck.
 		if (isAlreadyCompacted(error)) {
-			const advanced = advanceRelayForHandoff(rec);
-			if (rec.state.relay?.handoffPending) {
-				rec.state.relay = {
-					...rec.state.relay,
-					handoffPending: false,
-					handoffError: null,
-				};
-			}
-			persist(rec);
+			const compacted = station.finishCompactedHandoff();
 			debugLog("handoff.already_compacted", {
-				advanced,
-				generation: rec.state.relay?.generation ?? 0,
+				advanced: compacted.advanced,
+				generation: compacted.generation,
 			});
 			return {
 				ok: true,
 				alreadyCompacted: true,
-				advanced,
-				generation: rec.state.relay?.generation ?? 0,
+				advanced: compacted.advanced,
+				generation: compacted.generation,
 			};
 		}
-		rec.state.relay = recordHandoffFailure(rec.state.relay, error, {
-			at: Date.now(),
-		});
-		persist(rec);
+		station.recordHandoffFailureAt(error, Date.now());
 		return { ok: false, error: errorText(error) };
 	} finally {
-		rec.handoffExecuting = false;
+		station.handoffExecuting = false;
 	}
 	if (result?.inProgress) {
 		debugLog("handoff.in-progress", {
-			generation: rec.state.relay?.generation ?? null,
+			generation: station.state.relay?.generation ?? null,
 		});
 		return { ok: true, inProgress: true };
 	}
-	const advanced = advanceRelayForHandoff(rec);
+	const advanced = station.advanceRelayForHandoff();
 	const alreadyAdvanced =
-		rec.handoffAdvanced === true &&
-		Number.isInteger(rec.relayPromptPendingFor) &&
-		rec.state.relay?.generation === rec.relayPromptPendingFor;
+		station.handoffAdvanced === true &&
+		Number.isInteger(station.relayPromptPendingFor) &&
+		station.state.relay?.generation === station.relayPromptPendingFor;
 	if (!advanced && !alreadyAdvanced) {
 		const error = new Error("handoff completed but relay did not advance");
-		rec.state.relay = recordHandoffFailure(rec.state.relay, error, {
-			at: Date.now(),
-		});
-		persist(rec);
+		station.recordHandoffFailureAt(error, Date.now());
 		return { ok: false, error: error.message };
 	}
 	if (signalNeeded) {
-		appendHandoffSignal(manager, ctx, rec.state.relay?.generation ?? 0);
+		appendHandoffSignal(manager, ctx, station.state.relay?.generation ?? 0);
 	}
-	persist(rec);
-	return { ok: true, advanced, generation: rec.state.relay?.generation ?? 0 };
+	station.persist();
+	return { ok: true, advanced, generation: station.state.relay?.generation ?? 0 };
 }
 
 /**
- * Session-stop wrapper. The stop hook turns a handoff outcome into the one
- * continuation the host accepts; failure retries the real handoff.
+ * Session-stop handoff runner. Runs the real handoff once and turns the
+ * outcome into the one continuation the host accepts; failure retries.
  */
-async function runHandoffAtStop(rec, ctx, pi) {
-	const outcome = await performHandoff(rec, ctx, pi);
+async function runHandoffAtStop(station, ctx, pi) {
+	const outcome = await performHandoff(station, ctx, pi);
 	if (outcome?.inProgress) {
-		return feedback(ctx, pi, handoffPendingNudge(rec.state.relay));
+		return continueFeedback(handoffPendingNudge(station.state.relay));
 	}
 	if (outcome?.ok === false) {
-		return feedback(ctx, pi, handoffFailureNudge(outcome.error));
+		return continueFeedback(handoffFailureNudge(outcome.error));
 	}
-	return deliverSuccessor(rec, ctx, pi);
+	return deliverSuccessor(station, ctx);
 }
 
 /**
@@ -664,8 +605,8 @@ async function runHandoffAtStop(rec, ctx, pi) {
  * skipped because its command rebuilds the transcript and may re-enter the
  * active turn; the direct AgentSession.handoff() path still renders afterwards.
  */
-export async function runHandoffInContext(rec, ctx, pi) {
-	const liveSession = safeSession(ctx) ?? rec.handoffSession ?? null;
+export async function runHandoffInContext(station, ctx, pi) {
+	const liveSession = safeSession(ctx) ?? station.handoffSession ?? null;
 	const liveManager = managerOf(liveSession, ctx);
 	if (liveManager && typeof liveManager.getBranch === "function") {
 		try {
@@ -686,7 +627,7 @@ export async function runHandoffInContext(rec, ctx, pi) {
 			// Fall through to the real call.
 		}
 	}
-	const outcome = await performHandoff(rec, ctx, pi, { preferTui: false });
+	const outcome = await performHandoff(station, ctx, pi, { preferTui: false });
 	if (outcome?.inProgress) {
 		return { ok: false, pending: true, error: "handoff is already in progress" };
 	}
@@ -695,69 +636,33 @@ export async function runHandoffInContext(rec, ctx, pi) {
 }
 
 /**
- * Main session_stop handler. Every branch that must not stop returns a
- * session_stop continuation; only canStop allows a natural stop.
+ * Session-stop ticket. The stop gatekeeper has already decided that a handoff
+ * must run (relay.handoffPending or an empty ledger after arming); this ticket
+ * performs it exactly once and yields the continuation. Only canStop, decided
+ * by the gatekeeper, allows a natural stop.
  */
-async function handleSessionStopBody(rec, ctx, pi) {
-	if (agentPolicy(ctx) === READ_ONLY_SUBAGENT) return undefined;
-	if (rec.sessionStopRunning) {
-		return {
-			continue: true,
-			additionalContext: "A session_stop pass is already running; wait.",
-		};
-	}
-	rec.sessionStopRunning = true;
-	try {
-		const scope = currentScope(rec.state);
-		if (scope) return feedback(ctx, pi, insideScopeText(rec));
-		const relay = rec.state.relay;
-		if (!relay) return feedback(ctx, pi, firstEvaluationNudge());
-		if (relay.canStop) return undefined;
-		if (relay.handoffPending) {
-			return await runHandoffAtStop(rec, ctx, pi);
-		}
-		if (!relay.lastLedger) {
-			return feedback(ctx, pi, firstEvaluationNudge());
-		}
-		// The empty ledger after a handoff belongs to the previous generation.
-		// The successor must evaluate first; only its result can trigger the
-		// next handoff.
-		if (relay.generation > 0 && relay.firstEvaluation === null) {
-			return feedback(ctx, pi, firstEvaluationNudge());
-		}
-		if (relay.lastLedger.empty) {
-			rec.handoffFocus = handoffFocus({ ...relay, handoffPending: true });
-			rec.handoffAdvanced = false;
-			rec.handoffSwitched = false;
-			rec.state.relay = { ...relay, handoffPending: true };
-			persist(rec);
-			return await runHandoffAtStop(rec, ctx, pi);
-		}
-		return feedback(ctx, pi, openLedgerNudge(relay, relay.lastLedger));
-	} finally {
-		rec.sessionStopRunning = false;
-	}
-}
-
-export async function handleSessionStop(rec, ctx, pi) {
-	const before = rec?.state?.relay ?? null;
+export async function sessionStopTicket(station, ctx, pi) {
+	const before = station.state.relay ?? null;
 	debugLog("session_stop.enter", {
-		mode: ctx?.mode ?? rec?.mode ?? null,
+		mode: ctx?.mode ?? null,
 		generation: before?.generation ?? null,
 		handoffPending: before?.handoffPending ?? null,
 		canStop: before?.canStop ?? null,
 	});
+	station.sessionStopRunning = true;
 	let result;
 	try {
-		result = await handleSessionStopBody(rec, ctx, pi);
+		result = await runHandoffAtStop(station, ctx, pi);
 	} catch (error) {
 		debugLog("session_stop.error", {
 			error: errorText(error),
-			generation: rec?.state?.relay?.generation ?? null,
+			generation: station.state.relay?.generation ?? null,
 		});
 		throw error;
+	} finally {
+		station.sessionStopRunning = false;
 	}
-	const after = rec?.state?.relay ?? null;
+	const after = station.state.relay ?? null;
 	const context =
 		typeof result?.additionalContext === "string"
 			? result.additionalContext
@@ -765,136 +670,12 @@ export async function handleSessionStop(rec, ctx, pi) {
 	debugLog("session_stop.exit", {
 		continuation: result !== undefined,
 		successorPromptDelivered: context.includes("You are the relay successor"),
-		relayPromptSentFor: rec?.relayPromptSentFor ?? null,
-		relayPromptPendingFor: rec?.relayPromptPendingFor ?? null,
+		relayPromptSentFor: station.relayPromptSentFor ?? null,
+		relayPromptPendingFor: station.relayPromptPendingFor ?? null,
 		generation: after?.generation ?? null,
 		handoffPending: after?.handoffPending ?? null,
 		canStop: after?.canStop ?? null,
 		handoffError: after?.handoffError ?? null,
 	});
 	return result;
-}
-
-/**
- * Mark that an empty ledger must hand off. The todo execute body calls
- * runHandoffInline() right after this; session_stop keeps a retry path when
- * the inline call cannot complete.
- */
-export function requestHandoff(ctx, _pi, rec, options = {}) {
-	if (!rec?.state?.relay) {
-		return { ok: false, error: "relay state is missing" };
-	}
-	const relay = rec.state.relay;
-	if (relay.canStop) {
-		return { ok: true, skipped: "promoted", generation: relay.generation };
-	}
-	rec.handoffFocus =
-		options.focus ??
-		handoffFocus({ ...relay, handoffPending: true });
-	rec.handoffSession = safeSession(ctx) ?? rec.handoffSession ?? null;
-	// One pending main-session handoff at a time. This survives a session_stop
-	// context that cannot resolve the same SessionManager.
-	pending = rec;
-	if (relay.handoffPending) {
-		// applyLedgerEvaluation sets handoffPending itself. A new empty-ledger
-		// decision arrives here with pending already true, so clear the previous
-		// generation's completion flag before the stop hook advances.
-		if (!rec.handoffExecuting) {
-			rec.handoffAdvanced = false;
-			rec.handoffSwitched = false;
-		}
-		return {
-			ok: true,
-			pending: true,
-			inProgress: true,
-			generation: relay.generation,
-		};
-	}
-	rec.handoffAdvanced = false;
-	rec.handoffSwitched = false;
-	rec.state.relay = { ...relay, handoffPending: true, handoffError: null };
-	persist(rec);
-	return {
-		ok: true,
-		pending: true,
-		generation: rec.state.relay.generation,
-	};
-}
-
-function isHandoffCompaction(event) {
-	if (!event || typeof event !== "object") return false;
-	if (event.handoff === true || event.isHandoff === true) return true;
-	const action =
-		event.action ??
-		event.compaction?.action ??
-		event.reason ??
-		event.source ??
-		event.kind;
-	return action === "handoff";
-}
-
-/**
- * Register the stop hook and the two feature-detected transition events.
- * Nothing here calls handoff in agent_end: 18.16 unwinds and aborts a handoff
- * started from that notification.
- */
-export function installHandoffHooks(pi, options = {}) {
-	const lookup = typeof options.stateFor === "function" ? options.stateFor : null;
-	if (!lookup) return;
-	const recordFor = (ctx) => {
-		try {
-			return lookup(ctx) ?? null;
-		} catch {
-			return null;
-		}
-	};
-	const pendingRecord = (ctx) => {
-		const current = recordFor(ctx);
-		if (current?.state?.relay?.handoffPending) return current;
-		if (pending?.state?.relay?.handoffPending) return pending;
-		return current;
-	};
-	const register = (event, handler) => {
-		try {
-			pi?.on?.(event, handler);
-		} catch {
-			// The host does not expose this event; the stop hook remains.
-		}
-	};
-	register("session_stop", async (_event, ctx) => {
-		const rec = pendingRecord(ctx);
-		if (!rec) return undefined;
-		return handleSessionStop(rec, ctx, pi);
-	});
-	// 17.3.5 creates a new session. Its switch event is the only evidence that
-	// the custom scope.state entry must be re-appended to the new branch.
-	register("session_switch", (event, ctx) => {
-		if (agentPolicy(ctx) === READ_ONLY_SUBAGENT) return;
-		const reason = event?.reason ?? event?.handoffReason;
-		if (reason !== "handoff" && event?.handoff !== true) return;
-		const rec = pendingRecord(ctx);
-		if (!rec) return;
-		truncateForHostBoundary(rec.state);
-		if (rec.handoffExecuting) advanceRelayForHandoff(rec);
-		persist(rec);
-	});
-	// Any host compaction, including a manual /compact or an auto-compaction,
-	// truncates the transcript. Keep only the outermost scope and advance the
-	// epoch so later scopes have no elder siblings from before the cut.
-	register("session_compact", (_event, ctx) => {
-		if (agentPolicy(ctx) === READ_ONLY_SUBAGENT) return;
-		const rec = recordFor(ctx) ?? pendingRecord(ctx);
-		if (!rec) return;
-		truncateForHostBoundary(rec.state);
-		persist(rec);
-	});
-	// 18.18.2 compacts in place and marks the event. 18.16 does not emit it for
-	// a manual handoff; when present, it only confirms an in-flight call.
-	register("auto_compaction_end", (event, ctx) => {
-		if (!isHandoffCompaction(event)) return;
-		const rec = pendingRecord(ctx);
-		if (!rec?.handoffExecuting) return;
-		advanceRelayForHandoff(rec);
-		persist(rec);
-	});
 }

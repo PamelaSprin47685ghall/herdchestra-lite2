@@ -19,7 +19,7 @@ import {
 	rememberTui,
 	tuiFor,
 } from "../src/runner-capture.mjs";
-import { stateFor } from "../src/runtime.mjs";
+import { stateFor } from "../src/station.mjs";
 
 function makeManager() {
 	const entries = [];

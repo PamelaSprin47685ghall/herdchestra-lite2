@@ -8,7 +8,9 @@ import { requestHandoff } from "./handoff.mjs";
 import {
 	applyLedgerEvaluation,
 	handoffFocus,
+	isTodoView,
 	relayStatusText,
+	successorPrompt,
 } from "./relay.mjs";
 import { persistRecord, stateFor } from "./runtime.mjs";
 
@@ -157,10 +159,13 @@ export function createTodoExecute(pi) {
 				"todo is forbidden inside any active scope. Close every scope first, then call todo outside all scopes.",
 			);
 		}
-		if (rec.state.relay?.handoffPending) {
+		if (
+			rec.state.relay?.handoffPending &&
+			!isTodoView(params)
+		) {
 			return errorResult(
 				"RELAY_HANDOFF_PENDING",
-				"A relay handoff is pending. Do not change the ledger; wait for the successor. The runtime will retry the real AgentSession.handoff() if it did not start.",
+				"A relay handoff is pending. A todo view is allowed for diagnosis; do not change the ledger. The runtime retries the real AgentSession.handoff() if it did not start.",
 			);
 		}
 		if (typeof ctx?.invokeTool !== "function") {
@@ -231,8 +236,17 @@ export function createTodoExecute(pi) {
 			if (outcome?.ok === false) {
 				text += `\n\nHANDOFF FAILED: ${outcome.error}`;
 			} else if (outcome?.pending) {
-				text +=
-					"\n\nHandoff is pending. Stop now: do not call another tool. The main session_stop hook will call the real built-in /handoff and hand the successor prompt to the next agent. This stop becomes a session_stop continuation in every mode; the next turn is the successor. Do not send /handoff as text yourself.";
+				const gen0FirstEmpty =
+					rec.state.relay.generation === 0 &&
+					rec.state.relay.firstEvaluation === "empty";
+				if (gen0FirstEmpty) {
+					text +=
+						"\n\nHandoff is pending. Finish your reply to the user now; do not call another tool. The runtime runs the real handoff after this turn.";
+				} else {
+					text +=
+						"\n\nHandoff is pending. The next context hook interrupts this turn and runs the real handoff before the model request. Do not call another tool.";
+					text += `\n\n${successorPrompt(rec.state.relay, rec.state.relay.lastLedger ?? null)}`;
+				}
 			}
 		}
 

@@ -526,6 +526,31 @@ describe("scope lifecycle", () => {
 		);
 	});
 
+	test("different tools in one assistant message share one budget unit", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", {
+				begin: { intent: "split", budget: { read: 1, bash: 1 } },
+			})]),
+		);
+		const batch = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("r1", "read", { path: "one" }),
+				call("r2", "read", { path: "two" }),
+				call("x1", "bash", { command: "true" }),
+			]),
+		);
+		expect(batch.map((entry) => entry.blocked)).toEqual([false, false, false]);
+		const joined = texts(await outbound(host, ctx)).join("\n");
+		expect(joined).toContain("read 0.33/1.00");
+		expect(joined).toContain("bash 0.67/1.00");
+	});
+
 	function dropBeginEntry(manager, toolCallId) {
 		const victim = manager.entries.find(
 			(entry) =>

@@ -1,9 +1,10 @@
 # Herdchestra Lite 2.0 — design contract
 
 Plain `.mjs` omp extension. No ClojureScript, no sandbox, no board, no stages.
-Four tools: `scope`, `regret`, `defer`, `pin`. Built-in tools stay installed; the
-`tool_call` hook blocks every non-control tool outside a scope and charges the
-innermost scope's budget for every allowed call.
+Five tools: `scope`, `regret`, `defer`, `pin`, and `todo`. Built-in tools stay
+installed; the `tool_call` hook blocks every non-control tool outside a scope
+and charges the innermost scope's budget for every allowed call. `todo` is the
+relay ledger; it is free and is only legal outside every scope.
 
 ## Scope ADT
 
@@ -13,11 +14,15 @@ about n tool calls, a moderate scope covers about sqrt(n) of them. Size
 `budget` so its total across tools is roughly sqrt(n).
 `budget` is `{ [exactToolName]: nonNegativeInteger }`. Absent tool => zero.
 `scope`, `regret`, `defer`, and `pin` are free and are never budgeted.
-Several calls to the same tool in one assistant message are one batch and
-consume one unit of that tool's budget; budget and spend by batches, not
-individual calls.
+One assistant message spends at most one unit in total, split across the
+tools it calls in proportion to their call counts and rounded to two
+decimals. Several calls to one tool in a message consume that tool's share
+once; different tools divide the same unit instead of paying one unit each.
+A tool whose remaining balance is smaller than its share pays only what it
+has; that tool alone is blocked when its balance reaches zero, and the rest
+of the message still runs.
 For a heavy task, also budget `task`: parallel subagent workers take
-independent slices at once, and one batch of `task` calls costs one unit.
+independent slices at once, and one batch of `task` calls costs one task unit.
 
 Scopes nest. Only the innermost scope's budget is consumed.
 
@@ -30,6 +35,17 @@ Scopes nest. Only the innermost scope's budget is consumed.
    messages between that begin result and the assistant message that carried
    that sibling's `end` call are removed (in-place fork), except the begin
    beat's own tool results, which stay to keep the tool-call sequence valid.
+   A collapse never crosses a handoff boundary: elder siblings are matched
+   only within the same handoff generation, so the first scope after a handoff
+   has no elder sibling. If a handoff marker lies between an elder begin and a
+   younger end, the elder sibling stays visible.
+   A host compaction or handoff is also a truncation boundary. It advances
+   `state.epoch`, keeps only the outermost scope, drops the inner scopes,
+   clears their charges, and moves their defers to the outermost scope. The
+   surviving scope adopts the new epoch, so neither it nor later scopes can
+   match an elder sibling from before the cut. `session_compact`,
+   `session_switch` with reason `handoff`, and a handoff message marker all
+   trigger this truncation.
    Pin calls and their results inside the removed interior survive: they move
    after the collapsed scope's end beat.
    The scope that just closed stays visible until a younger sibling closes.
@@ -58,8 +74,8 @@ not `return_markdown`.
     intent: "…",
     beginToolCallId: "call_…",
     budget: { bash: 6, read: 7 },
-    remaining: { bash: 6, read: 7 },
-    spent: { bash: 0, read: 0 },
+    remaining: { bash: 4.5, read: 6 },
+    spent: { bash: 1.5, read: 1 },
     defers: [{ toolCallId, intent }],
     residualDefers: [{ toolCallId, intent }]
   }],
@@ -84,24 +100,30 @@ scope-end history replacement idempotent and sibling-local.
 
 Export exactly:
 
-- `createState()` -> fresh version-1 state.
+- `createState()` -> fresh version-2 state.
 - `currentScope(state)` -> innermost scope or `null`.
 - `beginScope(state, { toolCallId, intent, budget })`
   -> `{ ok: true, scope }` or `{ ok: false, code, reason }`.
   Validate: non-empty trimmed intent; plain budget object; every key non-empty
   string; every value an integer >= 0. Push the scope. `scope.id` is
   `scope-<++seq>`.
-- `chargeTool(state, { toolCallId, toolName, groupKey })`
+- `chargeTool(state, { toolCallId, toolName, groupKey, beatTools })`
   -> `{ ok: true, remaining }` or `{ ok: false, code, reason }`.
   No scope => `NOT_IN_SCOPE`. No budget key or zero => `BUDGET_EXHAUSTED`
   (mention the tool and remaining budget). Otherwise decrement `remaining`,
-  increment `spent`, record
-  `charges[toolCallId] = { scopeId, tool, amount: 1 }`, and return
+  increment `spent`, record `charges[toolCallId] = { scopeId, tool, amount }`
+  where `amount` is the tool's share of one unit, rounded to two decimals,
+  and capped at the tool's remaining balance, then return
   `{ ok: true, remaining }`. Repeating the same `toolCallId` must not
   double-charge; it returns the current `remaining` without changing state.
   Same `groupKey` and same normalized tool in one scope charge once; later
   calls in the batch return the current `remaining` without deducting again.
-  Different tools in the same batch charge separately.
+  Different tools in the same batch split one unit in proportion to their
+  call counts. `beatShares(toolNames)` returns that split as
+  `{ [tool]: amount }`, sums to exactly 1, ignores free tools, and normalizes
+  `apply_patch` to `edit`. A tool whose balance is below its share pays only
+  the balance; the other tools of the beat still charge, so a short balance
+  yields a partial success instead of blocking the whole message.
 - `deferIntent(state, { toolCallId, intent })`
   -> `{ ok: true }` or `{ ok: false, code, reason }`. Requires a scope and a
   non-empty trimmed intent. No budget charge.
@@ -125,7 +147,8 @@ Export exactly:
   Push `beat.key` to `regrets`. Return updated remaining.
 - `regretRemaining(state, scopeId)`? No — use `scope.remaining` directly.
 - `budgetText(scope)` -> deterministic comma list, e.g.
-  `bash 3/6, read 2/7`, sorted by tool name; `""` when there is no budget.
+  `bash 3.00/6.00, read 2.00/7.00`, sorted by tool name, both numbers fixed
+  to two decimals; `""` when there is no budget.
 - `serializeState(state)` / `deserializeState(data)`
   -> JSON-safe object / state. `deserializeState` accepts either a JSON-safe
   object or a JSON string. Validate `seq` as a non-negative integer, every
@@ -219,8 +242,10 @@ Export exactly:
     execute fallback performs the same transition.
   - `scope begin` and `scope end` in the same assistant message is rejected
     with `SAME_MESSAGE_BOUNDARY`.
-- `tool_call` hook: for non-control tools, call `chargeTool`; on failure return
-  `{ block: true, reason }`. Persist after a successful charge. This is also
+- `tool_call` hook: for non-control tools, call `chargeTool` with the beat's
+  tool names so one assistant message spends at most one split unit; on
+  failure return `{ block: true, reason }` for that tool alone. Persist after
+  a successful charge. This is also
   the fallback that processes unprocessed controls in the current assistant
   message (covers resumed tool batches).
 - `context` hook:
@@ -255,6 +280,33 @@ Export exactly:
 - `pin` tool: every field optional and Markdown; works inside or outside a
   scope; no budget charge; always returns `OK`. Collapse preserves its
   assistant message and tool result after the collapsed scope's end beat.
+
+## Subagent policy (`src/agent-policy.mjs`)
+
+Every subagent session carries a persisted `session_init` entry
+`{ agent, readOnly, tools }` (omp `task/executor.ts`). The newest entry
+classifies the caller:
+
+- no `agent` field: the main session; the full protocol applies.
+- `readOnly: true`, or `readOnly` absent and every declared tool belongs to
+  the host's read-only set: a read-only subagent. It gets no scope gate, no
+  budget charge, no relay ledger, and no nudge; `session_stop` returns
+  `undefined`; its `context` hook appends only the language skill.
+- otherwise: a read-write subagent; the full protocol applies. The host strips
+  `todo` from every subagent's active tools, so `before_agent_start` re-adds it
+  with `pi.setActiveTools([...active, "todo"])`.
+
+## Relay ledger (`todo`)
+
+`todo` delegates the ledger to the native tool and adds the relay gate. The
+ledger is canonical: a non-empty ledger forbids a natural stop. An empty ledger
+does not merely mark a pending handoff: the next `context` hook interrupts the
+turn by replacing its messages. It runs the real `AgentSession.handoff()` and
+returns the post-handoff transcript with the successor prompt. It does not call
+`ctx.abort()`, because that cancels the in-flight handoff. The provider request
+is then the successor's first turn. `session_stop` remains the retry path when
+the context hook cannot complete the handoff. Only a successor whose first
+submitted todo evaluation is empty may stop naturally.
 
 ## Status display (`src/usage.mjs`, `src/status.mjs`)
 

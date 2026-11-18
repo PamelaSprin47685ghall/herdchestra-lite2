@@ -2,15 +2,18 @@
 //
 // The installed CLI is 18.16: `AgentSession.handoff()` appends a compaction in
 // place. It does NOT create a new session, does NOT emit session_switch, and a
-// manual handoff does not emit auto_compaction_end. The reliable execution
-// point is the main session's `session_stop` hook:
-//   - every mode: return { continue: true, additionalContext }
-//   - only canStop returns undefined, which allows the host to stop.
+// manual handoff does not emit auto_compaction_end.
 //
-// The todo tool only marks `relay.handoffPending`. It never calls the host in
-// its execute body, so no mode can deadlock on a streaming session. The 17.3.5
-// new-session branch and 18.18.2 auto-compaction events remain as
-// feature-detected evidence, but the awaited call is the main path.
+// The empty-ledger todo only marks the relay pending. The next `context` hook
+// is the interrupt point: it runs the real handoff and returns the post-handoff
+// messages. Replacing the request messages is the interrupt; do not call
+// ctx.abort(), because AgentSession.abort() cancels the in-flight handoff.
+//
+// `session_stop` remains the retry path: after a context failure, or when the
+// host cannot run the call there, the stop hook returns { continue: true,
+// additionalContext } and runs the real handoff. Only canStop returns
+// undefined, which allows the host to stop. The 17.3.5 new-session branch and
+// 18.18.2 auto-compaction events remain as feature-detected evidence.
 //
 // The live AgentSession is captured at todo time and carried on the record.
 // Some hosts build a fresh extension context for session_stop; relying only on
@@ -28,7 +31,7 @@
 
 import { appendFileSync } from "node:fs";
 
-import { currentScope } from "./engine.mjs";
+import { currentScope, truncateForHostBoundary } from "./engine.mjs";
 import {
 	beginGenerationAfterHandoff,
 	firstEvaluationNudge,
@@ -39,6 +42,7 @@ import {
 	recordHandoffFailure,
 	successorPrompt,
 } from "./relay.mjs";
+import { agentPolicy, READ_ONLY_SUBAGENT } from "./agent-policy.mjs";
 import {
 	handoffFor,
 	interactiveCaptureState,
@@ -373,21 +377,33 @@ async function callHandoffWithRecovery(session, focus) {
 function appendHandoffCheckpoint(session) {
 	const manager = session?.sessionManager;
 	if (!manager || typeof manager.appendMessage !== "function") return false;
+	const message = {
+		role: "user",
+		content: [
+			{
+				type: "text",
+				text: "Relay handoff audit checkpoint. The previous holder's ledger was empty; the successor must verify it with todo.",
+			},
+		],
+		timestamp: Date.now(),
+	};
 	try {
-		manager.appendMessage({
-			role: "user",
-			content: [
-				{
-					type: "text",
-					text: "Relay handoff audit checkpoint. The previous holder's ledger was empty; the successor must verify it with todo.",
-				},
-			],
-			timestamp: Date.now(),
-		});
-		return true;
+		manager.appendMessage(message);
 	} catch {
 		return false;
 	}
+	// The compaction reads the live agent transcript, not only the session
+	// manager. Keep them aligned, or the checkpoint never forms a compressible
+	// tail and the retry fails with "already compacted" again.
+	try {
+		const messages = session?.agent?.state?.messages;
+		if (Array.isArray(messages) && !messages.includes(message)) {
+			messages.push(message);
+		}
+	} catch {
+		// A host without a live agent still got the manager entry.
+	}
+	return true;
 }
 
 async function executeHandoff(session, focus, pi, ctx, rec) {
@@ -479,9 +495,9 @@ function insideScopeText(rec) {
 	return `You are still inside scope level ${rec.state.scopes.length}: ${JSON.stringify(scope.intent)}. Do not write the final user-facing conclusion. Continue the task or close the scope. todo is forbidden inside every scope; close every scope before evaluating the ledger.`;
 }
 
-async function runHandoffAtStop(rec, ctx, pi) {
+async function performHandoff(rec, ctx, pi, options = {}) {
 	if (rec.handoffExecuting) {
-		return feedback(ctx, pi, handoffPendingNudge(rec.state.relay));
+		return { ok: true, inProgress: true };
 	}
 	const focus =
 		typeof rec.handoffFocus === "string" && rec.handoffFocus
@@ -501,7 +517,9 @@ async function runHandoffAtStop(rec, ctx, pi) {
 			tui = null;
 		}
 		const canRunTuiCommand =
-			Boolean(tui) && typeof tui.handleHandoffCommand === "function";
+			options.preferTui !== false &&
+			Boolean(tui) &&
+			typeof tui.handleHandoffCommand === "function";
 		debugLog("tui_capture", {
 			hasTui: Boolean(tui),
 			canHandoff: canRunTuiCommand,
@@ -564,11 +582,36 @@ async function runHandoffAtStop(rec, ctx, pi) {
 			error: errorText(error),
 			generation: rec.state.relay?.generation ?? null,
 		});
+		// "Nothing to hand off (already compacted)" is a terminal success, not a
+		// retryable failure: the host has no compressible tail left, so the
+		// handoff is already done. Advance at most once and clear pending, or
+		// the successor and every tool guarded by handoffPending stay stuck.
+		if (isAlreadyCompacted(error)) {
+			const advanced = advanceRelayForHandoff(rec);
+			if (rec.state.relay?.handoffPending) {
+				rec.state.relay = {
+					...rec.state.relay,
+					handoffPending: false,
+					handoffError: null,
+				};
+			}
+			persist(rec);
+			debugLog("handoff.already_compacted", {
+				advanced,
+				generation: rec.state.relay?.generation ?? 0,
+			});
+			return {
+				ok: true,
+				alreadyCompacted: true,
+				advanced,
+				generation: rec.state.relay?.generation ?? 0,
+			};
+		}
 		rec.state.relay = recordHandoffFailure(rec.state.relay, error, {
 			at: Date.now(),
 		});
 		persist(rec);
-		return feedback(ctx, pi, handoffFailureNudge(error));
+		return { ok: false, error: errorText(error) };
 	} finally {
 		rec.handoffExecuting = false;
 	}
@@ -576,7 +619,7 @@ async function runHandoffAtStop(rec, ctx, pi) {
 		debugLog("handoff.in-progress", {
 			generation: rec.state.relay?.generation ?? null,
 		});
-		return feedback(ctx, pi, handoffPendingNudge(rec.state.relay));
+		return { ok: true, inProgress: true };
 	}
 	const advanced = advanceRelayForHandoff(rec);
 	const alreadyAdvanced =
@@ -589,13 +632,66 @@ async function runHandoffAtStop(rec, ctx, pi) {
 			at: Date.now(),
 		});
 		persist(rec);
-		return feedback(ctx, pi, handoffFailureNudge(error));
+		return { ok: false, error: error.message };
 	}
 	if (signalNeeded) {
 		appendHandoffSignal(manager, ctx, rec.state.relay?.generation ?? 0);
 	}
 	persist(rec);
+	return { ok: true, advanced, generation: rec.state.relay?.generation ?? 0 };
+}
+
+/**
+ * Session-stop wrapper. The stop hook turns a handoff outcome into the one
+ * continuation the host accepts; failure retries the real handoff.
+ */
+async function runHandoffAtStop(rec, ctx, pi) {
+	const outcome = await performHandoff(rec, ctx, pi);
+	if (outcome?.inProgress) {
+		return feedback(ctx, pi, handoffPendingNudge(rec.state.relay));
+	}
+	if (outcome?.ok === false) {
+		return feedback(ctx, pi, handoffFailureNudge(outcome.error));
+	}
 	return deliverSuccessor(rec, ctx, pi);
+}
+
+/**
+ * Run the real handoff from the context hook, after the caller interrupts the
+ * turn that would otherwise ask the model for a useless "ready to hand off"
+ * reply. The context hook returns the post-handoff messages so the provider
+ * request is already the successor's first turn. The TUI command path is
+ * skipped because its command rebuilds the transcript and may re-enter the
+ * active turn; the direct AgentSession.handoff() path still renders afterwards.
+ */
+export async function runHandoffInContext(rec, ctx, pi) {
+	const liveSession = safeSession(ctx) ?? rec.handoffSession ?? null;
+	const liveManager = managerOf(liveSession, ctx);
+	if (liveManager && typeof liveManager.getBranch === "function") {
+		try {
+			const messageEntries = liveManager
+				.getBranch()
+				.filter((entry) => entry?.type === "message");
+			// The host refuses a handoff before its second message. The tool
+			// result is not on the branch yet, so a fresh session can only fail;
+			// let session_stop retry after the turn appends its messages.
+			if (messageEntries.length < 2) {
+				return {
+					ok: false,
+					error:
+						"too few messages for a context handoff; session_stop will retry",
+				};
+			}
+		} catch {
+			// Fall through to the real call.
+		}
+	}
+	const outcome = await performHandoff(rec, ctx, pi, { preferTui: false });
+	if (outcome?.inProgress) {
+		return { ok: false, pending: true, error: "handoff is already in progress" };
+	}
+	if (outcome?.ok === false) return { ok: false, error: outcome.error };
+	return { ok: true, generation: outcome.generation };
 }
 
 /**
@@ -603,6 +699,7 @@ async function runHandoffAtStop(rec, ctx, pi) {
  * session_stop continuation; only canStop allows a natural stop.
  */
 async function handleSessionStopBody(rec, ctx, pi) {
+	if (agentPolicy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	if (rec.sessionStopRunning) {
 		return {
 			continue: true,
@@ -679,8 +776,9 @@ export async function handleSessionStop(rec, ctx, pi) {
 }
 
 /**
- * Mark that an empty ledger must hand off. This is deliberately only a state
- * change: the actual host call happens in session_stop.
+ * Mark that an empty ledger must hand off. The todo execute body calls
+ * runHandoffInline() right after this; session_stop keeps a retry path when
+ * the inline call cannot complete.
  */
 export function requestHandoff(ctx, _pi, rec, options = {}) {
 	if (!rec?.state?.relay) {
@@ -771,11 +869,23 @@ export function installHandoffHooks(pi, options = {}) {
 	// 17.3.5 creates a new session. Its switch event is the only evidence that
 	// the custom scope.state entry must be re-appended to the new branch.
 	register("session_switch", (event, ctx) => {
-		const rec = pendingRecord(ctx);
-		if (!rec?.handoffExecuting) return;
+		if (agentPolicy(ctx) === READ_ONLY_SUBAGENT) return;
 		const reason = event?.reason ?? event?.handoffReason;
 		if (reason !== "handoff" && event?.handoff !== true) return;
-		advanceRelayForHandoff(rec);
+		const rec = pendingRecord(ctx);
+		if (!rec) return;
+		truncateForHostBoundary(rec.state);
+		if (rec.handoffExecuting) advanceRelayForHandoff(rec);
+		persist(rec);
+	});
+	// Any host compaction, including a manual /compact or an auto-compaction,
+	// truncates the transcript. Keep only the outermost scope and advance the
+	// epoch so later scopes have no elder siblings from before the cut.
+	register("session_compact", (_event, ctx) => {
+		if (agentPolicy(ctx) === READ_ONLY_SUBAGENT) return;
+		const rec = recordFor(ctx) ?? pendingRecord(ctx);
+		if (!rec) return;
+		truncateForHostBoundary(rec.state);
 		persist(rec);
 	});
 	// 18.18.2 compacts in place and marks the event. 18.16 does not emit it for

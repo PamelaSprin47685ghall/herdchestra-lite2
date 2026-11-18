@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   applyRegret,
   beginScope,
+  beatShares,
   budgetText,
   chargeTool,
   closeScope,
@@ -9,7 +10,10 @@ import {
   currentScope,
   deferIntent,
   deserializeState,
+  findElderSibling,
+  roundAmount,
   serializeState,
+  truncateForHostBoundary,
 } from "../src/engine.mjs";
 
 const STEER_HEADER =
@@ -22,11 +26,111 @@ function openScope(intent, budget, toolCallId = "call_begin") {
   return { state, scope: result.scope };
 }
 
+describe("handoff boundaries", () => {
+  test("records the relay generation on a new scope", () => {
+    const state = createState();
+    state.relay = { ...state.relay, generation: 1 };
+    const result = beginScope(state, {
+      toolCallId: "call_begin",
+      intent: "work",
+      budget: { read: 1 },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.scope.boundary).toBe(1);
+  });
+
+  test("finds elder siblings only within the same boundary", () => {
+    const state = createState();
+    state.collapses.push(
+      {
+        beginToolCallId: "call_old_begin",
+        endToolCallId: "call_old_end",
+        report: "old",
+        parentId: null,
+        order: 1,
+        collapsed: false,
+        createdAt: 1,
+        boundary: 0,
+      },
+      {
+        beginToolCallId: "call_new_begin",
+        endToolCallId: "call_new_end",
+        report: "new",
+        parentId: null,
+        order: 2,
+        collapsed: false,
+        createdAt: 2,
+        boundary: 1,
+      },
+    );
+    expect(findElderSibling(state, null, 3, 1)?.report).toBe("new");
+    expect(findElderSibling(state, null, 3, 2)).toBeNull();
+    expect(findElderSibling(state, null, 3, 0)?.report).toBe("old");
+  });
+
+  test("host truncation keeps the outermost scope and advances the epoch", () => {
+    const state = createState();
+    const outer = beginScope(state, {
+      toolCallId: "call_outer",
+      intent: "outer",
+      budget: { read: 2 },
+    });
+    expect(outer.ok).toBe(true);
+    chargeTool(state, {
+      toolCallId: "outer_charge",
+      toolName: "read",
+      beatTools: ["read"],
+    });
+    const inner = beginScope(state, {
+      toolCallId: "call_inner",
+      intent: "inner",
+      budget: { read: 2 },
+    });
+    expect(inner.ok).toBe(true);
+    chargeTool(state, {
+      toolCallId: "inner_charge",
+      toolName: "read",
+      beatTools: ["read"],
+    });
+    deferIntent(state, { toolCallId: "defer_inner", intent: "keep me" });
+
+    expect(truncateForHostBoundary(state)).toBe(true);
+
+    expect(state.epoch).toBe(1);
+    expect(state.scopes.length).toBe(1);
+    expect(state.scopes[0].id).toBe(outer.scope.id);
+    expect(state.scopes[0].epoch).toBe(1);
+    expect(state.charges.outer_charge).toBeDefined();
+    expect(state.charges.inner_charge).toBeUndefined();
+    expect(state.scopes[0].defers).toEqual([
+      { toolCallId: "defer_inner", intent: "keep me" },
+    ]);
+  });
+
+  test("elder siblings never match across a truncation epoch", () => {
+    const state = createState();
+    state.collapses.push({
+      beginToolCallId: "call_old_begin",
+      endToolCallId: "call_old_end",
+      report: "old",
+      parentId: null,
+      order: 1,
+      collapsed: false,
+      createdAt: 1,
+      boundary: 0,
+      epoch: 0,
+    });
+    expect(findElderSibling(state, null, 2, 0, 0)?.report).toBe("old");
+    expect(findElderSibling(state, null, 2, 0, 1)).toBeNull();
+  });
+});
+
 describe("createState", () => {
   test("returns a fresh version 2 state with an empty relay", () => {
     expect(createState()).toEqual({
       version: 2,
       seq: 0,
+      epoch: 0,
       scopes: [],
       charges: {},
       regrets: [],
@@ -65,6 +169,8 @@ describe("beginScope", () => {
     expect(result.ok).toBe(true);
     expect(result.scope).toEqual({
       id: "scope-1",
+      boundary: 0,
+      epoch: 0,
       intent: "Inspect the repo",
       beginToolCallId: "call_begin",
       budget: { read: 7, bash: 6 },
@@ -191,7 +297,7 @@ describe("chargeTool", () => {
     expect(result.ok).toBe(false);
     expect(result.code).toBe("BUDGET_EXHAUSTED");
     expect(result.reason).toContain("write");
-    expect(result.reason).toContain("0/0");
+    expect(result.reason).toContain("0.00/0.00");
     expect(scope.spent).toEqual({ bash: 0 });
     expect(state.charges).toEqual({});
   });
@@ -205,7 +311,7 @@ describe("chargeTool", () => {
     expect(result.ok).toBe(false);
     expect(result.code).toBe("BUDGET_EXHAUSTED");
     expect(result.reason).toContain("bash");
-    expect(result.reason).toContain("0/0");
+    expect(result.reason).toContain("0.00/0.00");
     expect(scope.spent).toEqual({ bash: 0 });
     expect(state.charges).toEqual({});
   });
@@ -251,11 +357,13 @@ describe("chargeTool", () => {
       toolCallId: "call_a",
       toolName: "bash",
       groupKey: "beat-1",
+      beatTools: ["bash", "bash"],
     });
     const second = chargeTool(state, {
       toolCallId: "call_b",
       toolName: "bash",
       groupKey: "beat-1",
+      beatTools: ["bash", "bash"],
     });
     expect(first).toEqual({ ok: true, remaining: { bash: 1 } });
     expect(second).toEqual({ ok: true, remaining: { bash: 1 } });
@@ -265,20 +373,76 @@ describe("chargeTool", () => {
     expect(state.charges.call_a.groupKey).toBe("beat-1");
   });
 
-  test("charges different tools in one batch separately", () => {
+  test("splits one unit across different tools in one batch", () => {
     const { state, scope } = openScope("batch", { bash: 1, read: 1 });
-    chargeTool(state, {
+    const beatTools = ["bash", "bash", "bash", "read", "read"];
+    const bash = chargeTool(state, {
       toolCallId: "call_bash",
       toolName: "bash",
       groupKey: "beat-1",
+      beatTools,
     });
-    chargeTool(state, {
+    const read = chargeTool(state, {
       toolCallId: "call_read",
       toolName: "read",
       groupKey: "beat-1",
+      beatTools,
     });
-    expect(scope.spent).toEqual({ bash: 1, read: 1 });
-    expect(scope.remaining).toEqual({ bash: 0, read: 0 });
+    expect(bash).toEqual({ ok: true, remaining: { bash: 0.4, read: 1 } });
+    expect(read).toEqual({ ok: true, remaining: { bash: 0.4, read: 0.6 } });
+    expect(scope.spent).toEqual({ bash: 0.6, read: 0.4 });
+    expect(scope.remaining).toEqual({ bash: 0.4, read: 0.6 });
+  });
+
+  test("blocks only the exhausted tool and keeps the rest of the beat running", () => {
+    const { state, scope } = openScope("partial", { bash: 1, read: 1 });
+    chargeTool(state, {
+      toolCallId: "call_r1",
+      toolName: "read",
+      groupKey: "beat-1",
+      beatTools: ["read"],
+    });
+    const beatTools = ["read", "bash"];
+    const blocked = chargeTool(state, {
+      toolCallId: "call_r2",
+      toolName: "read",
+      groupKey: "beat-2",
+      beatTools,
+    });
+    expect(blocked.code).toBe("BUDGET_EXHAUSTED");
+    expect(blocked.reason).toContain("0.00/1.00");
+    const bash = chargeTool(state, {
+      toolCallId: "call_b1",
+      toolName: "bash",
+      groupKey: "beat-2",
+      beatTools,
+    });
+    expect(bash.ok).toBe(true);
+    expect(scope.remaining).toEqual({ bash: 0.5, read: 0 });
+    expect(scope.spent).toEqual({ bash: 0.5, read: 1 });
+  });
+});
+
+describe("beatShares", () => {
+  test("splits one unit by call count with two decimals", () => {
+    expect(beatShares(["bash", "bash", "bash", "read", "read"])).toEqual({
+      bash: 0.6,
+      read: 0.4,
+    });
+  });
+
+  test("hands the rounding residue to the most frequent tool", () => {
+    const shares = beatShares(["bash", "read", "grep"]);
+    expect(shares).toEqual({ bash: 0.34, read: 0.33, grep: 0.33 });
+    const total = Object.values(shares).reduce((sum, amount) => sum + amount, 0);
+    expect(roundAmount(total)).toBe(1);
+  });
+
+  test("ignores free tools and normalizes apply_patch", () => {
+    expect(
+      beatShares(["scope", "defer", "pin", "todo", "apply_patch"]),
+    ).toEqual({ edit: 1 });
+    expect(beatShares([])).toEqual({});
   });
 });
 
@@ -557,9 +721,27 @@ describe("closeScope", () => {
 describe("budgetText", () => {
   test("reports remaining/budget sorted by tool name", () => {
     const { state, scope } = openScope("work", { read: 7, bash: 6 });
-    expect(budgetText(scope)).toBe("bash 6/6, read 7/7");
+    expect(budgetText(scope)).toBe("bash 6.00/6.00, read 7.00/7.00");
     chargeTool(state, { toolCallId: "call_bash", toolName: "bash" });
-    expect(budgetText(scope)).toBe("bash 5/6, read 7/7");
+    expect(budgetText(scope)).toBe("bash 5.00/6.00, read 7.00/7.00");
+  });
+
+  test("shows fractional shares with two decimals", () => {
+    const { state, scope } = openScope("work", { bash: 1, read: 1 });
+    const beatTools = ["bash", "read", "read"];
+    chargeTool(state, {
+      toolCallId: "call_bash",
+      toolName: "bash",
+      groupKey: "beat-1",
+      beatTools,
+    });
+    chargeTool(state, {
+      toolCallId: "call_read",
+      toolName: "read",
+      groupKey: "beat-1",
+      beatTools,
+    });
+    expect(budgetText(scope)).toBe("bash 0.67/1.00, read 0.33/1.00");
   });
 
   test("returns an empty string when there is no budget", () => {
@@ -616,6 +798,8 @@ describe("serializeState and deserializeState", () => {
       order: 0,
       collapsed: true,
       createdAt: 1700000000000,
+      boundary: 0,
+      epoch: 0,
     });
 
     const payload = serializeState(state);

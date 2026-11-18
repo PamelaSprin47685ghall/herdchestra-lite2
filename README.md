@@ -10,16 +10,18 @@ host hooks, in plain ESM.
 - `scope({ begin: { intent, budget } })` opens a scope. `intent` describes one
   task of moderate scope: if the whole user request needs about n tool calls,
   a moderate scope covers about sqrt(n) of them. `budget` maps exact tool names
-  to their call limits; its total across tools is roughly sqrt(n). Several
-  calls to the same tool in one assistant message are one simultaneous batch
-  and consume one unit of that tool's budget. Budget and spend by batches, not
-  individual calls.
+  to integer turn limits; its total across tools is roughly sqrt(n). One
+  assistant message spends at most one unit in total, split across the tools
+  it calls in proportion to their call counts and rounded to two decimals.
+  Budget and spend by assistant turns, not individual calls.
   For a heavy task, also budget `task`: parallel subagent workers take
   independent slices at once, and one batch of `task` calls costs one unit.
 - Every tool call other than `scope`, `regret`, `defer`, and `pin` must happen
-  inside a scope. It consumes one unit from the innermost scope's budget for
-  that tool; same-tool calls in one assistant message share that unit. A tool
-  not listed in the budget has zero calls.
+  inside a scope. The tools of one assistant message share one unit of the
+  innermost scope's budget, split by call count with two-decimal accounting.
+  When a tool's balance is below its share, that tool alone is blocked and the
+  rest of the message still runs. A tool not listed in the budget has zero
+  calls.
 - `scope({ end: { return_markdown } })` closes the innermost scope.
   `return_markdown` is the report you leave for your future self: it replaces
   the scope's begin receipt when the scope is collapsed and records what was

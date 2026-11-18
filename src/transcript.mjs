@@ -244,10 +244,39 @@ export function collectPinnedMessages(messages, options = {}) {
 	return pinned;
 }
 
-export function applyCollapses(messages, collapses) {
+function isHandoffBoundary(message) {
+	if (!message || message.role !== "custom") return false;
+	if (message.customType === "handoff" || message.customType === "herd-relay-handoff") {
+		return true;
+	}
+	const content = message.content;
+	const text =
+		typeof content === "string"
+			? content
+			: Array.isArray(content)
+				? content
+						.map((block) =>
+							typeof block?.text === "string" ? block.text : "",
+						)
+						.join("\n")
+				: "";
+	return text.includes("<handoff-context>");
+}
+
+function crossesHandoffBoundary(messages, start, end) {
+	for (let index = start; index < end; index += 1) {
+		if (isHandoffBoundary(messages[index])) return true;
+	}
+	return false;
+}
+
+export function applyCollapses(messages, collapses, epoch = 0) {
 	let result = Array.isArray(messages) ? messages.slice() : [];
 	const records = Array.isArray(collapses) ? collapses : [];
-	const active = records.filter((collapse) => collapse.collapsed !== false);
+	const active = records.filter(
+		(collapse) =>
+			collapse.collapsed !== false && (collapse.epoch ?? 0) === epoch,
+	);
 
 	for (const collapse of active) {
 		const begin = findBegin(result, collapse.beginToolCallId);
@@ -255,6 +284,9 @@ export function applyCollapses(messages, collapses) {
 
 		const endAssistantIndex = findToolCallIndex(result, collapse.endToolCallId);
 		if (endAssistantIndex < 0 || endAssistantIndex <= begin.resultIndex) continue;
+		if (crossesHandoffBoundary(result, begin.resultIndex + 1, endAssistantIndex)) {
+			continue;
+		}
 
 		const beginToolIds = new Set(toolCalls(begin.assistant).map((call) => call.id));
 		const pinned = collectPinnedMessages(result, {

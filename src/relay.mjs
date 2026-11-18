@@ -115,6 +115,19 @@ export function isValidRelay(value) {
 	return true;
 }
 
+/**
+ * A todo view is the one ledger call that changes nothing. The native todo
+ * infers `view` when no op is given and no list replaces the ledger; the relay
+ * gate uses the same rule, or a diagnostic view is blocked exactly when the
+ * relay is stuck.
+ */
+export function isTodoView(params) {
+	const value = isPlainObject(params) ? params : {};
+	if (value.op === "view") return true;
+	if (value.op !== undefined) return false;
+	return !Array.isArray(value.list);
+}
+
 function tasksOf(phase) {
 	if (!isPlainObject(phase)) return [];
 	if (Array.isArray(phase.tasks)) return phase.tasks;
@@ -187,10 +200,13 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 	const lastLedger = { ...stats, at };
 	const first = current.firstEvaluation === null;
 	if (stats.empty) {
+		// A holder that is already promoted remains allowed to stop. A repeated
+		// empty evaluation must not force another handoff: the promoted holder is
+		// the one that writes the final answer.
 		const promoted =
 			current.generation > 0 &&
-			first &&
-			!current.promotionInvalidated;
+			!current.promotionInvalidated &&
+			(first || current.canStop === true);
 		if (promoted) {
 			return {
 				relay: {
@@ -293,7 +309,9 @@ function nextStepText(relay, stats, action) {
 		case "promoted":
 			return "The successor's first todo evaluation is an empty ledger. This promotion is the only state that allows a natural stop. Write the final user-facing answer as ordinary assistant text now.";
 		case "handoff":
-			return "The ledger is empty. Stop now. Do not call another tool. The runtime's session_stop hook will call the real built-in AgentSession.handoff() and hand the successor prompt to the next generation.";
+			return relay.generation === 0 && relay.firstEvaluation === "empty"
+				? "The ledger is empty. Finish your reply to the user now; do not call another tool. The runtime runs the real built-in AgentSession.handoff() after this turn."
+				: "The ledger is empty. The next context hook runs the real built-in AgentSession.handoff() and interrupts this turn. Do not call another tool.";
 		case "rework":
 			return relay.generation === 0
 				? "Your first todo evaluation found open work (rework). Work through the ledger; a non-empty ledger forbids a natural stop."
@@ -348,6 +366,9 @@ const INDEPENDENT_AUDIT_EN = [
 	"4. An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
 ].join("\n");
 
+const VERBATIM_REQUIREMENTS_REMINDER =
+	"Friendly reminder: preserve the user's original requirements verbatim when handing off. Do not paraphrase, compress, or narrow them; retelling is where requirements drift. Quote the exact request in the ledger and in the handoff focus.";
+
 const SUCCESSOR_RULE =
 	"An empty ledger triggers a relay handoff: make a real call to the built-in /handoff and hand the successor prompt to the successor. The successor may first open any number of scopes to investigate, then make its first todo evaluation; todo does not have to be its first tool call. Only a successor whose first todo evaluation is an empty ledger may stop naturally. If successor A's first evaluation is a non-empty ledger, A enters rework; after that, even if A changes the ledger to empty, A is not the last holder and must call /handoff again to B; only when B's first todo evaluation is empty is stopping allowed.";
 
@@ -358,6 +379,7 @@ export function handoffFocus(relay) {
 		SUCCESSOR_RULE,
 		STOP_RULE,
 		INDEPENDENT_AUDIT_EN,
+		VERBATIM_REQUIREMENTS_REMINDER,
 		`Previous generation: ${current.generation}. Its ledger was empty when it called the built-in /handoff.`,
 		"Your first real task is an independent audit of that empty ledger. Do not trust the previous holder blindly: check whether unfinished user-requested work was marked completed or abandoned.",
 		"You may open any number of scopes to investigate before your first todo evaluation; todo need not be your first tool call. todo itself is forbidden inside every scope. Close every scope before calling todo.",
@@ -375,6 +397,7 @@ export function successorPrompt(relay, stats) {
 		SUCCESSOR_RULE,
 		STOP_RULE,
 		INDEPENDENT_AUDIT_EN,
+		VERBATIM_REQUIREMENTS_REMINDER,
 		"You may first open any number of scopes to investigate. todo does not have to be your first tool call. But todo is forbidden inside every scope; close all scopes before you call todo.",
 		"Your first todo evaluation decides everything: empty -> you are promoted and may write the final user-facing answer; non-empty -> rework, you are not the last holder, and after finishing the work an empty ledger must trigger another real /handoff to the next successor.",
 		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",

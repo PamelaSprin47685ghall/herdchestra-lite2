@@ -18,7 +18,7 @@ const checks = [
 	{
 		tool: "todo",
 		pattern:
-			/name:\s*"todo"[\s\S]*?concurrency:\s*"exclusive"[\s\S]*?strict:\s*true[\s\S]*?lenientArgValidation:\s*true[\s\S]*?execute:/,
+			/name:\s*"todo"[\s\S]*?concurrency:\s*"exclusive"[\s\S]*?strict:\s*true[\s\S]*?lenientArgValidation:\s*true[\s\S]*?loadMode:\s*"essential"[\s\S]*?execute:/,
 	},
 ];
 

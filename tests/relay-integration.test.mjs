@@ -1,11 +1,16 @@
 /**
  * Relay integration: real hooks, real todo wrapper, fake native todo, and a
- * fake AgentSession.handoff(). The handoff executes in session_stop, never in
- * the todo execute body, so print mode cannot deadlock on a streaming turn.
+ * fake AgentSession.handoff(). An empty ledger only marks the relay pending;
+ * the next context hook runs the real handoff and returns the post-handoff
+ * transcript, so the next LLM request is the successor's first turn.
+ * session_stop remains the retry path when the context hook fails.
  */
 
 import { describe, expect, test } from "bun:test";
-import { countHandoffCompactions } from "../src/handoff.mjs";
+import {
+	countHandoffCompactions,
+	runHandoffInContext,
+} from "../src/handoff.mjs";
 import { activate } from "../src/main.mjs";
 import {
 	installInteractiveCapture,
@@ -71,6 +76,17 @@ function makeManager() {
 			leafId = entry.id;
 			return entry.id;
 		},
+		appendSessionInit: (fields) => {
+			const entry = {
+				type: "session_init",
+				...fields,
+				id: id(),
+				parentId: leafId,
+			};
+			entries.push(entry);
+			leafId = entry.id;
+			return entry.id;
+		},
 		buildSessionContext: () => {
 			const messages = [];
 			for (const entry of manager.getBranch()) {
@@ -87,6 +103,7 @@ function makeHost() {
 	const tools = new Map();
 	const steers = [];
 	const messages = [];
+	const activeTools = ["read", "write", "bash", "edit", "glob"];
 	const pi = {
 		on(event, handler) {
 			if (!handlers.has(event)) handlers.set(event, []);
@@ -101,8 +118,14 @@ function makeHost() {
 			if (options?.deliverAs === "steer") steers.push(entry);
 			return Promise.resolve();
 		},
+		getActiveTools() {
+			return [...activeTools];
+		},
+		async setActiveTools(names) {
+			activeTools.splice(0, activeTools.length, ...names);
+		},
 	};
-	return { pi, handlers, tools, steers, messages };
+	return { pi, handlers, tools, steers, messages, activeTools };
 }
 
 async function emit(handlers, event, payload, ctx) {
@@ -205,6 +228,7 @@ async function start(options = {}) {
 		sessionManager: manager,
 		isGeneratingHandoff: false,
 		calls: [],
+		agent: { state: { messages: [] } },
 		settings: {
 			values: new Map([["compaction.keepRecentTokens", 20000]]),
 			sets: [],
@@ -226,16 +250,21 @@ async function start(options = {}) {
 	};
 	rememberSession(session);
 	await activate(host.pi);
+	const aborts = [];
 	const ctx = {
 		sessionManager: manager,
 		agentMessages: [],
 		mode: options.mode ?? "rpc",
+		abort: () => {
+			aborts.push(true);
+		},
 		invokeTool: (params) => native.execute(params),
 	};
+	if (options.sessionInit) manager.appendSessionInit(options.sessionInit);
 	const user = { role: "user", content: "do the task", timestamp: Date.now() };
 	manager.appendMessage(user);
 	ctx.agentMessages.push(user);
-	return { host, ctx, manager, native, session };
+	return { host, ctx, manager, native, session, aborts };
 }
 
 async function runAssistant(host, ctx, message) {
@@ -285,6 +314,14 @@ async function runAssistant(host, ctx, message) {
 		ctx.sessionManager.appendMessage(result);
 		ctx.agentMessages.push(result);
 		results.push({ result, blocked: false, output });
+		if (block.name === "todo" && output.details?.relay?.handoffPending === true) {
+			results[results.length - 1].context = await emit(
+				host.handlers,
+				"context",
+				{ messages: ctx.agentMessages },
+				ctx,
+			);
+		}
 	}
 	return results;
 }
@@ -307,6 +344,68 @@ function successorMessages(host) {
 }
 
 describe("relay integration", () => {
+	test("a context handoff with fewer than two messages waits for session_stop", async () => {
+		const { host, ctx, session } = await start({ mode: "print" });
+		ctx.sessionManager.entries.length = 0;
+		ctx.sessionManager.resetLeaf();
+		const rec = stateFor(ctx);
+		const outcome = await runHandoffInContext(rec, ctx, host.pi);
+		expect(outcome.ok).toBe(false);
+		expect(outcome.error).toContain("too few messages");
+		expect(session.calls.length).toBe(0);
+	});
+
+	test("a read-only subagent works without a scope and stops without relay", async () => {
+		const { host, ctx } = await start({
+			sessionInit: {
+				agent: "scout",
+				readOnly: true,
+				tools: ["read", "grep", "glob"],
+			},
+		});
+		const read = await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "a" })]),
+		);
+		expect(read[0].blocked).toBe(false);
+		const stop = await emitStop(host, ctx);
+		expect(stop).toBeUndefined();
+		const before = stateFor(ctx).state.epoch;
+		await emit(
+			host.handlers,
+			"session_compact",
+			{ type: "session_compact" },
+			ctx,
+		);
+		expect(stateFor(ctx).state.epoch).toBe(before);
+		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		const text = JSON.stringify(context.messages);
+		expect(text).not.toContain("todo");
+		expect(text).not.toContain("handoff");
+	});
+
+	test("a read-write subagent keeps scope gating and gets todo activated", async () => {
+		const { host, ctx } = await start({
+			sessionInit: {
+				agent: "task",
+				readOnly: false,
+				tools: ["read", "write", "bash", "edit"],
+			},
+		});
+		await emit(host.handlers, "before_agent_start", { systemPrompt: [] }, ctx);
+		expect(host.activeTools).toContain("todo");
+		const read = await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "a" })]),
+		);
+		expect(read[0].blocked).toBe(true);
+		expect(read[0].result.content[0].text).toContain("Not in a scope");
+		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		expect(JSON.stringify(context.messages)).toContain("todo");
+	});
+
 	test("todo is blocked inside a scope and free outside; other tools stay gated", async () => {
 		const { host, ctx } = await start();
 		await runAssistant(
@@ -396,31 +495,34 @@ describe("relay integration", () => {
 		expect(host.steers[0].text).toContain("natural stop is forbidden");
 	});
 
-	test("todo empty only marks pending; print session_stop returns continuation", async () => {
-		const { host, ctx, session } = await start({ mode: "print" });
+	test("todo empty lets generation 0 speak, then session_stop runs the real handoff", async () => {
+		const { host, ctx, session, aborts } = await start({ mode: "print" });
 		const result = await runAssistant(
 			host,
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
-		expect(result[0].output.content.at(-1).text).toContain("Handoff is pending");
-		expect(result[0].output.content.at(-1).text).toContain("Stop now");
+		const text = result[0].output.content.map((part) => part.text).join("\n");
 		expect(session.calls.length).toBe(0);
+		expect(aborts.length).toBe(0);
+		expect(result[0].context).toBeDefined();
+		expect(JSON.stringify(result[0].context.messages)).toContain(
+			"Finish your reply to the user now",
+		);
+		expect(text).toContain("Handoff is pending");
+		expect(text).toContain("Finish your reply to the user now");
+		expect(text).not.toContain("You are the relay successor");
+		expect(stateFor(ctx).state.relay.generation).toBe(0);
 
 		const stop = await emitStop(host, ctx);
 		expect(stop.continue).toBe(true);
 		expect(stop.additionalContext).toContain("You are the relay successor");
-		expect(stop.additionalContext).toContain(
-			"Only a successor whose first todo evaluation is an empty ledger may stop naturally",
-		);
-		expect(stop.additionalContext).toContain(
-			"You must independently verify the previous holder's work. Do not trust its empty ledger or its conclusion.",
-		);
 		expect(session.calls.length).toBe(1);
 		expect(session.calls[0]).toContain("An empty ledger triggers a relay handoff");
 		expect(session.calls[0]).toContain(
 			"An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
 		);
+		expect(stateFor(ctx).state.relay.generation).toBe(1);
 		expect(host.messages.length).toBe(0);
 		expect(host.messages.some((entry) => entry.text.trim() === "/handoff")).toBe(false);
 
@@ -430,9 +532,60 @@ describe("relay integration", () => {
 			assistant([call("t2", "todo", { op: "view" })]),
 		);
 		expect(view[0].output.details.relay.generation).toBe(1);
+
+		// The successor's first empty evaluation promotes it. A second empty
+		// evaluation must keep that promotion and must not force another handoff;
+		// the promoted holder is the one that writes the final answer.
+		const promoted = await runAssistant(
+			host,
+			ctx,
+			assistant([call("t3", "todo", { op: "init", list: [] })]),
+		);
+		expect(promoted[0].output.details.relay.canStop).toBe(true);
+		expect(promoted[0].output.details.relay.handoffPending).toBe(false);
+		expect(session.calls.length).toBe(1);
+
+		const repeated = await runAssistant(
+			host,
+			ctx,
+			assistant([call("t4", "todo", { op: "init", list: [] })]),
+		);
+		expect(repeated[0].output.details.relay.canStop).toBe(true);
+		expect(repeated[0].output.details.relay.handoffPending).toBe(false);
+		expect(session.calls.length).toBe(1);
 	});
 
-	test("all modes use the session_stop continuation for the successor prompt", async () => {
+	test("a failed stop handoff leaves the empty ledger for the next stop to retry", async () => {
+		let attempts = 0;
+		const { host, ctx, session } = await start({
+			mode: "print",
+			handoff: async () => {
+				attempts += 1;
+				if (attempts === 1) throw new Error("compaction already in progress");
+				return { ok: true };
+			},
+		});
+		const result = await runAssistant(
+			host,
+			ctx,
+			assistant([call("t1", "todo", { op: "init", list: [] })]),
+		);
+		expect(result[0].output.content.at(-1).text).toContain("Handoff is pending");
+		expect(result[0].output.details.relay.generation).toBe(0);
+		expect(session.calls.length).toBe(0);
+
+		const first = await emitStop(host, ctx);
+		expect(first.continue).toBe(true);
+		expect(first.additionalContext).toContain("HANDOFF FAILED: compaction already in progress");
+		expect(session.calls.length).toBe(1);
+
+		const second = await emitStop(host, ctx);
+		expect(second.continue).toBe(true);
+		expect(second.additionalContext).toContain("You are the relay successor");
+		expect(session.calls.length).toBe(2);
+	});
+
+	test("session_stop after a handoff asks the successor to evaluate", async () => {
 		const { host, ctx, session } = await start({ mode: "rpc" });
 		await runAssistant(
 			host,
@@ -442,6 +595,10 @@ describe("relay integration", () => {
 		const stop = await emitStop(host, ctx);
 		expect(stop.continue).toBe(true);
 		expect(stop.additionalContext).toContain("You are the relay successor");
+		expect(session.calls.length).toBe(1);
+		const second = await emitStop(host, ctx);
+		expect(second.continue).toBe(true);
+		expect(second.additionalContext).toContain("evaluate the ledger with todo");
 		expect(session.calls.length).toBe(1);
 		expect(host.messages.length).toBe(0);
 		expect(host.messages.some((entry) => entry.text.trim() === "/handoff")).toBe(false);
@@ -494,7 +651,7 @@ describe("relay integration", () => {
 	});
 
 	test("generation 1 first non-empty ledger is rework, then empty hands off again", async () => {
-		const { host, ctx, session } = await start({ mode: "rpc" });
+		const { host, ctx, session, aborts } = await start({ mode: "rpc" });
 		await runAssistant(
 			host,
 			ctx,
@@ -531,28 +688,27 @@ describe("relay integration", () => {
 			assistant([call("t4", "todo", { op: "view" })]),
 		);
 		expect(view[0].output.details.relay.generation).toBe(2);
+		expect(aborts.length).toBe(0);
 	});
 
-	test("a failed handoff nudges, and the next stop retries once", async () => {
+	test("a failed inline handoff surfaces the error and the stop hook retries", async () => {
 		const { host, ctx, session } = await start({
 			mode: "print",
 			handoff: () => {
 				throw new Error("no model");
 			},
 		});
-		await runAssistant(
+		const result = await runAssistant(
 			host,
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
+		expect(result[0].output.content.at(-1).text).toContain("Handoff is pending");
+		expect(session.calls.length).toBe(0);
 		const first = await emitStop(host, ctx);
 		expect(first.continue).toBe(true);
 		expect(first.additionalContext).toContain("HANDOFF FAILED: no model");
 		expect(session.calls.length).toBe(1);
-		const second = await emitStop(host, ctx);
-		expect(second.continue).toBe(true);
-		expect(second.additionalContext).toContain("HANDOFF FAILED: no model");
-		expect(session.calls.length).toBe(2);
 		const view = await runAssistant(
 			host,
 			ctx,
@@ -560,6 +716,74 @@ describe("relay integration", () => {
 		);
 		expect(view[0].output.details.relay.generation).toBe(0);
 		expect(view[0].output.content.at(-1).text).toContain("Last handoff error: no model");
+	});
+
+	test("an already-compacted handoff is terminal, advances once, and unblocks the relay", async () => {
+		const { host, ctx } = await start({
+			mode: "print",
+			handoff: () => {
+				throw new Error("Nothing to hand off (already compacted)");
+			},
+		});
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("t1", "todo", { op: "init", list: [] })]),
+		);
+		const rec = stateFor(ctx);
+		expect(rec.state.relay.handoffPending).toBe(true);
+
+		const first = await emitStop(host, ctx);
+		expect(first.continue).toBe(true);
+		expect(first.additionalContext).toContain(
+			"You are the relay successor (generation 1)",
+		);
+		expect(first.additionalContext).not.toContain("HANDOFF FAILED");
+		expect(rec.state.relay.generation).toBe(1);
+		expect(rec.state.relay.handoffPending).toBe(false);
+		expect(rec.state.relay.handoffError).toBeNull();
+
+		// The successor has not evaluated yet, so a second stop must not run
+		// another handoff or advance the generation.
+		await emitStop(host, ctx);
+		expect(rec.state.relay.generation).toBe(1);
+
+		// Even with pending re-armed, an already-compacted host is terminal: the
+		// idempotent advance runs at most once, and a todo view stays available
+		// as the diagnostic entry point.
+		rec.state.relay = { ...rec.state.relay, handoffPending: true };
+		const view = await runAssistant(
+			host,
+			ctx,
+			assistant([call("t2", "todo", { op: "view" })]),
+		);
+		expect(view[0].blocked).toBe(false);
+		expect(view[0].output.content.at(-1).text).toContain("RELAY STATE");
+		expect(rec.state.relay.generation).toBe(1);
+		expect(rec.state.relay.handoffPending).toBe(false);
+
+		const write = await runAssistant(
+			host,
+			ctx,
+			assistant([call("t3", "todo", { op: "init", list: [] })]),
+		);
+		expect(write[0].blocked).toBe(false);
+		expect(write[0].output.details.relay.canStop).toBe(true);
+
+		const opened = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("s1", "scope", {
+					begin: {
+						intent: "verify the unblocked relay",
+						budget: { read: 1 },
+					},
+				}),
+			]),
+		);
+		expect(opened[0].blocked).toBe(false);
+		expect(stateFor(ctx).state.scopes.length).toBe(1);
 	});
 
 	test("a handoff that returns success without advancing never allows a stop", async () => {
@@ -593,6 +817,7 @@ describe("relay integration", () => {
 	test("short-session recovery appends a real user checkpoint before retrying", async () => {
 		let started = null;
 		let checkpointAtRetry = false;
+		let checkpointInAgent = false;
 		started = await start({
 			mode: "print",
 			handoff: ({ call: callNumber }) => {
@@ -607,6 +832,10 @@ describe("relay integration", () => {
 							"Relay handoff audit checkpoint",
 						),
 				);
+				checkpointInAgent = started.session.agent.state.messages.some(
+					(message) =>
+						JSON.stringify(message).includes("Relay handoff audit checkpoint"),
+				);
 				return { ok: true };
 			},
 		});
@@ -615,18 +844,15 @@ describe("relay integration", () => {
 			started.ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
+		expect(started.session.calls.length).toBe(0);
 		const stop = await emitStop(started.host, started.ctx);
 		expect(stop.continue).toBe(true);
 		expect(stop.additionalContext).toContain("You are the relay successor");
 		expect(started.session.calls.length).toBe(2);
 		expect(checkpointAtRetry).toBe(true);
+		expect(checkpointInAgent).toBe(true);
 		expect(started.session.settings.sets).toEqual([]);
-		const view = await runAssistant(
-			started.host,
-			started.ctx,
-			assistant([call("t2", "todo", { op: "view" })]),
-		);
-		expect(view[0].output.details.relay.generation).toBe(1);
+		expect(stateFor(started.ctx).state.relay.generation).toBe(1);
 	});
 
 	test("when the checkpoint is not enough, keepRecentTokens is temporary", async () => {
@@ -644,6 +870,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
+		expect(session.calls.length).toBe(0);
 		const stop = await emitStop(host, ctx);
 		expect(stop.continue).toBe(true);
 		expect(stop.additionalContext).toContain("You are the relay successor");
@@ -656,6 +883,17 @@ describe("relay integration", () => {
 
 	test("print session_stop continues on scope, missing evaluation, and non-empty ledger", async () => {
 		const noEvaluation = await start({ mode: "print" });
+		const noEvalRec = stateFor(noEvaluation.ctx);
+		noEvalRec.state.relay = {
+			...noEvalRec.state.relay,
+			generation: 0,
+			firstEvaluation: null,
+			canStop: false,
+			handoffPending: false,
+			promotionInvalidated: false,
+			lastLedger: null,
+			handoffError: null,
+		};
 		const unevaluated = await emitStop(noEvaluation.host, noEvaluation.ctx);
 		expect(unevaluated.continue).toBe(true);
 		expect(unevaluated.additionalContext).toContain("evaluate the ledger with todo");
@@ -686,23 +924,33 @@ describe("relay integration", () => {
 		expect(scoped.additionalContext).toContain("still inside scope level 1");
 	});
 
-	test("scope begin is blocked while a handoff is pending", async () => {
-		const { host, ctx, session } = await start({ mode: "rpc" });
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		const begin = await runAssistant(
+	test("scope begin is blocked while pending, then allowed for the successor", async () => {
+		const { host, ctx } = await start({ mode: "rpc" });
+		const rec = stateFor(ctx);
+		rec.state.relay = { ...rec.state.relay, handoffPending: true };
+		const blocked = await runAssistant(
 			host,
 			ctx,
 			assistant([call("b1", "scope", { begin: { intent: "early", budget: { read: 1 } } })]),
 		);
-		expect(begin[0].blocked).toBe(true);
-		expect(begin[0].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
-		expect(session.calls.length).toBe(0);
-		await emitStop(host, ctx);
-		expect(session.calls.length).toBe(1);
+		expect(blocked[0].blocked).toBe(true);
+		expect(blocked[0].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
+
+		const fresh = await start({ mode: "rpc" });
+		await runAssistant(
+			fresh.host,
+			fresh.ctx,
+			assistant([call("t1", "todo", { op: "init", list: [] })]),
+		);
+		const stop = await emitStop(fresh.host, fresh.ctx);
+		expect(stop.continue).toBe(true);
+		expect(fresh.session.calls.length).toBe(1);
+		const allowed = await runAssistant(
+			fresh.host,
+			fresh.ctx,
+			assistant([call("b2", "scope", { begin: { intent: "audit", budget: { read: 1 } } })]),
+		);
+		expect(allowed[0].blocked).toBe(false);
 	});
 
 	test("vibe mode keeps the todo override registered", async () => {
@@ -800,16 +1048,22 @@ describe("tui handoff integration", () => {
 		expect(countHandoffCompactions(manager)).toBe(2);
 	});
 
-	test("the TUI handoff command runs the real session handoff and returns continuation", async () => {
+	test("the empty-ledger handoff runs before the tool result and rebuilds the TUI", async () => {
 		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
 		const tui = makeTui(started.session);
 		rememberTui(tui);
 		try {
-			await runAssistant(
+			const result = await runAssistant(
 				started.host,
 				started.ctx,
 				assistant([call("t1", "todo", { op: "init", list: [] })]),
 			);
+			const text = result[0].output.content.map((part) => part.text).join("\n");
+			expect(text).toContain("Handoff is pending");
+			expect(text).toContain("Finish your reply to the user now");
+			expect(text).not.toContain("You are the relay successor");
+			expect(tui.handoffCalls.length).toBe(0);
+			expect(started.session.calls.length).toBe(0);
 			const stop = await emitStop(started.host, started.ctx);
 			expect(stop.continue).toBe(true);
 			expect(stop.additionalContext).toContain("You are the relay successor");
@@ -827,26 +1081,31 @@ describe("tui handoff integration", () => {
 		}
 	});
 
-	test("a failing TUI command falls back to the real handoff and rebuilds", async () => {
-		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
-		const tui = makeTui(started.session, {
-			command: () => {
-				throw new Error("command exploded");
+	test("a failed inline handoff falls back to the TUI command at stop", async () => {
+		const started = await start({
+			mode: "print",
+			handoff: ({ call: callNumber, session }) => {
+				if (callNumber === 1) throw new Error("no model");
+				session.sessionManager.appendCompaction("handoff");
+				return { ok: true };
 			},
 		});
+		const tui = makeTui(started.session);
 		rememberTui(tui);
 		try {
-			await runAssistant(
+			const result = await runAssistant(
 				started.host,
 				started.ctx,
 				assistant([call("t1", "todo", { op: "init", list: [] })]),
 			);
+			expect(result[0].output.content.at(-1).text).toContain("Handoff is pending");
+			expect(started.session.calls.length).toBe(0);
+
 			const stop = await emitStop(started.host, started.ctx);
 			expect(stop.continue).toBe(true);
 			expect(stop.additionalContext).toContain("You are the relay successor");
 			expect(tui.handoffCalls.length).toBe(1);
-			expect(started.session.calls.length).toBe(1);
-			expect(tui.renders).toBe(1);
+			expect(started.session.calls.length).toBe(2);
 			expect(countHandoffCompactions(started.manager)).toBe(1);
 			expect(stateFor(started.ctx).state.relay.generation).toBe(1);
 		} finally {
@@ -891,11 +1150,12 @@ describe("tui handoff integration", () => {
 		};
 		rememberTui(tui);
 		try {
-			await runAssistant(
+			const result = await runAssistant(
 				started.host,
 				started.ctx,
 				assistant([call("t1", "todo", { op: "init", list: [] })]),
 			);
+			expect(result[0].output.content.at(-1).text).toContain("Finish your reply to the user now");
 			const stop = await emitStop(started.host, started.ctx);
 			expect(stop.continue).toBe(true);
 			expect(stop.additionalContext).toContain("You are the relay successor");
@@ -910,11 +1170,12 @@ describe("tui handoff integration", () => {
 	test("without a TUI, success appends a visible handoff signal", async () => {
 		rememberTui(null);
 		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
-		await runAssistant(
+		const result = await runAssistant(
 			started.host,
 			started.ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
+		expect(result[0].output.content.at(-1).text).toContain("Finish your reply to the user now");
 		const stop = await emitStop(started.host, started.ctx);
 		expect(stop.continue).toBe(true);
 		expect(stop.additionalContext).toContain("You are the relay successor");
@@ -924,5 +1185,80 @@ describe("tui handoff integration", () => {
 		expect(signal.message.content[0].text).toBe(
 			"Handoff complete: generation 1 -> successor evaluating",
 		);
+	});
+});
+
+describe("host truncation", () => {
+	async function openNestedScopes() {
+		const started = await start({ mode: "print" });
+		await runAssistant(
+			started.host,
+			started.ctx,
+			assistant([
+				call("b1", "scope", {
+					begin: { intent: "outer", budget: { read: 2 } },
+				}),
+			]),
+		);
+		await runAssistant(
+			started.host,
+			started.ctx,
+			assistant([
+				call("b2", "scope", {
+					begin: { intent: "inner", budget: { read: 2 } },
+				}),
+			]),
+		);
+		expect(stateFor(started.ctx).state.scopes.length).toBe(2);
+		return started;
+	}
+
+	test("a host compaction keeps only the outermost scope and advances the epoch", async () => {
+		const { host, ctx } = await openNestedScopes();
+		await emit(
+			host.handlers,
+			"session_compact",
+			{
+				type: "session_compact",
+				compactionEntry: { type: "compaction", fromExtension: false },
+			},
+			ctx,
+		);
+		const state = stateFor(ctx).state;
+		expect(state.epoch).toBe(1);
+		expect(state.scopes.length).toBe(1);
+		expect(state.scopes[0].intent).toBe("outer");
+		expect(state.scopes[0].epoch).toBe(1);
+	});
+
+	test("a host handoff message truncates to the outermost scope", async () => {
+		const { host, ctx } = await openNestedScopes();
+		ctx.agentMessages.push({
+			role: "custom",
+			customType: "handoff",
+			content: [
+				{ type: "text", text: "<handoff-context>host handoff</handoff-context>" },
+			],
+			timestamp: 42,
+		});
+		await emit(host.handlers, "context", { messages: ctx.agentMessages }, ctx);
+		const state = stateFor(ctx).state;
+		expect(state.epoch).toBe(1);
+		expect(state.scopes.length).toBe(1);
+		expect(state.scopes[0].intent).toBe("outer");
+	});
+
+	test("a host session_switch handoff truncates without a relay handoff", async () => {
+		const { host, ctx } = await openNestedScopes();
+		await emit(
+			host.handlers,
+			"session_switch",
+			{ type: "session_switch", reason: "handoff" },
+			ctx,
+		);
+		const state = stateFor(ctx).state;
+		expect(state.epoch).toBe(1);
+		expect(state.scopes.length).toBe(1);
+		expect(state.scopes[0].intent).toBe("outer");
 	});
 });

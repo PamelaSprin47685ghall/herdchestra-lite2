@@ -26,6 +26,7 @@ import {
 	findElderSibling,
 	scopeOrder,
 	serializeState,
+	truncateForHostBoundary,
 } from "./engine.mjs";
 import {
 	appendUserTail,
@@ -42,16 +43,24 @@ import {
 	toolCalls,
 } from "./transcript.mjs";
 import { injectSystemPrompt, languageSkill, outsideScopeInstruction } from "./prompts.mjs";
+import {
+	agentPolicy,
+	READ_ONLY_SUBAGENT,
+	READ_WRITE_SUBAGENT,
+} from "./agent-policy.mjs";
 import { setAgentMessages } from "./runner-capture.mjs";
 import {
 	installHandoffHooks,
 	requestHandoff,
+	runHandoffInContext,
 } from "./handoff.mjs";
 import {
 	firstEvaluationNudge,
 	invalidatePromotion,
+	isTodoView,
 	openLedgerNudge,
 	relayStatusText,
+	successorPrompt,
 } from "./relay.mjs";
 
 const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
@@ -70,6 +79,8 @@ function makeRecord(manager) {
 		nudged: new WeakSet(),
 		needsRebase: false,
 		lastError: null,
+		hostBoundaryKey: null,
+		agentPolicy: null,
 		relayPromptPendingFor: null,
 		relayPromptSentFor: null,
 		handoffInFlight: false,
@@ -145,6 +156,11 @@ function persist(rec) {
 	} catch (error) {
 		rec.lastError = String(error?.message ?? error);
 	}
+}
+
+function policyFor(rec, ctx) {
+	if (rec.agentPolicy === null) rec.agentPolicy = agentPolicy(ctx);
+	return rec.agentPolicy;
 }
 
 /** Persist a record from another module without exposing the WeakMap. */
@@ -278,7 +294,7 @@ function beginText(scope) {
 		`Budget (innermost scope only): ${budgetText(scope) || "none"}.`,
 		"Only the innermost scope's budget is used. A tool not listed in the budget has zero calls. scope, regret, defer, and pin are free.",
 		"todo is free but forbidden inside any active scope. Close every scope before updating the ledger; a natural stop requires a successful todo evaluation outside all scopes.",
-		"Calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget. Budget and spend by batches, not individual calls.",
+		"Calls in one assistant message spend at most one unit in total, split across the tools used in proportion to their call counts and rounded to two decimals. A tool whose balance runs out is blocked while the rest of the message still runs. Budget and spend by assistant turns.",
 		"Do not write the final user-facing answer while inside a scope. Close every scope first; only after every scope closes may you answer the user.",
 		"When this scope closes, its elder sibling at the same level is collapsed; this scope stays visible until a younger sibling closes.",
 		'Call scope({ end: { return_markdown: "<report for your future self>" } }) when this task is complete. return_markdown is a self-delivery report; write the user-facing answer as ordinary assistant text.',
@@ -370,7 +386,7 @@ function budgetLine(scope) {
 function scopeTailInstruction(state) {
 	const scope = currentScope(state);
 	if (!scope) return outsideScopeInstruction;
-	return `You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetLine(scope)}. Only the innermost scope's budget is used; scope, regret, defer, and pin are free. todo is free but forbidden inside any active scope; close every scope before updating the ledger. Calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget; budget and spend by batches. Do not write the final user-facing answer while inside a scope. When this task is complete, call scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, you are back inside it; close it too before answering the user. Only outside all scopes may you write the final answer as ordinary assistant text, and only after todo evaluates the ledger: a non-empty ledger forbids stopping, while an empty ledger triggers a real /handoff to a successor whose first todo evaluation must also be empty. return_markdown is a self-delivery report, not the user-facing answer. If you stop inside a scope, a nudge will remind you of this rule. Finishing is not a tool call.`;
+	return `You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetLine(scope)}. Only the innermost scope's budget is used; scope, regret, defer, and pin are free. todo is free but forbidden inside any active scope; close every scope before updating the ledger. Calls in one assistant message share at most one unit, split across the tools used in proportion to their call counts and rounded to two decimals; a tool whose balance runs out is blocked while the rest of the message still runs. Do not write the final user-facing answer while inside a scope. When this task is complete, call scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, you are back inside it; close it too before answering the user. Only outside all scopes may you write the final answer as ordinary assistant text, and only after todo evaluates the ledger: a non-empty ledger forbids stopping, while an empty ledger triggers a real /handoff to a successor whose first todo evaluation must also be empty. return_markdown is a self-delivery report, not the user-facing answer. If you stop inside a scope, a nudge will remind you of this rule. Finishing is not a tool call.`;
 }
 
 /** The exact outbound user tail: additional-system-instructions + language skill. */
@@ -402,6 +418,7 @@ function insideScopeNudge(state) {
 
 function maybeNudge(rec, pi, message, ctx) {
 	if (!message || message.role !== "assistant") return;
+	if (policyFor(rec, ctx) === READ_ONLY_SUBAGENT) return;
 	if (toolCalls(message).length > 0) return;
 	if (rec.nudged.has(message)) return;
 	rec.nudged.add(message);
@@ -669,7 +686,13 @@ function handleScopeCall(rec, pi, call, { base, currentMessage, currentPersisted
 			? rec.state.scopes[rec.state.scopes.length - 2].id
 			: null;
 	const order = scopeOrder(scope);
-	const elder = findElderSibling(rec.state, parentId, order);
+	const elder = findElderSibling(
+		rec.state,
+		parentId,
+		order,
+		scope.boundary ?? 0,
+		scope.epoch ?? 0,
+	);
 	let foldedReport = null;
 	if (elder) {
 		const folded = foldElder(rec, {
@@ -689,6 +712,8 @@ function handleScopeCall(rec, pi, call, { base, currentMessage, currentPersisted
 			report,
 			parentId,
 			order,
+			boundary: scope.boundary ?? 0,
+			epoch: scope.epoch ?? 0,
 			collapsed: false,
 			createdAt: Date.now(),
 		});
@@ -941,6 +966,33 @@ function tailKey(message) {
 	return `${message.role}:${message.customType ?? ""}`;
 }
 
+function hostBoundaryKey(messages) {
+	if (!Array.isArray(messages)) return null;
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (!message || message.role !== "custom") continue;
+		const content = message.content;
+		const text =
+			typeof content === "string"
+				? content
+				: Array.isArray(content)
+					? content
+							.map((block) =>
+								typeof block?.text === "string" ? block.text : "",
+							)
+							.join("\n")
+					: "";
+		if (
+			message.customType === "handoff" ||
+			message.customType === "herd-relay-handoff" ||
+			text.includes("<handoff-context>")
+		) {
+			return `${message.customType ?? ""}:${message.timestamp ?? ""}:${text.length}`;
+		}
+	}
+	return null;
+}
+
 function sameTail(a, b) {
 	if (!Array.isArray(a) || !Array.isArray(b) || a.length === 0 || b.length === 0) return false;
 	return tailKey(a[a.length - 1]) === tailKey(b[b.length - 1]);
@@ -960,6 +1012,7 @@ export function installHooks(pi) {
 		pi.on("assistant_message", async (event, ctx) => {
 			const rec = stateFor(ctx);
 			rec.pi = pi;
+			if (policyFor(rec, ctx) === READ_ONLY_SUBAGENT) return undefined;
 			try {
 				rememberCallGroups(rec, event.message);
 				processAssistantMessage(rec, pi, event.message, { persisted: false });
@@ -980,6 +1033,7 @@ export function installHooks(pi) {
 				if (event.message?.role !== "assistant") return;
 				const rec = stateFor(ctx);
 				rec.pi = pi;
+				if (policyFor(rec, ctx) === READ_ONLY_SUBAGENT) return undefined;
 				try {
 					rememberCallGroups(rec, event.message);
 					const controls = controlsIn(event.message);
@@ -1000,6 +1054,7 @@ export function installHooks(pi) {
 	pi.on("tool_call", async (event, ctx) => {
 		const rec = stateFor(ctx);
 		rec.pi = pi;
+		if (policyFor(rec, ctx) === READ_ONLY_SUBAGENT) return undefined;
 		try {
 			// Controls are processed before tool dispatch so scope executes can
 			// read their cached result. A handoff-pending begin must be stopped
@@ -1025,11 +1080,14 @@ export function installHooks(pi) {
 							"TODO_OUTSIDE_SCOPE_ONLY: todo is forbidden inside any active scope. Close every scope first; todo only works outside all scopes.",
 					};
 				}
-				if (rec.state.relay?.handoffPending) {
+				if (
+					rec.state.relay?.handoffPending &&
+					!isTodoView(event.input ?? event.arguments ?? {})
+				) {
 					return {
 						block: true,
 						reason:
-							"RELAY_HANDOFF_PENDING: a relay handoff is pending. Do not change the ledger; wait for the successor.",
+							"RELAY_HANDOFF_PENDING: a relay handoff is pending. A todo view is allowed for diagnosis; do not change the ledger.",
 					};
 				}
 				persist(rec);
@@ -1068,10 +1126,14 @@ export function installHooks(pi) {
 			const groupKey =
 				rec.callGroups.get(event.toolCallId) ??
 				(found ? beatKey(found.message) : undefined);
+			const beatTools = found
+				? toolCalls(found.message).map((call) => call.name)
+				: [];
 			const charged = chargeTool(rec.state, {
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
 				groupKey,
+				beatTools,
 			});
 			if (!charged.ok) return { block: true, reason: charged.reason };
 			persist(rec);
@@ -1087,9 +1149,57 @@ export function installHooks(pi) {
 	pi.on("context", async (event, ctx) => {
 		const rec = stateFor(ctx);
 		const original = Array.isArray(event?.messages) ? event.messages : [];
+		if (policyFor(rec, ctx) === READ_ONLY_SUBAGENT) {
+			return {
+				messages: appendUserTail(
+					original,
+					`<system-reminder>${languageSkill}</system-reminder>`,
+				),
+			};
+		}
+		const boundaryKey = hostBoundaryKey(original);
+		if (boundaryKey && boundaryKey !== rec.hostBoundaryKey) {
+			rec.hostBoundaryKey = boundaryKey;
+			truncateForHostBoundary(rec.state);
+			persist(rec);
+		}
+		const relay = rec.state.relay;
+		const gen0FirstEmpty =
+			relay?.generation === 0 &&
+			relay?.firstEvaluation === "empty" &&
+			relay?.lastLedger?.empty === true;
+		if (relay?.handoffPending && relay.lastLedger?.empty && !gen0FirstEmpty) {
+			// The context hook is the interrupt point: replacing this request's
+			// messages with the post-handoff transcript means the provider sees the
+			// successor's first turn. Do not call ctx.abort(): AgentSession.abort()
+			// aborts the in-flight handoff, and the host then reports
+			// "Handoff cancelled".
+			const outcome = await runHandoffInContext(rec, ctx, pi);
+			if (outcome.ok) {
+				let live = [];
+				try {
+					const context = ctx?.sessionManager?.buildSessionContext?.();
+					if (Array.isArray(context?.messages)) live = context.messages;
+				} catch {
+					live = [];
+				}
+				return {
+					messages: appendUserTail(
+						live.length > 0 ? live : original,
+						`<system-reminder>${languageSkill}</system-reminder>\n\n${successorPrompt(rec.state.relay, rec.state.relay.lastLedger ?? null)}`,
+					),
+				};
+			}
+			rec.lastError = outcome.error;
+			// Fall through: session_stop retries the real handoff.
+		}
 		try {
 			let messages = filterRegrets(original, rec.state.regrets);
-			messages = applyCollapses(messages, rec.state.collapses);
+			messages = applyCollapses(
+				messages,
+				rec.state.collapses,
+				rec.state.epoch,
+			);
 			messages = messages.map(rewriteVibeMessage);
 			maybeRebase(ctx, rec, messages);
 			messages = appendUserTail(messages, tailText(rec.state));
@@ -1111,7 +1221,20 @@ export function installHooks(pi) {
 
 /** Inject the retained English repo-aware prompt. */
 export function installSystemPrompt(pi) {
-	pi.on("before_agent_start", (event) => {
+	pi.on("before_agent_start", async (event, ctx) => {
+		const rec = stateFor(ctx);
+		const policy = agentPolicy(ctx);
+		rec.agentPolicy = policy;
+		if (policy === READ_WRITE_SUBAGENT) {
+			try {
+				const active = pi.getActiveTools?.() ?? [];
+				if (!active.includes("todo")) {
+					await pi.setActiveTools?.([...active, "todo"]);
+				}
+			} catch {
+				// A host without tool activation keeps its own tool set.
+			}
+		}
 		const prompt = injectSystemPrompt(event?.systemPrompt);
 		if (prompt === event?.systemPrompt) return undefined;
 		return { systemPrompt: prompt };

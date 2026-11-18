@@ -104,7 +104,7 @@ function registerTools(pi) {
 		concurrency: "exclusive",
 		strict: true,
 		lenientArgValidation: true,
-		loadMode: "discoverable",
+		loadMode: "essential",
 		approval: "read",
 		execute: createTodoExecute(pi),
 	});

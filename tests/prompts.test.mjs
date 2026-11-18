@@ -30,9 +30,9 @@ describe("languageSkill", () => {
 });
 
 describe("BUDGET_DESCRIPTION", () => {
-  test("explains same-tool batches as one budget unit", () => {
-    expect(BUDGET_DESCRIPTION).toContain("batch");
-    expect(BUDGET_DESCRIPTION).toContain("one read unit");
+  test("explains one shared unit per assistant turn", () => {
+    expect(BUDGET_DESCRIPTION).toContain("assistant turns");
+    expect(BUDGET_DESCRIPTION).toContain("two decimals");
   });
 });
 

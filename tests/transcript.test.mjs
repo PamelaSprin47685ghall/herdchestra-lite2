@@ -464,6 +464,37 @@ describe("applyCollapses", () => {
 		expect(messages).toHaveLength(7);
 	});
 
+	test("does not collapse across a handoff boundary", () => {
+		const boundaries = [
+			{
+				role: "custom",
+				customType: "handoff",
+				display: true,
+				content: "<handoff-context>\nprevious work\n</handoff-context>",
+				timestamp: 150,
+			},
+			{
+				role: "custom",
+				customType: "herd-relay-handoff",
+				display: true,
+				content: [{ type: "text", text: "Handoff complete" }],
+				timestamp: 150,
+			},
+		];
+		const collapse = {
+			beginToolCallId: BEGIN_ID,
+			endToolCallId: END_ID,
+			report: "across",
+		};
+		for (const boundary of boundaries) {
+			const messages = collapsedFixture();
+			messages.splice(4, 0, boundary);
+			const out = applyCollapses(messages, [collapse]);
+			expect(out).toEqual(messages);
+			expect(out).not.toBe(messages);
+		}
+	});
+
 	test("does nothing when the end assistant is before the begin result", () => {
 		const messages = [beginAssistant(), endAssistant(), beginResult()];
 		const collapse = { beginToolCallId: BEGIN_ID, endToolCallId: END_ID, report: "late" };
@@ -472,6 +503,24 @@ describe("applyCollapses", () => {
 
 		expect(out).toEqual(messages);
 		expect(out).not.toBe(messages);
+	});
+
+	test("does not apply a collapse record from an older epoch", () => {
+		const messages = collapsedFixture();
+		const collapse = {
+			beginToolCallId: BEGIN_ID,
+			endToolCallId: END_ID,
+			report: "old epoch",
+			epoch: 0,
+		};
+
+		const out = applyCollapses(messages, [collapse], 1);
+
+		expect(out).toEqual(messages);
+		expect(out).not.toBe(messages);
+		expect(applyCollapses(messages, [collapse], 0)[2].content).toEqual([
+			{ type: "text", text: finishedReport("old epoch") },
+		]);
 	});
 
 	test("does nothing when the end assistant is absent", () => {

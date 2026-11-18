@@ -10,6 +10,11 @@ const VERSION = 2;
 
 const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
 
+// Charge amounts are real numbers with at most two decimal places. One budget
+// unit is split into 100 hundredths so an assistant turn spends exactly one
+// unit however its tools divide it.
+const CHARGE_SCALE = 100;
+
 const STEER_HEADER =
   "You deferred the following findings in this scope. Address them now:";
 
@@ -74,7 +79,7 @@ function copyDefers(list) {
 }
 
 function copyCollapse(collapse) {
-  return {
+	return {
     beginToolCallId: collapse.beginToolCallId,
     endToolCallId: collapse.endToolCallId,
     report: collapse.report,
@@ -88,6 +93,14 @@ function copyCollapse(collapse) {
         : 0,
     collapsed: collapse.collapsed !== false,
     createdAt: collapse.createdAt,
+    boundary:
+      Number.isInteger(collapse.boundary) && collapse.boundary >= 0
+        ? collapse.boundary
+        : 0,
+    epoch:
+      Number.isInteger(collapse.epoch) && collapse.epoch >= 0
+        ? collapse.epoch
+        : 0,
   };
 }
 
@@ -119,6 +132,57 @@ function normalizeToolName(toolName) {
   return toolName === "apply_patch" ? "edit" : toolName;
 }
 
+/** Round a charge amount to the two-decimal budget precision. */
+export function roundAmount(value) {
+  return Math.round(value * CHARGE_SCALE) / CHARGE_SCALE;
+}
+
+/** Render an amount with the fixed two-decimal display precision. */
+export function formatAmount(value) {
+  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
+}
+
+/**
+ * Split one budget unit across the tools called in a single assistant
+ * message, in proportion to their call counts. The shares sum to exactly one
+ * unit. Control tools and `todo` spend nothing and take no share.
+ */
+export function beatShares(toolNames) {
+  const counts = new Map();
+  let total = 0;
+  for (const name of Array.isArray(toolNames) ? toolNames : []) {
+    if (typeof name !== "string" || name === "") continue;
+    if (CONTROL_TOOLS.has(name) || name === "todo") continue;
+    const tool = normalizeToolName(name);
+    counts.set(tool, (counts.get(tool) ?? 0) + 1);
+    total += 1;
+  }
+  if (total === 0) return {};
+  const shares = {};
+  let assigned = 0;
+  let largestTool = null;
+  let largestCount = 0;
+  for (const [tool, count] of counts) {
+    const part = Math.max(1, Math.round((count * CHARGE_SCALE) / total));
+    put(shares, tool, part);
+    assigned += part;
+    if (count > largestCount) {
+      largestCount = count;
+      largestTool = tool;
+    }
+  }
+  // Hand the rounding residue to the most frequent tool so the shares always
+  // add up to one unit.
+  const correction = CHARGE_SCALE - assigned;
+  if (correction !== 0) {
+    put(shares, largestTool, Math.max(0, shares[largestTool] + correction));
+  }
+  for (const tool of Object.keys(shares)) {
+    put(shares, tool, roundAmount(shares[tool] / CHARGE_SCALE));
+  }
+  return shares;
+}
+
 function makeScope(state, toolCallId, intent, budget) {
   const spent = {};
   for (const tool of Reflect.ownKeys(budget)) {
@@ -126,6 +190,12 @@ function makeScope(state, toolCallId, intent, budget) {
   }
   return {
     id: `scope-${++state.seq}`,
+    boundary:
+      Number.isInteger(state.relay?.generation) && state.relay.generation >= 0
+        ? state.relay.generation
+        : 0,
+    epoch:
+      Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
     intent: intent.trim(),
     beginToolCallId: typeof toolCallId === "string" ? toolCallId : "",
     budget: copyCounts(budget),
@@ -169,6 +239,7 @@ export function createState() {
   return {
     version: VERSION,
     seq: 0,
+    epoch: 0,
     scopes: [],
     charges: {},
     regrets: [],
@@ -195,15 +266,58 @@ export function scopeOrder(scope) {
  * still visible (not yet collapsed). Siblings close in order, so this is the
  * scope that should be collapsed when the current scope closes.
  */
-export function findElderSibling(state, parentId, order) {
+export function findElderSibling(state, parentId, order, boundary = 0, epoch = 0) {
   let best = null;
   for (const record of state?.collapses ?? []) {
     if (!record || record.collapsed !== false) continue;
     if ((record.parentId ?? null) !== (parentId ?? null)) continue;
+    if ((record.boundary ?? 0) !== boundary) continue;
+    if ((record.epoch ?? 0) !== epoch) continue;
     if (!Number.isInteger(record.order) || record.order >= order) continue;
     if (!best || record.order > best.order) best = record;
   }
   return best;
+}
+
+/**
+ * A host compaction or handoff truncates history. Keep only the outermost
+ * scope, clear charges owned by dropped inner scopes, and advance the epoch so
+ * later scopes (and the surviving outer scope) never match pre-truncation
+ * elder siblings. Deferred findings from dropped scopes move to the outermost
+ * scope instead of disappearing.
+ */
+export function truncateForHostBoundary(state) {
+  if (!state || typeof state !== "object") return false;
+  const current =
+    Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0;
+  state.epoch = current + 1;
+  if (!Array.isArray(state.scopes) || state.scopes.length === 0) return true;
+  const kept = state.scopes[0];
+  const dropped = state.scopes.slice(1);
+  state.scopes = [kept];
+  kept.epoch = state.epoch;
+  const charges = state.charges;
+  if (charges && typeof charges === "object") {
+    for (const key of Object.keys(charges)) {
+      if (charges[key]?.scopeId !== kept.id) delete charges[key];
+    }
+  }
+  if (dropped.length > 0) {
+    const seen = new Set(
+      (kept.defers ?? []).map((item) => item.toolCallId),
+    );
+    for (const scope of dropped) {
+      for (const item of [...(scope.defers ?? []), ...(scope.residualDefers ?? [])]) {
+        if (seen.has(item.toolCallId)) continue;
+        seen.add(item.toolCallId);
+        kept.defers.push({
+          toolCallId: item.toolCallId,
+          intent: item.intent,
+        });
+      }
+    }
+  }
+  return true;
 }
 
 export function beginScope(state, params) {
@@ -256,7 +370,7 @@ function groupAlreadyCharged(state, scopeId, tool, groupKey) {
 }
 
 export function chargeTool(state, params) {
-  const { toolCallId, toolName, groupKey } = params || {};
+  const { toolCallId, toolName, groupKey, beatTools } = params || {};
   const normalized = normalizeToolName(toolName);
   const scope = currentScope(state);
   if (!scope) {
@@ -280,20 +394,32 @@ export function chargeTool(state, params) {
   if (remaining === undefined || remaining <= 0) {
     return failure(
       "BUDGET_EXHAUSTED",
-      `Tool "${normalized}" has no budget left (${remaining ?? 0}/${budget}). No more calls allowed.`,
+      `Tool "${normalized}" has no budget left (${formatAmount(remaining ?? 0)}/${formatAmount(budget)}). No more calls allowed.`,
     );
   }
-  put(scope.spent, normalized, spent + 1);
-  put(scope.remaining, normalized, remaining - 1);
-  const charge = {
-    scopeId: scope.id,
-    tool: normalized,
-    amount: 1,
-  };
-  if (typeof groupKey === "string" && groupKey !== "") {
-    charge.groupKey = groupKey;
+  // A shared unit is split by call count across the tools of the beat. A tool
+  // whose remaining balance is smaller than its share pays what it has; the
+  // other tools of the same message still run, so a short balance produces a
+  // partial success instead of blocking the whole turn.
+  const share =
+    Array.isArray(beatTools) && beatTools.length > 0
+      ? beatShares(beatTools)[normalized] ?? 1
+      : 1;
+  const requested = Number.isFinite(share) && share >= 0 ? share : 1;
+  const amount = roundAmount(Math.min(requested, remaining));
+  put(scope.spent, normalized, roundAmount(spent + amount));
+  put(scope.remaining, normalized, roundAmount(remaining - amount));
+  if (amount > 0) {
+    const charge = {
+      scopeId: scope.id,
+      tool: normalized,
+      amount,
+    };
+    if (typeof groupKey === "string" && groupKey !== "") {
+      charge.groupKey = groupKey;
+    }
+    put(state.charges, toolCallId, charge);
   }
-  put(state.charges, toolCallId, charge);
   return { ok: true, remaining: copyCounts(scope.remaining) };
 }
 
@@ -334,10 +460,11 @@ export function applyRegret(state, params) {
       const spent = scope.spent[normalized] ?? 0;
       const remaining = scope.remaining[normalized] ?? 0;
       const amount =
-        Number.isInteger(charge.amount) && charge.amount > 0 ? charge.amount : 1;
+        Number.isFinite(charge.amount) && charge.amount > 0 ? charge.amount : 1;
       if (spent > 0) {
-        put(scope.spent, normalized, Math.max(0, spent - amount));
-        put(scope.remaining, normalized, remaining + Math.min(amount, spent));
+        const refund = Math.min(amount, spent);
+        put(scope.spent, normalized, roundAmount(Math.max(0, spent - refund)));
+        put(scope.remaining, normalized, roundAmount(remaining + refund));
         refunded += 1;
       }
       delete state.charges[call.id];
@@ -360,7 +487,9 @@ export function budgetText(scope) {
     const remaining = scope.remaining[tool];
     const budget = scope.budget[tool];
     if (budget === undefined) continue;
-    entries.push(`${tool} ${remaining}/${budget}`);
+    entries.push(
+      `${tool} ${formatAmount(remaining)}/${formatAmount(budget)}`,
+    );
   }
   return entries.join(", ");
 }
@@ -371,6 +500,12 @@ export function serializeState(state) {
     seq: state.seq ?? 0,
     scopes: (state.scopes ?? []).map((scope) => ({
       id: scope.id,
+      boundary:
+        Number.isInteger(scope.boundary) && scope.boundary >= 0
+          ? scope.boundary
+          : 0,
+      epoch:
+        Number.isInteger(scope.epoch) && scope.epoch >= 0 ? scope.epoch : 0,
       intent: scope.intent,
       beginToolCallId: scope.beginToolCallId,
       budget: copyCounts(scope.budget),
@@ -384,6 +519,8 @@ export function serializeState(state) {
     collapses: Array.isArray(state.collapses)
       ? state.collapses.map(copyCollapse)
       : [],
+    epoch:
+      Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
     relay: copyRelay(state.relay),
   };
 }
@@ -398,7 +535,7 @@ function validDefers(value) {
   return true;
 }
 
-function validCounts(value) {
+function validBudgetCounts(value) {
   if (!isPlainObject(value)) return false;
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string") return false;
@@ -408,14 +545,38 @@ function validCounts(value) {
   return true;
 }
 
+function validAmountCounts(value) {
+  if (!isPlainObject(value)) return false;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") return false;
+    const amount = value[key];
+    if (typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function validScope(scope) {
   if (!isPlainObject(scope)) return false;
   if (!isNonEmptyString(scope.id)) return false;
   if (!isNonEmptyString(scope.intent)) return false;
+  if (
+    scope.boundary !== undefined &&
+    (!Number.isInteger(scope.boundary) || scope.boundary < 0)
+  ) {
+    return false;
+  }
+  if (
+    scope.epoch !== undefined &&
+    (!Number.isInteger(scope.epoch) || scope.epoch < 0)
+  ) {
+    return false;
+  }
   if (typeof scope.beginToolCallId !== "string") return false;
-  if (!validCounts(scope.budget)) return false;
-  if (!validCounts(scope.remaining)) return false;
-  if (!validCounts(scope.spent)) return false;
+  if (!validBudgetCounts(scope.budget)) return false;
+  if (!validAmountCounts(scope.remaining)) return false;
+  if (!validAmountCounts(scope.spent)) return false;
   if (!validDefers(scope.defers)) return false;
   if (!validDefers(scope.residualDefers)) return false;
   return true;
@@ -429,7 +590,13 @@ function validCharges(value) {
     if (!isPlainObject(charge)) return false;
     if (!isNonEmptyString(charge.scopeId)) return false;
     if (!isNonEmptyString(charge.tool)) return false;
-    if (!Number.isInteger(charge.amount) || charge.amount < 1) return false;
+    if (
+      typeof charge.amount !== "number" ||
+      !Number.isFinite(charge.amount) ||
+      charge.amount <= 0
+    ) {
+      return false;
+    }
     if (charge.groupKey !== undefined && typeof charge.groupKey !== "string") {
       return false;
     }
@@ -445,6 +612,18 @@ function validCollapses(value) {
     if (!isNonEmptyString(item.endToolCallId)) return false;
     if (!isNonEmptyString(item.report)) return false;
     if (typeof item.createdAt !== "number" || !Number.isFinite(item.createdAt)) {
+      return false;
+    }
+    if (
+      item.boundary !== undefined &&
+      (!Number.isInteger(item.boundary) || item.boundary < 0)
+    ) {
+      return false;
+    }
+    if (
+      item.epoch !== undefined &&
+      (!Number.isInteger(item.epoch) || item.epoch < 0)
+    ) {
       return false;
     }
     if (
@@ -500,11 +679,25 @@ export function deserializeState(input) {
       return createState();
     }
     if (!validCollapses(data.collapses)) return createState();
+    if (
+      data.epoch !== undefined &&
+      (!Number.isInteger(data.epoch) || data.epoch < 0)
+    ) {
+      return createState();
+    }
     return {
       version: VERSION,
       seq: data.seq,
+      epoch:
+        Number.isInteger(data.epoch) && data.epoch >= 0 ? data.epoch : 0,
       scopes: data.scopes.map((scope) => ({
         id: scope.id,
+        boundary:
+          Number.isInteger(scope.boundary) && scope.boundary >= 0
+            ? scope.boundary
+            : 0,
+        epoch:
+          Number.isInteger(scope.epoch) && scope.epoch >= 0 ? scope.epoch : 0,
         intent: scope.intent,
         beginToolCallId: scope.beginToolCallId,
         budget: copyCounts(scope.budget),

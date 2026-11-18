@@ -69,6 +69,8 @@ function directScope(station, toolCallId, params) {
 		currentPersisted: Boolean(found),
 		sameMessageBeginIds: beginIds,
 	});
+	station.setHandled(toolCallId, result);
+	station.processedCalls.add(toolCallId);
 	station.persist();
 	return result;
 }
@@ -81,8 +83,8 @@ function directRegret(station, toolCallId, params) {
 		if (cached) return cached;
 	}
 	const base = found?.messages ?? station.contextMessages();
-	const index = found?.index ?? -1;
-	if (index < 0) {
+	const index = found ? found.index : base.length;
+	if (index <= 0 && !found) {
 		return errorResult("NOT_IN_SCOPE", "regret is only allowed inside a scope with a visible beat history.");
 	}
 	const result = handleRegretCall(
@@ -91,6 +93,8 @@ function directRegret(station, toolCallId, params) {
 		base,
 		index,
 	);
+	station.setHandled(toolCallId, result);
+	station.processedCalls.add(toolCallId);
 	station.persist();
 	return result;
 }
@@ -103,6 +107,8 @@ function directDefer(station, toolCallId, params) {
 		if (cached) return cached;
 	}
 	const result = handleDeferCall(station, { id: toolCallId, name: "defer", arguments: params });
+	station.setHandled(toolCallId, result);
+	station.processedCalls.add(toolCallId);
 	station.persist();
 	return result;
 }
@@ -114,7 +120,10 @@ function directPin(station, toolCallId, params) {
 		const cached = station.handled.get(toolCallId);
 		if (cached) return cached;
 	}
-	return handlePinCall();
+	const result = handlePinCall();
+	station.setHandled(toolCallId, result);
+	station.processedCalls.add(toolCallId);
+	return result;
 }
 
 export {

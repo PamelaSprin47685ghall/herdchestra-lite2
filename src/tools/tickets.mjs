@@ -80,6 +80,10 @@ export async function pinTicket(station, toolCallId, params) {
 export async function contextHandoffTicket(station, ctx, original) {
 	const outcome = await runHandoffInContext(station, ctx, station.pi);
 	if (outcome.ok) {
+		if (Number.isInteger(station.state.relay?.generation)) {
+			station.relayPromptSentFor = station.state.relay.generation;
+			station.relayPromptPendingFor = null;
+		}
 		let live = [];
 		try {
 			const context = ctx?.sessionManager?.buildSessionContext?.();

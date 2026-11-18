@@ -97,11 +97,13 @@ function onToolCall(station, event, ctx) {
 			return undefined;
 		}
 		if (CONTROL_TOOLS.has(event.toolName)) {
+			const args = parseArgs({
+				arguments: event.input ?? event.arguments ?? {},
+			});
 			if (event.toolName === "scope") {
-				const args = parseArgs({
-					arguments: event.input ?? event.arguments ?? {},
-				});
-				if (args.begin !== undefined && args.begin !== null) {
+				const hasBegin = args.begin !== undefined && args.begin !== null;
+				const hasEnd = args.end !== undefined && args.end !== null;
+				if (hasBegin) {
 					if (station.state.relay?.handoffPending) {
 						return {
 							block: true,
@@ -113,6 +115,20 @@ function onToolCall(station, event, ctx) {
 						station.state.relay = invalidatePromotion(station.state.relay);
 						station.persist();
 					}
+					// In hosts where `tool_call` runs before `assistant_message` /
+					// persistence, opening a begin-only scope here ensures
+					// subsequent tools in the same message see the new scope.
+					if (!hasEnd && !station.handled.has(event.toolCallId)) {
+						station.directScope(event.toolCallId, args);
+					}
+				}
+			} else if (!station.handled.has(event.toolCallId)) {
+				if (event.toolName === "regret") {
+					station.directRegret(event.toolCallId, args);
+				} else if (event.toolName === "defer") {
+					station.directDefer(event.toolCallId, args);
+				} else if (event.toolName === "pin") {
+					station.directPin(event.toolCallId, args);
 				}
 			}
 			return undefined;
@@ -173,11 +189,6 @@ function onContext(station, messages, ctx) {
 		relay?.firstEvaluation === "empty" &&
 		relay?.lastLedger?.empty === true;
 	if (relayOn && relay?.handoffPending && relay.lastLedger?.empty && !gen0FirstEmpty) {
-		// The context hook is the interrupt point: replacing this request's
-		// messages with the post-handoff transcript means the provider sees the
-		// successor's first turn. Do not call ctx.abort(): AgentSession.abort()
-		// aborts the in-flight handoff, and the host then reports
-		// "Handoff cancelled".
 		return station.tickets.contextHandoff(station, ctx, original);
 	}
 	return station.transformContext(original, ctx);

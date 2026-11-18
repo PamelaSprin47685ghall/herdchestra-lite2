@@ -873,3 +873,119 @@ describe("vibe mode", () => {
 		expect(view.some((message) => message.content === "drive two worker CLIs")).toBe(false);
 	});
 });
+
+describe("same-message scope and command co-dispatch", () => {
+	async function runHostPrepareOrder(host, ctx, message) {
+		const manager = ctx.sessionManager;
+		const decisions = [];
+		for (const block of message.content) {
+			if (block.type !== "toolCall") continue;
+			const decision = await emit(
+				host.handlers,
+				"tool_call",
+				{ type: "tool_call", toolCallId: block.id, toolName: block.name, input: block.arguments },
+				ctx,
+			);
+			decisions.push({ block, decision });
+		}
+		const results = [];
+		for (const { block, decision } of decisions) {
+			if (decision?.block) {
+				const result = toolResult(block.id, block.name, decision.reason, true);
+				results.push({ result, blocked: true });
+				continue;
+			}
+			const tool = host.tools.get(block.name);
+			const output = tool
+				? await tool.execute(block.id, block.arguments, undefined, undefined, ctx)
+				: { content: [{ type: "text", text: `${block.name} ok` }] };
+			const result = toolResult(block.id, block.name, output.content[0].text, Boolean(output.isError));
+			results.push({ result, blocked: false, output });
+		}
+		manager.appendMessage(message);
+		ctx.agentMessages.push(message);
+		for (const { result } of results) {
+			manager.appendMessage(result);
+			ctx.agentMessages.push(result);
+		}
+		await emit(host.handlers, "assistant_message", { type: "assistant_message", message }, ctx);
+		return results;
+	}
+
+	test("scope(begin) + functional command in one message works when tool_call precedes persistence", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const results = await runHostPrepareOrder(
+			host,
+			ctx,
+			assistant([
+				call("s1", "scope", { begin: { intent: "inspect", budget: { read: 1 } } }),
+				call("r1", "read", { path: "a.mjs" }),
+			]),
+		);
+		expect(results[0].blocked).toBe(false);
+		expect(results[0].output.content[0].text).toContain("You are now inside this scope.");
+		expect(results[1].blocked).toBe(false);
+		expect(results[1].result.content[0].text).toBe("read ok");
+
+		// Budget should be exhausted after that 1 read, and no duplicate scope should be open.
+		const secondRead = await runHostPrepareOrder(
+			host,
+			ctx,
+			assistant([call("r2", "read", { path: "b.mjs" })]),
+		);
+		expect(secondRead[0].blocked).toBe(true);
+		expect(secondRead[0].result.content[0].text).toContain("no budget left");
+
+		const closed = await runHostPrepareOrder(
+			host,
+			ctx,
+			assistant([call("s2", "scope", { end: "done" })]),
+		);
+		expect(closed[0].blocked).toBe(false);
+		expect(closed[0].output.content[0].text).toContain("Scope closed. You are outside all scopes.");
+	});
+
+	test("functional command + scope(end) in one message runs the command before closing scope", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(host, ctx, assistant([
+			call("s1", "scope", { begin: { intent: "work", budget: { read: 1 } } }),
+		]));
+		const results = await runAssistant(host, ctx, assistant([
+			call("r1", "read", { path: "a.mjs" }),
+			call("s2", "scope", { end: "finished" }),
+		]));
+		expect(results[0].blocked).toBe(false);
+		expect(results[1].blocked).toBe(false);
+		expect(results[1].output.content[0].text).toContain("Scope closed. You are outside all scopes.");
+	});
+
+	test("regret + functional command in one message refunds before tool_call budget check", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runHostPrepareOrder(
+			host,
+			ctx,
+			assistant([call("s1", "scope", { begin: { intent: "retry", budget: { read: 1 } } })]),
+		);
+		const first = await runHostPrepareOrder(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "wrong.mjs" })]),
+		);
+		expect(first[0].blocked).toBe(false);
+
+		const retried = await runHostPrepareOrder(
+			host,
+			ctx,
+			assistant([
+				call("g1", "regret", { reflection: "read wrong file" }),
+				call("r2", "read", { path: "right.mjs" }),
+			]),
+		);
+		expect(retried[0].blocked).toBe(false);
+		expect(retried[0].output.content[0].text).toContain("Undid the previous beat.");
+		expect(retried[1].blocked).toBe(false);
+	});
+});

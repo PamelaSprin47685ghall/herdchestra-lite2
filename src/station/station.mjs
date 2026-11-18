@@ -313,17 +313,27 @@ export class SessionStation {
 				.filter((call) => call.name === "scope" && parseArgs(call).begin != null)
 				.map((call) => call.id),
 		);
+		const hasFunctionalTools = toolCalls(message).some(
+			(call) => !CONTROL_TOOLS.has(call.name),
+		);
 
 		for (const call of controls) {
 			if (call.name === "regret") continue;
 			if (this.processedCalls.has(call.id)) continue;
 			if (call.name === "pin") {
 				this.setHandled(call.id, handlePinCall());
+				this.processedCalls.add(call.id);
 				continue;
 			}
 			if (call.name === "defer") {
 				this.setHandled(call.id, handleDeferCall(this, call));
+				this.processedCalls.add(call.id);
 				changed = true;
+				continue;
+			}
+			if (hasFunctionalTools && parseArgs(call).end != null) {
+				// Defer closing scope until executeScope so functional tools in the
+				// same message still pass their `tool_call` budget check first.
 				continue;
 			}
 			this.setHandled(
@@ -335,10 +345,13 @@ export class SessionStation {
 					sameMessageBeginIds: beginIds,
 				}),
 			);
+			this.processedCalls.add(call.id);
 			changed = true;
 		}
 
-		for (const call of controls) this.processedCalls.add(call.id);
+		for (const call of controls) {
+			if (call.name === "regret") this.processedCalls.add(call.id);
+		}
 		if (changed) this.persist();
 	}
 

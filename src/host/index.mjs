@@ -11,7 +11,15 @@ export {
 	installInteractiveCapture,
 	setAgentMessages,
 	installRunnerCapture,
+	parseSlashCommand,
+	sendSlashPrompt,
+	installSlashPrompt,
 } from "./capture.mjs";
+export {
+	HeadlessTuiStation,
+	headlessStationFor,
+	createHeadlessTuiContext,
+} from "./headless-tui.mjs";
 export {
 	MAIN_AGENT,
 	READ_ONLY_SUBAGENT,

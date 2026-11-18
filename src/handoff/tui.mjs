@@ -1,10 +1,7 @@
-// Handoff via the live TUI command, with a visible fallback signal.
+// TUI transcript refresh and visible fallback signal after handoff.
 
-import { interactiveCaptureState } from "../host/capture.mjs";
 import { debugLog } from "./debug.mjs";
-import { countHandoffCompactions, errorText } from "./session.mjs";
-
-const TUI_HANDOFF_FLAG = Symbol.for("herdchestra-lite2.tui-handoff-in-flight");
+import { errorText } from "./session.mjs";
 
 async function renderTui(tui) {
 	if (!tui || typeof tui.renderInitialMessages !== "function") return false;
@@ -58,74 +55,4 @@ function appendHandoffSignal(manager, ctx, generation) {
 	return false;
 }
 
-/**
- * Run the host's built-in handoff command, which calls the real
- * AgentSession.handoff() and then rebuilds the TUI transcript. The command
- * returns void and may swallow its own errors, so success is decided only by a
- * new `method: "handoff"` compaction entry on the branch.
- */
-async function handoffViaTui(tui, manager, focus, station) {
-	const before = countHandoffCompactions(manager);
-	const captureBefore = interactiveCaptureState();
-	if (before === null) {
-		return { ok: false, reason: "compaction-count-unavailable", before };
-	}
-	if (tui[TUI_HANDOFF_FLAG]) {
-		return { inProgress: true, before };
-	}
-	try {
-		Object.defineProperty(tui, TUI_HANDOFF_FLAG, {
-			value: true,
-			configurable: true,
-		});
-	} catch {
-		try {
-			tui[TUI_HANDOFF_FLAG] = true;
-		} catch {
-			// The command guard is best effort; station.handoffExecuting still holds.
-		}
-	}
-	let callError = null;
-	let returned = false;
-	debugLog("tui_handoff_call", {
-		before,
-		generation: station.state.relay?.generation ?? null,
-		focusChars: focus.length,
-	});
-	try {
-		await tui.handleHandoffCommand(focus);
-		returned = true;
-	} catch (error) {
-		callError = errorText(error);
-	} finally {
-		try {
-			delete tui[TUI_HANDOFF_FLAG];
-		} catch {
-			// A frozen instance is left marked; the next stop reports in progress.
-		}
-	}
-	const after = countHandoffCompactions(manager);
-	const captureAfter = interactiveCaptureState();
-	const ok = after !== null && after > before;
-	debugLog("tui_handoff_result", {
-		before,
-		after,
-		ok,
-		returned,
-		rendersBefore: captureBefore.renders,
-		rendersAfter: captureAfter.renders,
-		error: callError,
-		generation: station.state.relay?.generation ?? null,
-	});
-	debugLog("compaction_entry", { path: "tui", before, after });
-	if (callError) debugLog("tui_handoff_error", { error: callError, before, after });
-	return {
-		ok,
-		before,
-		after,
-		error: callError,
-		reason: ok ? null : callError ? "tui-handler-error" : "no-new-compaction-entry",
-	};
-}
-
-export { TUI_HANDOFF_FLAG, renderTui, appendHandoffSignal, handoffViaTui };
+export { renderTui, appendHandoffSignal };

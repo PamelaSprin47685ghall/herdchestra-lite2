@@ -54,7 +54,7 @@ export async function runHandoffInContext(station, ctx, pi) {
 			// Fall through to the real call.
 		}
 	}
-	const outcome = await performHandoff(station, ctx, pi, { preferTui: false });
+	const outcome = await performHandoff(station, ctx, pi);
 	if (outcome?.inProgress) {
 		return { ok: false, pending: true, error: "handoff is already in progress" };
 	}

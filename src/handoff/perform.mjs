@@ -1,12 +1,15 @@
 // Handoff perform: run the real handoff once and deliver the successor prompt.
 
-import { handoffFor, interactiveCaptureState, tuiFor } from "../host/capture.mjs";
+import {
+	handoffFor,
+	interactiveCaptureState,
+	sendSlashPrompt,
+	tuiFor,
+} from "../host/capture.mjs";
 import {
 	handoffFocus,
-	handoffPendingNudge,
 	successorPrompt,
 } from "../relay/index.mjs";
-import { continueFeedback } from "../tools/results.mjs";
 import { debugLog } from "./debug.mjs";
 import {
 	countHandoffCompactions,
@@ -16,7 +19,19 @@ import {
 	managerOf,
 	safeSession,
 } from "./session.mjs";
-import { appendHandoffSignal, handoffViaTui, renderTui } from "./tui.mjs";
+import { appendHandoffSignal, renderTui } from "./tui.mjs";
+
+function buildHandoffSlashCommand(focus) {
+	const trimmed = typeof focus === "string" ? focus.trim() : "";
+	return trimmed ? `/handoff ${trimmed}` : "/handoff";
+}
+
+function dispatchSlashHandoff(session, ctx, slashCommand, options) {
+	if (session && typeof session.sendSlashPrompt === "function") {
+		return session.sendSlashPrompt(slashCommand, options);
+	}
+	return sendSlashPrompt(session ?? ctx, slashCommand, options);
+}
 
 async function executeHandoff(session, focus, pi, ctx, station) {
 	if (session && session.isGeneratingHandoff === true) {
@@ -138,7 +153,7 @@ function deliverSuccessor(station, ctx) {
 	return { continue: true, additionalContext: prompt };
 }
 
-async function performHandoff(station, ctx, pi, options = {}) {
+async function performHandoff(station, ctx, pi) {
 	if (station.handoffExecuting) {
 		return { ok: true, inProgress: true };
 	}
@@ -155,71 +170,32 @@ async function performHandoff(station, ctx, pi, options = {}) {
 		manager = managerOf(session, ctx);
 		let tui = null;
 		try {
-			tui = tuiFor();
+			tui = tuiFor(session ?? ctx);
 		} catch {
 			tui = null;
 		}
-		const canRunTuiCommand =
-			options.preferTui !== false &&
-			Boolean(tui) &&
-			typeof tui.handleHandoffCommand === "function";
+		const slashCommand = buildHandoffSlashCommand(focus);
 		debugLog("tui_capture", {
 			hasTui: Boolean(tui),
-			canHandoff: canRunTuiCommand,
 			canRender: typeof tui?.renderInitialMessages === "function",
 			capture: interactiveCaptureState(),
 			generation: station.state.relay?.generation ?? null,
+			slashCommand,
 		});
-		if (canRunTuiCommand) {
-			const viaTui = await handoffViaTui(tui, manager, focus, station);
-			if (viaTui.inProgress) {
-				return continueFeedback(handoffPendingNudge(station.state.relay));
-			}
-			if (viaTui.ok) {
-				debugLog("handoff.path", { path: "tui", generation: station.state.relay?.generation ?? null });
-				result = { ok: true, viaTui: true };
-			} else {
-				// The built-in command may swallow its own failure. Fall back to the
-				// real AgentSession.handoff() (with short-session recovery) and then
-				// rebuild the transcript ourselves. The compaction count decides.
-				debugLog("tui_handoff_fallback", {
-					reason: viaTui.reason,
-					before: viaTui.before,
-					after: viaTui.after,
-					error: viaTui.error,
-				});
-				result = await executeHandoff(session, focus, pi, ctx, station);
-				const rendered = await renderTui(tui);
-				if (!rendered) signalNeeded = true;
-				const afterFallback = countHandoffCompactions(manager);
-				debugLog("compaction_entry", {
-					path: "tui-fallback",
-					before: viaTui.before,
-					after: afterFallback,
-				});
-				if (
-					!result?.inProgress &&
-					viaTui.before !== null &&
-					afterFallback !== null &&
-					afterFallback <= viaTui.before
-				) {
-					const detail = viaTui.error
-						? ` TUI handler error: ${viaTui.error}.`
-						: "";
-					throw new Error(
-						`handoff did not add a compaction entry (method=handoff; ${viaTui.before} -> ${afterFallback}). The TUI handler did not perform the real session handoff.${detail}`,
-					);
-				}
-			}
-		} else {
-			result = await executeHandoff(session, focus, pi, ctx, station);
-			const rendered = await renderTui(tui);
-			const after = countHandoffCompactions(manager);
-			debugLog("compaction_entry", { path: "direct", before: null, after });
-			// No TUI rebuild means the divider cannot appear. Leave a real,
-			// displayable session entry so the user still sees the handoff.
-			if (!rendered) signalNeeded = true;
-		}
+		const before = countHandoffCompactions(manager);
+		const dispatched = await dispatchSlashHandoff(session, ctx, slashCommand, {
+			ctx,
+			onSessionHandoff: (_s, f) =>
+				executeHandoff(session, f ?? focus, pi, ctx, station),
+		});
+		result = dispatched?.result ?? { ok: true };
+		debugLog("compaction_entry", {
+			path: "slash-prompt:session",
+			before,
+			after: countHandoffCompactions(manager),
+		});
+		const rendered = await renderTui(tui);
+		if (!rendered) signalNeeded = true;
 	} catch (error) {
 		debugLog("handoff.error", {
 			error: errorText(error),

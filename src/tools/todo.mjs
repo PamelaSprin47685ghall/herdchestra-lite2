@@ -148,17 +148,8 @@ export async function todoTicket(station, params, ctx) {
 		if (outcome?.ok === false) {
 			text += `\n\nHANDOFF FAILED: ${outcome.error}`;
 		} else if (outcome?.pending) {
-			const gen0FirstEmpty =
-				station.state.relay.generation === 0 &&
-				station.state.relay.firstEvaluation === "empty";
-			if (gen0FirstEmpty) {
-				text +=
-					"\n\nHandoff is pending. Finish your reply to the user now; do not call another tool. The runtime runs the real handoff after this turn.";
-			} else {
-				text +=
-					"\n\nHandoff is pending. The next context hook interrupts this turn and runs the real handoff before the model request. Do not call another tool.";
-				text += `\n\n${successorPrompt(station.state.relay, station.state.relay.lastLedger ?? null)}`;
-			}
+			text +=
+				"\n\nHandoff is pending. Finish your reply to the user now; do not call another tool. The runtime runs `/handoff` after this turn.";
 		}
 	}
 

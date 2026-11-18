@@ -1,31 +1,40 @@
 #!/usr/bin/env node
 /**
- * 验证 scope/regret/defer/pin 工具配置包含 alwaysAvailable 标志
+ * Verify the registered tool metadata.
+ *
+ * `alwaysAvailable` is not read by the host and must not come back. The todo
+ * override must copy the native strict/exclusive metadata.
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync } from "fs";
 
-const mainContent = readFileSync('src/main.mjs', 'utf-8');
+const mainContent = readFileSync("src/main.mjs", "utf-8");
 
 const checks = [
-	{ tool: 'scope', pattern: /name:\s*"scope"[\s\S]*?alwaysAvailable:\s*true/ },
-	{ tool: 'regret', pattern: /name:\s*"regret"[\s\S]*?alwaysAvailable:\s*true/ },
-	{ tool: 'defer', pattern: /name:\s*"defer"[\s\S]*?alwaysAvailable:\s*true/ },
-	{ tool: 'pin', pattern: /name:\s*"pin"[\s\S]*?alwaysAvailable:\s*true/ },
+	{ tool: "scope", pattern: /name:\s*"scope"[\s\S]*?execute:/ },
+	{ tool: "regret", pattern: /name:\s*"regret"[\s\S]*?execute:/ },
+	{ tool: "defer", pattern: /name:\s*"defer"[\s\S]*?execute:/ },
+	{ tool: "pin", pattern: /name:\s*"pin"[\s\S]*?execute:/ },
+	{
+		tool: "todo",
+		pattern:
+			/name:\s*"todo"[\s\S]*?concurrency:\s*"exclusive"[\s\S]*?strict:\s*true[\s\S]*?lenientArgValidation:\s*true[\s\S]*?execute:/,
+	},
 ];
 
 let allPassed = true;
 
 for (const { tool, pattern } of checks) {
 	const match = pattern.test(mainContent);
-	console.log(`✓ ${tool}: alwaysAvailable = ${match ? 'true' : 'MISSING'}`);
+	console.log(`${match ? "✓" : "✗"} ${tool}: registered`);
 	if (!match) allPassed = false;
 }
 
-if (allPassed) {
-	console.log('\n✓ 所有工具都配置了 alwaysAvailable: true');
-	process.exit(0);
+if (/alwaysAvailable/.test(mainContent)) {
+	console.log("✗ alwaysAvailable must not be registered; the host does not read it");
+	allPassed = false;
 } else {
-	console.log('\n✗ 部分工具缺少 alwaysAvailable 配置');
-	process.exit(1);
+	console.log("✓ alwaysAvailable is absent");
 }
+
+process.exit(allPassed ? 0 : 1);

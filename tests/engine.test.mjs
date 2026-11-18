@@ -23,14 +23,24 @@ function openScope(intent, budget, toolCallId = "call_begin") {
 }
 
 describe("createState", () => {
-  test("returns a fresh version 1 state", () => {
+  test("returns a fresh version 2 state with an empty relay", () => {
     expect(createState()).toEqual({
-      version: 1,
+      version: 2,
       seq: 0,
       scopes: [],
       charges: {},
       regrets: [],
       collapses: [],
+      relay: {
+        generation: 0,
+        firstEvaluation: null,
+        canStop: false,
+        handoffPending: false,
+        promotionInvalidated: false,
+        handoffError: null,
+        lastLedger: null,
+        lastHandoff: null,
+      },
     });
   });
 
@@ -692,5 +702,20 @@ describe("serializeState and deserializeState", () => {
     const badCharge = serializeState(state);
     badCharge.charges.call_bash.amount = 0;
     expect(deserializeState(badCharge)).toEqual(createState());
+  });
+
+  test("migrates a version 1 state to version 2 with a fresh relay", () => {
+    const legacy = {
+      version: 1,
+      seq: 0,
+      scopes: [],
+      charges: {},
+      regrets: [],
+      collapses: [],
+    };
+    const migrated = deserializeState(legacy);
+    expect(migrated.version).toBe(2);
+    expect(migrated.relay).toEqual(createState().relay);
+    expect(migrated).toEqual(createState());
   });
 });

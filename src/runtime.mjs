@@ -43,6 +43,16 @@ import {
 } from "./transcript.mjs";
 import { injectSystemPrompt, languageSkill, outsideScopeInstruction } from "./prompts.mjs";
 import { setAgentMessages } from "./runner-capture.mjs";
+import {
+	installHandoffHooks,
+	requestHandoff,
+} from "./handoff.mjs";
+import {
+	firstEvaluationNudge,
+	invalidatePromotion,
+	openLedgerNudge,
+	relayStatusText,
+} from "./relay.mjs";
 
 const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
 const SESSION_STATE_TYPE = "scope.state";
@@ -50,7 +60,7 @@ const records = new WeakMap();
 const orphanRecord = makeRecord(null);
 
 function makeRecord(manager) {
-	return {
+	const created = {
 		manager,
 		state: restoreState(manager),
 		handled: new Map(),
@@ -60,7 +70,15 @@ function makeRecord(manager) {
 		nudged: new WeakSet(),
 		needsRebase: false,
 		lastError: null,
+		relayPromptPendingFor: null,
+		relayPromptSentFor: null,
+		handoffInFlight: false,
+		handoffTimer: null,
+		handoffPolls: 0,
+		handoffSwitched: false,
 	};
+	created.persist = () => persist(created);
+	return created;
 }
 
 function restoreState(manager) {
@@ -127,6 +145,11 @@ function persist(rec) {
 	} catch (error) {
 		rec.lastError = String(error?.message ?? error);
 	}
+}
+
+/** Persist a record from another module without exposing the WeakMap. */
+export function persistRecord(rec) {
+	persist(rec);
 }
 
 function setHandled(rec, toolCallId, result) {
@@ -254,6 +277,7 @@ function beginText(scope) {
 		`Intent: ${scope.intent}`,
 		`Budget (innermost scope only): ${budgetText(scope) || "none"}.`,
 		"Only the innermost scope's budget is used. A tool not listed in the budget has zero calls. scope, regret, defer, and pin are free.",
+		"todo is free but forbidden inside any active scope. Close every scope before updating the ledger; a natural stop requires a successful todo evaluation outside all scopes.",
 		"Calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget. Budget and spend by batches, not individual calls.",
 		"Do not write the final user-facing answer while inside a scope. Close every scope first; only after every scope closes may you answer the user.",
 		"When this scope closes, its elder sibling at the same level is collapsed; this scope stays visible until a younger sibling closes.",
@@ -300,6 +324,15 @@ function endText(
 	} else {
 		lines.push("No deferred findings were recorded in this scope.");
 	}
+	if (remainingScope) {
+		lines.push(
+			"todo cannot be called inside any scope. Before finishing, close every enclosing scope, then call todo to update the ledger. A non-empty ledger forbids stopping; an empty ledger must trigger the real /handoff protocol.",
+		);
+	} else {
+		lines.push(
+			"Call todo now to evaluate the ledger before writing the final user-facing answer. A non-empty ledger forbids stopping; an empty ledger must trigger the real /handoff protocol.",
+		);
+	}
 	if (!transitioning) {
 		if (remainingScope) {
 			lines.push(
@@ -307,7 +340,7 @@ function endText(
 			);
 		} else {
 			lines.push(
-				"You are outside all scopes. Write the final user-facing answer now as ordinary assistant text. Do not put it in return_markdown. Finishing is not a tool call.",
+				"You are outside all scopes. Only a promoted empty-ledger successor evaluation allows the final user-facing answer as ordinary assistant text. Do not put it in return_markdown. Finishing is not a tool call.",
 			);
 		}
 	}
@@ -337,7 +370,7 @@ function budgetLine(scope) {
 function scopeTailInstruction(state) {
 	const scope = currentScope(state);
 	if (!scope) return outsideScopeInstruction;
-	return `You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetLine(scope)}. Only the innermost scope's budget is used; scope, regret, defer, and pin are free. Calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget; budget and spend by batches. Do not write the final user-facing answer while inside a scope. When this task is complete, call scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, you are back inside it; close it too before answering the user. Only outside all scopes may you write the final answer as ordinary assistant text. return_markdown is a self-delivery report, not the user-facing answer. If you stop inside a scope, a nudge will remind you of this rule. Finishing is not a tool call.`;
+	return `You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetLine(scope)}. Only the innermost scope's budget is used; scope, regret, defer, and pin are free. todo is free but forbidden inside any active scope; close every scope before updating the ledger. Calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget; budget and spend by batches. Do not write the final user-facing answer while inside a scope. When this task is complete, call scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, you are back inside it; close it too before answering the user. Only outside all scopes may you write the final answer as ordinary assistant text, and only after todo evaluates the ledger: a non-empty ledger forbids stopping, while an empty ledger triggers a real /handoff to a successor whose first todo evaluation must also be empty. return_markdown is a self-delivery report, not the user-facing answer. If you stop inside a scope, a nudge will remind you of this rule. Finishing is not a tool call.`;
 }
 
 /** The exact outbound user tail: additional-system-instructions + language skill. */
@@ -364,16 +397,47 @@ function queueSteer(pi, text) {
 function insideScopeNudge(state) {
 	const scope = currentScope(state);
 	if (!scope) return "";
-	return `You are still inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Do not write the final user-facing conclusion yet. Continue the task; when it is complete, close this scope with scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, close it too before answering the user. Only outside all scopes may you write the final answer as ordinary assistant text. If you are permanently blocked, close the scope with a return_markdown report explaining the block, then answer outside.`;
+	return `You are still inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Do not write the final user-facing conclusion yet. Continue the task; when it is complete, close this scope with scope({ end: { return_markdown: "<report for your future self>" } }). todo is forbidden inside every scope, so close this scope and every enclosing scope before updating the ledger. Only outside all scopes may you write the final answer as ordinary assistant text, and only after a promoted empty-ledger successor evaluation. If you are permanently blocked, close the scope with a return_markdown report explaining the block, then answer outside only after the relay evaluation.`;
 }
 
-function maybeNudge(rec, pi, message) {
+function maybeNudge(rec, pi, message, ctx) {
 	if (!message || message.role !== "assistant") return;
 	if (toolCalls(message).length > 0) return;
-	if (!currentScope(rec.state)) return;
 	if (rec.nudged.has(message)) return;
 	rec.nudged.add(message);
-	queueSteer(pi, insideScopeNudge(rec.state));
+	if (currentScope(rec.state)) {
+		queueSteer(pi, insideScopeNudge(rec.state));
+		return;
+	}
+	const relay = rec.state.relay;
+	if (!relay) {
+		queueSteer(pi, firstEvaluationNudge());
+		return;
+	}
+	if (relay.canStop) return;
+	if (relay.handoffPending) {
+		// Do not steer here. A steering nudge keeps the turn alive and prevents
+		// the host from emitting session_stop, which is the only place where the
+		// real handoff runs. The todo result already tells the model to stop.
+		return;
+	}
+	if (!relay.lastLedger) {
+		queueSteer(pi, firstEvaluationNudge());
+		return;
+	}
+	// After a handoff, lastLedger still holds the previous holder's empty
+	// snapshot. The successor has not evaluated yet, so do not hand off again;
+	// require its first todo evaluation first.
+	if (relay.generation > 0 && relay.firstEvaluation === null) {
+		queueSteer(pi, firstEvaluationNudge());
+		return;
+	}
+	if (relay.lastLedger.empty) {
+		queueSteer(pi, relayStatusText(relay, relay.lastLedger, { action: "handoff" }));
+		requestHandoff(ctx, pi, rec, { reason: "empty-ledger" });
+		return;
+	}
+	queueSteer(pi, openLedgerNudge(relay, relay.lastLedger));
 }
 
 function forkCollapse(rec, { collapse, begin, beginEntry, oldMessages, currentMessage, currentPersisted }) {
@@ -540,6 +604,15 @@ function handleScopeCall(rec, pi, call, { base, currentMessage, currentPersisted
 	const hasEnd = args.end !== undefined && args.end !== null;
 	if (!hasBegin && !hasEnd) {
 		return errorResult("INVALID_ARGUMENT", "Provide begin, end, or both.");
+	}
+	// The assistant_message hook processes controls before tool dispatch. A
+	// handoff-pending begin must be rejected here, otherwise the scope would
+	// open even though the tool result is blocked.
+	if (hasBegin && rec.state.relay?.handoffPending) {
+		return errorResult(
+			"RELAY_HANDOFF_PENDING",
+			"A relay handoff is pending. Do not open a new scope; wait for the successor.",
+		);
 	}
 	if (hasBegin && !hasEnd) {
 		const begin = args.begin;
@@ -890,7 +963,7 @@ export function installHooks(pi) {
 			try {
 				rememberCallGroups(rec, event.message);
 				processAssistantMessage(rec, pi, event.message, { persisted: false });
-				maybeNudge(rec, pi, event.message);
+				maybeNudge(rec, pi, event.message, ctx);
 			} catch (error) {
 				rec.lastError = String(error?.message ?? error);
 			}
@@ -914,7 +987,7 @@ export function installHooks(pi) {
 						const found = assistantForToolCall(rec, controls[0].id);
 						processAssistantMessage(rec, pi, event.message, { persisted: Boolean(found) });
 					}
-					maybeNudge(rec, pi, event.message);
+					maybeNudge(rec, pi, event.message, ctx);
 				} catch (error) {
 					rec.lastError = String(error?.message ?? error);
 				}
@@ -928,8 +1001,68 @@ export function installHooks(pi) {
 		const rec = stateFor(ctx);
 		rec.pi = pi;
 		try {
+			// Controls are processed before tool dispatch so scope executes can
+			// read their cached result. A handoff-pending begin must be stopped
+			// before that processing, or the scope would open despite the block.
+			if (event.toolName === "scope" && rec.state.relay?.handoffPending) {
+				const args = parseArgs({
+					arguments: event.input ?? event.arguments ?? {},
+				});
+				if (args.begin !== undefined && args.begin !== null) {
+					return {
+						block: true,
+						reason:
+							"RELAY_HANDOFF_PENDING: a relay handoff is pending. Do not open a new scope; wait for the successor.",
+					};
+				}
+			}
 			processControlsForTool(rec, pi, event.toolCallId);
-			if (CONTROL_TOOLS.has(event.toolName)) return undefined;
+			if (event.toolName === "todo") {
+				if (currentScope(rec.state)) {
+					return {
+						block: true,
+						reason:
+							"TODO_OUTSIDE_SCOPE_ONLY: todo is forbidden inside any active scope. Close every scope first; todo only works outside all scopes.",
+					};
+				}
+				if (rec.state.relay?.handoffPending) {
+					return {
+						block: true,
+						reason:
+							"RELAY_HANDOFF_PENDING: a relay handoff is pending. Do not change the ledger; wait for the successor.",
+					};
+				}
+				persist(rec);
+				return undefined;
+			}
+			if (CONTROL_TOOLS.has(event.toolName)) {
+				if (event.toolName === "scope") {
+					const args = parseArgs({
+						arguments: event.input ?? event.arguments ?? {},
+					});
+					if (args.begin !== undefined && args.begin !== null) {
+						if (rec.state.relay?.handoffPending) {
+							return {
+								block: true,
+								reason:
+									"RELAY_HANDOFF_PENDING: a relay handoff is pending. Do not open a new scope; wait for the successor.",
+							};
+						}
+						if (rec.state.relay?.canStop) {
+							rec.state.relay = invalidatePromotion(rec.state.relay);
+							persist(rec);
+						}
+					}
+				}
+				return undefined;
+			}
+			if (!currentScope(rec.state)) {
+				return {
+					block: true,
+					reason:
+						"Not in a scope. Outside all scopes only todo and the free control tools (scope, regret, defer, pin) may be called. Open a scope with scope({ begin: { intent, budget } }) before using any other tool.",
+				};
+			}
 			const found = assistantForToolCall(rec, event.toolCallId);
 			if (found) rememberCallGroups(rec, found.message);
 			const groupKey =
@@ -970,6 +1103,10 @@ export function installHooks(pi) {
 			}
 		}
 	});
+
+	// Completion events and the idle fallback live in handoff.mjs. The lookup
+	// keeps that module free of a runtime import cycle.
+	installHandoffHooks(pi, { stateFor });
 }
 
 /** Inject the retained English repo-aware prompt. */

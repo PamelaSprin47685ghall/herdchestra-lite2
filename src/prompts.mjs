@@ -19,10 +19,10 @@ const commonRulesHeading = "# Repo-aware Rules";
 // The retained Lite repo-aware prompt. It has no sandbox and no UFSS text.
 export const commonRulesText = [commonRulesHeading, ...commonCoreRules].join("\n\n");
 
-export const languageSkill = '<skill version="1.0">（宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。</skill>';
+export const languageSkill = '<skill version="1.0">(Routine reminder appended by the host extension at the end of every turn; not a new user message. Continue the current work.) 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。</skill>';
 
 export const outsideScopeInstruction =
-  "You are not in a scope. Before using any tool, start a scope; otherwise finish the task. You are outside all scopes: write the final user-facing answer as ordinary assistant text. return_markdown is your self-delivery report, not the user-facing answer. Finishing is not a tool call, and there is no finish tool.";
+  "You are outside all scopes. Only todo and the free control tools (scope, regret, defer, pin) may be called here; todo is the only functional tool allowed outside a scope and it is forbidden inside every scope. Before stopping, call todo outside all scopes to evaluate the ledger: a non-empty ledger forbids a natural stop; an empty ledger triggers a real /handoff to a successor whose first todo evaluation must also be empty. Only that promotion allows the final user-facing answer as ordinary assistant text. return_markdown is your self-delivery report, not the user-facing answer. Finishing is not a tool call, and there is no finish tool.";
 
 const vibeModeReplacements = [
   {

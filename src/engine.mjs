@@ -1,10 +1,12 @@
+import { copyRelay, createRelay, isValidRelay } from "./relay.mjs";
+
 // Herdchestra Lite 2.0 engine. Pure scope accounting. No I/O.
 //
 // Callers pass plain objects in and receive plain objects out. Every exported
 // function mutates the state object that it receives, except the serializers.
 // Control tools are free and are never budgeted.
 
-const VERSION = 1;
+const VERSION = 2;
 
 const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
 
@@ -171,6 +173,7 @@ export function createState() {
     charges: {},
     regrets: [],
     collapses: [],
+    relay: createRelay(),
   };
 }
 
@@ -381,6 +384,7 @@ export function serializeState(state) {
     collapses: Array.isArray(state.collapses)
       ? state.collapses.map(copyCollapse)
       : [],
+    relay: copyRelay(state.relay),
   };
 }
 
@@ -473,7 +477,17 @@ export function deserializeState(input) {
         return createState();
       }
     }
-    if (!isPlainObject(data) || data.version !== VERSION) return createState();
+    if (
+      !isPlainObject(data) ||
+      (data.version !== 1 && data.version !== VERSION)
+    ) {
+      return createState();
+    }
+    // Version 1 predates the relay state. Its other fields keep their meaning,
+    // so migrate them instead of discarding the scope history.
+    if (data.version === VERSION && !isValidRelay(data.relay)) {
+      return createState();
+    }
     if (!Number.isInteger(data.seq) || data.seq < 0) return createState();
     if (!Array.isArray(data.scopes) || !data.scopes.every(validScope)) {
       return createState();
@@ -502,6 +516,7 @@ export function deserializeState(input) {
       charges: copyCharges(data.charges),
       regrets: data.regrets.slice(),
       collapses: data.collapses.map(copyCollapse),
+      relay: data.version === VERSION ? copyRelay(data.relay) : createRelay(),
     };
   } catch {
     return createState();

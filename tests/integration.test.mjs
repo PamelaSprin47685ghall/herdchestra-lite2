@@ -179,7 +179,9 @@ describe("scope lifecycle", () => {
 		})]));
 		expect(transition[0].output.content[0].text).toContain("Scope closed.");
 		expect(transition[0].output.content[0].text).toContain("You are now inside this scope.");
-		expect(transition[0].output.content[0].text).not.toContain("outside all scopes");
+		expect(transition[0].output.content[0].text).not.toContain(
+			"Scope closed. You are outside all scopes.",
+		);
 		const read = await runAssistant(host, ctx, assistant([call("r2", "read", { path: "second" })]));
 		expect(read[0].blocked).toBe(false);
 		await runAssistant(host, ctx, assistant([call("t2", "scope", {
@@ -301,7 +303,7 @@ describe("scope lifecycle", () => {
 		expect(joined).toContain("read:config-one");
 		expect(joined).not.toContain("read:config-two");
 		expect(joined).toContain("read:config-three");
-		expect(joined).toContain("You are not in a scope. Before using any tool, start a scope; otherwise finish the task.");
+		expect(joined).toContain("You are outside all scopes. Only todo and the free control tools");
 		expect(joined).toContain("强制以简体中文思考");
 	});
 
@@ -353,7 +355,7 @@ describe("scope lifecycle", () => {
 		expect(result[0].blocked).toBe(true);
 		expect(result[0].result.content[0].text).toContain("Not in a scope");
 		const view = await outbound(host, ctx);
-		expect(texts(view).join("\n")).toContain("You are not in a scope.");
+		expect(texts(view).join("\n")).toContain("You are outside all scopes.");
 	});
 
 	test("nudges a natural stop inside a scope", async () => {
@@ -379,7 +381,7 @@ describe("scope lifecycle", () => {
 		);
 	});
 
-	test("does not nudge a final answer outside all scopes", async () => {
+	test("nudges a final answer outside all scopes before any todo evaluation", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		await runAssistant(
@@ -387,7 +389,11 @@ describe("scope lifecycle", () => {
 			ctx,
 			assistant([{ type: "text", text: "Final answer." }]),
 		);
-		expect(host.steers).toEqual([]);
+		expect(host.steers.length).toBe(1);
+		expect(host.steers[0].text).toContain("evaluate the ledger with todo");
+		expect(host.steers[0].text).toContain(
+			"A natural stop is allowed only in one sequence",
+		);
 	});
 
 	test("closing a parent collapses its elder sibling, not its child", async () => {

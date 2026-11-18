@@ -12,7 +12,7 @@ import {
 	isCollapsed,
 	rewriteVibeMessage,
 	toolCalls,
-} from "../src/transcript.mjs";
+} from "../src/transcript/index.mjs";
 
 const BEGIN_ID = "call_begin";
 const END_ID = "call_end";

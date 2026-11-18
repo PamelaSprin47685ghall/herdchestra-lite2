@@ -5,8 +5,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { activate } from "../src/main.mjs";
-import { installVibeTools } from "../src/runner-capture.mjs";
-import { finishedReport } from "../src/transcript.mjs";
+import { installVibeTools } from "../src/host/index.mjs";
+import { finishedReport } from "../src/transcript/index.mjs";
 
 function makeManager() {
 	const entries = [];

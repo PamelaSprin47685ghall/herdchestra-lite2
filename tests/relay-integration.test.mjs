@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	countHandoffCompactions,
 	runHandoffInContext,
-} from "../src/handoff.mjs";
+} from "../src/handoff/index.mjs";
 import { activate } from "../src/main.mjs";
 import {
 	installInteractiveCapture,
@@ -18,8 +18,8 @@ import {
 	rememberSession,
 	rememberTui,
 	tuiFor,
-} from "../src/runner-capture.mjs";
-import { stateFor } from "../src/station.mjs";
+} from "../src/host/index.mjs";
+import { stateFor } from "../src/station/index.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -355,6 +355,46 @@ describe("relay integration", () => {
 		expect(session.calls.length).toBe(0);
 	});
 
+	test("a host that filters todo out keeps a read-write subagent relay-off", async () => {
+		const { host, ctx } = await start({
+			sessionInit: {
+				agent: "task",
+				readOnly: false,
+				tools: ["read", "write", "bash"],
+			},
+		});
+		host.activeTools.splice(0, host.activeTools.length, "read", "write");
+		host.pi.setActiveTools = async (names) => {
+			host.activeTools.splice(
+				0,
+				host.activeTools.length,
+				...names.filter((name) => name !== "todo"),
+			);
+		};
+		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		await sleep(5);
+		const text = JSON.stringify(context.messages);
+		expect(text).not.toContain("evaluate the ledger");
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "greeting" }]));
+		expect(host.steers.length).toBe(0);
+		expect(await emitStop(host, ctx)).toBeUndefined();
+	});
+
+	test("a read-write subagent that really holds todo keeps the relay", async () => {
+		const { host, ctx } = await start({
+			sessionInit: {
+				agent: "task",
+				readOnly: false,
+				tools: ["read", "write", "bash"],
+			},
+		});
+		host.activeTools.splice(0, host.activeTools.length, "read", "write", "todo");
+		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		expect(JSON.stringify(context.messages)).toContain("evaluate the ledger");
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "greeting" }]));
+		expect(host.steers.length).toBe(1);
+	});
+
 	test("a read-only subagent works without a scope and stops without relay", async () => {
 		const { host, ctx } = await start({
 			sessionInit: {
@@ -385,6 +425,28 @@ describe("relay integration", () => {
 		expect(text).not.toContain("handoff");
 	});
 
+	test("a subagent classified before its session_init lands is reclassified", async () => {
+		const { host, ctx } = await start();
+		// The first hook can run before the host persists the subagent contract.
+		// That early "main" verdict must not be cached for the whole session.
+		await emit(host.handlers, "before_agent_start", { systemPrompt: [] }, ctx);
+		ctx.sessionManager.appendSessionInit({
+			agent: "scout",
+			readOnly: true,
+			tools: ["read", "grep", "glob"],
+		});
+		const read = await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "a" })]),
+		);
+		expect(read[0].blocked).toBe(false);
+		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		const text = JSON.stringify(context.messages);
+		expect(text).not.toContain("todo");
+		expect(text).not.toContain("handoff");
+	});
+
 	test("a read-write subagent keeps scope gating and gets todo activated", async () => {
 		const { host, ctx } = await start({
 			sessionInit: {
@@ -404,6 +466,59 @@ describe("relay integration", () => {
 		expect(read[0].result.content[0].text).toContain("Not in a scope");
 		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
 		expect(JSON.stringify(context.messages)).toContain("todo");
+	});
+
+	test("a read-write subagent whose tools omit editor transports keeps the relay", async () => {
+		const { host, ctx } = await start({
+			sessionInit: {
+				agent: "bash-writer",
+				readOnly: false,
+				tools: ["read", "grep", "bash"],
+			},
+		});
+		await emit(host.handlers, "before_agent_start", { systemPrompt: [] }, ctx);
+		expect(host.activeTools).toContain("todo");
+		const read = await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "a" })]),
+		);
+		expect(read[0].blocked).toBe(true);
+		expect(read[0].result.content[0].text).toContain("Not in a scope");
+	});
+
+	test("plugin-owned tools never start the relay for a read-only subagent", async () => {
+		const { host, ctx } = await start({
+			sessionInit: {
+				agent: "scout",
+				readOnly: true,
+				tools: ["read", "grep", "glob", "scope", "pin", "defer", "regret"],
+			},
+		});
+		host.activeTools.splice(0, host.activeTools.length, "read", "grep");
+		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		expect(JSON.stringify(context.messages)).not.toContain("handoff");
+		expect(host.activeTools).not.toContain("todo");
+		const read = await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "a" })]),
+		);
+		expect(read[0].blocked).toBe(false);
+	});
+
+	test("the relay verdict grants todo even before before_agent_start", async () => {
+		const { host, ctx } = await start({
+			sessionInit: {
+				agent: "task",
+				readOnly: false,
+				tools: ["read", "write", "bash", "edit"],
+			},
+		});
+		host.activeTools.splice(0, host.activeTools.length, "read");
+		await emit(host.handlers, "context", { messages: [] }, ctx);
+		await sleep(5);
+		expect(host.activeTools).toContain("todo");
 	});
 
 	test("todo is blocked inside a scope and free outside; other tools stay gated", async () => {

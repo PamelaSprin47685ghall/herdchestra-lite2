@@ -8,10 +8,10 @@
  */
 
 import { errorResult, textResult } from "./results.mjs";
-import { runHandoffInContext } from "./handoff.mjs";
-import { appendUserTail } from "./transcript.mjs";
-import { languageSkill } from "./prompts.mjs";
-import { successorPrompt } from "./relay.mjs";
+import { runHandoffInContext } from "../handoff/index.mjs";
+import { appendUserTail } from "../transcript/index.mjs";
+import { languageSkill } from "../host/prompts.mjs";
+import { successorPrompt } from "../relay/index.mjs";
 
 /** Fire-and-forget steer delivery. The scope result already reports the send. */
 export async function sendSteerTicket(pi, text) {
@@ -29,8 +29,10 @@ export async function sendSteerTicket(pi, text) {
  */
 export async function activateToolsTicket(pi, activeTools, prompt, promptChanged) {
 	if (typeof pi?.setActiveTools === "function") {
+		const next = Array.isArray(activeTools) ? [...activeTools] : [];
+		if (!next.includes("todo")) next.push("todo");
 		try {
-			await pi.setActiveTools([...activeTools, "todo"]);
+			await pi.setActiveTools(next);
 		} catch {
 			// A host without tool activation keeps its own tool set.
 		}

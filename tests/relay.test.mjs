@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createState, deserializeState, serializeState } from "../src/engine.mjs";
+import { createState, deserializeState, serializeState } from "../src/scope/index.mjs";
 import {
 	applyLedgerEvaluation,
 	beginGenerationAfterHandoff,
@@ -11,7 +11,7 @@ import {
 	recordHandoffFailure,
 	relayStatusText,
 	successorPrompt,
-} from "../src/relay.mjs";
+} from "../src/relay/index.mjs";
 
 function phases(tasks) {
 	return [{ name: "P", tasks }];

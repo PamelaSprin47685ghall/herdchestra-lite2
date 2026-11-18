@@ -14,7 +14,7 @@ import {
   roundAmount,
   serializeState,
   truncateForHostBoundary,
-} from "../src/engine.mjs";
+} from "../src/scope/index.mjs";
 
 const STEER_HEADER =
   "You deferred the following findings in this scope. Address them now:";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createStatusRuntime } from "../src/status.mjs";
+import { createStatusRuntime } from "../src/host/index.mjs";
 
 function makeUi() {
 	const working = [];

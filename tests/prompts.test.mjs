@@ -6,8 +6,8 @@ import {
   languageSkill,
   outsideScopeInstruction,
   rewriteVibeModeContext,
-} from "../src/prompts.mjs";
-import { BUDGET_DESCRIPTION } from "../src/descriptions.mjs";
+} from "../src/host/index.mjs";
+import { BUDGET_DESCRIPTION } from "../src/tools/index.mjs";
 
 const HEADING = "# Repo-aware Rules";
 const START = "<!-- herdchestra-lite2:system-prompt v1 -->";

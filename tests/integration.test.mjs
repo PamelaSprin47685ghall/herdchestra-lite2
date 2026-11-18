@@ -519,6 +519,76 @@ describe("scope lifecycle", () => {
 			'Tool "read" has no budget left',
 		);
 	});
+
+	function dropBeginEntry(manager, toolCallId) {
+		const victim = manager.entries.find(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message?.role === "assistant" &&
+				entry.message.content.some(
+					(block) => block.type === "toolCall" && block.id === toolCallId,
+				),
+		);
+		expect(victim).toBeDefined();
+		for (const entry of manager.entries) {
+			if (entry.parentId === victim.id) entry.parentId = victim.parentId;
+		}
+		manager.entries.splice(manager.entries.indexOf(victim), 1);
+	}
+
+	test("closes when the elder sibling's begin left the branch", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", {
+				begin: { intent: "elder", budget: { read: 1 } },
+			})]),
+		);
+		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "elder" })]));
+		await runAssistant(host, ctx, assistant([call("e1", "scope", { end: "elder done" })]));
+
+		// Compaction keeps the collapse record but removes the begin message.
+		dropBeginEntry(manager, "b1");
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b2", "scope", {
+				begin: { intent: "younger", budget: { read: 1 } },
+			})]),
+		);
+		const ended = await runAssistant(
+			host,
+			ctx,
+			assistant([call("e2", "scope", { end: "younger done" })]),
+		);
+		expect(ended[0].output.isError).toBeFalsy();
+		expect(ended[0].output.content[0].text).toContain("Scope closed.");
+		expect(ended[0].output.content[0].text).not.toContain("SCOPE_BOUNDARY");
+	});
+
+	test("closes when its own begin left the branch", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", {
+				begin: { intent: "work", budget: { read: 1 } },
+			})]),
+		);
+		dropBeginEntry(manager, "b1");
+
+		const ended = await runAssistant(
+			host,
+			ctx,
+			assistant([call("e1", "scope", { end: "done" })]),
+		);
+		expect(ended[0].output.isError).toBeFalsy();
+		expect(ended[0].output.content[0].text).toContain("outside all scopes");
+	});
 });
 
 describe("regret", () => {

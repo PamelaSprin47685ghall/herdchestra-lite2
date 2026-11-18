@@ -208,6 +208,9 @@ Export exactly:
     begin assistant, append a `toolResult` with the begin `toolCallId` whose
     text is `finishedReport(report)`, then replay the persisted tail from the
     previous end call onwards unchanged.
+    Folding is presentation only: when the elder's begin is no longer on the
+    branch (compaction, restore, or an earlier fork), mark the record collapsed
+    and close anyway. A close never fails because history is missing.
     Persist the updated scope state as a `scope.state` custom entry on the new
     branch. Queue the defer steering prompt with
     `pi.sendUserMessage(text, { deliverAs: "steer" })`.
@@ -238,6 +241,8 @@ Export exactly:
 - Scope state is per `ctx.sessionManager`, restored from the newest
   `scope.state` custom entry on the current branch. Persist after every
   transition. Unknown/corrupt state => fresh state.
+  On restore, drop active scopes and mark collapse records whose begin is not
+  in the visible transcript as collapsed, so state and branch start aligned.
 - After a fork, optionally rebase `session.agent.state.messages` from
   `sessionManager.buildSessionContext().messages` when the live session is
   available; outbound correction must not depend on it.

@@ -73,15 +73,30 @@ function restoreState(manager) {
 				// A crash can leave an active scope whose begin message never
 				// reached the transcript. Drop such scopes instead of charging
 				// every later tool call to a scope that can never be closed.
-				if (restored.scopes.length > 0) {
+				if (restored.scopes.length > 0 || restored.collapses.length > 0) {
 					try {
 						const context = manager.buildSessionContext?.();
 						const messages = Array.isArray(context?.messages) ? context.messages : [];
-						restored.scopes = restored.scopes.filter(
-							(scope) => findToolCallIndex(messages, scope.beginToolCallId) >= 0,
+						const visible = new Set();
+						for (const message of messages) {
+							if (message?.role !== "assistant") continue;
+							for (const call of toolCalls(message)) visible.add(call.id);
+						}
+						// A scope whose begin left the branch can never be closed
+						// or folded. Drop it instead of charging later calls to it.
+						restored.scopes = restored.scopes.filter((scope) =>
+							visible.has(scope.beginToolCallId),
 						);
+						// A collapse record whose begin left the branch has already
+						// lost its interior. Treat it as folded so the elder lookup
+						// never asks for a message that cannot be shown.
+						for (const record of restored.collapses) {
+							if (record?.collapsed === false && !visible.has(record.beginToolCallId)) {
+								record.collapsed = true;
+							}
+						}
 					} catch {
-						// Keep the restored scopes when the host cannot expose context.
+						// Keep the restored state when the host cannot expose context.
 					}
 				}
 				return restored;
@@ -447,6 +462,39 @@ function forkCollapse(rec, { collapse, begin, beginEntry, oldMessages, currentMe
 	}
 }
 
+/**
+ * Fold an elder sibling into its begin receipt when it is still visible.
+ *
+ * Folding is presentation only. A record whose begin is no longer on the
+ * current branch has already lost its interior, so mark it folded and let the
+ * close proceed instead of failing on a message that cannot be shown.
+ */
+function foldElder(rec, options) {
+	const { elder, base, currentMessage, currentPersisted } = options;
+	const begin = findBegin(base, elder.beginToolCallId);
+	const beginEntry = begin ? findBeginEntry(rec.manager, elder.beginToolCallId) : null;
+	if (!begin || !beginEntry) {
+		elder.collapsed = true;
+		return { folded: false, report: null };
+	}
+	if (!isCollapsed(base, elder)) {
+		const forked = forkCollapse(rec, {
+			collapse: elder,
+			begin,
+			beginEntry,
+			oldMessages: base,
+			currentMessage: currentMessage ?? null,
+			currentPersisted,
+		});
+		if (!forked.ok) {
+			elder.collapsed = true;
+			return { folded: false, report: null };
+		}
+	}
+	elder.collapsed = true;
+	return { folded: true, report: elder.report };
+}
+
 function handleRegretCall(rec, call, base, currentIndex) {
 	const args = parseArgs(call);
 	const reflection = trimText(args.reflection);
@@ -532,15 +580,12 @@ function handleScopeCall(rec, pi, call, { base, currentMessage, currentPersisted
 			"A scope cannot begin and end in the same assistant message. Begin it in one message, do the work, then end it in a later message.",
 		);
 	}
-	if (!findBegin(base, scope.beginToolCallId)) {
-		return errorResult(
-			"SCOPE_BOUNDARY",
-			"The assistant message that began this scope is not present on the current branch.",
-		);
-	}
-	if (!findBeginEntry(rec.manager, scope.beginToolCallId)) {
-		return errorResult("SCOPE_BOUNDARY", "Cannot locate the scope begin entry in the session tree.");
-	}
+	// A close is a state transition, not a history edit. The begin may be gone
+	// after compaction, restore, or an earlier fork; close anyway and record a
+	// collapse only when its begin is still addressable.
+	const selfVisible =
+		findBegin(base, scope.beginToolCallId) !== null &&
+		findBeginEntry(rec.manager, scope.beginToolCallId) !== null;
 
 	// A closing scope collapses its immediately elder sibling at the same
 	// level. The closing scope itself stays fully visible until a younger
@@ -554,45 +599,27 @@ function handleScopeCall(rec, pi, call, { base, currentMessage, currentPersisted
 	const elder = findElderSibling(rec.state, parentId, order);
 	let foldedReport = null;
 	if (elder) {
-		const elderBegin = findBegin(base, elder.beginToolCallId);
-		if (!elderBegin) {
-			return errorResult(
-				"SCOPE_BOUNDARY",
-				"The elder sibling's begin is not present on the current branch.",
-			);
-		}
-		const elderBeginEntry = findBeginEntry(rec.manager, elder.beginToolCallId);
-		if (!elderBeginEntry) {
-			return errorResult(
-				"SCOPE_BOUNDARY",
-				"Cannot locate the elder sibling's begin entry in the session tree.",
-			);
-		}
-		if (!isCollapsed(base, elder)) {
-			const forked = forkCollapse(rec, {
-				collapse: elder,
-				begin: elderBegin,
-				beginEntry: elderBeginEntry,
-				oldMessages: base,
-				currentMessage: currentMessage ?? null,
-				currentPersisted,
-			});
-			if (!forked.ok) return errorResult(forked.code, forked.reason);
-		}
-		elder.collapsed = true;
-		foldedReport = elder.report;
+		const folded = foldElder(rec, {
+			elder,
+			base,
+			currentMessage,
+			currentPersisted,
+		});
+		if (folded.folded) foldedReport = folded.report;
 	}
 	const closed = closeScope(rec.state, { toolCallId: call.id, report });
 	if (!closed.ok) return errorResult(closed.code, closed.reason);
-	rec.state.collapses.push({
-		beginToolCallId: scope.beginToolCallId,
-		endToolCallId: call.id,
-		report,
-		parentId,
-		order,
-		collapsed: false,
-		createdAt: Date.now(),
-	});
+	if (selfVisible) {
+		rec.state.collapses.push({
+			beginToolCallId: scope.beginToolCallId,
+			endToolCallId: call.id,
+			report,
+			parentId,
+			order,
+			collapsed: false,
+			createdAt: Date.now(),
+		});
+	}
 	const deferred = closed.defers ?? [];
 	const steerSent = queueSteer(pi, closed.steerText);
 	const remainingScope = currentScope(rec.state);

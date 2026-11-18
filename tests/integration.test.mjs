@@ -1,0 +1,664 @@
+/**
+ * Fake-host integration: exercises the real hooks and tool executes against a
+ * session manager with the same tree semantics as omp.
+ */
+
+import { describe, expect, test } from "bun:test";
+import { activate } from "../src/main.mjs";
+import { installVibeTools } from "../src/runner-capture.mjs";
+import { finishedReport } from "../src/transcript.mjs";
+
+function makeManager() {
+	const entries = [];
+	let leafId = null;
+	let nextId = 1;
+	const id = () => `e${nextId++}`;
+	const manager = {
+		entries,
+		getLeafId: () => leafId,
+		getEntry: (entryId) => entries.find((entry) => entry.id === entryId),
+		getBranch: (fromId) => {
+			const path = [];
+			let current = fromId ? entries.find((entry) => entry.id === fromId) : entries.find((entry) => entry.id === leafId);
+			while (current) {
+				path.unshift(current);
+				current = current.parentId ? entries.find((entry) => entry.id === current.parentId) : undefined;
+			}
+			return path;
+		},
+		branch: (entryId) => {
+			if (!entries.some((entry) => entry.id === entryId)) throw new Error(`missing ${entryId}`);
+			leafId = entryId;
+		},
+		resetLeaf: () => {
+			leafId = null;
+		},
+		appendMessage: (message) => {
+			const entry = { type: "message", id: id(), parentId: leafId, message };
+			entries.push(entry);
+			leafId = entry.id;
+			return entry.id;
+		},
+		appendCustomEntry: (customType, data) => {
+			const entry = { type: "custom", customType, data, id: id(), parentId: leafId };
+			entries.push(entry);
+			leafId = entry.id;
+			return entry.id;
+		},
+		buildSessionContext: () => {
+			const messages = [];
+			for (const entry of manager.getBranch()) {
+				if (entry.type === "message") messages.push(entry.message);
+			}
+			return { messages };
+		},
+	};
+	return manager;
+}
+
+function makeHost() {
+	const handlers = new Map();
+	const tools = new Map();
+	const steers = [];
+	const pi = {
+		on(event, handler) {
+			if (!handlers.has(event)) handlers.set(event, []);
+			handlers.get(event).push(handler);
+		},
+		registerTool(definition) {
+			tools.set(definition.name, definition);
+		},
+		sendUserMessage(text, options) {
+			steers.push({ text, options });
+			return Promise.resolve();
+		},
+	};
+	return { pi, handlers, tools, steers };
+}
+
+async function emit(handlers, event, payload, ctx) {
+	const results = [];
+	for (const handler of handlers.get(event) ?? []) {
+		results.push(await handler(payload, ctx));
+	}
+	return results.find((result) => result !== undefined);
+}
+
+function assistant(content, timestamp) {
+	return { role: "assistant", content, timestamp: timestamp ?? Date.now() };
+}
+
+function call(id, name, args) {
+	return { type: "toolCall", id, name, arguments: args };
+}
+
+function toolResult(id, name, text, isError = false) {
+	return {
+		role: "toolResult",
+		toolCallId: id,
+		toolName: name,
+		content: [{ type: "text", text }],
+		isError,
+		timestamp: Date.now(),
+	};
+}
+
+function makeRuntime(manager) {
+	const host = makeHost();
+	const ctx = { sessionManager: manager, agentMessages: [] };
+	return { host, ctx };
+}
+
+async function start(manager) {
+	const host = makeHost();
+	await activate(host.pi);
+	const ctx = { sessionManager: manager, agentMessages: [] };
+	const user = { role: "user", content: "do the task", timestamp: Date.now() };
+	manager.appendMessage(user);
+	ctx.agentMessages.push(user);
+	return { host, ctx };
+}
+
+async function runAssistant(host, ctx, message) {
+	const manager = ctx.sessionManager;
+	await emit(host.handlers, "assistant_message", { type: "assistant_message", message }, ctx);
+	manager.appendMessage(message);
+	ctx.agentMessages.push(message);
+	const results = [];
+	for (const block of message.content) {
+		if (block.type !== "toolCall") continue;
+		const decision = await emit(
+			host.handlers,
+			"tool_call",
+			{ type: "tool_call", toolCallId: block.id, toolName: block.name, input: block.arguments },
+			ctx,
+		);
+		if (decision?.block) {
+			const result = toolResult(block.id, block.name, decision.reason, true);
+			manager.appendMessage(result);
+			ctx.agentMessages.push(result);
+			results.push({ result, blocked: true });
+			continue;
+		}
+		const tool = host.tools.get(block.name);
+		const nativeText = block.name === "read" ? `read:${block.arguments?.path}` : `${block.name} ok`;
+		const output = tool
+			? await tool.execute(block.id, block.arguments, undefined, undefined, ctx)
+			: { content: [{ type: "text", text: nativeText }] };
+		const result = toolResult(block.id, block.name, output.content[0].text, Boolean(output.isError));
+		manager.appendMessage(result);
+		ctx.agentMessages.push(result);
+		results.push({ result, blocked: false, output });
+	}
+	return results;
+}
+
+async function outbound(host, ctx) {
+	const result = await emit(host.handlers, "context", { type: "context", messages: ctx.agentMessages }, ctx);
+	return result.messages;
+}
+
+function texts(messages) {
+	return messages.map((message) =>
+		typeof message.content === "string"
+			? message.content
+			: (message.content ?? []).map((block) => block.text ?? block.thinking ?? "").join(""),
+	);
+}
+
+describe("scope lifecycle", () => {
+	test("transitions between scopes and preserves delayed collapse", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(host, ctx, assistant([call("b1", "scope", {
+			begin: { intent: "first", budget: { read: 1 } },
+		})]));
+		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "first" })]));
+		const transition = await runAssistant(host, ctx, assistant([call("t1", "scope", {
+			end: "first done", begin: { intent: "second", budget: { read: 1 } },
+		})]));
+		expect(transition[0].output.content[0].text).toContain("Scope closed.");
+		expect(transition[0].output.content[0].text).toContain("You are now inside this scope.");
+		expect(transition[0].output.content[0].text).not.toContain("outside all scopes");
+		const read = await runAssistant(host, ctx, assistant([call("r2", "read", { path: "second" })]));
+		expect(read[0].blocked).toBe(false);
+		await runAssistant(host, ctx, assistant([call("t2", "scope", {
+			end: "second done", begin: { intent: "third", budget: { read: 1 } },
+		})]));
+		let joined = texts(await outbound(host, ctx)).join("\n");
+		expect(joined).toContain(finishedReport("first done"));
+		expect(joined).not.toContain(finishedReport("second done"));
+		await runAssistant(host, ctx, assistant([call("r3", "read", { path: "third" })]));
+		const end = await runAssistant(host, ctx, assistant([call("e3", "scope", { end: "third done" })]));
+		expect(end[0].output.isError).not.toBe(true);
+		joined = texts(await outbound(host, ctx)).join("\n");
+		expect(joined).toContain(finishedReport("second done"));
+		expect(joined).toContain("read:third");
+	});
+
+	test("rejects invalid transitions without closing the active scope", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const outside = await runAssistant(host, ctx, assistant([call("t0", "scope", {
+			end: "nothing", begin: { intent: "first", budget: { read: 1 } },
+		})]));
+		expect(outside[0].output.content[0].text).toContain("NOT_IN_SCOPE");
+		await runAssistant(host, ctx, assistant([call("b1", "scope", {
+			begin: { intent: "first", budget: { read: 1 } },
+		})]));
+		const invalid = await runAssistant(host, ctx, assistant([call("t1", "scope", {
+			end: "first done", begin: { intent: "", budget: { read: 1 } },
+		})]));
+		expect(invalid[0].output.isError).toBe(true);
+		const read = await runAssistant(host, ctx, assistant([call("r1", "read", { path: "still first" })]));
+		expect(read[0].blocked).toBe(false);
+	});
+
+	test("begin, budget block, deferred collapse, outside tail", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+
+		const first = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("c1", "scope", { begin: { intent: "inspect config", budget: { read: 1 } } }),
+				call("c2", "read", { path: "config-one" }),
+			]),
+		);
+		expect(first[0].output.content[0].text).toContain("You are now inside this scope.");
+		expect(first[1].blocked).toBe(false);
+
+		const second = await runAssistant(host, ctx, assistant([call("c3", "read", { path: "config-two" })]));
+		expect(second[0].blocked).toBe(true);
+		expect(second[0].result.content[0].text).toContain('Tool "read" has no budget left');
+
+		const third = await runAssistant(
+			host,
+			ctx,
+			assistant([call("c4", "scope", { end: "done: config inspected" })]),
+		);
+		expect(third[0].blocked).toBe(false);
+		expect(third[0].output.content[0].text).toContain("Scope closed");
+		expect(third[0].output.content[0].text).toContain("younger sibling scope");
+
+		// The freshest scope keeps its turns: nothing is rewritten yet.
+		const branchAfterFirstEnd = manager.getBranch();
+		const messagesAfterFirstEnd = branchAfterFirstEnd
+			.filter((entry) => entry.type === "message")
+			.map((entry) => entry.message);
+		expect(texts(messagesAfterFirstEnd).join("\n")).not.toContain(
+			"You have finished this scope. Here is your report: done: config inspected",
+		);
+		expect(
+			messagesAfterFirstEnd.some(
+				(message) =>
+					message.role === "assistant" && message.content.some((block) => block.id === "c3"),
+			),
+		).toBe(true);
+
+		const viewAfterFirstEnd = await outbound(host, ctx);
+		const joinedAfterFirstEnd = texts(viewAfterFirstEnd).join("\n");
+		expect(joinedAfterFirstEnd).not.toContain("You have finished this scope. Here is your report:");
+		expect(joinedAfterFirstEnd).toContain('Tool "read" has no budget left');
+
+		// The next scope end collapses the previous scope, not itself.
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("d1", "scope", { begin: { intent: "second pass", budget: { read: 1 } } })]),
+		);
+		await runAssistant(host, ctx, assistant([call("d2", "read", { path: "config-three" })]));
+		const finalEnd = await runAssistant(
+			host,
+			ctx,
+			assistant([call("d3", "scope", { end: "second pass done" })]),
+		);
+		expect(finalEnd[0].output.content[0].text).toContain(
+			"Your elder sibling scope at this level was collapsed; its begin receipt now reads",
+		);
+
+		const branch = manager.getBranch();
+		const messages = branch.filter((entry) => entry.type === "message").map((entry) => entry.message);
+		expect(texts(messages).join("\n")).toContain(finishedReport("done: config inspected"));
+		expect(
+			messages.some(
+				(message) =>
+					message.role === "assistant" && message.content.some((block) => block.id === "c3"),
+			),
+		).toBe(false);
+		expect(
+			messages.some(
+				(message) =>
+					message.role === "assistant" && message.content.some((block) => block.id === "d2"),
+			),
+		).toBe(true);
+
+		const view = await outbound(host, ctx);
+		const joined = texts(view).join("\n");
+		expect(joined).toContain(finishedReport("done: config inspected"));
+		expect(joined).not.toContain(finishedReport("second pass done"));
+		expect(joined).toContain("read:config-one");
+		expect(joined).not.toContain("read:config-two");
+		expect(joined).toContain("read:config-three");
+		expect(joined).toContain("You are not in a scope. Before using any tool, start a scope; otherwise finish the task.");
+		expect(joined).toContain("强制以简体中文思考");
+	});
+
+	test("collapses one scope behind across three scopes", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", { begin: { intent: "one", budget: { read: 1 } } })]),
+		);
+		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "one" })]));
+		await runAssistant(host, ctx, assistant([call("e1", "scope", { end: "scope one done" })]));
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b2", "scope", { begin: { intent: "two", budget: { read: 1 } } })]),
+		);
+		await runAssistant(host, ctx, assistant([call("r2", "read", { path: "two" })]));
+		await runAssistant(host, ctx, assistant([call("e2", "scope", { end: "scope two done" })]));
+
+		let joined = texts(await outbound(host, ctx)).join("\n");
+		expect(joined).toContain(finishedReport("scope one done"));
+		expect(joined).not.toContain(finishedReport("scope two done"));
+		expect(joined).not.toContain("read:one");
+		expect(joined).toContain("read:two");
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b3", "scope", { begin: { intent: "three", budget: { read: 1 } } })]),
+		);
+		await runAssistant(host, ctx, assistant([call("r3", "read", { path: "three" })]));
+		await runAssistant(host, ctx, assistant([call("e3", "scope", { end: "scope three done" })]));
+
+		joined = texts(await outbound(host, ctx)).join("\n");
+		expect(joined).toContain(finishedReport("scope one done"));
+		expect(joined).toContain(finishedReport("scope two done"));
+		expect(joined).not.toContain(finishedReport("scope three done"));
+		expect(joined).not.toContain("read:two");
+		expect(joined).toContain("read:three");
+	});
+
+	test("outside tools are blocked", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const result = await runAssistant(host, ctx, assistant([call("c1", "read", { path: "a" })]));
+		expect(result[0].blocked).toBe(true);
+		expect(result[0].result.content[0].text).toContain("Not in a scope");
+		const view = await outbound(host, ctx);
+		expect(texts(view).join("\n")).toContain("You are not in a scope.");
+	});
+
+	test("nudges a natural stop inside a scope", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", {
+				begin: { intent: "work", budget: { read: 1 } },
+			})]),
+		);
+		const stop = await runAssistant(
+			host,
+			ctx,
+			assistant([{ type: "text", text: "Done." }]),
+		);
+		expect(stop).toEqual([]);
+		expect(host.steers.length).toBe(1);
+		expect(host.steers[0].text).toContain("still inside scope level 1");
+		expect(host.steers[0].text).toContain(
+			"Do not write the final user-facing conclusion",
+		);
+	});
+
+	test("does not nudge a final answer outside all scopes", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([{ type: "text", text: "Final answer." }]),
+		);
+		expect(host.steers).toEqual([]);
+	});
+
+	test("closing a parent collapses its elder sibling, not its child", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", {
+				begin: { intent: "outer", budget: { read: 1 } },
+			})]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b2", "scope", {
+				begin: { intent: "inner", budget: { read: 1 } },
+			})]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "inner" })]),
+		);
+		const innerEnd = await runAssistant(
+			host,
+			ctx,
+			assistant([call("e1", "scope", { end: "inner done" })]),
+		);
+		expect(innerEnd[0].output.content[0].text).toContain(
+			"back inside the enclosing scope",
+		);
+		expect(innerEnd[0].output.content[0].text).not.toContain(
+			"outside all scopes",
+		);
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("e2", "scope", { end: "outer done" })]),
+		);
+		const joined = texts(await outbound(host, ctx)).join("\n");
+		expect(joined).toContain("read:inner");
+		expect(joined).not.toContain(finishedReport("inner done"));
+	});
+
+	test("collapses the elder sibling inside an enclosing scope", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("a1", "scope", {
+				begin: { intent: "parent", budget: { read: 1 } },
+			})]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", {
+				begin: { intent: "elder", budget: { read: 1 } },
+			})]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "elder" })]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("e1", "scope", { end: "elder done" })]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("c1", "scope", {
+				begin: { intent: "younger", budget: { read: 1 } },
+			})]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("r2", "read", { path: "younger" })]),
+		);
+		const youngerEnd = await runAssistant(
+			host,
+			ctx,
+			assistant([call("e2", "scope", { end: "younger done" })]),
+		);
+		expect(youngerEnd[0].output.content[0].text).toContain(
+			"Your elder sibling scope at this level was collapsed",
+		);
+		const joined = texts(await outbound(host, ctx)).join("\n");
+		expect(joined).toContain(finishedReport("elder done"));
+		expect(joined).not.toContain("read:elder");
+		expect(joined).toContain("read:younger");
+		expect(joined).not.toContain(finishedReport("younger done"));
+	});
+
+	test("same-tool calls in one assistant message share one budget unit", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", {
+				begin: { intent: "batch", budget: { read: 1 } },
+			})]),
+		);
+		const batch = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("r1", "read", { path: "one" }),
+				call("r2", "read", { path: "two" }),
+			]),
+		);
+		expect(batch[0].blocked).toBe(false);
+		expect(batch[1].blocked).toBe(false);
+
+		const after = await runAssistant(
+			host,
+			ctx,
+			assistant([call("r3", "read", { path: "three" })]),
+		);
+		expect(after[0].blocked).toBe(true);
+		expect(after[0].result.content[0].text).toContain(
+			'Tool "read" has no budget left',
+		);
+	});
+});
+
+describe("regret", () => {
+	test("undoes the previous beat, refunds budget, and filters outbound", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", { begin: { intent: "read twice", budget: { read: 2 } } }),
+				call("r1", "read", { path: "one" }),
+			]),
+		);
+		await runAssistant(host, ctx, assistant([call("r2", "read", { path: "two" })]));
+		const third = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("g1", "regret", { reflection: "the second read was redundant" }),
+				call("r3", "read", { path: "three" }),
+			]),
+		);
+		expect(third[0].output.content[0].text).toContain("Undid the previous beat");
+		expect(third[0].output.content[0].text).toContain("Refunded 1 tool call");
+		expect(third[1].blocked).toBe(false);
+
+		const view = await outbound(host, ctx);
+		const joined = texts(view).join("\n");
+		expect(joined).not.toContain("read:two");
+		expect(joined).toContain("read:three");
+		expect(JSON.stringify(view)).toContain("the second read was redundant");
+	});
+
+	test("cannot regret across the scope begin", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 2 } } })]),
+		);
+		const result = await runAssistant(
+			host,
+			ctx,
+			assistant([call("g1", "regret", { reflection: "nothing before this scope" })]),
+		);
+		expect(result[0].output.content[0].text).toContain("SCOPE_BOUNDARY");
+	});
+});
+
+describe("defer", () => {
+	test("delivers deferred findings as a steering prompt and keeps residual defers", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", { begin: { intent: "limited work", budget: { read: 1 } } }),
+				call("d1", "defer", { intent: "fix the docs later" }),
+			]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("g1", "regret", { reflection: "the defer beat was premature" })]),
+		);
+		const end = await runAssistant(
+			host,
+			ctx,
+			assistant([call("e1", "scope", { end: "limited work done" })]),
+		);
+		expect(end[0].blocked).toBe(false);
+		expect(host.steers.length).toBe(1);
+		expect(host.steers[0].text).toContain("fix the docs later");
+		expect(host.steers[0].options).toEqual({ deliverAs: "steer" });
+		expect(end[0].output.content[0].text).toContain("fix the docs later");
+	});
+});
+
+describe("nested scopes", () => {
+	test("only the innermost budget is consumed", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", { begin: { intent: "outer", budget: { read: 0, bash: 1 } } }),
+				call("b2", "scope", { begin: { intent: "inner", budget: { read: 1 } } }),
+				call("r1", "read", { path: "inner" }),
+			]),
+		);
+		const afterRead = await runAssistant(host, ctx, assistant([call("r2", "read", { path: "inner2" })]));
+		expect(afterRead[0].blocked).toBe(true);
+		const innerEnd = await runAssistant(host, ctx, assistant([call("e1", "scope", { end: "inner done" })]));
+		expect(innerEnd[0].output.content[0].text).toContain("Scope closed");
+		const bash = await runAssistant(host, ctx, assistant([call("s1", "bash", { command: "true" })]));
+		expect(bash[0].blocked).toBe(false);
+		const outerEnd = await runAssistant(host, ctx, assistant([call("e2", "scope", { end: "outer done" })]));
+		expect(outerEnd[0].output.content[0].text).toContain("Scope closed");
+	});
+});
+
+describe("vibe mode", () => {
+	test("keeps registered scope tools when entering vibe mode", async () => {
+		class Session {
+			constructor(registered) {
+				this.registered = registered;
+			}
+			getAllToolNames() {
+				return this.registered;
+			}
+			async activateVibeTools(names) {
+				this.active = [...names, "task"];
+			}
+		}
+		installVibeTools(Session);
+		installVibeTools(Session);
+		const session = new Session(["read", "scope", "regret", "defer"]);
+		await session.activateVibeTools(["read", "scope"]);
+		expect(session.active).toEqual(["read", "scope", "regret", "defer", "task"]);
+		const other = new Session(["read"]);
+		await other.activateVibeTools(["read"]);
+		expect(other.active).toEqual(["read", "task"]);
+	});
+
+	test("rewrites the host custom message outbound only", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		ctx.agentMessages.push({
+			role: "custom",
+			customType: "vibe-mode-context",
+			content: "drive two worker CLIs",
+			display: false,
+		});
+		const view = await outbound(host, ctx);
+		expect(texts(view).join("\n")).toContain("direct as many parallel slice/swarm workers as causality allows");
+		expect(view.some((message) => message.content === "drive two worker CLIs")).toBe(false);
+	});
+});

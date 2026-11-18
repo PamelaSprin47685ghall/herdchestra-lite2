@@ -1,0 +1,32 @@
+{
+	"name": "herdchestra-lite2",
+	"version": "2.0.0",
+	"description": "Minimal budgeted-scope extension for omp",
+	"type": "module",
+	"license": "MIT",
+	"private": true,
+	"omp": {
+		"extensions": [
+			"./src/main.mjs"
+		]
+	},
+	"pi": {
+		"extensions": [
+			"./src/main.mjs"
+		]
+	},
+	"exports": {
+		".": "./src/main.mjs",
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"src/",
+		"README.md"
+	],
+	"engines": {
+		"bun": ">=1.4.4"
+	},
+	"scripts": {
+		"test": "bun test tests"
+	}
+}

@@ -69,6 +69,13 @@ function makeScope(state, toolCallId, intent, budget) {
     spent,
     defers: [],
     residualDefers: [],
+    // Measured token accounting for the strict open interior of this scope.
+    // null until a real usage message establishes an baseline.
+    baseInputTokens: null,
+    preBeginInputTokens: null,
+    endInputTokens: null,
+    endInputTokensPending: false,
+    beginResultChars: 0,
   };
 }
 

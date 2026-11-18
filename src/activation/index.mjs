@@ -12,8 +12,8 @@ import { wireTools } from "./tools.mjs";
 export { installCapture };
 
 /** Assemble the extension: registry, hooks, tools. Mechanical only. */
-export function wireExtension(pi) {
-	const registry = createStationRegistry(pi, buildTickets(pi));
+export function wireExtension(pi, pricingCatalog) {
+	const registry = createStationRegistry(pi, buildTickets(pi), pricingCatalog);
 	setActiveRegistry(registry);
 	wireHooks(pi, registry);
 	wireTools(pi, registry);

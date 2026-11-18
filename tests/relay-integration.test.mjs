@@ -333,7 +333,7 @@ async function emitStop(host, ctx) {
 		{ type: "session_stop" },
 		ctx,
 	);
-	await sleep(0);
+	await sleep(10);
 	return result;
 }
 
@@ -526,7 +526,7 @@ describe("relay integration", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 1 } } })]),
+			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 1 }, elder_report: null } })]),
 		);
 		const blocked = await runAssistant(
 			host,
@@ -539,7 +539,7 @@ describe("relay integration", () => {
 		const ended = await runAssistant(
 			host,
 			ctx,
-			assistant([call("e1", "scope", { end: "done" })]),
+			assistant([call("e1", "scope", { end: true })]),
 		);
 		expect(ended[0].output.content[0].text).toContain("Call todo now");
 
@@ -630,15 +630,15 @@ describe("relay integration", () => {
 		expect(stateFor(ctx).state.relay.generation).toBe(0);
 
 		const stop = await emitStop(host, ctx);
-		expect(stop.continue).toBe(true);
-		expect(stop.additionalContext).toContain("You are the relay successor");
+		expect(stop).toBeUndefined();
 		expect(session.calls.length).toBe(1);
 		expect(session.calls[0]).toContain("An empty ledger triggers a relay handoff");
 		expect(session.calls[0]).toContain(
 			"An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
 		);
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages.length).toBe(0);
+		expect(host.messages.length).toBe(1);
+		expect(host.messages[0].text).toContain("You are the relay successor");
 		expect(host.messages.some((entry) => entry.text.trim() === "/handoff")).toBe(false);
 
 		const view = await runAssistant(
@@ -690,14 +690,16 @@ describe("relay integration", () => {
 		expect(session.calls.length).toBe(0);
 
 		const first = await emitStop(host, ctx);
-		expect(first.continue).toBe(true);
-		expect(first.additionalContext).toContain("HANDOFF FAILED: compaction already in progress");
+		expect(first).toBeUndefined();
 		expect(session.calls.length).toBe(1);
+		expect(stateFor(ctx).state.relay.handoffError).toContain("compaction already in progress");
+		expect(host.messages.length).toBe(0);
 
 		const second = await emitStop(host, ctx);
-		expect(second.continue).toBe(true);
-		expect(second.additionalContext).toContain("You are the relay successor");
+		expect(second).toBeUndefined();
 		expect(session.calls.length).toBe(2);
+		expect(host.messages.length).toBe(1);
+		expect(host.messages[0].text).toContain("You are the relay successor");
 	});
 
 	test("session_stop after a handoff asks the successor to evaluate", async () => {
@@ -708,14 +710,14 @@ describe("relay integration", () => {
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
 		const stop = await emitStop(host, ctx);
-		expect(stop.continue).toBe(true);
-		expect(stop.additionalContext).toContain("You are the relay successor");
+		expect(stop).toBeUndefined();
 		expect(session.calls.length).toBe(1);
+		expect(host.messages.length).toBe(1);
+		expect(host.messages[0].text).toContain("You are the relay successor");
 		const second = await emitStop(host, ctx);
 		expect(second.continue).toBe(true);
 		expect(second.additionalContext).toContain("evaluate the ledger with todo");
 		expect(session.calls.length).toBe(1);
-		expect(host.messages.length).toBe(0);
 		expect(host.messages.some((entry) => entry.text.trim() === "/handoff")).toBe(false);
 	});
 
@@ -727,8 +729,10 @@ describe("relay integration", () => {
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
 		const first = await emitStop(host, ctx);
-		expect(first.continue).toBe(true);
+		expect(first).toBeUndefined();
 		expect(session.calls.length).toBe(1);
+		expect(host.messages.length).toBe(1);
+		expect(host.messages[0].text).toContain("You are the relay successor");
 
 		const second = await emitStop(host, ctx);
 		expect(second.continue).toBe(true);
@@ -821,8 +825,7 @@ describe("relay integration", () => {
 		expect(result[0].output.content.at(-1).text).toContain("Handoff is pending");
 		expect(session.calls.length).toBe(0);
 		const first = await emitStop(host, ctx);
-		expect(first.continue).toBe(true);
-		expect(first.additionalContext).toContain("HANDOFF FAILED: no model");
+		expect(first).toBeUndefined();
 		expect(session.calls.length).toBe(1);
 		const view = await runAssistant(
 			host,
@@ -849,14 +852,13 @@ describe("relay integration", () => {
 		expect(rec.state.relay.handoffPending).toBe(true);
 
 		const first = await emitStop(host, ctx);
-		expect(first.continue).toBe(true);
-		expect(first.additionalContext).toContain(
-			"You are the relay successor (generation 1)",
-		);
-		expect(first.additionalContext).not.toContain("HANDOFF FAILED");
+		expect(first).toBeUndefined();
 		expect(rec.state.relay.generation).toBe(1);
 		expect(rec.state.relay.handoffPending).toBe(false);
 		expect(rec.state.relay.handoffError).toBeNull();
+		expect(host.messages.length).toBe(1);
+		expect(host.messages[0].text).toContain("You are the relay successor (generation 1)");
+		expect(host.messages[0].text).not.toContain("HANDOFF FAILED");
 
 		// The successor has not evaluated yet, so a second stop must not run
 		// another handoff or advance the generation.
@@ -872,6 +874,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([call("t2", "todo", { op: "view" })]),
 		);
+		await sleep(10);
 		expect(view[0].blocked).toBe(false);
 		expect(view[0].output.content.at(-1).text).toContain("RELAY STATE");
 		expect(rec.state.relay.generation).toBe(1);
@@ -893,6 +896,7 @@ describe("relay integration", () => {
 					begin: {
 						intent: "verify the unblocked relay",
 						budget: { read: 1 },
+						elder_report: null,
 					},
 				}),
 			]),
@@ -915,13 +919,10 @@ describe("relay integration", () => {
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
 		const stop = await emitStop(host, ctx);
-		expect(stop).toBeDefined();
-		expect(stop.continue).toBe(true);
-		expect(stop.additionalContext).toContain(
-			"HANDOFF FAILED: handoff completed but relay did not advance",
-		);
+		expect(stop).toBeUndefined();
 		const rec = stateFor(ctx);
 		expect(rec.state.relay.generation).toBe(0);
+		expect(rec.state.relay.canStop).toBe(false);
 		expect(rec.state.relay.handoffPending).toBe(false);
 		expect(rec.state.relay.handoffError).toBe(
 			"handoff completed but relay did not advance",
@@ -961,13 +962,13 @@ describe("relay integration", () => {
 		);
 		expect(started.session.calls.length).toBe(0);
 		const stop = await emitStop(started.host, started.ctx);
-		expect(stop.continue).toBe(true);
-		expect(stop.additionalContext).toContain("You are the relay successor");
+		expect(stop).toBeUndefined();
 		expect(started.session.calls.length).toBe(2);
 		expect(checkpointAtRetry).toBe(true);
 		expect(checkpointInAgent).toBe(true);
 		expect(started.session.settings.sets).toEqual([]);
 		expect(stateFor(started.ctx).state.relay.generation).toBe(1);
+		expect(started.host.messages[0].text).toContain("You are the relay successor");
 	});
 
 	test("when the checkpoint is not enough, keepRecentTokens is temporary", async () => {
@@ -987,13 +988,13 @@ describe("relay integration", () => {
 		);
 		expect(session.calls.length).toBe(0);
 		const stop = await emitStop(host, ctx);
-		expect(stop.continue).toBe(true);
-		expect(stop.additionalContext).toContain("You are the relay successor");
+		expect(stop).toBeUndefined();
 		expect(session.calls.length).toBe(3);
 		expect(session.settings.sets).toEqual([
 			["compaction.keepRecentTokens", 1],
 			["compaction.keepRecentTokens", 20000],
 		]);
+		expect(host.messages[0].text).toContain("You are the relay successor");
 	});
 
 	test("print session_stop continues on scope, missing evaluation, and non-empty ledger", async () => {
@@ -1032,7 +1033,7 @@ describe("relay integration", () => {
 		await runAssistant(
 			inScope.host,
 			inScope.ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 1 } } })]),
+			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 1 }, elder_report: null } })]),
 		);
 		const scoped = await emitStop(inScope.host, inScope.ctx);
 		expect(scoped.continue).toBe(true);
@@ -1046,7 +1047,7 @@ describe("relay integration", () => {
 		const blocked = await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "early", budget: { read: 1 } } })]),
+			assistant([call("b1", "scope", { begin: { intent: "early", budget: { read: 1 }, elder_report: null } })]),
 		);
 		expect(blocked[0].blocked).toBe(true);
 		expect(blocked[0].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
@@ -1058,12 +1059,12 @@ describe("relay integration", () => {
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
 		const stop = await emitStop(fresh.host, fresh.ctx);
-		expect(stop.continue).toBe(true);
+		expect(stop).toBeUndefined();
 		expect(fresh.session.calls.length).toBe(1);
 		const allowed = await runAssistant(
 			fresh.host,
 			fresh.ctx,
-			assistant([call("b2", "scope", { begin: { intent: "audit", budget: { read: 1 } } })]),
+			assistant([call("b2", "scope", { begin: { intent: "audit", budget: { read: 1 }, elder_report: null } })]),
 		);
 		expect(allowed[0].blocked).toBe(false);
 	});
@@ -1180,14 +1181,14 @@ describe("tui handoff integration", () => {
 			expect(tui.handoffCalls.length).toBe(0);
 			expect(started.session.calls.length).toBe(0);
 			const stop = await emitStop(started.host, started.ctx);
-			expect(stop.continue).toBe(true);
-			expect(stop.additionalContext).toContain("You are the relay successor");
+			expect(stop).toBeUndefined();
 			expect(tui.handoffCalls.length).toBe(0);
 			expect(started.session.calls.length).toBe(1);
 			expect(countHandoffCompactions(started.manager)).toBe(1);
 			expect(tui.renders).toBe(1);
 			expect(handoffSignal(started.manager)).toBeUndefined();
 			expect(stateFor(started.ctx).state.relay.generation).toBe(1);
+			expect(started.host.messages[0].text).toContain("You are the relay successor");
 			expect(
 				started.host.messages.some((entry) => entry.text.trim() === "/handoff"),
 			).toBe(false);
@@ -1217,18 +1218,17 @@ describe("tui handoff integration", () => {
 			expect(started.session.calls.length).toBe(0);
 
 			const firstStop = await emitStop(started.host, started.ctx);
-			expect(firstStop.continue).toBe(true);
-			expect(firstStop.additionalContext).toContain("HANDOFF FAILED: no model");
+			expect(firstStop).toBeUndefined();
 			expect(tui.handoffCalls.length).toBe(0);
 			expect(started.session.calls.length).toBe(1);
 
 			const secondStop = await emitStop(started.host, started.ctx);
-			expect(secondStop.continue).toBe(true);
-			expect(secondStop.additionalContext).toContain("You are the relay successor");
+			expect(secondStop).toBeUndefined();
 			expect(started.session.calls.length).toBe(2);
 			expect(tui.renders).toBe(1);
 			expect(countHandoffCompactions(started.manager)).toBe(1);
 			expect(stateFor(started.ctx).state.relay.generation).toBe(1);
+			expect(started.host.messages[0].text).toContain("You are the relay successor");
 		} finally {
 			rememberTui(null);
 		}
@@ -1252,11 +1252,11 @@ describe("tui handoff integration", () => {
 			);
 			expect(result[0].output.content.at(-1).text).toContain("Finish your reply to the user now");
 			const stop = await emitStop(started.host, started.ctx);
-			expect(stop.continue).toBe(true);
-			expect(stop.additionalContext).toContain("You are the relay successor");
+			expect(stop).toBeUndefined();
 			expect(started.session.calls.length).toBe(1);
 			expect(tui.renders).toBe(1);
 			expect(handoffSignal(started.manager)).toBeUndefined();
+			expect(started.host.messages[0].text).toContain("You are the relay successor");
 		} finally {
 			rememberTui(null);
 		}
@@ -1272,14 +1272,14 @@ describe("tui handoff integration", () => {
 		);
 		expect(result[0].output.content.at(-1).text).toContain("Finish your reply to the user now");
 		const stop = await emitStop(started.host, started.ctx);
-		expect(stop.continue).toBe(true);
-		expect(stop.additionalContext).toContain("You are the relay successor");
+		expect(stop).toBeUndefined();
 		const signal = handoffSignal(started.manager);
 		expect(signal).toBeDefined();
 		expect(signal.message.display).toBe(true);
 		expect(signal.message.content[0].text).toBe(
 			"Handoff complete: generation 1 -> successor evaluating",
 		);
+		expect(started.host.messages[0].text).toContain("You are the relay successor");
 	});
 });
 
@@ -1291,7 +1291,7 @@ describe("host truncation", () => {
 			started.ctx,
 			assistant([
 				call("b1", "scope", {
-					begin: { intent: "outer", budget: { read: 2 } },
+					begin: { intent: "outer", budget: { read: 2 }, elder_report: null },
 				}),
 			]),
 		);
@@ -1300,7 +1300,7 @@ describe("host truncation", () => {
 			started.ctx,
 			assistant([
 				call("b2", "scope", {
-					begin: { intent: "inner", budget: { read: 2 } },
+					begin: { intent: "inner", budget: { read: 2 }, elder_report: null },
 				}),
 			]),
 		);
@@ -1470,11 +1470,42 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 				lastLedger: { empty: true, phases: [] },
 			};
 			const stop = await emitStop(host, ctx);
-			expect(stop.continue).toBe(true);
-			expect(stop.additionalContext).toContain("You are the relay successor (generation 1)");
+			expect(stop).toBeUndefined();
 			expect(focusSeen.length).toBe(1);
 			expect(countHandoffCompactions(manager)).toBe(1);
+			expect(host.messages[0].text).toContain("You are the relay successor (generation 1)");
 		}
+	});
+
+	test("fire-and-forget handoff returns immediately from session_stop and context even while handoff hangs", async () => {
+		let resolveHandoff;
+		const handoffGate = new Promise((resolve) => {
+			resolveHandoff = resolve;
+		});
+		const { host, ctx, manager } = await start({
+			mode: "rpc",
+			handoff: async () => {
+				await handoffGate;
+				manager.appendCompaction("handoff", { focus: "slow" });
+				return { ok: true };
+			},
+		});
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("t1", "todo", { op: "init", list: [] })]),
+		);
+		const stopResult = await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx);
+		expect(stopResult).toBeUndefined();
+		const contextResult = await emit(host.handlers, "context", { messages: [] }, ctx);
+		expect(contextResult).toBeDefined();
+		expect(host.messages.length).toBe(0);
+
+		resolveHandoff();
+		await sleep(15);
+		expect(stateFor(ctx).state.relay.generation).toBe(1);
+		expect(host.messages.length).toBe(1);
+		expect(host.messages[0].text).toContain("You are the relay successor (generation 1)");
 	});
 
 	test("Headless TUI Adapter supports /vibe, /vibe <prompt>, /new, /fresh, and arbitrary slash commands uniformly", async () => {

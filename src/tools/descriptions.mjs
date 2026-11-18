@@ -7,17 +7,17 @@ export const SCOPE_DESCRIPTION = `Scope is the only way to use tools in this ses
 
 A moderate scope names an outcome and the evidence that proves it. Its budget should cover the calls the work really needs; sqrt(n) only helps judge how large a block should be when you first plan the split, not how many calls the finished task must take. Aim for each scope to make a concrete contribution to the user's goal, such as a usable change or a completed deliverable; combine necessary investigation with action when practical instead of routinely spending whole scopes on research alone. Research-only scopes remain appropriate when investigation is itself the requested deliverable or is necessary before safe, informed action. For a heavy task, also budget task: parallel subagent workers take independent slices at once, and one batch of task calls costs one task unit. A scope is neither a single operation nor the whole user goal.
 
-Call scope({ begin: { intent, budget } }) before using any other functional tool. todo is the only functional tool allowed outside all scopes; it is free and is forbidden inside every scope. Every tool call other than todo and the control tools must happen inside a scope. One assistant message spends at most one unit in total; that unit is split across the tools it calls in proportion to their call counts, rounded to two decimals. scope, regret, defer, pin, and todo are free. A tool not listed in the budget has zero budget. Scopes nest, and only the innermost scope's budget is used.
+Call scope({ begin: { intent, budget, elder_report } }) before using any other functional tool. todo is the only functional tool allowed outside all scopes; it is free and is forbidden inside every scope. Every tool call other than todo and the control tools must happen inside a scope. One assistant message spends at most one unit in total; that unit is split across the tools it calls in proportion to their call counts, rounded to two decimals. scope, regret, defer, pin, and todo are free. A tool not listed in the budget has zero budget. Scopes nest, and only the innermost scope's budget is used.
 
 Budget by assistant turns, not individual calls. One assistant message spends at most one unit in total, however many tools and calls it makes; that unit is split across the tools in proportion to their call counts and rounded to two decimals. Two read calls in one message cost one read unit; a read and a bash in one message cost about half a read unit and half a bash unit. When a tool's balance is smaller than its share, that tool alone is blocked and the rest of the message still runs. Plan integer budgets around the number of turns you expect to use each tool in.
 
-Plan budget use ahead: estimate the tools the actual work needs for the outcome and its verification, and monitor the remaining budget as work progresses. Anticipate shortfalls and organize work early rather than waiting for the budget to be exhausted. Consider these options: (1) If the last eligible beat was clearly wrong, use regret to correct course and refund that beat's tool budget; do not undo useful work merely to recover budget. (2) If there is a coherent, independent unit of work, begin a sub-scope with its own budget; its calls use that budget, not the outer scope's. (3) For a relevant side finding that should be handled later, use defer to record actionable work; it will be delivered when this scope ends. (4) For a heavy task, budget task as well: parallel subagent workers take independent slices at once, so one task batch can replace many serial exploratory calls. Otherwise, when the current task is complete or permanently blocked, close the scope.
+Plan budget use ahead: estimate the tools the actual work needs for the outcome and its verification, and monitor the remaining budget as work progresses. Anticipate shortfalls and organize work early rather than waiting for the budget to be exhausted. Consider these options: (1) If the last eligible beat was clearly wrong, use regret to correct course and refund that beat's tool budget; do not undo useful work merely to recover budget. (2) If there is a coherent, independent unit of work, begin a sub-scope with its own budget; its calls use that budget, not the outer scope's. (3) For a relevant side finding that should be handled later, use defer to record actionable work; it will be delivered when this scope ends. (4) For a heavy task, budget task as well: parallel subagent workers take independent slices at once, so one task batch can replace many serial exploratory calls. Otherwise, when the current task is complete or permanently blocked, close the scope with scope({ end: true }).
 
-Call scope({ end: { return_markdown } }) only when the current task is complete or permanently blocked. return_markdown is your report to your future self: it replaces this scope's begin receipt when the scope is collapsed, and records what was accomplished, the evidence that proves it, what remains unfinished, and the lesson learned. It is not the user-facing deliverable. Write the user-facing answer as ordinary assistant text, and only when you are outside all scopes. Inside any scope, keep working or close the scope; do not present the final user-facing conclusion.
+Call scope({ end: true }) only when the current task is complete or permanently blocked. Closing writes no report and asks for no summary. The most recently closed scope at a level stays fully visible as the hot workbench. When you later open another sibling scope at that level, pass the prior scope's summary in begin.elder_report: a non-empty string to archive it, or null when no elder is pending. A closed scope whose elder_report is never written is sealed without a report; its deletable interior may be folded once economics or the watermark allows. Write the user-facing answer as ordinary assistant text only when you are outside all scopes. Inside any scope, keep working or close the scope with scope({ end: true }); do not present the final user-facing conclusion.
 
-When a scope closes, its immediately elder sibling at the same level is collapsed: that sibling's begin receipt becomes its return_markdown and its interior is removed. The scope that just closed stays fully visible until a younger sibling closes. Collapse is local to one sibling chain, not global close order. A parent closing does not collapse its children; an enclosing scope's later collapse will remove their receipts. Put durable child results in the enclosing scope's return_markdown.
+When a scope closes, its elder at the same level remains the hot workbench until a new sibling archives it with elder_report. Once archived, older elders strictly behind the hot workbench become foldable; a batch fold collapses them in one branch operation and keeps the hot workbench and any pinned receipts intact. Collapse is local to one sibling chain, not global close order. A parent closing seals its youngest unarchived child and subsumes its still-unfolded descendants.
 
-Provide begin, end, or both. With both, end the current scope first, then begin the new scope in the same call. end outside a scope is rejected, including when begin is also supplied. A particular scope cannot begin and end in the same assistant message: begin it in one message, do the work in later messages, then end it.`;
+Provide begin, end: true, or both. With both, close the current scope first, archive it with begin.elder_report, then open the new scope in the same call. end: true outside a scope is rejected, including when begin is also supplied. Do not open a fresh scope and close it in the same assistant message; begin a scope in one message, do the work in later messages, then end it.`;
 
 export const BEGIN_INTENT_DESCRIPTION =
 	"A task of moderate scope: one outcome that can be completed and reviewed in a bounded stretch, plus the evidence that proves completion. As a heuristic for how much work one scope should hold, if the whole user request seems to need about n tool calls, a moderate scope covers roughly sqrt(n) of them; this is not a target for the call count and does not decide how many calls the task actually takes. Name the outcome and its proof, not a single file operation and not the whole user request. One to three sentences.";
@@ -25,11 +25,11 @@ export const BEGIN_INTENT_DESCRIPTION =
 export const BUDGET_DESCRIPTION =
 	'Map each tool name to an integer budget of assistant turns. One assistant message spends at most one unit in total: that unit is split across the tools it calls in proportion to their call counts, rounded to two decimals. Several read calls issued together consume one read share once, while a read in a later message consumes another share. Use actual tool names (bash, read, write, edit, glob, grep, lsp, task, wait, web_search, ask, debug, eval, etc.), not semantic descriptions. Example: {"bash": 6, "read": 7, "edit": 4}. Size each number by the number of turns you expect to use that tool in, not by individual calls. For a heavy task, also budget task: parallel subagent workers take independent slices at once, and one batch of task calls costs one task unit. A tool not listed has zero budget. Only the innermost scope\'s budget is used. scope, regret, defer, and pin are never budgeted. todo is free, is only callable outside all scopes, and must not be given a budget. Values must be non-negative integers; the accounting splits them into two-decimal shares, and a tool whose balance is below its share is blocked while the rest of the message still runs.';
 
-export const END_REPORT_DESCRIPTION =
-	"Close the current scope. return_markdown is the report you leave for your future self: it replaces this scope's begin receipt when the scope is collapsed as an elder sibling, and records what was accomplished, the evidence that proves it, what remains unfinished, and the lesson learned. It is not the user-facing answer. Write the user-facing deliverable as ordinary assistant text only when you are outside all scopes. A parent close does not collapse its children; an enclosing scope's later collapse removes their receipts, so summarize durable child results here.";
+export const END_DESCRIPTION =
+	"Close the current scope by passing true. No report is written at close time and no summary is required. The closed scope stays visible as the hot workbench at its level. If you later open another sibling scope at that level, pass this scope's summary in that begin's elder_report; if you leave the level or finish the task instead, write no summary at all.";
 
-export const RETURN_MARKDOWN_DESCRIPTION =
-	"The report you leave for your future self, not the user-facing deliverable. It replaces this scope's begin receipt when the scope is collapsed as an elder sibling, so later scopes can recover what happened, what proved it, what remains, and the lesson. A nested scope's report survives only until an enclosing scope collapses; put durable child results in the enclosing scope's report. The user reads your ordinary assistant text, written only outside all scopes.";
+export const ELDER_REPORT_DESCRIPTION =
+	"The summary of the previous scope at this level. Pass a non-empty string only when an unarchived elder scope is pending at this level: the tail instruction names it and its intent. That summary archives the elder, turning it from pending into the hot workbench so older folded elders become eligible for batching. Pass null when no elder is pending, when the previous scope is not visible on the branch, or when this is the first scope at the level. This is a handoff receipt, not the user-facing answer.";
 
 export const REGRET_DESCRIPTION = `Undo the most recent completed beat inside the current scope. A beat is one assistant message (thinking and output) together with its tool calls and their results. On the next LLM request, that beat disappears completely, and the budget spent by its tool calls is refunded to the current scope. An assistant message spends at most one unit in total, split across the tools it calls, so undoing its beat refunds exactly what those calls consumed. Multiple regret calls in the same beat undo several earlier beats, one per call. All regret calls in a beat are processed before any normal tool in that beat, so a refund can fund a later call.
 
@@ -69,7 +69,7 @@ export const scopeParameters = {
 		begin: {
 			type: "object",
 			additionalProperties: false,
-			required: ["intent", "budget"],
+			required: ["intent", "budget", "elder_report"],
 			properties: {
 				intent: { type: "string", minLength: 1, description: BEGIN_INTENT_DESCRIPTION },
 				budget: {
@@ -78,22 +78,18 @@ export const scopeParameters = {
 					additionalProperties: { type: "integer", minimum: 0 },
 					description: BUDGET_DESCRIPTION,
 				},
-			},
-			description:
-				"Open a new innermost scope with a task of moderate scope (use sqrt(n), where n is the estimated tool call count for the whole request, only as a heuristic for how much work one scope should hold, never as the required number of calls) and a per-tool integer budget of assistant turns. For a heavy task, budget task too so parallel subagent workers can take independent slices.",
-		},
-		end: {
-			type: "object",
-			additionalProperties: false,
-			required: ["return_markdown"],
-			properties: {
-				return_markdown: {
-					type: "string",
-					minLength: 1,
-					description: RETURN_MARKDOWN_DESCRIPTION,
+				elder_report: {
+					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
+					description: ELDER_REPORT_DESCRIPTION,
 				},
 			},
-			description: END_REPORT_DESCRIPTION,
+			description:
+				"Open a new innermost scope with a task of moderate scope (use sqrt(n), where n is the estimated tool call count for the whole request, only as a heuristic for how much work one scope should hold, never as the required number of calls) and a per-tool integer budget of assistant turns. elder_report archives the previous scope at this level: a non-empty summary when one is pending, otherwise null. For a heavy task, budget task too so parallel subagent workers can take independent slices.",
+		},
+		end: {
+			type: "boolean",
+			enum: [true],
+			description: END_DESCRIPTION,
 		},
 	},
 };

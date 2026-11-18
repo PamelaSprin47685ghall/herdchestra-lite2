@@ -7,11 +7,12 @@
  */
 
 import { wireExtension, installCapture } from "./activation/index.mjs";
-import { installStatus } from "./host/index.mjs";
+import { installStatus, loadPricingCatalog } from "./host/index.mjs";
 
 export async function activate(pi) {
 	await installCapture(pi);
-	wireExtension(pi);
+	const pricingCatalog = await loadPricingCatalog();
+	wireExtension(pi, pricingCatalog);
 	installStatus(pi);
 }
 

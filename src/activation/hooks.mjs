@@ -18,6 +18,17 @@ export function wireHooks(pi, registry) {
 		} catch {
 			// Neither assistant_message nor message_end is available.
 		}
+	} else {
+		// Some providers attach usage only at message_end. Record it with a
+		// dedicated, safe listener even when assistant_message already drives
+		// the scope transitions.
+		try {
+			pi.on("message_end", (event, ctx) =>
+				registry.stationFor(ctx).onUsageMessage(event?.message, ctx),
+			);
+		} catch {
+			// Usage at message_end is optional.
+		}
 	}
 	pi.on("tool_call", (event, ctx) =>
 		registry.stationFor(ctx).onToolCall(event, ctx),

@@ -29,6 +29,7 @@ import { insideScopeText } from "./texts.mjs";
 function onAssistantMessage(station, message, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
+		station.onUsageMessage(message, ctx);
 		station.rememberCallGroups(message);
 		station.processAssistantMessage(message, { persisted: false });
 		station.maybeNudge(message, ctx);
@@ -43,6 +44,7 @@ function onMessageEnd(station, event, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	const message = event.message;
 	try {
+		station.onUsageMessage(message, ctx);
 		station.rememberCallGroups(message);
 		const controls = controlsIn(message);
 		if (controls.length > 0) {
@@ -102,7 +104,7 @@ function onToolCall(station, event, ctx) {
 			});
 			if (event.toolName === "scope") {
 				const hasBegin = args.begin !== undefined && args.begin !== null;
-				const hasEnd = args.end !== undefined && args.end !== null;
+				const hasEnd = args.end === true;
 				if (hasBegin) {
 					if (station.state.relay?.handoffPending) {
 						return {
@@ -246,6 +248,7 @@ function onAutoCompactionEnd(station, event, ctx) {
 }
 
 function onBeforeAgentStart(station, event, ctx) {
+	if (ctx?.model) station.lastCtxModel = ctx.model;
 	const policy = station.policy(ctx);
 	const prompt = injectSystemPrompt(event?.systemPrompt);
 	const promptChanged = prompt !== event?.systemPrompt;

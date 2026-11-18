@@ -39,7 +39,7 @@ describe("BUDGET_DESCRIPTION", () => {
 describe("outsideScopeInstruction", () => {
   test("is the exact instruction for work outside every scope", () => {
     expect(outsideScopeInstruction).toBe(
-      "You are outside all scopes. Only todo and the free control tools (scope, regret, defer, pin) may be called here; todo is the only functional tool allowed outside a scope and it is forbidden inside every scope. Before stopping, call todo outside all scopes to evaluate the ledger: a non-empty ledger forbids a natural stop; an empty ledger triggers a real /handoff to a successor whose first todo evaluation must also be empty. Only that promotion allows the final user-facing answer as ordinary assistant text. return_markdown is your self-delivery report, not the user-facing answer. Finishing is not a tool call, and there is no finish tool.",
+      "You are outside all scopes. Only todo and the free control tools (scope, regret, defer, pin) may be called here; todo is the only functional tool allowed outside a scope and it is forbidden inside every scope. Before stopping, call todo outside all scopes to evaluate the ledger: a non-empty ledger forbids a natural stop; an empty ledger triggers a real /handoff to a successor whose first todo evaluation must also be empty. Only that promotion allows the final user-facing answer as ordinary assistant text. Close a scope with scope({ end: true }); no report is written at close time. When you open another sibling scope at this level, pass the prior scope's summary in begin.elder_report; if none is pending, pass null. Finishing is not a tool call, and there is no finish tool.",
     );
   });
 });

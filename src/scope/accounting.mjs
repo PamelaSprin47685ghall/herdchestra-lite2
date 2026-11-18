@@ -69,13 +69,10 @@ export function beginScope(state, params) {
 }
 
 export function closeScope(state, params) {
-  const { toolCallId, report } = params || {};
+  const { toolCallId } = params || {};
   const scope = currentScope(state);
   if (!scope) {
     return failure("NOT_IN_SCOPE", "No active scope to close.");
-  }
-  if (!isNonEmptyString(report)) {
-    return failure("INVALID_REPORT", "report must be a non-empty string.");
   }
   state.scopes.pop();
   for (const key of Object.keys(state.charges)) {
@@ -228,6 +225,124 @@ export function findElderSibling(state, parentId, order, boundary = 0, epoch = 0
   return best;
 }
 
+function matchesLevel(record, parentId, boundary, epoch) {
+  return (
+    record &&
+    (record.parentId ?? null) === (parentId ?? null) &&
+    (record.boundary ?? 0) === boundary &&
+    (record.epoch ?? 0) === epoch
+  );
+}
+
+/**
+ * When a scope closes, its innermost still-unarchived child will never get a
+ * later sibling. Seal it so the model is never asked for a lost elder report.
+ */
+export function sealClosedParentChildren(state, parentScopeId) {
+  let sealed = 0;
+  for (const record of state?.collapses ?? []) {
+    if (!matchesLevel(record, parentScopeId, record.boundary ?? 0, record.epoch ?? 0)) {
+      continue;
+    }
+    if (record.collapsed !== false || record.sealed === true) continue;
+    if (record.report !== null) continue;
+    record.sealed = true;
+    sealed += 1;
+  }
+  return sealed;
+}
+
+/** The single unarchived elder at a level, if one is pending a report. */
+export function findPendingReportElder(state, parentId, boundary = 0, epoch = 0) {
+  for (const record of state?.collapses ?? []) {
+    if (!matchesLevel(record, parentId, boundary, epoch)) continue;
+    if (record.collapsed !== false || record.sealed === true) continue;
+    if (record.report !== null) continue;
+    return record;
+  }
+  return null;
+}
+
+/** The highest-order uncollapsed record at a level: hot workbench or pending elder. */
+export function findHotWorkbench(state, parentId, boundary = 0, epoch = 0) {
+  let hot = null;
+  for (const record of state?.collapses ?? []) {
+    if (!matchesLevel(record, parentId, boundary, epoch)) continue;
+    if (record.collapsed !== false) continue;
+    if (!Number.isInteger(record.order)) continue;
+    if (!hot || record.order > hot.order) hot = record;
+  }
+  return hot;
+}
+
+/** Archived, unsealed elders strictly behind the hot workbench, in order. */
+export function findFoldablePool(state, parentId, boundary = 0, epoch = 0) {
+  const hot = findHotWorkbench(state, parentId, boundary, epoch);
+  const hotOrder = hot ? hot.order : Number.POSITIVE_INFINITY;
+  const pool = [];
+  for (const record of state?.collapses ?? []) {
+    if (!matchesLevel(record, parentId, boundary, epoch)) continue;
+    if (record.collapsed !== false || record.sealed === true) continue;
+    if (!isNonEmptyString(record.report)) continue;
+    if (!Number.isInteger(record.order) || record.order >= hotOrder) continue;
+    pool.push(record);
+  }
+  pool.sort((a, b) => a.order - b.order);
+  return pool;
+}
+
+/**
+ * Foldable pools at levels that are still live: the root level or a parent
+ * scope that remains on the stack, in the current epoch.
+ */
+export function findActivePools(state) {
+  const activeParentIds = new Set([
+    null,
+    ...(state?.scopes ?? []).map((scope) => scope.id),
+  ]);
+  const epoch = Number.isInteger(state?.epoch) ? state.epoch : 0;
+  const levels = new Map();
+  for (const record of state?.collapses ?? []) {
+    if (!record || record.collapsed !== false || record.sealed === true) continue;
+    if (!isNonEmptyString(record.report)) continue;
+    if (!activeParentIds.has(record.parentId ?? null)) continue;
+    if ((record.epoch ?? 0) !== epoch) continue;
+    const parentId = record.parentId ?? null;
+    const boundary = record.boundary ?? 0;
+    const key = `${String(parentId)} ${boundary} ${epoch}`;
+    if (!levels.has(key)) levels.set(key, { parentId, boundary, epoch });
+  }
+  const groups = [];
+  for (const level of levels.values()) {
+    const pool = findFoldablePool(state, level.parentId, level.boundary, level.epoch);
+    if (pool.length > 0) groups.push({ ...level, pool });
+  }
+  return groups;
+}
+
+/** When an elder folds, its collapsed descendants become subsumed transitively. */
+export function markSubsumedDescendants(state, foldedRecords) {
+  const foldedIds = new Set();
+  for (const record of foldedRecords ?? []) {
+    if (isNonEmptyString(record?.scopeId)) foldedIds.add(record.scopeId);
+  }
+  let marked = 0;
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const record of state?.collapses ?? []) {
+      if (!record || record.collapsed === true) continue;
+      if (!isNonEmptyString(record.scopeId)) continue;
+      if (!foldedIds.has(record.parentId ?? null)) continue;
+      record.collapsed = true;
+      foldedIds.add(record.scopeId);
+      marked += 1;
+      grew = true;
+    }
+  }
+  return marked;
+}
+
 /**
  * A host compaction or handoff truncates history. Keep only the outermost
  * scope, clear charges owned by dropped inner scopes, and advance the epoch so
@@ -239,12 +354,25 @@ export function truncateForHostBoundary(state) {
   if (!state || typeof state !== "object") return false;
   const current =
     Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0;
-  state.epoch = current + 1;
+  const nextEpoch = current + 1;
+  // Retire every record from the old epoch: an unarchived elder is sealed,
+  // anything else still visible is collapsed. Old accounts never leak forward.
+  for (const record of state.collapses ?? []) {
+    if (!record || (record.epoch ?? 0) !== current) continue;
+    if (record.collapsed !== false) continue;
+    if (record.report === null && record.sealed !== true) {
+      record.sealed = true;
+    } else if (record.sealed !== true) {
+      record.collapsed = true;
+    }
+  }
+  state.epoch = nextEpoch;
   if (!Array.isArray(state.scopes) || state.scopes.length === 0) return true;
   const kept = state.scopes[0];
   const dropped = state.scopes.slice(1);
   state.scopes = [kept];
-  kept.epoch = state.epoch;
+  kept.epoch = nextEpoch;
+  kept.baseInputTokens = null;
   const charges = state.charges;
   if (charges && typeof charges === "object") {
     for (const key of Object.keys(charges)) {

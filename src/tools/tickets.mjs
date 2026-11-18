@@ -8,10 +8,8 @@
  */
 
 import { errorResult, textResult } from "./results.mjs";
-import { runHandoffInContext } from "../handoff/index.mjs";
-import { appendUserTail } from "../transcript/index.mjs";
-import { languageSkill } from "../host/prompts.mjs";
-import { successorPrompt } from "../relay/index.mjs";
+import { scheduleBackgroundHandoff } from "../handoff/index.mjs";
+import { managerOf, safeSession } from "../handoff/session.mjs";
 
 /** Fire-and-forget steer delivery. The scope result already reports the send. */
 export async function sendSteerTicket(pi, text) {
@@ -73,34 +71,25 @@ export async function pinTicket(station, toolCallId, params) {
 }
 
 /**
- * Context ticket for the relay handoff path. Runs the real handoff, then either
- * returns the post-handoff transcript (successor's first turn) or falls through
- * to the station's synchronous context transform when the handoff cannot run.
+ * Context ticket for the relay handoff path. Schedules the real handoff in the
+ * background (fire-and-forget) when the branch already has >= 2 messages, then
+ * immediately returns the station's synchronous context transform so the host's
+ * `context` hook never hits its handler timeout.
  */
-export async function contextHandoffTicket(station, ctx, original) {
-	const outcome = await runHandoffInContext(station, ctx, station.pi);
-	if (outcome.ok) {
-		if (Number.isInteger(station.state.relay?.generation)) {
-			station.relayPromptSentFor = station.state.relay.generation;
-			station.relayPromptPendingFor = null;
-		}
-		let live = [];
+export function contextHandoffTicket(station, ctx, original) {
+	const liveSession = safeSession(ctx) ?? station.handoffSession ?? null;
+	const liveManager = managerOf(liveSession, ctx);
+	let canSchedule = true;
+	if (liveManager && typeof liveManager.getBranch === "function") {
 		try {
-			const context = ctx?.sessionManager?.buildSessionContext?.();
-			if (Array.isArray(context?.messages)) live = context.messages;
+			const messageEntries = liveManager
+				.getBranch()
+				.filter((entry) => entry?.type === "message");
+			if (messageEntries.length < 2) canSchedule = false;
 		} catch {
-			live = [];
+			canSchedule = true;
 		}
-		return {
-			messages: appendUserTail(
-				live.length > 0 ? live : original,
-				`<system-reminder>${languageSkill}</system-reminder>\n\n${successorPrompt(
-					station.state.relay,
-					station.state.relay.lastLedger ?? null,
-				)}`,
-			),
-		};
 	}
-	station.lastError = outcome.error;
+	if (canSchedule) scheduleBackgroundHandoff(station, ctx, station.pi);
 	return station.transformContext(original, ctx);
 }

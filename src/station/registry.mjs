@@ -11,7 +11,7 @@ const nullTickets = {
 		changed ? { systemPrompt: prompt } : undefined,
 };
 
-export function createStationRegistry(pi, tickets = nullTickets) {
+export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog) {
 	const stations = new WeakMap();
 	let orphanStation = null;
 	let pendingStation = null;
@@ -21,13 +21,13 @@ export function createStationRegistry(pi, tickets = nullTickets) {
 			const key = ctx?.sessionManager ?? ctx;
 			if (!key || (typeof key !== "object" && typeof key !== "function")) {
 				if (!orphanStation) {
-					orphanStation = new SessionStation(null, pi, tickets, registry);
+					orphanStation = new SessionStation(null, pi, tickets, registry, pricingCatalog);
 				}
 				return orphanStation;
 			}
 			let station = stations.get(key);
 			if (!station) {
-				station = new SessionStation(ctx?.sessionManager ?? null, pi, tickets, registry);
+				station = new SessionStation(ctx?.sessionManager ?? null, pi, tickets, registry, pricingCatalog);
 				stations.set(key, station);
 			}
 			return station;

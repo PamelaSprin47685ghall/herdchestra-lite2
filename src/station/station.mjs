@@ -24,7 +24,12 @@
  * - `pi.sendUserMessage(text, { deliverAs: "steer" })` queues a user prompt.
  */
 
-import { currentScope, deferIntent, serializeState } from "../scope/index.mjs";
+import {
+	currentScope,
+	deferIntent,
+	findActivePools,
+	serializeState,
+} from "../scope/index.mjs";
 import {
 	applyCollapses,
 	appendUserTail,
@@ -42,6 +47,12 @@ import {
 	READ_WRITE_SUBAGENT,
 } from "../host/policy.mjs";
 import { setAgentMessages } from "../host/capture.mjs";
+import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
+import {
+	charsToTokens,
+	createEmptyCatalog,
+	resolveModelPolicy,
+} from "../host/pricing.mjs";
 import {
 	firstEvaluationNudge,
 	openLedgerNudge,
@@ -63,7 +74,13 @@ import {
 	executeRegret,
 	executeScope,
 } from "./execute.mjs";
-import { findBeginEntry, foldElder as foldElderInBranch } from "./fold.mjs";
+import {
+	findBeginEntry,
+	foldBatch as foldBatchInBranch,
+	foldElder as foldElderInBranch,
+	netRemovableTokens,
+	sliceChars,
+} from "./fold.mjs";
 import {
 	advanceRelayForHandoff,
 	armHandoff,
@@ -88,11 +105,12 @@ import { restoreState, SESSION_STATE_TYPE } from "./restore.mjs";
 import { insideScopeNudge, tailText } from "./texts.mjs";
 
 export class SessionStation {
-	constructor(manager, pi, tickets, registry) {
+	constructor(manager, pi, tickets, registry, pricingCatalog) {
 		this.manager = manager;
 		this.pi = pi;
 		this.tickets = tickets;
 		this.registry = registry;
+		this.pricingCatalog = pricingCatalog ?? createEmptyCatalog();
 		this.state = restoreState(manager);
 		this.handled = new Map();
 		this.processedCalls = new Set();
@@ -106,6 +124,7 @@ export class SessionStation {
 		this.relayPromptPendingFor = null;
 		this.relayPromptSentFor = null;
 		this.handoffExecuting = false;
+		this.handoffScheduled = false;
 		this.handoffSwitched = false;
 		this.handoffSession = null;
 		this.handoffFocus = null;
@@ -113,6 +132,111 @@ export class SessionStation {
 		this.sessionStopRunning = false;
 		this.relayState = true;
 		this.todoGrantKey = null;
+		// Measured usage baseline. Populated from live messages and restored
+		// from the branch tail so a session reload (-r) keeps the watermark.
+		this.lastTotalInput = null;
+		this.lastOutputTokens = 0;
+		this.lastModelHint = null;
+		this.lastUsageCost = null;
+		this.lastCtxModel = null;
+		this.recordedUsageMessages = new WeakSet();
+		this.restoreUsageFromBranch();
+	}
+
+	// -- Usage baseline -------------------------------------------------------
+
+	/** Recover the most recent usage from the persisted branch tail. */
+	restoreUsageFromBranch() {
+		try {
+			const branch = this.manager?.getBranch?.();
+			if (!Array.isArray(branch)) return;
+			for (let index = branch.length - 1; index >= 0; index -= 1) {
+				const entry = branch[index];
+				const message = entry?.message;
+				if ((message?.model || message?.provider) && !this.lastModelHint) {
+					this.lastModelHint = {
+						model: message.model,
+						provider: message.provider,
+					};
+				}
+				const usage = entryUsage(entry);
+				if (!usage) continue;
+				const snap = usageSnapshot(usage);
+				const tIn = totalInput(snap);
+				this.lastTotalInput = tIn;
+				this.lastOutputTokens = snap.output;
+				this.lastUsageCost = usage.cost ?? null;
+				for (const scope of this.state.scopes ?? []) {
+					if (scope.baseInputTokens === null || scope.baseInputTokens === undefined) {
+						scope.baseInputTokens = tIn;
+					}
+				}
+				break;
+			}
+		} catch {
+			// A host without a branch keeps the null baseline.
+		}
+	}
+
+	/**
+	 * Synchronously fold one assistant usage payload into the station's live
+	 * baseline. Called at the head of assistant_message, message_end, and the
+	 * extra message_end listener. Idempotent per message object.
+	 */
+	onUsageMessage(message, ctx) {
+		if (!message || message.role !== "assistant") return;
+		try {
+			if ((message.model || message.provider) && !this.lastModelHint) {
+				this.lastModelHint = {
+					model: message.model,
+					provider: message.provider,
+				};
+			}
+			if (ctx?.model && !this.lastCtxModel) this.lastCtxModel = ctx.model;
+			if (!message.usage || this.recordedUsageMessages.has(message)) return;
+			this.recordedUsageMessages.add(message);
+			const snap = usageSnapshot(message.usage);
+			const tIn = totalInput(snap);
+			this.lastTotalInput = tIn;
+			this.lastOutputTokens = snap.output;
+			this.lastUsageCost = message.usage.cost ?? null;
+			const callIds = new Set(toolCalls(message).map((call) => call.id));
+			for (const scope of this.state.scopes ?? []) {
+				if (callIds.has(scope.beginToolCallId)) continue;
+				if (scope.baseInputTokens === null || scope.baseInputTokens === undefined) {
+					scope.baseInputTokens = tIn;
+				}
+			}
+			// A tool_call may close a scope before its assistant usage arrives.
+			// Complete the deferred measured interior once usage is visible.
+			const collapses = this.state.collapses ?? [];
+			for (let index = collapses.length - 1; index >= 0; index -= 1) {
+				const record = collapses[index];
+				if (record.endInputTokensPending !== true) continue;
+				if (!callIds.has(record.endToolCallId)) continue;
+				record.endInputTokens = tIn;
+				const base = record.baseInputTokens;
+				record.interiorTokens =
+					typeof base === "number"
+						? Math.max(0, tIn - base)
+						: Number.isFinite(record.interiorChars)
+							? charsToTokens(record.interiorChars)
+							: null;
+				record.endInputTokensPending = false;
+				for (const scope of this.state.scopes ?? []) {
+					if (
+						scope.preBeginInputTokens === null ||
+						scope.preBeginInputTokens === undefined
+					) {
+						scope.preBeginInputTokens = tIn;
+					}
+				}
+				this.persist();
+				break;
+			}
+		} catch (error) {
+			this.lastError = String(error?.message ?? error);
+		}
 	}
 
 	// -- Persistence ---------------------------------------------------------
@@ -262,6 +386,109 @@ export class SessionStation {
 		return folded;
 	}
 
+	/** Fold a whole elder pool in one branch operation. */
+	foldBatch(args) {
+		return foldBatchInBranch({
+			manager: this.manager,
+			state: this.state,
+			tokensPerChar: this.tokensPerChar(),
+			...args,
+		});
+	}
+
+	/** Observed token density, clamped to a safe band. */
+	tokensPerChar(messages) {
+		const totalIn = this.lastTotalInput;
+		if (!Number.isFinite(totalIn) || totalIn <= 0) return 0.3;
+		const source = Array.isArray(messages) ? messages : this.contextMessages();
+		const chars = sliceChars(source);
+		if (!(chars > 0)) return 0.3;
+		const rate = totalIn / chars;
+		return Math.min(0.8, Math.max(0.15, rate));
+	}
+
+	/** Live outbound watermark from the last usage plus fresh pending messages. */
+	currentContextTokens(messages) {
+		const source = Array.isArray(messages) ? messages : this.contextMessages();
+		const tpc = this.tokensPerChar(source);
+		if (!Number.isFinite(this.lastTotalInput)) {
+			return charsToTokens(sliceChars(source), tpc);
+		}
+		let pendingChars = 0;
+		let usageIndex = -1;
+		for (let index = 0; index < source.length; index += 1) {
+			if (source[index]?.role === "assistant" && source[index]?.usage) usageIndex = index;
+		}
+		for (let index = usageIndex + 1; index < source.length; index += 1) {
+			if (source[index]?.role === "custom") continue;
+			pendingChars += sliceChars([source[index]]);
+		}
+		return (
+			this.lastTotalInput +
+			(Number.isFinite(this.lastOutputTokens) ? this.lastOutputTokens : 0) +
+			charsToTokens(pendingChars, tpc)
+		);
+	}
+
+	/** True when a message already carries the usage that closes a scope. */
+	usageArrivedFor(message) {
+		return Boolean(message?.usage) || this.recordedUsageMessages.has(message);
+	}
+
+	usagePricingHint() {
+		return this.lastUsageCost ? { usage: { cost: this.lastUsageCost } } : undefined;
+	}
+
+	/** After a fold, shift younger baselines down by the reclaimed tokens. */
+	rebaseBaselines(folded) {
+		if (!folded || typeof folded.savedTokens !== "number" || folded.savedTokens <= 0) return;
+		const saved = folded.savedTokens;
+		for (const scope of this.state.scopes ?? []) {
+			const orderMatch = /^scope-(\d+)$/.exec(String(scope.id ?? ""));
+			const order = orderMatch ? Number(orderMatch[1]) : 0;
+			if (Number.isInteger(folded.maxOrder) && order <= folded.maxOrder) continue;
+			if (Number.isFinite(scope.baseInputTokens)) {
+				scope.baseInputTokens = Math.max(0, scope.baseInputTokens - saved);
+			}
+		}
+		if (Number.isFinite(this.lastTotalInput)) {
+			this.lastTotalInput = Math.max(0, this.lastTotalInput - saved);
+		}
+	}
+
+	/** Accrue per-step cache rent and flood the pools at the 90% watermark. */
+	accrueRentAndFlood(original, pricing, contextTokens) {
+		const pools = findActivePools(this.state);
+		if (pools.length === 0) return false;
+		const tpc = this.tokensPerChar(original);
+		const pHit = Number.isFinite(pricing?.pHit) ? Math.max(0, pricing.pHit) : 1e-6;
+		let dirty = false;
+		for (const group of pools) {
+			for (const record of group.pool) {
+				const rent = netRemovableTokens(record, tpc) * pHit;
+				if (rent > 0) {
+					record.paidRentCost = (Number.isFinite(record.paidRentCost) ? record.paidRentCost : 0) + rent;
+					dirty = true;
+				}
+			}
+		}
+		const cw = Number.isFinite(pricing?.contextWindow) ? pricing.contextWindow : null;
+		const emergency = cw && Number.isFinite(contextTokens) && contextTokens >= 0.9 * cw;
+		if (emergency) {
+			const tree = Array.isArray(original) ? original : this.contextMessages();
+			for (const group of pools) {
+				const folded = this.foldBatch({ batch: group.pool.slice(), base: tree, epoch: group.epoch });
+				if (folded.rebased) {
+					this.needsRebase = true;
+					this.rebaseBaselines(folded);
+					dirty = true;
+				}
+			}
+		}
+		if (dirty) this.persist();
+		return dirty;
+	}
+
 	findRegretTarget(base, currentIndex, scope) {
 		return findRegretTarget(this.state, base, currentIndex, scope);
 	}
@@ -331,7 +558,7 @@ export class SessionStation {
 				changed = true;
 				continue;
 			}
-			if (hasFunctionalTools && parseArgs(call).end != null) {
+			if (hasFunctionalTools && parseArgs(call).end === true) {
 				// Defer closing scope until executeScope so functional tools in the
 				// same message still pass their `tool_call` budget check first.
 				continue;
@@ -451,6 +678,13 @@ export class SessionStation {
 
 	transformContext(original, ctx) {
 		try {
+			const pricing = resolveModelPolicy(
+				this.pricingCatalog,
+				ctx,
+				this.usagePricingHint(),
+			);
+			const contextTokens = this.currentContextTokens(original);
+			this.accrueRentAndFlood(original, pricing, contextTokens);
 			let messages = filterRegrets(original, this.state.regrets);
 			messages = applyCollapses(
 				messages,

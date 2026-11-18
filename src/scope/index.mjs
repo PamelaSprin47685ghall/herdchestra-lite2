@@ -14,6 +14,12 @@ export {
   deferIntent,
   applyRegret,
   findElderSibling,
+  sealClosedParentChildren,
+  findPendingReportElder,
+  findHotWorkbench,
+  findFoldablePool,
+  findActivePools,
+  markSubsumedDescendants,
   truncateForHostBoundary,
 } from "./accounting.mjs";
 export { serializeState, deserializeState } from "./persistence.mjs";

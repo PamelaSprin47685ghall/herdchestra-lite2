@@ -31,7 +31,7 @@ function copyCharges(source) {
 }
 
 function copyCollapse(collapse) {
-	return {
+  const copied = {
     beginToolCallId: collapse.beginToolCallId,
     endToolCallId: collapse.endToolCallId,
     report: collapse.report,
@@ -54,6 +54,39 @@ function copyCollapse(collapse) {
         ? collapse.epoch
         : 0,
   };
+  // Optional measured fields. Copy only when present so legacy snapshots
+  // (which lack them) round-trip unchanged.
+  for (const key of [
+    "scopeId",
+    "intent",
+    "sealed",
+    "interiorTokens",
+    "interiorChars",
+    "pinTokens",
+    "paidRentCost",
+    "baseInputTokens",
+    "preBeginInputTokens",
+    "endInputTokens",
+    "endInputTokensPending",
+  ]) {
+    if (collapse[key] !== undefined) put(copied, key, collapse[key]);
+  }
+  return copied;
+}
+
+// Scope-level measured fields follow the same presence-only rule.
+function measuredFields(source) {
+  const out = {};
+  for (const key of [
+    "baseInputTokens",
+    "preBeginInputTokens",
+    "endInputTokens",
+    "endInputTokensPending",
+    "beginResultChars",
+  ]) {
+    if (source[key] !== undefined) put(out, key, source[key]);
+  }
+  return out;
 }
 
 export function serializeState(state) {
@@ -75,6 +108,7 @@ export function serializeState(state) {
       spent: copyCounts(scope.spent),
       defers: copyDefers(scope.defers),
       residualDefers: copyDefers(scope.residualDefers),
+      ...measuredFields(scope),
     })),
     charges: copyCharges(state.charges),
     regrets: Array.isArray(state.regrets) ? state.regrets.slice() : [],
@@ -141,6 +175,28 @@ function validScope(scope) {
   if (!validAmountCounts(scope.spent)) return false;
   if (!validDefers(scope.defers)) return false;
   if (!validDefers(scope.residualDefers)) return false;
+  // Optional measured fields must stay type-correct when present; their
+  // absence is allowed so legacy snapshots migrate cleanly.
+  for (const key of ["baseInputTokens", "preBeginInputTokens", "endInputTokens"]) {
+    if (scope[key] === undefined || scope[key] === null) continue;
+    if (typeof scope[key] !== "number" || !Number.isFinite(scope[key]) || scope[key] < 0) {
+      return false;
+    }
+  }
+  if (
+    scope.endInputTokensPending !== undefined &&
+    typeof scope.endInputTokensPending !== "boolean"
+  ) {
+    return false;
+  }
+  if (
+    scope.beginResultChars !== undefined &&
+    (typeof scope.beginResultChars !== "number" ||
+      !Number.isFinite(scope.beginResultChars) ||
+      scope.beginResultChars < 0)
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -172,7 +228,12 @@ function validCollapses(value) {
     if (!isPlainObject(item)) return false;
     if (!isNonEmptyString(item.beginToolCallId)) return false;
     if (!isNonEmptyString(item.endToolCallId)) return false;
-    if (!isNonEmptyString(item.report)) return false;
+    // A finished report is a non-empty string; an unarchived elder has a
+    // null report and must still be uncollapsed.
+    const reportOk =
+      isNonEmptyString(item.report) ||
+      (item.report === null && item.collapsed === false);
+    if (!reportOk) return false;
     if (typeof item.createdAt !== "number" || !Number.isFinite(item.createdAt)) {
       return false;
     }
@@ -202,6 +263,42 @@ function validCollapses(value) {
       return false;
     }
     if (item.collapsed !== undefined && typeof item.collapsed !== "boolean") {
+      return false;
+    }
+    if (item.sealed !== undefined && typeof item.sealed !== "boolean") {
+      return false;
+    }
+    if (
+      item.scopeId !== undefined &&
+      item.scopeId !== null &&
+      typeof item.scopeId !== "string"
+    ) {
+      return false;
+    }
+    if (item.intent !== undefined && typeof item.intent !== "string") {
+      return false;
+    }
+    for (const key of [
+      "interiorTokens",
+      "baseInputTokens",
+      "preBeginInputTokens",
+      "endInputTokens",
+    ]) {
+      if (item[key] === undefined || item[key] === null) continue;
+      if (typeof item[key] !== "number" || !Number.isFinite(item[key]) || item[key] < 0) {
+        return false;
+      }
+    }
+    for (const key of ["interiorChars", "pinTokens", "paidRentCost"]) {
+      if (item[key] === undefined) continue;
+      if (typeof item[key] !== "number" || !Number.isFinite(item[key]) || item[key] < 0) {
+        return false;
+      }
+    }
+    if (
+      item.endInputTokensPending !== undefined &&
+      typeof item.endInputTokensPending !== "boolean"
+    ) {
       return false;
     }
   }
@@ -267,6 +364,7 @@ export function deserializeState(input) {
         spent: copyCounts(scope.spent),
         defers: copyDefers(scope.defers),
         residualDefers: copyDefers(scope.residualDefers),
+        ...measuredFields(scope),
       })),
       charges: copyCharges(data.charges),
       regrets: data.regrets.slice(),

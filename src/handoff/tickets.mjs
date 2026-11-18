@@ -1,27 +1,99 @@
 // Handoff tickets: the only async entry points into the handoff flow.
 
 import {
-	handoffFailureNudge,
-	handoffPendingNudge,
+	successorPrompt,
 } from "../relay/index.mjs";
-import { continueFeedback } from "../tools/results.mjs";
 import { debugLog } from "./debug.mjs";
-import { deliverSuccessor, performHandoff } from "./perform.mjs";
+import { performHandoff } from "./perform.mjs";
 import { errorText, managerOf, safeSession } from "./session.mjs";
 
 /**
- * Session-stop handoff runner. Runs the real handoff once and turns the
- * outcome into the one continuation the host accepts; failure retries.
+ * Deliver the successor prompt asynchronously after background handoff finishes.
+ * Uses the host's user-message / prompt channel so the successor starts a fresh
+ * turn outside the timed event-handler callback.
  */
-async function runHandoffAtStop(station, ctx, pi) {
-	const outcome = await performHandoff(station, ctx, pi);
-	if (outcome?.inProgress) {
-		return continueFeedback(handoffPendingNudge(station.state.relay));
+async function dispatchSuccessorToHost(station, ctx, pi) {
+	const target = station.relayPromptPendingFor;
+	if (!Number.isInteger(target) || station.relayPromptSentFor === target) {
+		return false;
 	}
-	if (outcome?.ok === false) {
-		return continueFeedback(handoffFailureNudge(outcome.error));
+	const relay = station.state.relay;
+	if (!relay || relay.generation !== target) {
+		return false;
 	}
-	return deliverSuccessor(station, ctx);
+	const prompt = successorPrompt(relay, relay.lastLedger ?? null);
+	const session = safeSession(ctx) ?? station.handoffSession ?? null;
+	try {
+		if (typeof pi?.sendUserMessage === "function") {
+			station.relayPromptSentFor = target;
+			station.relayPromptPendingFor = null;
+			station.persist();
+			await pi.sendUserMessage(prompt);
+			debugLog("successor.dispatched", { via: "pi.sendUserMessage", generation: target });
+			return true;
+		}
+		if (session && typeof session.sendUserMessage === "function") {
+			station.relayPromptSentFor = target;
+			station.relayPromptPendingFor = null;
+			station.persist();
+			await session.sendUserMessage(prompt);
+			debugLog("successor.dispatched", { via: "session.sendUserMessage", generation: target });
+			return true;
+		}
+		if (session && typeof session.prompt === "function") {
+			station.relayPromptSentFor = target;
+			station.relayPromptPendingFor = null;
+			station.persist();
+			await session.prompt(prompt);
+			debugLog("successor.dispatched", { via: "session.prompt", generation: target });
+			return true;
+		}
+	} catch (error) {
+		station.relayPromptPendingFor = target;
+		if (station.relayPromptSentFor === target) station.relayPromptSentFor = null;
+		station.recordHandoffFailureAt(error, Date.now());
+		debugLog("successor.dispatch_error", { error: errorText(error), generation: target });
+	}
+	return false;
+}
+
+async function runBackgroundHandoff(station, ctx, pi) {
+	try {
+		const outcome = await performHandoff(station, ctx, pi);
+		if (outcome?.ok && !outcome.inProgress) {
+			await dispatchSuccessorToHost(station, ctx, pi);
+		}
+	} catch (error) {
+		debugLog("handoff.background_error", { error: errorText(error) });
+		try {
+			station.recordHandoffFailureAt(error, Date.now());
+		} catch {
+			// Best-effort error recording inside fire-and-forget shell.
+		}
+	} finally {
+		station.handoffScheduled = false;
+	}
+}
+
+/**
+ * Schedule the real handoff completely outside the host's event handler
+ * timeout budget via a macrotask timer with a catch-all safety shell.
+ */
+export function scheduleBackgroundHandoff(station, ctx, pi) {
+	if (station.handoffExecuting || station.handoffScheduled) {
+		return false;
+	}
+	station.handoffScheduled = true;
+	const timer = setTimeout(() => {
+		void runBackgroundHandoff(station, ctx, pi);
+	}, 0);
+	if (typeof timer?.unref === "function") {
+		timer.unref();
+	}
+	debugLog("handoff.scheduled", {
+		generation: station.state.relay?.generation ?? null,
+	});
+	return true;
 }
 
 /**
@@ -64,11 +136,11 @@ export async function runHandoffInContext(station, ctx, pi) {
 
 /**
  * Session-stop ticket. The stop gatekeeper has already decided that a handoff
- * must run (relay.handoffPending or an empty ledger after arming); this ticket
- * performs it exactly once and yields the continuation. Only canStop, decided
- * by the gatekeeper, allows a natural stop.
+ * must run (relay.handoffPending or an empty ledger after arming). Dispatches
+ * the real handoff as a fire-and-forget background task so the host's
+ * `session_stop` handler returns immediately without hitting the callback timeout.
  */
-export async function sessionStopTicket(station, ctx, pi) {
+export function sessionStopTicket(station, ctx, pi) {
 	const before = station.state.relay ?? null;
 	debugLog("session_stop.enter", {
 		mode: ctx?.mode ?? null,
@@ -76,33 +148,11 @@ export async function sessionStopTicket(station, ctx, pi) {
 		handoffPending: before?.handoffPending ?? null,
 		canStop: before?.canStop ?? null,
 	});
-	station.sessionStopRunning = true;
-	let result;
-	try {
-		result = await runHandoffAtStop(station, ctx, pi);
-	} catch (error) {
-		debugLog("session_stop.error", {
-			error: errorText(error),
-			generation: station.state.relay?.generation ?? null,
-		});
-		throw error;
-	} finally {
-		station.sessionStopRunning = false;
-	}
-	const after = station.state.relay ?? null;
-	const context =
-		typeof result?.additionalContext === "string"
-			? result.additionalContext
-			: "";
+	const scheduled = scheduleBackgroundHandoff(station, ctx, pi);
 	debugLog("session_stop.exit", {
-		continuation: result !== undefined,
-		successorPromptDelivered: context.includes("You are the relay successor"),
-		relayPromptSentFor: station.relayPromptSentFor ?? null,
-		relayPromptPendingFor: station.relayPromptPendingFor ?? null,
-		generation: after?.generation ?? null,
-		handoffPending: after?.handoffPending ?? null,
-		canStop: after?.canStop ?? null,
-		handoffError: after?.handoffError ?? null,
+		fireAndForget: true,
+		scheduled,
+		generation: before?.generation ?? null,
 	});
-	return result;
+	return undefined;
 }

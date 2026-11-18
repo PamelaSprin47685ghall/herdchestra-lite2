@@ -167,15 +167,15 @@ function texts(messages) {
 }
 
 describe("scope lifecycle", () => {
-	test("transitions between scopes and preserves delayed collapse", async () => {
+	test("transitions between scopes and retains elder work as a hot workbench", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		await runAssistant(host, ctx, assistant([call("b1", "scope", {
-			begin: { intent: "first", budget: { read: 1 } },
+			begin: { intent: "first", budget: { read: 1 }, elder_report: null },
 		})]));
 		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "first" })]));
 		const transition = await runAssistant(host, ctx, assistant([call("t1", "scope", {
-			end: "first done", begin: { intent: "second", budget: { read: 1 } },
+			end: true, begin: { intent: "second", budget: { read: 1 }, elder_report: "first done" },
 		})]));
 		expect(transition[0].output.content[0].text).toContain("Scope closed.");
 		expect(transition[0].output.content[0].text).toContain("You are now inside this scope.");
@@ -185,31 +185,36 @@ describe("scope lifecycle", () => {
 		const read = await runAssistant(host, ctx, assistant([call("r2", "read", { path: "second" })]));
 		expect(read[0].blocked).toBe(false);
 		await runAssistant(host, ctx, assistant([call("t2", "scope", {
-			end: "second done", begin: { intent: "third", budget: { read: 1 } },
+			end: true, begin: { intent: "third", budget: { read: 1 }, elder_report: "second done" },
 		})]));
 		let joined = texts(await outbound(host, ctx)).join("\n");
-		expect(joined).toContain(finishedReport("first done"));
+		// No cost/watermark pressure in this fake host: no fold happens, so the
+		// archived elder keeps its full interior instead of a receipt.
+		expect(joined).toContain("read:first");
+		expect(joined).toContain("read:second");
+		expect(joined).not.toContain(finishedReport("first done"));
 		expect(joined).not.toContain(finishedReport("second done"));
 		await runAssistant(host, ctx, assistant([call("r3", "read", { path: "third" })]));
-		const end = await runAssistant(host, ctx, assistant([call("e3", "scope", { end: "third done" })]));
+		const end = await runAssistant(host, ctx, assistant([call("e3", "scope", { end: true })]));
 		expect(end[0].output.isError).not.toBe(true);
 		joined = texts(await outbound(host, ctx)).join("\n");
-		expect(joined).toContain(finishedReport("second done"));
+		expect(joined).toContain("read:second");
 		expect(joined).toContain("read:third");
+		expect(joined).not.toContain(finishedReport("second done"));
 	});
 
 	test("rejects invalid transitions without closing the active scope", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		const outside = await runAssistant(host, ctx, assistant([call("t0", "scope", {
-			end: "nothing", begin: { intent: "first", budget: { read: 1 } },
+			end: true, begin: { intent: "first", budget: { read: 1 }, elder_report: null },
 		})]));
 		expect(outside[0].output.content[0].text).toContain("NOT_IN_SCOPE");
 		await runAssistant(host, ctx, assistant([call("b1", "scope", {
-			begin: { intent: "first", budget: { read: 1 } },
+			begin: { intent: "first", budget: { read: 1 }, elder_report: null },
 		})]));
 		const invalid = await runAssistant(host, ctx, assistant([call("t1", "scope", {
-			end: "first done", begin: { intent: "", budget: { read: 1 } },
+			end: true, begin: { intent: "", budget: { read: 1 }, elder_report: "first done" },
 		})]));
 		expect(invalid[0].output.isError).toBe(true);
 		const read = await runAssistant(host, ctx, assistant([call("r1", "read", { path: "still first" })]));
@@ -224,7 +229,7 @@ describe("scope lifecycle", () => {
 			host,
 			ctx,
 			assistant([
-				call("c1", "scope", { begin: { intent: "inspect config", budget: { read: 1 } } }),
+				call("c1", "scope", { begin: { intent: "inspect config", budget: { read: 1 }, elder_report: null } }),
 				call("c2", "read", { path: "config-one" }),
 			]),
 		);
@@ -238,7 +243,7 @@ describe("scope lifecycle", () => {
 		const third = await runAssistant(
 			host,
 			ctx,
-			assistant([call("c4", "scope", { end: "done: config inspected" })]),
+			assistant([call("c4", "scope", { end: true })]),
 		);
 		expect(third[0].blocked).toBe(false);
 		expect(third[0].output.content[0].text).toContain("Scope closed");
@@ -268,27 +273,28 @@ describe("scope lifecycle", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("d1", "scope", { begin: { intent: "second pass", budget: { read: 1 } } })]),
+			assistant([call("d1", "scope", { begin: { intent: "second pass", budget: { read: 1 }, elder_report: "done: config inspected" } })]),
 		);
 		await runAssistant(host, ctx, assistant([call("d2", "read", { path: "config-three" })]));
 		const finalEnd = await runAssistant(
 			host,
 			ctx,
-			assistant([call("d3", "scope", { end: "second pass done" })]),
+			assistant([call("d3", "scope", { end: true })]),
 		);
 		expect(finalEnd[0].output.content[0].text).toContain(
-			"Your elder sibling scope at this level was collapsed; its begin receipt now reads",
+			"No elder sibling scope was collapsed.",
 		);
 
 		const branch = manager.getBranch();
 		const messages = branch.filter((entry) => entry.type === "message").map((entry) => entry.message);
-		expect(texts(messages).join("\n")).toContain(finishedReport("done: config inspected"));
+		expect(texts(messages).join("\n")).toContain("read:config-one");
+		expect(texts(messages).join("\n")).not.toContain(finishedReport("done: config inspected"));
 		expect(
 			messages.some(
 				(message) =>
 					message.role === "assistant" && message.content.some((block) => block.id === "c3"),
 			),
-		).toBe(false);
+		).toBe(true);
 		expect(
 			messages.some(
 				(message) =>
@@ -298,7 +304,7 @@ describe("scope lifecycle", () => {
 
 		const view = await outbound(host, ctx);
 		const joined = texts(view).join("\n");
-		expect(joined).toContain(finishedReport("done: config inspected"));
+		expect(joined).toContain("read:config-one");
 		expect(joined).not.toContain(finishedReport("second pass done"));
 		expect(joined).toContain("read:config-one");
 		expect(joined).not.toContain("read:config-two");
@@ -308,43 +314,47 @@ describe("scope lifecycle", () => {
 	});
 
 	test("collapses one scope behind across three scopes", async () => {
+		// Retained as a lifecycle regression: with no measured usage or pricing
+		// the economics never cross the fold threshold, so all elders stay hot.
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "one", budget: { read: 1 } } })]),
+			assistant([call("b1", "scope", { begin: { intent: "one", budget: { read: 1 }, elder_report: null } })]),
 		);
 		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "one" })]));
-		await runAssistant(host, ctx, assistant([call("e1", "scope", { end: "scope one done" })]));
+		await runAssistant(host, ctx, assistant([call("e1", "scope", { end: true })]));
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b2", "scope", { begin: { intent: "two", budget: { read: 1 } } })]),
+			assistant([call("b2", "scope", { begin: { intent: "two", budget: { read: 1 }, elder_report: "scope one done" } })]),
 		);
 		await runAssistant(host, ctx, assistant([call("r2", "read", { path: "two" })]));
-		await runAssistant(host, ctx, assistant([call("e2", "scope", { end: "scope two done" })]));
+		await runAssistant(host, ctx, assistant([call("e2", "scope", { end: true })]));
 
 		let joined = texts(await outbound(host, ctx)).join("\n");
-		expect(joined).toContain(finishedReport("scope one done"));
-		expect(joined).not.toContain(finishedReport("scope two done"));
-		expect(joined).not.toContain("read:one");
+		expect(joined).toContain("read:one");
 		expect(joined).toContain("read:two");
+		expect(joined).not.toContain(finishedReport("scope one done"));
+		expect(joined).not.toContain(finishedReport("scope two done"));
 
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b3", "scope", { begin: { intent: "three", budget: { read: 1 } } })]),
+			assistant([call("b3", "scope", { begin: { intent: "three", budget: { read: 1 }, elder_report: "scope two done" } })]),
 		);
 		await runAssistant(host, ctx, assistant([call("r3", "read", { path: "three" })]));
-		await runAssistant(host, ctx, assistant([call("e3", "scope", { end: "scope three done" })]));
+		await runAssistant(host, ctx, assistant([call("e3", "scope", { end: true })]));
 
 		joined = texts(await outbound(host, ctx)).join("\n");
-		expect(joined).toContain(finishedReport("scope one done"));
-		expect(joined).toContain(finishedReport("scope two done"));
+		expect(joined).toContain("read:one");
+		expect(joined).toContain("read:two");
+		expect(joined).not.toContain(finishedReport("scope one done"));
+		expect(joined).not.toContain(finishedReport("scope two done"));
 		expect(joined).not.toContain(finishedReport("scope three done"));
-		expect(joined).not.toContain("read:two");
+		expect(joined).toContain("read:two");
 		expect(joined).toContain("read:three");
 	});
 
@@ -365,7 +375,7 @@ describe("scope lifecycle", () => {
 			host,
 			ctx,
 			assistant([call("b1", "scope", {
-				begin: { intent: "work", budget: { read: 1 } },
+				begin: { intent: "work", budget: { read: 1 }, elder_report: null },
 			})]),
 		);
 		const stop = await runAssistant(
@@ -403,14 +413,14 @@ describe("scope lifecycle", () => {
 			host,
 			ctx,
 			assistant([call("b1", "scope", {
-				begin: { intent: "outer", budget: { read: 1 } },
+				begin: { intent: "outer", budget: { read: 1 }, elder_report: null },
 			})]),
 		);
 		await runAssistant(
 			host,
 			ctx,
 			assistant([call("b2", "scope", {
-				begin: { intent: "inner", budget: { read: 1 } },
+				begin: { intent: "inner", budget: { read: 1 }, elder_report: null },
 			})]),
 		);
 		await runAssistant(
@@ -421,7 +431,7 @@ describe("scope lifecycle", () => {
 		const innerEnd = await runAssistant(
 			host,
 			ctx,
-			assistant([call("e1", "scope", { end: "inner done" })]),
+			assistant([call("e1", "scope", { end: true })]),
 		);
 		expect(innerEnd[0].output.content[0].text).toContain(
 			"back inside the enclosing scope",
@@ -433,7 +443,7 @@ describe("scope lifecycle", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("e2", "scope", { end: "outer done" })]),
+			assistant([call("e2", "scope", { end: true })]),
 		);
 		const joined = texts(await outbound(host, ctx)).join("\n");
 		expect(joined).toContain("read:inner");
@@ -447,14 +457,14 @@ describe("scope lifecycle", () => {
 			host,
 			ctx,
 			assistant([call("a1", "scope", {
-				begin: { intent: "parent", budget: { read: 1 } },
+				begin: { intent: "parent", budget: { read: 1 }, elder_report: null },
 			})]),
 		);
 		await runAssistant(
 			host,
 			ctx,
 			assistant([call("b1", "scope", {
-				begin: { intent: "elder", budget: { read: 1 } },
+				begin: { intent: "elder", budget: { read: 1 }, elder_report: null },
 			})]),
 		);
 		await runAssistant(
@@ -465,13 +475,13 @@ describe("scope lifecycle", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("e1", "scope", { end: "elder done" })]),
+			assistant([call("e1", "scope", { end: true })]),
 		);
 		await runAssistant(
 			host,
 			ctx,
 			assistant([call("c1", "scope", {
-				begin: { intent: "younger", budget: { read: 1 } },
+				begin: { intent: "younger", budget: { read: 1 }, elder_report: "elder done" },
 			})]),
 		);
 		await runAssistant(
@@ -482,14 +492,13 @@ describe("scope lifecycle", () => {
 		const youngerEnd = await runAssistant(
 			host,
 			ctx,
-			assistant([call("e2", "scope", { end: "younger done" })]),
+			assistant([call("e2", "scope", { end: true })]),
 		);
 		expect(youngerEnd[0].output.content[0].text).toContain(
-			"Your elder sibling scope at this level was collapsed",
+			"No elder sibling scope was collapsed.",
 		);
 		const joined = texts(await outbound(host, ctx)).join("\n");
-		expect(joined).toContain(finishedReport("elder done"));
-		expect(joined).not.toContain("read:elder");
+		expect(joined).toContain("read:elder");
 		expect(joined).toContain("read:younger");
 		expect(joined).not.toContain(finishedReport("younger done"));
 	});
@@ -574,11 +583,11 @@ describe("scope lifecycle", () => {
 			host,
 			ctx,
 			assistant([call("b1", "scope", {
-				begin: { intent: "elder", budget: { read: 1 } },
+				begin: { intent: "elder", budget: { read: 1 }, elder_report: null },
 			})]),
 		);
 		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "elder" })]));
-		await runAssistant(host, ctx, assistant([call("e1", "scope", { end: "elder done" })]));
+		await runAssistant(host, ctx, assistant([call("e1", "scope", { end: true })]));
 
 		// Compaction keeps the collapse record but removes the begin message.
 		dropBeginEntry(manager, "b1");
@@ -587,13 +596,13 @@ describe("scope lifecycle", () => {
 			host,
 			ctx,
 			assistant([call("b2", "scope", {
-				begin: { intent: "younger", budget: { read: 1 } },
+				begin: { intent: "younger", budget: { read: 1 }, elder_report: "elder done" },
 			})]),
 		);
 		const ended = await runAssistant(
 			host,
 			ctx,
-			assistant([call("e2", "scope", { end: "younger done" })]),
+			assistant([call("e2", "scope", { end: true })]),
 		);
 		expect(ended[0].output.isError).toBeFalsy();
 		expect(ended[0].output.content[0].text).toContain("Scope closed.");
@@ -607,7 +616,7 @@ describe("scope lifecycle", () => {
 			host,
 			ctx,
 			assistant([call("b1", "scope", {
-				begin: { intent: "work", budget: { read: 1 } },
+				begin: { intent: "work", budget: { read: 1 }, elder_report: null },
 			})]),
 		);
 		dropBeginEntry(manager, "b1");
@@ -615,7 +624,7 @@ describe("scope lifecycle", () => {
 		const ended = await runAssistant(
 			host,
 			ctx,
-			assistant([call("e1", "scope", { end: "done" })]),
+			assistant([call("e1", "scope", { end: true })]),
 		);
 		expect(ended[0].output.isError).toBeFalsy();
 		expect(ended[0].output.content[0].text).toContain("outside all scopes");
@@ -631,7 +640,7 @@ describe("regret", () => {
 			host,
 			ctx,
 			assistant([
-				call("b1", "scope", { begin: { intent: "read twice", budget: { read: 2 } } }),
+				call("b1", "scope", { begin: { intent: "read twice", budget: { read: 2 }, elder_report: null } }),
 				call("r1", "read", { path: "one" }),
 			]),
 		);
@@ -661,7 +670,7 @@ describe("regret", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 2 } } })]),
+			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 2 }, elder_report: null } })]),
 		);
 		const result = await runAssistant(
 			host,
@@ -680,7 +689,7 @@ describe("defer", () => {
 			host,
 			ctx,
 			assistant([
-				call("b1", "scope", { begin: { intent: "limited work", budget: { read: 1 } } }),
+				call("b1", "scope", { begin: { intent: "limited work", budget: { read: 1 }, elder_report: null } }),
 				call("d1", "defer", { intent: "fix the docs later" }),
 			]),
 		);
@@ -692,7 +701,7 @@ describe("defer", () => {
 		const end = await runAssistant(
 			host,
 			ctx,
-			assistant([call("e1", "scope", { end: "limited work done" })]),
+			assistant([call("e1", "scope", { end: true })]),
 		);
 		expect(end[0].blocked).toBe(false);
 		expect(host.steers.length).toBe(1);
@@ -751,14 +760,14 @@ describe("pin", () => {
 		expect(read[0].blocked).toBe(false);
 	});
 
-	test("survives collapse and moves after the collapsed scope", async () => {
+	test("pin is retained in place with its interior when no fold is due", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "one", budget: { read: 1 } } })]),
+			assistant([call("b1", "scope", { begin: { intent: "one", budget: { read: 1 }, elder_report: null } })]),
 		);
 		await runAssistant(
 			host,
@@ -776,18 +785,18 @@ describe("pin", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("e1", "scope", { end: "one done" })]),
+			assistant([call("e1", "scope", { end: true })]),
 		);
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b2", "scope", { begin: { intent: "two", budget: { read: 1 } } })]),
+			assistant([call("b2", "scope", { begin: { intent: "two", budget: { read: 1 }, elder_report: "one done" } })]),
 		);
 		await runAssistant(host, ctx, assistant([call("r2", "read", { path: "two" })]));
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("e2", "scope", { end: "two done" })]),
+			assistant([call("e2", "scope", { end: true })]),
 		);
 
 		const branch = manager
@@ -796,18 +805,21 @@ describe("pin", () => {
 			.map((entry) => entry.message);
 		const pinIndex = branch.findIndex((message) => hasCall(message, "q1"));
 		const firstEndIndex = branch.findIndex((message) => hasCall(message, "e1"));
-		expect(pinIndex).toBeGreaterThan(firstEndIndex);
+		// No cost pressure: no fold runs, so the pin stays in its original beat.
+		expect(pinIndex).toBeLessThan(firstEndIndex);
 		expect(branch.some((message) => message.toolCallId === "q1")).toBe(true);
-		expect(branch.some((message) => hasCall(message, "r1"))).toBe(false);
-		expect(branch.some((message) => message.toolCallId === "r1")).toBe(false);
+		expect(branch.some((message) => hasCall(message, "r1"))).toBe(true);
+		expect(branch.some((message) => message.toolCallId === "r1")).toBe(true);
 		expect(
-			branch[pinIndex].content.filter((block) => block.type === "toolCall"),
-		).toHaveLength(1);
+			branch[pinIndex].content
+				.filter((block) => block.type === "toolCall")
+				.some((block) => block.id === "q1"),
+		).toBe(true);
 		expect(JSON.stringify(branch)).toContain("durable note");
 
 		const view = await outbound(host, ctx);
 		expect(view.some((message) => hasCall(message, "q1"))).toBe(true);
-		expect(view.some((message) => message.toolCallId === "r1")).toBe(false);
+		expect(view.some((message) => message.toolCallId === "r1")).toBe(true);
 		expect(JSON.stringify(view)).toContain("durable note");
 	});
 });
@@ -820,18 +832,18 @@ describe("nested scopes", () => {
 			host,
 			ctx,
 			assistant([
-				call("b1", "scope", { begin: { intent: "outer", budget: { read: 0, bash: 1 } } }),
-				call("b2", "scope", { begin: { intent: "inner", budget: { read: 1 } } }),
+				call("b1", "scope", { begin: { intent: "outer", budget: { read: 0, bash: 1 }, elder_report: null } }),
+				call("b2", "scope", { begin: { intent: "inner", budget: { read: 1 }, elder_report: null } }),
 				call("r1", "read", { path: "inner" }),
 			]),
 		);
 		const afterRead = await runAssistant(host, ctx, assistant([call("r2", "read", { path: "inner2" })]));
 		expect(afterRead[0].blocked).toBe(true);
-		const innerEnd = await runAssistant(host, ctx, assistant([call("e1", "scope", { end: "inner done" })]));
+		const innerEnd = await runAssistant(host, ctx, assistant([call("e1", "scope", { end: true })]));
 		expect(innerEnd[0].output.content[0].text).toContain("Scope closed");
 		const bash = await runAssistant(host, ctx, assistant([call("s1", "bash", { command: "true" })]));
 		expect(bash[0].blocked).toBe(false);
-		const outerEnd = await runAssistant(host, ctx, assistant([call("e2", "scope", { end: "outer done" })]));
+		const outerEnd = await runAssistant(host, ctx, assistant([call("e2", "scope", { end: true })]));
 		expect(outerEnd[0].output.content[0].text).toContain("Scope closed");
 	});
 });
@@ -919,7 +931,7 @@ describe("same-message scope and command co-dispatch", () => {
 			host,
 			ctx,
 			assistant([
-				call("s1", "scope", { begin: { intent: "inspect", budget: { read: 1 } } }),
+				call("s1", "scope", { begin: { intent: "inspect", budget: { read: 1 }, elder_report: null } }),
 				call("r1", "read", { path: "a.mjs" }),
 			]),
 		);
@@ -940,7 +952,7 @@ describe("same-message scope and command co-dispatch", () => {
 		const closed = await runHostPrepareOrder(
 			host,
 			ctx,
-			assistant([call("s2", "scope", { end: "done" })]),
+			assistant([call("s2", "scope", { end: true })]),
 		);
 		expect(closed[0].blocked).toBe(false);
 		expect(closed[0].output.content[0].text).toContain("Scope closed. You are outside all scopes.");
@@ -950,11 +962,11 @@ describe("same-message scope and command co-dispatch", () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		await runAssistant(host, ctx, assistant([
-			call("s1", "scope", { begin: { intent: "work", budget: { read: 1 } } }),
+			call("s1", "scope", { begin: { intent: "work", budget: { read: 1 }, elder_report: null } }),
 		]));
 		const results = await runAssistant(host, ctx, assistant([
 			call("r1", "read", { path: "a.mjs" }),
-			call("s2", "scope", { end: "finished" }),
+			call("s2", "scope", { end: true }),
 		]));
 		expect(results[0].blocked).toBe(false);
 		expect(results[1].blocked).toBe(false);
@@ -967,7 +979,7 @@ describe("same-message scope and command co-dispatch", () => {
 		await runHostPrepareOrder(
 			host,
 			ctx,
-			assistant([call("s1", "scope", { begin: { intent: "retry", budget: { read: 1 } } })]),
+			assistant([call("s1", "scope", { begin: { intent: "retry", budget: { read: 1 }, elder_report: null } })]),
 		);
 		const first = await runHostPrepareOrder(
 			host,

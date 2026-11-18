@@ -29,12 +29,16 @@ function restoreState(manager) {
 						restored.scopes = restored.scopes.filter((scope) =>
 							visible.has(scope.beginToolCallId),
 						);
-						// A collapse record whose begin left the branch has already
-						// lost its interior. Treat it as folded so the elder lookup
-						// never asks for a message that cannot be shown.
+						// A pending elder whose begin left the branch can never be
+						// archived: seal it so no new scope asks for its report.
+						// Other lost records are folded as before.
 						for (const record of restored.collapses) {
 							if (record?.collapsed === false && !visible.has(record.beginToolCallId)) {
-								record.collapsed = true;
+								if (record.report === null && record.sealed !== true) {
+									record.sealed = true;
+								} else {
+									record.collapsed = true;
+								}
 							}
 						}
 					} catch {

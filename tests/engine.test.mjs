@@ -10,8 +10,14 @@ import {
   currentScope,
   deferIntent,
   deserializeState,
+  findActivePools,
+  findFoldablePool,
   findElderSibling,
+  findHotWorkbench,
+  findPendingReportElder,
+  markSubsumedDescendants,
   roundAmount,
+  sealClosedParentChildren,
   serializeState,
   truncateForHostBoundary,
 } from "../src/scope/index.mjs";
@@ -178,6 +184,11 @@ describe("beginScope", () => {
       spent: { read: 0, bash: 0 },
       defers: [],
       residualDefers: [],
+      baseInputTokens: null,
+      preBeginInputTokens: null,
+      endInputTokens: null,
+      endInputTokensPending: false,
+      beginResultChars: 0,
     });
     expect(currentScope(state)).toBe(result.scope);
     expect(state.seq).toBe(1);
@@ -632,16 +643,11 @@ describe("closeScope", () => {
     expect(state.scopes).toEqual([]);
   });
 
-  test("rejects a missing or empty report", () => {
+  test("closes without a report; archiving is deferred to the next sibling", () => {
     const { state } = openScope("work", {});
-    for (const report of [undefined, "", "   ", null, 42]) {
-      const result = closeScope(state, {
-        toolCallId: "call_end",
-        report,
-      });
-      expect(result).toMatchObject({ ok: false, code: "INVALID_REPORT" });
-    }
-    expect(state.scopes).toHaveLength(1);
+    const result = closeScope(state, { toolCallId: "call_end" });
+    expect(result.ok).toBe(true);
+    expect(currentScope(state)).toBeNull();
   });
 
   test("pops the innermost scope and removes only its charges", () => {
@@ -901,5 +907,181 @@ describe("serializeState and deserializeState", () => {
     expect(migrated.version).toBe(2);
     expect(migrated.relay).toEqual(createState().relay);
     expect(migrated).toEqual(createState());
+  });
+});
+
+function makeCollapse(overrides = {}) {
+  return {
+    beginToolCallId: "call_begin",
+    endToolCallId: "call_end",
+    report: "report",
+    parentId: null,
+    order: 1,
+    collapsed: false,
+    createdAt: 1700000000000,
+    boundary: 0,
+    epoch: 0,
+    scopeId: "scope-1",
+    intent: "work",
+    sealed: false,
+    ...overrides,
+  };
+}
+
+describe("elder lifecycle queries", () => {
+  test("finds the single unarchived elder at a level", () => {
+    const state = createState();
+    state.collapses.push(
+      makeCollapse({ report: null, scopeId: "s1", order: 1, beginToolCallId: "b1", endToolCallId: "e1" }),
+      makeCollapse({ report: "done", scopeId: "s2", order: 2 }),
+    );
+    expect(findPendingReportElder(state, null, 0, 0)?.scopeId).toBe("s1");
+    expect(findPendingReportElder(state, "no-parent", 0, 0)).toBeNull();
+  });
+
+  test("a sealed pending elder is no longer pending", () => {
+    const state = createState();
+    state.collapses.push(
+      makeCollapse({ report: null, scopeId: "s1", sealed: true }),
+    );
+    expect(findPendingReportElder(state, null, 0, 0)).toBeNull();
+  });
+
+  test("findHotWorkbench returns the highest uncollapsed order", () => {
+    const state = createState();
+    state.collapses.push(
+      makeCollapse({ scopeId: "s1", order: 1 }),
+      makeCollapse({ scopeId: "s2", order: 3 }),
+      makeCollapse({ scopeId: "s3", order: 5, collapsed: true }),
+    );
+    expect(findHotWorkbench(state, null, 0, 0)?.scopeId).toBe("s2");
+  });
+
+  test("findFoldablePool keeps archived elders strictly behind the workbench", () => {
+    const state = createState();
+    state.collapses.push(
+      makeCollapse({ scopeId: "s1", report: "r1", order: 1 }),
+      makeCollapse({ scopeId: "s2", report: "r2", order: 2 }),
+      makeCollapse({ scopeId: "s3", report: null, order: 3 }),
+      makeCollapse({ scopeId: "s0", report: "sealed", order: 0, sealed: true }),
+    );
+    expect(findFoldablePool(state, null, 0, 0).map((r) => r.scopeId)).toEqual([
+      "s1",
+      "s2",
+    ]);
+  });
+
+  test("findActivePools skips levels whose parent is no longer on the stack", () => {
+    const state = createState();
+    state.scopes.push({ id: "parent-1" });
+    state.collapses.push(
+      makeCollapse({ parentId: null, report: "r1", scopeId: "s1", order: 1 }),
+      makeCollapse({ parentId: null, report: "r2", scopeId: "s2", order: 2, beginToolCallId: "b2" }),
+      makeCollapse({ parentId: "parent-1", report: "r3", scopeId: "s3", order: 3, beginToolCallId: "b3" }),
+      makeCollapse({ parentId: "parent-1", report: "r4", scopeId: "s4", order: 4, beginToolCallId: "b4" }),
+      makeCollapse({ parentId: "ghost", report: "r5", scopeId: "s5", order: 5, beginToolCallId: "b5" }),
+    );
+    const groups = findActivePools(state);
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.parentId).sort()).toEqual([null, "parent-1"].sort());
+    for (const group of groups) expect(group.pool).toHaveLength(1);
+  });
+
+  test("markSubsumedDescendants folds descendants transitively", () => {
+    const state = createState();
+    state.collapses.push(
+      makeCollapse({ scopeId: "root", parentId: null, report: "r", order: 1, collapsed: true }),
+      makeCollapse({ scopeId: "child", parentId: "root", report: null, order: 2 }),
+      makeCollapse({ scopeId: "grand", parentId: "child", report: null, order: 3 }),
+    );
+    expect(markSubsumedDescendants(state, [{ scopeId: "root" }])).toBe(2);
+    expect(state.collapses[1].collapsed).toBe(true);
+    expect(state.collapses[2].collapsed).toBe(true);
+  });
+
+  test("sealClosedParentChildren seals only pending children of the parent", () => {
+    const state = createState();
+    state.collapses.push(
+      makeCollapse({ parentId: "parent-x", report: null, scopeId: "s1" }),
+      makeCollapse({ parentId: "parent-x", report: "done", scopeId: "s2" }),
+      makeCollapse({ parentId: "other", report: null, scopeId: "s3" }),
+    );
+    expect(sealClosedParentChildren(state, "parent-x")).toBe(1);
+    expect(state.collapses[0].sealed).toBe(true);
+    expect(state.collapses[2].sealed).toBe(false);
+  });
+
+  test("host boundary seals a stale pending elder and collapses stale archives", () => {
+    const state = createState();
+    state.collapses.push(
+      makeCollapse({ report: null, epoch: 0, order: 1, scopeId: "s1", beginToolCallId: "b1", endToolCallId: "e1" }),
+      makeCollapse({ report: "done", epoch: 0, order: 2, scopeId: "s2" }),
+    );
+    expect(truncateForHostBoundary(state)).toBe(true);
+    expect(state.epoch).toBe(1);
+    expect(state.collapses[0].sealed).toBe(true);
+    expect(state.collapses[0].collapsed).toBe(false);
+    expect(state.collapses[1].collapsed).toBe(true);
+  });
+});
+
+describe("measured collapse persistence", () => {
+  test("round-trips null reports and measured fields", () => {
+    const state = createState();
+    state.collapses.push({
+      ...makeCollapse({ report: null, scopeId: "s1", sealed: false }),
+      paidRentCost: 1.25,
+      interiorTokens: 320,
+      interiorChars: 900,
+      pinTokens: 12,
+      baseInputTokens: 4000,
+      endInputTokens: null,
+      endInputTokensPending: true,
+    });
+    const restored = deserializeState(JSON.stringify(serializeState(state)));
+    expect(restored.collapses[0]).toMatchObject({
+      report: null,
+      sealed: false,
+      paidRentCost: 1.25,
+      interiorTokens: 320,
+      pinTokens: 12,
+      baseInputTokens: 4000,
+      endInputTokensPending: true,
+    });
+  });
+
+  test("legacy snapshots without measured fields still deserialize", () => {
+    const legacy = {
+      version: 2,
+      seq: 1,
+      epoch: 0,
+      scopes: [],
+      charges: {},
+      regrets: [],
+      collapses: [
+        {
+          beginToolCallId: "b",
+          endToolCallId: "e",
+          report: "done",
+          parentId: null,
+          order: 0,
+          collapsed: true,
+          createdAt: 1,
+          boundary: 0,
+          epoch: 0,
+        },
+      ],
+      relay: createState().relay,
+    };
+    const restored = deserializeState(legacy);
+    expect(restored.collapses[0].report).toBe("done");
+    expect(restored.collapses[0].sealed).toBeUndefined();
+    expect(restored.collapses[0].paidRentCost).toBeUndefined();
+  });
+
+  test("a pending null report that is collapsed fails validation", () => {
+    const state = createState();
+    state.collapses.push(makeCollapse({ report: null, collapsed: true }));
+    expect(deserializeState(serializeState(state))).toEqual(createState());
   });
 });

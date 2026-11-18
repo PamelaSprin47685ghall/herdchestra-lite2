@@ -224,7 +224,7 @@ describe("chargeTool", () => {
 
   test("never charges control tools", () => {
     const { state, scope } = openScope("work", { bash: 1 });
-    for (const [index, toolName] of ["scope", "regret", "defer"].entries()) {
+    for (const [index, toolName] of ["scope", "regret", "defer", "pin"].entries()) {
       const result = chargeTool(state, {
         toolCallId: `call_free_${index}`,
         toolName,

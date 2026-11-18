@@ -15,7 +15,7 @@
 
 const STATE_KEY = Symbol.for("herdchestra-lite2.session-capture.v1");
 const VIBE_PATCH = Symbol.for("herdchestra-lite2.vibe-tools.v1");
-const SCOPE_TOOLS = ["scope", "regret", "defer"];
+const SCOPE_TOOLS = ["scope", "regret", "defer", "pin"];
 
 /** Keep registered scope tools in the host's atomic vibe-mode activation. */
 export function installVibeTools(AgentSession) {

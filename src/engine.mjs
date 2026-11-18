@@ -6,7 +6,7 @@
 
 const VERSION = 1;
 
-const CONTROL_TOOLS = new Set(["scope", "regret", "defer"]);
+const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
 
 const STEER_HEADER =
   "You deferred the following findings in this scope. Address them now:";

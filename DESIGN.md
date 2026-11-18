@@ -1,7 +1,7 @@
 # Herdchestra Lite 2.0 — design contract
 
 Plain `.mjs` omp extension. No ClojureScript, no sandbox, no board, no stages.
-Three tools: `scope`, `regret`, `defer`. Built-in tools stay installed; the
+Four tools: `scope`, `regret`, `defer`, `pin`. Built-in tools stay installed; the
 `tool_call` hook blocks every non-control tool outside a scope and charges the
 innermost scope's budget for every allowed call.
 
@@ -12,7 +12,7 @@ innermost scope's budget for every allowed call.
 about n tool calls, a moderate scope covers about sqrt(n) of them. Size
 `budget` so its total across tools is roughly sqrt(n).
 `budget` is `{ [exactToolName]: nonNegativeInteger }`. Absent tool => zero.
-`scope`, `regret`, and `defer` are free and are never budgeted.
+`scope`, `regret`, `defer`, and `pin` are free and are never budgeted.
 Several calls to the same tool in one assistant message are one batch and
 consume one unit of that tool's budget; budget and spend by batches, not
 individual calls.
@@ -28,6 +28,8 @@ Scopes nest. Only the innermost scope's budget is consumed.
    messages between that begin result and the assistant message that carried
    that sibling's `end` call are removed (in-place fork), except the begin
    beat's own tool results, which stay to keep the tool-call sequence valid.
+   Pin calls and their results inside the removed interior survive: they move
+   after the collapsed scope's end beat.
    The scope that just closed stays visible until a younger sibling closes.
    Collapse order is sibling order, not global close order. A parent close
    does not collapse its children; an enclosing scope's later collapse removes
@@ -175,7 +177,13 @@ Export exactly:
   `toolCallId`, `toolName`, `isError: false`, `timestamp`, `details`) and
   remove every message strictly between the begin result and the end
   assistant, except tool results belonging to the begin assistant's own beat.
-  Idempotent when already collapsed.
+  Pin calls and their results are kept and moved after the end assistant's
+  tool results. Idempotent when already collapsed.
+- `PIN_TOOL_NAME` -> `"pin"`.
+- `collectPinnedMessages(messages, { start, end, skipResultIds })` -> pin
+  assistant messages (text/thinking blocks plus pin calls) and pin tool
+  results inside the range, in order; `skipResultIds` keeps results that
+  already survive in place. Used by collapse.
 - `finishedReport(report)` -> exact string
   `You have finished this scope. Here is your report: ${report}`.
 - `rewriteVibeMessage(message)` -> message; if
@@ -187,11 +195,12 @@ Export exactly:
 
 ## Host wiring (`src/main.mjs`, `src/runtime.mjs`)
 
-- Register `scope`, `regret`, `defer` with `executionMode: "sequential"`.
+- Register `scope`, `regret`, `defer`, `pin` with `executionMode: "sequential"`.
 - `assistant_message` hook processes all control calls in a finalized
   assistant message before tool dispatch, in this order: every `regret` (in
-  message order), then every `scope` / `defer` in message order.
-  - `begin` opens a scope. `defer` records. `end` closes and performs the
+  message order), then every `scope` / `defer` / `pin` in message order.
+  - `begin` opens a scope. `defer` records. `pin` returns `OK` and stores
+    nothing. `end` closes and performs the
     persistent fork for the elder sibling at the same level: branch the session
     manager to that scope's begin assistant's parent, append a copy of the
     begin assistant, append a `toolResult` with the begin `toolCallId` whose
@@ -236,6 +245,9 @@ Export exactly:
 - `regret` tool: reflection non-empty; only inside a scope; one call undoes one
   previous beat. Return refund summary.
 - `defer` tool: intent non-empty; only inside a scope; return `OK`.
+- `pin` tool: every field optional and Markdown; works inside or outside a
+  scope; no budget charge; always returns `OK`. Collapse preserves its
+  assistant message and tool result after the collapsed scope's end beat.
 
 ## Non-goals
 

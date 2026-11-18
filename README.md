@@ -2,7 +2,7 @@
 
 A minimal omp extension that puts every tool call inside a budgeted scope.
 
-No ClojureScript. No sandbox. No stage machine. No board. Three tools and four
+No ClojureScript. No sandbox. No stage machine. No board. Four tools and four
 host hooks, in plain ESM.
 
 ## What it does
@@ -14,10 +14,10 @@ host hooks, in plain ESM.
   calls to the same tool in one assistant message are one simultaneous batch
   and consume one unit of that tool's budget. Budget and spend by batches, not
   individual calls.
-- Every tool call outside `scope`, `regret`, and `defer` must happen inside a
-  scope. It consumes one unit from the innermost scope's budget for that tool;
-  same-tool calls in one assistant message share that unit. A tool not listed
-  in the budget has zero calls.
+- Every tool call other than `scope`, `regret`, `defer`, and `pin` must happen
+  inside a scope. It consumes one unit from the innermost scope's budget for
+  that tool; same-tool calls in one assistant message share that unit. A tool
+  not listed in the budget has zero calls.
 - `scope({ end: { return_markdown } })` closes the innermost scope.
   `return_markdown` is the report you leave for your future self: it replaces
   the scope's begin receipt when the scope is collapsed and records what was
@@ -37,6 +37,12 @@ host hooks, in plain ESM.
 - `defer({ intent })` records a finding to handle later without spending
   budget. When the scope ends, all deferred findings are delivered as one
   steering user message.
+- `pin({ assumption, deduction, induction, finding, conclusion })` records a
+  durable reasoning note in Markdown. Every field is optional. It costs no
+  budget, has no call limit, and always returns `OK`; it works inside or
+  outside a scope. Pin records survive scope collapse: when a scope is
+  collapsed, its pin calls and results move after that scope and stay in the
+  conversation.
 
 - If the assistant stops inside a scope without a tool call, the runtime sends
   a steering nudge: do not give the user-facing conclusion yet; continue the
@@ -68,8 +74,8 @@ scope triggers the nudge.
   they live in the tool descriptions.
 - The vibe-mode outbound rewrite is preserved for
   `role: "custom", customType: "vibe-mode-context"`.
-- The registered `scope`, `regret`, and `defer` tools remain available in
-  vibe mode, without changing its restrictions on other tools.
+- The registered `scope`, `regret`, `defer`, and `pin` tools remain available
+  in vibe mode, without changing its restrictions on other tools.
 
 ## Install
 
@@ -111,7 +117,8 @@ bun test tests
 
 The suite is pure and uses a fake host session manager. It covers budget
 enforcement, nested scopes, regret refunds and outbound filtering, defer steer,
-scope-end fork/collapse, vibe rewrite, and prompt injection. For a live check:
+pin retention across collapse, scope-end fork/collapse, vibe rewrite, and
+prompt injection. For a live check:
 
 ```sh
 omp -p --no-session --no-extensions --no-rules --no-context-files \

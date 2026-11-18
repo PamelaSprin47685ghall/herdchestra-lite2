@@ -7,7 +7,7 @@ export const SCOPE_DESCRIPTION = `Scope is the only way to use tools in this ses
 
 A moderate scope names an outcome and the evidence that proves it. Its budget should cover the calls the work really needs; sqrt(n) only helps judge how large a block should be when you first plan the split, not how many calls the finished task must take. Aim for each scope to make a concrete contribution to the user's goal, such as a usable change or a completed deliverable; combine necessary investigation with action when practical instead of routinely spending whole scopes on research alone. Research-only scopes remain appropriate when investigation is itself the requested deliverable or is necessary before safe, informed action. A scope is neither a single operation nor the whole user goal.
 
-Call scope({ begin: { intent, budget } }) before using any other tool. Every tool call outside the control tools must happen inside a scope. A batch of same-tool calls in one assistant message uses one unit of that tool's budget; different tools use their own units. scope, regret, and defer are free. A tool not listed in the budget has zero budget. Scopes nest, and only the innermost scope's budget is used.
+Call scope({ begin: { intent, budget } }) before using any other tool. Every tool call outside the control tools must happen inside a scope. A batch of same-tool calls in one assistant message uses one unit of that tool's budget; different tools use their own units. scope, regret, defer, and pin are free. A tool not listed in the budget has zero budget. Scopes nest, and only the innermost scope's budget is used.
 
 Budget by batches, not individual calls. Several calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget. Two read calls in one assistant message cost 1 read unit; a third read in a later assistant message costs another read unit. Different tools in the same message each cost their own unit. Plan the budget around the number of same-tool batches you expect, and spend it with the same rule in mind.
 
@@ -23,7 +23,7 @@ export const BEGIN_INTENT_DESCRIPTION =
 	"A task of moderate scope: one outcome that can be completed and reviewed in a bounded stretch, plus the evidence that proves completion. As a heuristic for how much work one scope should hold, if the whole user request seems to need about n tool calls, a moderate scope covers roughly sqrt(n) of them; this is not a target for the call count and does not decide how many calls the task actually takes. Name the outcome and its proof, not a single file operation and not the whole user request. One to three sentences.";
 
 export const BUDGET_DESCRIPTION =
-	'Map each tool name to the maximum number of batches allowed in this scope. A batch is all calls to one tool in the same assistant message: several read calls issued together consume one read unit, while a read in a later message consumes another. Use actual tool names (bash, read, write, edit, glob, grep, lsp, task, wait, todo, web_search, ask, debug, eval, etc.), not semantic descriptions. Example: {"bash": 6, "read": 7, "edit": 4}. Size each number by the batches the work actually needs, not by individual calls. A tool not listed has zero budget. Only the innermost scope\'s budget is used. scope, regret, and defer are never budgeted. Values must be non-negative integers; an integer budget is a number of batches, not a promise that every call in a batch is independently charged.';
+	'Map each tool name to the maximum number of batches allowed in this scope. A batch is all calls to one tool in the same assistant message: several read calls issued together consume one read unit, while a read in a later message consumes another. Use actual tool names (bash, read, write, edit, glob, grep, lsp, task, wait, todo, web_search, ask, debug, eval, etc.), not semantic descriptions. Example: {"bash": 6, "read": 7, "edit": 4}. Size each number by the batches the work actually needs, not by individual calls. A tool not listed has zero budget. Only the innermost scope\'s budget is used. scope, regret, defer, and pin are never budgeted. Values must be non-negative integers; an integer budget is a number of batches, not a promise that every call in a batch is independently charged.';
 
 export const END_REPORT_DESCRIPTION =
 	"Close the current scope. return_markdown is the report you leave for your future self: it replaces this scope's begin receipt when the scope is collapsed as an elder sibling, and records what was accomplished, the evidence that proves it, what remains unfinished, and the lesson learned. It is not the user-facing answer. Write the user-facing deliverable as ordinary assistant text only when you are outside all scopes. A parent close does not collapse its children; an enclosing scope's later collapse removes their receipts, so summarize durable child results here.";
@@ -44,6 +44,23 @@ export const DEFER_DESCRIPTION = `Record a finding that should be handled later 
 
 export const DEFER_INTENT_DESCRIPTION =
 	"What must be done later and why it matters. Must be specific, actionable, and non-empty.";
+
+export const PIN_DESCRIPTION = `Record a durable reasoning note in the transcript. pin costs no budget, has no call limit, and always returns OK; call it inside or outside a scope. Every field is optional Markdown. Pin records survive scope collapse: when a scope is collapsed, its pin calls and results move after the collapsed scope and stay in the conversation, so later work can recover the observation, the reasoning, and the conclusion that would otherwise disappear with the scope interior. Use pin for durable assumptions, deductions, inductions, findings, and conclusions; use defer for work that must be done later.`;
+
+export const PIN_ASSUMPTION_DESCRIPTION =
+	"A premise or assumption, in Markdown. Optional.";
+
+export const PIN_DEDUCTION_DESCRIPTION =
+	"A deductive step or consequence drawn from the premises, in Markdown. Optional.";
+
+export const PIN_INDUCTION_DESCRIPTION =
+	"An inductive generalization from observations, in Markdown. Optional.";
+
+export const PIN_FINDING_DESCRIPTION =
+	"A concrete observation or piece of evidence, in Markdown. Optional.";
+
+export const PIN_CONCLUSION_DESCRIPTION =
+	"The current conclusion, in Markdown. Optional.";
 
 export const scopeParameters = {
 	type: "object",
@@ -96,5 +113,17 @@ export const deferParameters = {
 	required: ["intent"],
 	properties: {
 		intent: { type: "string", minLength: 1, description: DEFER_INTENT_DESCRIPTION },
+	},
+};
+
+export const pinParameters = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		assumption: { type: "string", description: PIN_ASSUMPTION_DESCRIPTION },
+		deduction: { type: "string", description: PIN_DEDUCTION_DESCRIPTION },
+		induction: { type: "string", description: PIN_INDUCTION_DESCRIPTION },
+		finding: { type: "string", description: PIN_FINDING_DESCRIPTION },
+		conclusion: { type: "string", description: PIN_CONCLUSION_DESCRIPTION },
 	},
 };

@@ -10,6 +10,7 @@
 
 const TOOL_CALL_TYPE = "toolCall";
 const SCOPE_TOOL_NAME = "scope";
+export const PIN_TOOL_NAME = "pin";
 
 const VIBE_WORKER_LINE = "drive two worker CLIs";
 const VIBE_WORKER_REPLACEMENT =
@@ -191,6 +192,58 @@ export function filterRegrets(messages, regrets) {
  * receipt rewritten and its interior removed. The newest closed scope stays
  * fully visible until a younger sibling closes.
  */
+function pinAssistantMessage(message) {
+	const content = Array.isArray(message.content) ? message.content : [];
+	return {
+		...message,
+		content: content.filter(
+			(block) => block?.type !== TOOL_CALL_TYPE || block.name === PIN_TOOL_NAME,
+		),
+	};
+}
+
+/**
+ * Return the pin records inside [start, end) in transcript order.
+ *
+ * A pin assistant keeps its text and thinking blocks plus its pin calls. Other
+ * tool calls in the same message are removed, so their results can vanish
+ * together. skipResultIds holds results that already survive in place.
+ */
+export function collectPinnedMessages(messages, options = {}) {
+	const source = Array.isArray(messages) ? messages : [];
+	const start = Number.isInteger(options.start) ? Math.max(0, options.start) : 0;
+	const end = Number.isInteger(options.end)
+		? Math.min(source.length, options.end)
+		: source.length;
+	const skip = options.skipResultIds instanceof Set ? options.skipResultIds : new Set();
+	const pinIds = new Set();
+	for (let index = start; index < end; index += 1) {
+		const message = source[index];
+		if (message?.role !== "assistant") continue;
+		for (const call of toolCalls(message)) {
+			if (call.name === PIN_TOOL_NAME) pinIds.add(call.id);
+		}
+	}
+	if (pinIds.size === 0) return [];
+	const pinned = [];
+	for (let index = start; index < end; index += 1) {
+		const message = source[index];
+		if (message?.role === "assistant") {
+			if (!toolCalls(message).some((call) => call.name === PIN_TOOL_NAME)) continue;
+			pinned.push(pinAssistantMessage(message));
+			continue;
+		}
+		if (
+			message?.role === "toolResult" &&
+			pinIds.has(message.toolCallId) &&
+			!skip.has(message.toolCallId)
+		) {
+			pinned.push(message);
+		}
+	}
+	return pinned;
+}
+
 export function applyCollapses(messages, collapses) {
 	let result = Array.isArray(messages) ? messages.slice() : [];
 	const records = Array.isArray(collapses) ? collapses : [];
@@ -204,7 +257,18 @@ export function applyCollapses(messages, collapses) {
 		if (endAssistantIndex < 0 || endAssistantIndex <= begin.resultIndex) continue;
 
 		const beginToolIds = new Set(toolCalls(begin.assistant).map((call) => call.id));
+		const pinned = collectPinnedMessages(result, {
+			start: begin.resultIndex + 1,
+			end: endAssistantIndex,
+			skipResultIds: beginToolIds,
+		});
 		const next = [];
+		let pinnedFlushed = pinned.length === 0;
+		const flushPinned = () => {
+			if (pinnedFlushed) return;
+			pinnedFlushed = true;
+			for (const message of pinned) next.push(message);
+		};
 		for (let index = 0; index < result.length; index += 1) {
 			if (index === begin.resultIndex) {
 				next.push({
@@ -229,8 +293,19 @@ export function applyCollapses(messages, collapses) {
 				}
 				continue;
 			}
+			if (index <= endAssistantIndex) {
+				next.push(result[index]);
+				continue;
+			}
+			// Pin records move after the collapsed scope's end beat.
+			if (result[index]?.role === "toolResult") {
+				next.push(result[index]);
+				continue;
+			}
+			flushPinned();
 			next.push(result[index]);
 		}
+		flushPinned();
 		result = next;
 	}
 

@@ -599,6 +599,96 @@ describe("applyCollapses", () => {
 	});
 });
 
+describe("applyCollapses with pins", () => {
+	const PIN_ID = "call_pin";
+	const BASH_ID = "call_bash";
+	const collapse = {
+		beginToolCallId: BEGIN_ID,
+		endToolCallId: END_ID,
+		report: "all green",
+	};
+
+	function pinnedFixture() {
+		return [
+			{ role: "user", content: "start", timestamp: 99 },
+			beginAssistant(),
+			beginResult(),
+			callMessage(
+				[
+					{ id: PIN_ID, name: "pin", arguments: { assumption: "A", conclusion: "C" } },
+					{ id: BASH_ID, name: "bash", arguments: { command: "ls" } },
+				],
+				[{ type: "text", text: "reasoning note" }],
+				110,
+			),
+			toolResultMessage(PIN_ID, "pin", { timestamp: 111 }),
+			toolResultMessage(BASH_ID, "bash", { timestamp: 112 }),
+			endAssistant(),
+			toolResultMessage(END_ID, "scope", { timestamp: 201 }),
+		];
+	}
+
+	test("keeps pin calls and results after the collapsed scope end beat", () => {
+		const messages = pinnedFixture();
+
+		const out = applyCollapses(messages, [collapse]);
+
+		expect(out).toHaveLength(7);
+		const pinAssistant = out.find(
+			(message) =>
+				message.role === "assistant" &&
+				toolCalls(message).some((call) => call.id === PIN_ID),
+		);
+		expect(pinAssistant).toBeDefined();
+		expect(toolCalls(pinAssistant)).toEqual([
+			{ id: PIN_ID, name: "pin", arguments: { assumption: "A", conclusion: "C" } },
+		]);
+		expect(
+			pinAssistant.content.some(
+				(block) => block.type === "text" && block.text === "reasoning note",
+			),
+		).toBe(true);
+		const pinResultIndex = out.findIndex((message) => message.toolCallId === PIN_ID);
+		expect(pinResultIndex).toBeGreaterThan(-1);
+		expect(out.some((message) => message.toolCallId === BASH_ID)).toBe(false);
+		const endResultIndex = out.findIndex((message) => message.toolCallId === END_ID);
+		expect(out.indexOf(pinAssistant)).toBeGreaterThan(endResultIndex);
+		expect(pinResultIndex).toBe(out.indexOf(pinAssistant) + 1);
+	});
+
+	test("does not duplicate a pin result in the begin beat", () => {
+		const messages = [
+			{ role: "user", content: "start", timestamp: 99 },
+			callMessage(
+				[
+					{ id: BEGIN_ID, name: "scope", arguments: {} },
+					{ id: PIN_ID, name: "pin", arguments: { finding: "F" } },
+				],
+				[],
+				100,
+			),
+			beginResult(),
+			toolResultMessage(PIN_ID, "pin", { timestamp: 102 }),
+			callMessage([{ id: BASH_ID, name: "bash", arguments: {} }], [], 110),
+			toolResultMessage(BASH_ID, "bash", { timestamp: 111 }),
+			endAssistant(),
+			toolResultMessage(END_ID, "scope", { timestamp: 201 }),
+		];
+
+		const out = applyCollapses(messages, [collapse]);
+
+		expect(out.filter((message) => message.toolCallId === PIN_ID)).toHaveLength(1);
+		expect(out.some((message) => message.toolCallId === BASH_ID)).toBe(false);
+	});
+
+	test("is idempotent with pins", () => {
+		const once = applyCollapses(pinnedFixture(), [collapse]);
+		const twice = applyCollapses(once, [collapse]);
+
+		expect(twice).toEqual(once);
+	});
+});
+
 describe("finishedReport", () => {
 	test("uses the exact report sentence", () => {
 		expect(finishedReport("all green")).toBe(

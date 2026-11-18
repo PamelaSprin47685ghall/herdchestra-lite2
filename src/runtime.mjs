@@ -31,6 +31,7 @@ import {
 	appendUserTail,
 	applyCollapses,
 	beatKey,
+	collectPinnedMessages,
 	filterRegrets,
 	findBegin,
 	findRegretTarget,
@@ -43,7 +44,7 @@ import {
 import { injectSystemPrompt, languageSkill, outsideScopeInstruction } from "./prompts.mjs";
 import { setAgentMessages } from "./runner-capture.mjs";
 
-const CONTROL_TOOLS = new Set(["scope", "regret", "defer"]);
+const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
 const SESSION_STATE_TYPE = "scope.state";
 const records = new WeakMap();
 const orphanRecord = makeRecord(null);
@@ -237,7 +238,7 @@ function beginText(scope) {
 		"You are now inside this scope.",
 		`Intent: ${scope.intent}`,
 		`Budget (innermost scope only): ${budgetText(scope) || "none"}.`,
-		"Only the innermost scope's budget is used. A tool not listed in the budget has zero calls. scope, regret, and defer are free.",
+		"Only the innermost scope's budget is used. A tool not listed in the budget has zero calls. scope, regret, defer, and pin are free.",
 		"Calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget. Budget and spend by batches, not individual calls.",
 		"Do not write the final user-facing answer while inside a scope. Close every scope first; only after every scope closes may you answer the user.",
 		"When this scope closes, its elder sibling at the same level is collapsed; this scope stays visible until a younger sibling closes.",
@@ -321,7 +322,7 @@ function budgetLine(scope) {
 function scopeTailInstruction(state) {
 	const scope = currentScope(state);
 	if (!scope) return outsideScopeInstruction;
-	return `You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetLine(scope)}. Only the innermost scope's budget is used; scope, regret, and defer are free. Calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget; budget and spend by batches. Do not write the final user-facing answer while inside a scope. When this task is complete, call scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, you are back inside it; close it too before answering the user. Only outside all scopes may you write the final answer as ordinary assistant text. return_markdown is a self-delivery report, not the user-facing answer. If you stop inside a scope, a nudge will remind you of this rule. Finishing is not a tool call.`;
+	return `You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetLine(scope)}. Only the innermost scope's budget is used; scope, regret, defer, and pin are free. Calls to the same tool in one assistant message are one simultaneous batch and consume one unit of that tool's budget; budget and spend by batches. Do not write the final user-facing answer while inside a scope. When this task is complete, call scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, you are back inside it; close it too before answering the user. Only outside all scopes may you write the final answer as ordinary assistant text. return_markdown is a self-delivery report, not the user-facing answer. If you stop inside a scope, a nudge will remind you of this rule. Finishing is not a tool call.`;
 }
 
 /** The exact outbound user tail: additional-system-instructions + language skill. */
@@ -418,9 +419,27 @@ function forkCollapse(rec, { collapse, begin, beginEntry, oldMessages, currentMe
 		// Replay the whole persisted tail from the previous scope's end onwards:
 		// the most recently finished scope and the live turn stay byte-identical,
 		// so their token prefix remains cacheable.
+		const pinned = collectPinnedMessages(oldMessages, {
+			start: begin.resultIndex + 1,
+			end: endIndex,
+			skipResultIds: beginIds,
+		});
+		let pinnedFlushed = pinned.length === 0;
+		const flushPinned = () => {
+			if (pinnedFlushed) return;
+			pinnedFlushed = true;
+			for (const message of pinned) manager.appendMessage(cloneMessage(message));
+		};
+		// Replay the whole persisted tail from the previous scope's end onwards:
+		// the most recently finished scope and the live turn stay byte-identical,
+		// so their token prefix remains cacheable.
 		for (let index = endIndex; index < persistedEnd; index += 1) {
+			if (index > endIndex && oldMessages[index]?.role !== "toolResult") {
+				flushPinned();
+			}
 			manager.appendMessage(cloneMessage(oldMessages[index]));
 		}
+		flushPinned();
 		rec.needsRebase = true;
 		return { ok: true };
 	} catch (error) {
@@ -460,6 +479,10 @@ function handleDeferCall(rec, call) {
 	}
 	const out = deferIntent(rec.state, { toolCallId: call.id, intent });
 	if (!out.ok) return errorResult(out.code, out.reason);
+	return textResult("OK");
+}
+
+function handlePinCall() {
 	return textResult("OK");
 }
 
@@ -610,10 +633,12 @@ function processAssistantMessage(rec, pi, message, { persisted = false } = {}) {
 	const currentIndex = currentPersisted ? firstIndex : base.length - 1;
 	const currentMessage = base[currentIndex] ?? message;
 
+	let changed = false;
 	for (const call of controls) {
 		if (call.name !== "regret") continue;
 		if (rec.processedCalls.has(call.id)) continue;
 		setHandled(rec, call.id, handleRegretCall(rec, call, base, currentIndex));
+		changed = true;
 	}
 
 	const beginIds = new Set(
@@ -625,8 +650,13 @@ function processAssistantMessage(rec, pi, message, { persisted = false } = {}) {
 	for (const call of controls) {
 		if (call.name === "regret") continue;
 		if (rec.processedCalls.has(call.id)) continue;
+		if (call.name === "pin") {
+			setHandled(rec, call.id, handlePinCall());
+			continue;
+		}
 		if (call.name === "defer") {
 			setHandled(rec, call.id, handleDeferCall(rec, call));
+			changed = true;
 			continue;
 		}
 		setHandled(
@@ -639,10 +669,11 @@ function processAssistantMessage(rec, pi, message, { persisted = false } = {}) {
 				sameMessageBeginIds: beginIds,
 			}),
 		);
+		changed = true;
 	}
 
 	for (const call of controls) rec.processedCalls.add(call.id);
-	persist(rec);
+	if (changed) persist(rec);
 }
 
 function processControlsForTool(rec, pi, toolCallId) {
@@ -711,6 +742,16 @@ function directDefer(rec, toolCallId, params) {
 	return result;
 }
 
+function directPin(rec, toolCallId, params) {
+	const found = assistantForToolCall(rec, toolCallId);
+	if (found) {
+		processAssistantMessage(rec, rec.pi, found.message, { persisted: true });
+		const cached = rec.handled.get(toolCallId);
+		if (cached) return cached;
+	}
+	return handlePinCall();
+}
+
 /** Execute body for the scope tool. */
 export function createScopeExecute(pi) {
 	return async (toolCallId, params, _signal, _onUpdate, ctx) => {
@@ -761,6 +802,24 @@ export function createDeferExecute(pi) {
 			return directDefer(rec, toolCallId, params);
 		} catch (error) {
 			return errorResult("DEFER_INTERNAL_ERROR", String(error?.message ?? error));
+		}
+	};
+}
+
+/** Execute body for the pin tool. It always returns OK. */
+export function createPinExecute(pi) {
+	return async (toolCallId, params, _signal, _onUpdate, ctx) => {
+		const rec = stateFor(ctx);
+		rec.pi = pi;
+		const cached = rec.handled.get(toolCallId);
+		if (cached) return cached;
+		try {
+			processControlsForTool(rec, pi, toolCallId);
+			const processed = rec.handled.get(toolCallId);
+			if (processed) return processed;
+			return directPin(rec, toolCallId, params);
+		} catch {
+			return textResult("OK");
 		}
 	};
 }

@@ -12,10 +12,13 @@ import {
 	scopeParameters,
 	DEFER_DESCRIPTION,
 	REGRET_DESCRIPTION,
+	PIN_DESCRIPTION,
+	pinParameters,
 } from "./descriptions.mjs";
 import { installRunnerCapture } from "./runner-capture.mjs";
 import {
 	createDeferExecute,
+	createPinExecute,
 	createRegretExecute,
 	createScopeExecute,
 	installHooks,
@@ -58,6 +61,15 @@ function registerTools(pi) {
 		executionMode: "sequential",
 		alwaysAvailable: true,
 		execute: createDeferExecute(pi),
+	});
+	pi.registerTool({
+		name: "pin",
+		label: "Pin",
+		description: PIN_DESCRIPTION,
+		parameters: pinParameters,
+		executionMode: "sequential",
+		alwaysAvailable: true,
+		execute: createPinExecute(pi),
 	});
 }
 

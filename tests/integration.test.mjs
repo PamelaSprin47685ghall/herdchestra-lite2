@@ -601,6 +601,116 @@ describe("defer", () => {
 	});
 });
 
+describe("pin", () => {
+	function hasCall(message, id) {
+		return (
+			message?.role === "assistant" &&
+			Array.isArray(message.content) &&
+			message.content.some((block) => block.type === "toolCall" && block.id === id)
+		);
+	}
+
+	test("is free, unlimited, and works outside scopes", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+
+		const outside = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("p1", "pin", { assumption: "A" }),
+				call("p2", "pin", { finding: "F", conclusion: "C" }),
+			]),
+		);
+		expect(outside[0].blocked).toBe(false);
+		expect(outside[1].blocked).toBe(false);
+		expect(outside[0].output.content[0].text).toBe("OK");
+		expect(outside[1].output.content[0].text).toBe("OK");
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 1 } } })]),
+		);
+		const inside = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("p3", "pin", { deduction: "D" }),
+				call("p4", "pin", { induction: "I" }),
+			]),
+		);
+		expect(inside[0].blocked).toBe(false);
+		expect(inside[1].blocked).toBe(false);
+		const read = await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", { path: "still available" })]),
+		);
+		expect(read[0].blocked).toBe(false);
+	});
+
+	test("survives collapse and moves after the collapsed scope", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b1", "scope", { begin: { intent: "one", budget: { read: 1 } } })]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("q1", "pin", {
+					assumption: "durable note",
+					deduction: "D",
+					finding: "F",
+					conclusion: "C",
+				}),
+				call("r1", "read", { path: "one" }),
+			]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("e1", "scope", { end: "one done" })]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b2", "scope", { begin: { intent: "two", budget: { read: 1 } } })]),
+		);
+		await runAssistant(host, ctx, assistant([call("r2", "read", { path: "two" })]));
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("e2", "scope", { end: "two done" })]),
+		);
+
+		const branch = manager
+			.getBranch()
+			.filter((entry) => entry.type === "message")
+			.map((entry) => entry.message);
+		const pinIndex = branch.findIndex((message) => hasCall(message, "q1"));
+		const firstEndIndex = branch.findIndex((message) => hasCall(message, "e1"));
+		expect(pinIndex).toBeGreaterThan(firstEndIndex);
+		expect(branch.some((message) => message.toolCallId === "q1")).toBe(true);
+		expect(branch.some((message) => hasCall(message, "r1"))).toBe(false);
+		expect(branch.some((message) => message.toolCallId === "r1")).toBe(false);
+		expect(
+			branch[pinIndex].content.filter((block) => block.type === "toolCall"),
+		).toHaveLength(1);
+		expect(JSON.stringify(branch)).toContain("durable note");
+
+		const view = await outbound(host, ctx);
+		expect(view.some((message) => hasCall(message, "q1"))).toBe(true);
+		expect(view.some((message) => message.toolCallId === "r1")).toBe(false);
+		expect(JSON.stringify(view)).toContain("durable note");
+	});
+});
+
 describe("nested scopes", () => {
 	test("only the innermost budget is consumed", async () => {
 		const manager = makeManager();
@@ -640,9 +750,9 @@ describe("vibe mode", () => {
 		}
 		installVibeTools(Session);
 		installVibeTools(Session);
-		const session = new Session(["read", "scope", "regret", "defer"]);
+		const session = new Session(["read", "scope", "regret", "defer", "pin"]);
 		await session.activateVibeTools(["read", "scope"]);
-		expect(session.active).toEqual(["read", "scope", "regret", "defer", "task"]);
+		expect(session.active).toEqual(["read", "scope", "regret", "defer", "pin", "task"]);
 		const other = new Session(["read"]);
 		await other.activateVibeTools(["read"]);
 		expect(other.active).toEqual(["read", "task"]);

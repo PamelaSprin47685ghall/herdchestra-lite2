@@ -25,7 +25,7 @@ import {
 	hostBoundaryKey,
 	parseArgs,
 } from "./messages.mjs";
-import { herdModeSteer, insideScopeText } from "./texts.mjs";
+import { insideScopeText } from "./texts.mjs";
 
 function onAssistantMessage(station, message, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
@@ -249,10 +249,11 @@ function onBeforeAgentStart(station, event, ctx) {
 	return result;
 }
 
-function onHerdCommand(station) {
+function onHerdCommand(station, args) {
 	station.state.herdMode = !station.state.herdMode;
 	station.persist();
-	station.deliverSteer(herdModeSteer(station.state.herdMode));
+	const text = typeof args === "string" ? args.trim() : "";
+	if (text) station.deliverUserMessage(text);
 }
 
 export {

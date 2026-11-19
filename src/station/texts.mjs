@@ -1,7 +1,7 @@
 // Station texts: every model-facing scope string. Pure. No I/O.
 
 import { budgetText, currentScope } from "../scope/index.mjs";
-import { DECISION_FRAMING, NORMAL_STAGES } from "../scope/stages.mjs";
+import { DECISION_FRAMING } from "../scope/stages.mjs";
 import { handoffToolBlockedReason } from "../relay/index.mjs";
 
 function stageLine(scope) {
@@ -115,13 +115,6 @@ function regretText(applied) {
 	return lines.join("\n");
 }
 
-function herdModeSteer(enabled) {
-	if (enabled) {
-		return 'Herd mode is on. Finish the current work unit promptly and open a scope with stage: "decision-framing". With that scope innermost, ask is allowed. You may stop naturally while herd mode is on.';
-	}
-	return `Herd mode is off. Close any decision-framing scopes promptly. New scopes may use only ${NORMAL_STAGES.join(" | ")}. ask is disabled and the relay resumes its normal stop rules.`;
-}
-
 function leaveFramingText(scope) {
 	return scope.stage === DECISION_FRAMING
 		? " Herd mode is off. Leave decision-framing by closing this scope."
@@ -171,7 +164,6 @@ export {
 	beginText,
 	endText,
 	regretText,
-	herdModeSteer,
 	insideScopeNudge,
 	insideScopeText,
 };

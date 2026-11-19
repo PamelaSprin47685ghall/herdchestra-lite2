@@ -3,6 +3,7 @@
 import {
 	activateToolsTicket,
 	sendSteerTicket,
+	sendUserMessageTicket,
 	switchModelTicket,
 } from "../tools/tickets.mjs";
 
@@ -19,6 +20,10 @@ export function buildTickets(pi) {
 			void sendSteerTicket(pi, text);
 		},
 		canSteer: typeof pi?.sendUserMessage === "function",
+		prompt: (text) => {
+			void sendUserMessageTicket(pi, text);
+		},
+		canPrompt: typeof pi?.sendUserMessage === "function",
 		restoreScopedModel,
 		activateTools: (activeTools, prompt, changed) =>
 			activateToolsTicket(pi, activeTools, prompt, changed),

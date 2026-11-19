@@ -11,7 +11,6 @@ import { handoffFocus, successorOpeningText } from "../src/relay/texts.mjs";
 import { stagePromptsBlock } from "../src/host/prompts.mjs";
 import {
   beginText,
-  herdModeSteer,
   skillReceiptText,
 } from "../src/station/texts.mjs";
 
@@ -85,15 +84,6 @@ describe("herd mode text", () => {
     expect(receipt).not.toContain("Stage:");
   });
 
-  test("the toggle steer names the stage policy of each mode", () => {
-    expect(herdModeSteer(true)).toContain("decision-framing");
-    expect(herdModeSteer(true)).toContain("ask");
-    const off = herdModeSteer(false);
-    expect(off).toContain("acceptance-cases");
-    expect(off).toContain("architecture-design");
-    expect(off).toContain("orchestration-plan");
-    expect(off).toContain("direct-execution");
-  });
 });
 
 describe("pinned context across a handoff", () => {

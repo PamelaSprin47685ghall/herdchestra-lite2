@@ -1015,16 +1015,16 @@ describe("same-message scope and command co-dispatch", () => {
 });
 
 describe("herd mode", () => {
-	test("/herd toggles the mode, steers, and pins the openable stage", async () => {
+	test("/herd flips the mode without messaging the model and pins the openable stage", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		const command = host.commands.get("herd");
 		expect(typeof command?.handler).toBe("function");
 		expect(command.description).toContain("decision framing");
 
+		const before = host.steers.length;
 		await command.handler("", ctx);
-		expect(host.steers.at(-1).text).toContain("Herd mode is on.");
-		expect(host.steers.at(-1).options).toEqual({ deliverAs: "steer" });
+		expect(host.steers.length).toBe(before);
 
 		const rejected = await runAssistant(host, ctx, assistant([
 			call("h1", "scope", { begin: { intent: "wrong", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null } }),
@@ -1043,8 +1043,9 @@ describe("herd mode", () => {
 		]));
 		expect(asked[0].blocked).toBe(false);
 
+		const beforeOff = host.steers.length;
 		await command.handler("", ctx);
-		expect(host.steers.at(-1).text).toContain("Herd mode is off.");
+		expect(host.steers.length).toBe(beforeOff);
 
 		const askedOff = await runAssistant(host, ctx, assistant([
 			call("a2", "ask", { question: "Still allowed?" }),
@@ -1057,6 +1058,45 @@ describe("herd mode", () => {
 		]));
 		expect(framedAgain[0].output.isError).toBe(true);
 		expect(framedAgain[0].output.content[0].text).toContain("INVALID_STAGE");
+	});
+
+	test("/herd with text toggles the mode and sends exactly one plain user message", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const command = host.commands.get("herd");
+		const before = host.steers.length;
+
+		await command.handler("  收束发布范围  ", ctx);
+
+		expect(host.steers.length).toBe(before + 1);
+		expect(host.steers.at(-1)).toEqual({
+			text: "收束发布范围",
+			options: undefined,
+		});
+
+		const framed = await runAssistant(host, ctx, assistant([
+			call("t1", "scope", { begin: { intent: "frame release", stage: "decision-framing", budget: { read: 1 }, elder_report: null } }),
+		]));
+		expect(framed[0].output.isError).not.toBe(true);
+	});
+
+	test("a bare /herd reaches the model through the next context receipt", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const before = host.steers.length;
+
+		await host.commands.get("herd").handler("", ctx);
+		const pulled = await emit(
+			host.handlers,
+			"context",
+			{ type: "context", messages: ctx.agentMessages },
+			ctx,
+		);
+
+		expect(host.steers.length).toBe(before);
+		const receipt = pulled.messages.at(-1);
+		expect(receipt.herdSkill).toBe(true);
+		expect(receipt.content[0].text).toContain("Herd mode: on.");
 	});
 
 	test("default mode blocks ask outside and inside a scope", async () => {

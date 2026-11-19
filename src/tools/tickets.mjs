@@ -29,6 +29,19 @@ export async function sendSteerTicket(pi, text) {
 }
 
 /**
+ * Fire-and-forget user-message delivery. A plain message without `deliverAs`
+ * always starts one turn, which is what `/herd <text>` promises.
+ */
+export async function sendUserMessageTicket(pi, text) {
+	if (!text) return;
+	try {
+		await pi?.sendUserMessage?.(text);
+	} catch {
+		// A host that rejects the message must not leak an unhandled rejection.
+	}
+}
+
+/**
  * before_agent_start ticket: reactivate `todo` for a read-write subagent, then
  * report the injected system prompt (or undefined when unchanged).
  */

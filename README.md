@@ -24,6 +24,8 @@ The stage sections for `decision-framing`, `acceptance-cases`, `architecture-des
 
 Herd mode is toggled only by the user, with `/herd`. No stage or model turn can enter or leave it.
 
+A bare `/herd` flips the mode and sends nothing to the model: the next request learns the new mode from its receipt. `/herd <text>` is that same flip followed by one plain user message carrying `<text>`, so the model starts exactly one turn and reads the sentence as the user's request.
+
 - While it is on, new scopes may open only `decision-framing`, `ask` is allowed inside that scope, and a turn may end naturally to wait for the user. The relay's stop rules stay suspended until the user toggles herd mode off.
 - While it is off, `decision-framing` cannot open, `ask` is always blocked, and the relay's ledger and handoff rules run as usual.
 

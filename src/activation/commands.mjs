@@ -2,7 +2,7 @@
 
 export function wireCommands(pi, registry) {
 	pi.registerCommand?.("herd", {
-		description: "Toggle interactive decision framing",
-		handler: async (_args, ctx) => registry.stationFor(ctx).onHerdCommand(),
+		description: "Toggle interactive decision framing; optional text is sent as one user message",
+		handler: async (args, ctx) => registry.stationFor(ctx).onHerdCommand(args),
 	});
 }

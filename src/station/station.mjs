@@ -381,6 +381,13 @@ export class SessionStation {
 		return true;
 	}
 
+	/** Send one plain user message; the host starts a turn for it. */
+	deliverUserMessage(text) {
+		if (!text || !this.tickets.canPrompt) return false;
+		this.tickets.prompt(text);
+		return true;
+	}
+
 	contextMessages() {
 		try {
 			const context = this.manager?.buildSessionContext?.();
@@ -788,8 +795,8 @@ export class SessionStation {
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------
 
-	onHerdCommand() {
-		return onHerdCommand(this);
+	onHerdCommand(args) {
+		return onHerdCommand(this, args);
 	}
 
 	onAssistantMessage(message, ctx) {

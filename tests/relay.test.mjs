@@ -10,7 +10,6 @@ import {
 	ledgerStats,
 	recordHandoffFailure,
 	relayStatusText,
-	successorPrompt,
 } from "../src/relay/index.mjs";
 
 function phases(tasks) {
@@ -244,10 +243,10 @@ describe("relay text", () => {
 
 	test("handoff text carries the relay rules in English", () => {
 		const relay = { ...createRelay(), generation: 2 };
-		expect(successorPrompt(relay, null)).toContain(
+		expect(handoffFocus(relay)).toContain(
 			"The successor may first open any number of scopes to investigate",
 		);
-		expect(successorPrompt(relay, null)).toContain(
+		expect(handoffFocus(relay)).toContain(
 			"Only a successor whose first todo evaluation is an empty ledger may stop naturally",
 		);
 		expect(handoffFocus(relay)).toContain("An empty ledger triggers a relay handoff");
@@ -257,9 +256,9 @@ describe("relay text", () => {
 		expect(handoffFailureNudge("boom")).toContain("HANDOFF FAILED: boom");
 	});
 
-	test("handoff and successor prompts demand an English independent audit", () => {
+	test("the handoff argument demands an independent audit", () => {
 		const relay = { ...createRelay(), generation: 2 };
-		const texts = [handoffFocus(relay), successorPrompt(relay, null)];
+		const texts = [handoffFocus(relay)];
 		for (const text of texts) {
 			expect(text).toContain(
 				"You must independently verify the previous holder's work. Do not trust its empty ledger or its conclusion.",

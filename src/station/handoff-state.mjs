@@ -35,8 +35,6 @@ function advanceRelayForHandoff(station) {
 		fromGeneration: relay.generation,
 	});
 	station.handoffAdvanced = true;
-	station.relayPromptPendingFor = station.state.relay.generation;
-	station.relayPromptSentFor = null;
 	station.persist();
 	return true;
 }
@@ -57,22 +55,6 @@ function recordHandoffFailureAt(station, error, at) {
 	station.persist();
 }
 
-/** Finish an already-compacted handoff: advance once, clear pending, persist. */
-function finishCompactedHandoff(station) {
-	const advanced = advanceRelayForHandoff(station);
-	if (station.state.relay?.handoffPending) {
-		station.state.relay = {
-			...station.state.relay,
-			handoffPending: false,
-			handoffError: null,
-		};
-	}
-	station.persist();
-	return {
-		advanced,
-		generation: station.state.relay?.generation ?? 0,
-	};
-}
 
 function markHandoffPending(station, ctx, options = {}) {
 	const relay = station.state.relay;
@@ -116,6 +98,5 @@ export {
 	advanceRelayForHandoff,
 	recordLedgerEvaluation,
 	recordHandoffFailureAt,
-	finishCompactedHandoff,
 	markHandoffPending,
 };

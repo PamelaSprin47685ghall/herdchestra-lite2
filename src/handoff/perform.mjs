@@ -12,11 +12,10 @@ import {
 	countHandoffCompactions,
 	callHandoffWithRecovery,
 	errorText,
-	isAlreadyCompacted,
 	managerOf,
 	safeSession,
 } from "./session.mjs";
-import { appendHandoffSignal, renderTui } from "./tui.mjs";
+import { renderTui } from "./tui.mjs";
 
 function buildHandoffSlashCommand(focus) {
 	const trimmed = typeof focus === "string" ? focus.trim() : "";
@@ -123,7 +122,6 @@ async function performHandoff(station, ctx, pi) {
 			: handoffFocus(station.state.relay);
 	let result;
 	let manager = null;
-	let signalNeeded = false;
 	station.handoffExecuting = true;
 	try {
 		const session = safeSession(ctx) ?? station.handoffSession ?? null;
@@ -145,39 +143,25 @@ async function performHandoff(station, ctx, pi) {
 		const before = countHandoffCompactions(manager);
 		const dispatched = await dispatchSlashHandoff(session, ctx, slashCommand, {
 			ctx,
+			slashOnly: true,
 			onSessionHandoff: (_s, f) =>
 				executeHandoff(session, f ?? focus, pi, ctx, station),
 		});
-		result = dispatched?.result ?? { ok: true };
+		if (!dispatched?.handled || !dispatched.result?.ok) {
+			throw new Error("The system /handoff command did not complete");
+		}
+		result = dispatched.result;
 		debugLog("compaction_entry", {
 			path: "slash-prompt:session",
 			before,
 			after: countHandoffCompactions(manager),
 		});
-		const rendered = await renderTui(tui);
-		if (!rendered) signalNeeded = true;
+		await renderTui(tui);
 	} catch (error) {
 		debugLog("handoff.error", {
 			error: errorText(error),
 			generation: station.state.relay?.generation ?? null,
 		});
-		// "Nothing to hand off (already compacted)" is a terminal success, not a
-		// retryable failure: the host has no compressible tail left, so the
-		// handoff is already done. Advance at most once and clear pending, or
-		// the successor and every tool guarded by handoffPending stay stuck.
-		if (isAlreadyCompacted(error)) {
-			const compacted = station.finishCompactedHandoff();
-			debugLog("handoff.already_compacted", {
-				advanced: compacted.advanced,
-				generation: compacted.generation,
-			});
-			return {
-				ok: true,
-				alreadyCompacted: true,
-				advanced: compacted.advanced,
-				generation: compacted.generation,
-			};
-		}
 		station.recordHandoffFailureAt(error, Date.now());
 		return { ok: false, error: errorText(error) };
 	} finally {
@@ -190,17 +174,10 @@ async function performHandoff(station, ctx, pi) {
 		return { ok: true, inProgress: true };
 	}
 	const advanced = station.advanceRelayForHandoff();
-	const alreadyAdvanced =
-		station.handoffAdvanced === true &&
-		Number.isInteger(station.relayPromptPendingFor) &&
-		station.state.relay?.generation === station.relayPromptPendingFor;
-	if (!advanced && !alreadyAdvanced) {
+	if (!advanced) {
 		const error = new Error("handoff completed but relay did not advance");
 		station.recordHandoffFailureAt(error, Date.now());
 		return { ok: false, error: error.message };
-	}
-	if (signalNeeded) {
-		appendHandoffSignal(manager, ctx, station.state.relay?.generation ?? 0);
 	}
 	station.persist();
 	return { ok: true, advanced, generation: station.state.relay?.generation ?? 0 };

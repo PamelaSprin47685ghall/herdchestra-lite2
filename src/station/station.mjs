@@ -83,7 +83,6 @@ import {
 import {
 	advanceRelayForHandoff,
 	armHandoff,
-	finishCompactedHandoff,
 	markHandoffPending,
 	recordHandoffFailureAt,
 	recordLedgerEvaluation,
@@ -140,12 +139,9 @@ export class SessionStation {
 		this.lastError = null;
 		this.hostBoundaryKey = null;
 		this.agentPolicy = null;
-		this.relayPromptPendingFor = null;
-		this.relayPromptSentFor = null;
 		this.handoffExecuting = false;
 		this.handoffScheduled = false;
 		this.handoffPromise = null;
-		this.handoffWaiters = 0;
 		this.gatedAgentHooks = new WeakSet();
 		this.handoffSwitched = false;
 		this.handoffSession = null;
@@ -797,10 +793,6 @@ export class SessionStation {
 
 	recordHandoffFailureAt(error, at) {
 		return recordHandoffFailureAt(this, error, at);
-	}
-
-	finishCompactedHandoff() {
-		return finishCompactedHandoff(this);
 	}
 
 	markHandoffPending(ctx, options = {}) {

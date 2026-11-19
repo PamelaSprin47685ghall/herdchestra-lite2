@@ -1,10 +1,8 @@
 // Handoff tickets: the only async entry points into the handoff flow.
 
-import { appendHistoryMessage } from "../host/hack-context.mjs";
-import { successorPrompt } from "../relay/index.mjs";
 import { debugLog } from "./debug.mjs";
 import { performHandoff } from "./perform.mjs";
-import { errorText, managerOf, safeSession } from "./session.mjs";
+import { errorText, safeSession } from "./session.mjs";
 
 function awaitWithAbort(promise, signal) {
 	if (!signal) return promise;
@@ -52,18 +50,12 @@ async function modelCallGateTicket(station, session, signal, context, ctx) {
 		}
 		return;
 	}
-	station.handoffWaiters += 1;
 	debugLog("model_call_gate.wait", {
-		waiters: station.handoffWaiters,
 		generation: station.state.relay?.generation ?? null,
 	});
-	try {
-		const outcome = await awaitWithAbort(barrier, signal);
-		if (!outcome?.ok || outcome.inProgress) {
-			throw new Error(`Relay handoff did not complete: ${outcome?.error ?? "handoff already in progress"}`);
-		}
-	} finally {
-		station.handoffWaiters = Math.max(0, station.handoffWaiters - 1);
+	const outcome = await awaitWithAbort(barrier, signal);
+	if (!outcome?.ok || outcome.inProgress) {
+		throw new Error(`Relay handoff did not complete: ${outcome?.error ?? "handoff already in progress"}`);
 	}
 	if (signal?.aborted) return;
 
@@ -72,77 +64,6 @@ async function modelCallGateTicket(station, session, signal, context, ctx) {
 	if (Array.isArray(context?.messages) && Array.isArray(latestMessages) && context.messages !== latestMessages) {
 		context.messages.splice(0, context.messages.length, ...latestMessages);
 	}
-
-	const target = station.relayPromptPendingFor;
-	const successor = station.state.relay;
-	if (
-		Number.isInteger(target) &&
-		station.relayPromptSentFor !== target &&
-		successor?.generation === target &&
-		Array.isArray(context?.messages)
-	) {
-		const message = {
-			role: "user",
-			content: [{ type: "text", text: successorPrompt(successor, successor.lastLedger) }],
-			timestamp: Date.now(),
-		};
-		appendHistoryMessage(managerOf(liveSession, ctx), message, liveSession);
-		if (!context.messages.includes(message)) context.messages.push(message);
-		station.relayPromptSentFor = target;
-		station.relayPromptPendingFor = null;
-		station.persist();
-		debugLog("model_call_gate.successor_injected", { generation: target });
-	}
-}
-
-/**
- * Deliver the successor prompt asynchronously after background handoff finishes.
- * Uses the host's user-message / prompt channel so the successor starts a fresh
- * turn outside the timed event-handler callback.
- */
-async function dispatchSuccessorToHost(station, ctx, pi) {
-	const target = station.relayPromptPendingFor;
-	if (!Number.isInteger(target) || station.relayPromptSentFor === target) {
-		return false;
-	}
-	const relay = station.state.relay;
-	if (!relay || relay.generation !== target) {
-		return false;
-	}
-	const prompt = successorPrompt(relay, relay.lastLedger ?? null);
-	const session = safeSession(ctx) ?? station.handoffSession ?? null;
-	try {
-		if (typeof pi?.sendUserMessage === "function") {
-			station.relayPromptSentFor = target;
-			station.relayPromptPendingFor = null;
-			station.persist();
-			await pi.sendUserMessage(prompt);
-			debugLog("successor.dispatched", { via: "pi.sendUserMessage", generation: target });
-			return true;
-		}
-		if (session && typeof session.sendUserMessage === "function") {
-			station.relayPromptSentFor = target;
-			station.relayPromptPendingFor = null;
-			station.persist();
-			await session.sendUserMessage(prompt);
-			debugLog("successor.dispatched", { via: "session.sendUserMessage", generation: target });
-			return true;
-		}
-		if (session && typeof session.prompt === "function") {
-			station.relayPromptSentFor = target;
-			station.relayPromptPendingFor = null;
-			station.persist();
-			await session.prompt(prompt);
-			debugLog("successor.dispatched", { via: "session.prompt", generation: target });
-			return true;
-		}
-	} catch (error) {
-		station.relayPromptPendingFor = target;
-		if (station.relayPromptSentFor === target) station.relayPromptSentFor = null;
-		station.recordHandoffFailureAt(error, Date.now());
-		debugLog("successor.dispatch_error", { error: errorText(error), generation: target });
-	}
-	return false;
 }
 
 async function runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier) {
@@ -165,9 +86,6 @@ async function runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier) {
 		}
 		station.handoffScheduled = false;
 		resolveBarrier(outcome);
-	}
-	if (outcome?.ok && !outcome.inProgress && station.handoffWaiters === 0) {
-		await dispatchSuccessorToHost(station, ctx, pi);
 	}
 }
 

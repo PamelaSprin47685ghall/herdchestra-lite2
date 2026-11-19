@@ -12,7 +12,6 @@ export {
 export {
 	relayStatusText,
 	handoffFocus,
-	successorPrompt,
 	firstEvaluationNudge,
 	openLedgerNudge,
 	handoffPendingNudge,

@@ -79,6 +79,7 @@ export function handoffFocus(relay) {
 	const current = copyRelay(relay);
 	return [
 		"Relay: empty-ledger handoff.",
+		`Include these relay instructions in the handoff document for generation ${current.generation + 1}: the predecessor submitted an empty ledger; the successor must independently audit it before its first write to todo.`,
 		SUCCESSOR_RULE,
 		STOP_RULE,
 		INDEPENDENT_AUDIT_EN,
@@ -90,24 +91,6 @@ export function handoffFocus(relay) {
 		"Only your first todo evaluation being an empty ledger promotes you and allows a natural stop. If it is non-empty, you enter rework and must hand off again later; you are not the last holder.",
 		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",
 	].join("\n");
-}
-
-export function successorPrompt(relay, stats) {
-	const current = copyRelay(relay);
-	const ledger = normalizedStats(stats, current);
-	return [
-		`You are the relay successor (generation ${current.generation}). The previous holder's ledger was empty, so it called the real built-in /handoff and handed the work to you.`,
-		SUCCESSOR_RULE,
-		STOP_RULE,
-		INDEPENDENT_AUDIT_EN,
-		REQUIREMENTS_REMINDER,
-		"You may first open any number of scopes to investigate. todo does not have to be your first tool call. But todo is forbidden inside every scope; close all scopes before you call todo.",
-		"Your first todo evaluation decides everything: empty -> you are promoted and may write the final user-facing answer; non-empty -> rework, you are not the last holder, and after finishing the work an empty ledger must trigger another real /handoff to the next successor.",
-		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",
-		"You have no /handoff tool to call. If the ledger becomes empty in rework, the runtime performs the real AgentSession.handoff() before the next model request.",
-		"Write the ledger so the next agent can understand the whole task: user requirements, acceptance evidence, unresolved risks, and the next concrete action.",
-		relayStatusText(current, ledger),
-	].join("\n\n");
 }
 
 export function firstEvaluationNudge() {

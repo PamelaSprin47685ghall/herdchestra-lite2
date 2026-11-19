@@ -343,12 +343,6 @@ async function emitStop(host, ctx) {
 	return result;
 }
 
-function successorMessages(host) {
-	return host.messages.filter((entry) =>
-		entry.text.includes("You are the relay successor"),
-	);
-}
-
 describe("relay integration", () => {
 	test("a host that filters todo out keeps a read-write subagent relay-off", async () => {
 		const { host, ctx } = await start({
@@ -673,9 +667,7 @@ describe("relay integration", () => {
 			"An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
 		);
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages.length).toBe(1);
-		expect(host.messages[0].text).toContain("You are the relay successor");
-		expect(host.messages.some((entry) => entry.text.trim() === "/handoff")).toBe(false);
+		expect(host.messages).toHaveLength(0);
 
 		const view = await runAssistant(
 			host,
@@ -734,8 +726,7 @@ describe("relay integration", () => {
 		const second = await emitStop(host, ctx);
 		expect(second).toBeUndefined();
 		expect(session.calls.length).toBe(2);
-		expect(host.messages.length).toBe(1);
-		expect(host.messages[0].text).toContain("You are the relay successor");
+		expect(host.messages).toHaveLength(0);
 	});
 
 	test("session_stop after a handoff asks the successor to evaluate", async () => {
@@ -748,8 +739,7 @@ describe("relay integration", () => {
 		const stop = await emitStop(host, ctx);
 		expect(stop).toBeUndefined();
 		expect(session.calls.length).toBe(1);
-		expect(host.messages.length).toBe(1);
-		expect(host.messages[0].text).toContain("You are the relay successor");
+		expect(host.messages).toHaveLength(0);
 		const second = await emitStop(host, ctx);
 		expect(second.continue).toBe(true);
 		expect(second.additionalContext).toContain("evaluate the ledger with todo");
@@ -767,8 +757,7 @@ describe("relay integration", () => {
 		const first = await emitStop(host, ctx);
 		expect(first).toBeUndefined();
 		expect(session.calls.length).toBe(1);
-		expect(host.messages.length).toBe(1);
-		expect(host.messages[0].text).toContain("You are the relay successor");
+		expect(host.messages).toHaveLength(0);
 
 		const second = await emitStop(host, ctx);
 		expect(second.continue).toBe(true);
@@ -872,7 +861,7 @@ describe("relay integration", () => {
 		expect(view[0].output.content.at(-1).text).toContain("Last handoff error: no model");
 	});
 
-	test("an already-compacted handoff is terminal, advances once, and unblocks the relay", async () => {
+	test("an already-compacted handoff failure does not promote a successor", async () => {
 		const { host, ctx } = await start({
 			mode: "print",
 			handoff: () => {
@@ -889,56 +878,10 @@ describe("relay integration", () => {
 
 		const first = await emitStop(host, ctx);
 		expect(first).toBeUndefined();
-		expect(rec.state.relay.generation).toBe(1);
-		expect(rec.state.relay.handoffPending).toBe(false);
-		expect(rec.state.relay.handoffError).toBeNull();
-		expect(host.messages.length).toBe(1);
-		expect(host.messages[0].text).toContain("You are the relay successor (generation 1)");
-		expect(host.messages[0].text).not.toContain("HANDOFF FAILED");
-
-		// The successor has not evaluated yet, so a second stop must not run
-		// another handoff or advance the generation.
-		await emitStop(host, ctx);
-		expect(rec.state.relay.generation).toBe(1);
-
-		// Even with pending re-armed, an already-compacted host is terminal: the
-		// idempotent advance runs at most once, and a todo view stays available
-		// as the diagnostic entry point.
-		rec.state.relay = { ...rec.state.relay, handoffPending: true };
-		const view = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t2", "todo", { op: "view" })]),
-		);
-		await emitStop(host, ctx);
-		expect(view[0].blocked).toBe(false);
-		expect(view[0].output.content.at(-1).text).toContain("RELAY STATE");
-		expect(rec.state.relay.generation).toBe(1);
-		expect(rec.state.relay.handoffPending).toBe(false);
-
-		const write = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t3", "todo", { op: "init", list: [] })]),
-		);
-		expect(write[0].blocked).toBe(false);
-		expect(write[0].output.details.relay.canStop).toBe(true);
-
-		const opened = await runAssistant(
-			host,
-			ctx,
-			assistant([
-				call("s1", "scope", {
-					begin: {
-						intent: "verify the unblocked relay",
-						budget: { read: 1 },
-						elder_report: null,
-					},
-				}),
-			]),
-		);
-		expect(opened[0].blocked).toBe(false);
-		expect(stateFor(ctx).state.scopes.length).toBe(1);
+		expect(rec.state.relay.generation).toBe(0);
+		expect(rec.state.relay.canStop).toBe(false);
+		expect(rec.state.relay.handoffError).toContain("already compacted");
+		expect(host.messages).toHaveLength(0);
 	});
 
 	test("a handoff that returns success without advancing never allows a stop", async () => {
@@ -966,7 +909,7 @@ describe("relay integration", () => {
 		expect(rec.state.relay.lastHandoff.ok).toBe(false);
 	});
 
-	test("short-session recovery appends a real user checkpoint before retrying", async () => {
+	test("short-session recovery retries with identical instructions and no checkpoint", async () => {
 		let started = null;
 		let checkpointAtRetry = false;
 		let checkpointInAgent = false;
@@ -1000,18 +943,18 @@ describe("relay integration", () => {
 		const stop = await emitStop(started.host, started.ctx);
 		expect(stop).toBeUndefined();
 		expect(started.session.calls.length).toBe(2);
-		expect(checkpointAtRetry).toBe(true);
-		expect(checkpointInAgent).toBe(true);
-		expect(started.session.settings.sets).toEqual([]);
+		expect(checkpointAtRetry).toBe(false);
+		expect(checkpointInAgent).toBe(false);
+		expect(started.session.calls[1]).toBe(started.session.calls[0]);
 		expect(stateFor(started.ctx).state.relay.generation).toBe(1);
-		expect(started.host.messages[0].text).toContain("You are the relay successor");
+		expect(started.host.messages).toHaveLength(0);
 	});
 
-	test("when the checkpoint is not enough, keepRecentTokens is temporary", async () => {
+	test("the smaller retained tail is temporary", async () => {
 		const { host, ctx, session } = await start({
 			mode: "print",
 			handoff: ({ call: callNumber }) => {
-				if (callNumber <= 2) {
+				if (callNumber === 1) {
 					throw new Error("Nothing to hand off (already compacted)");
 				}
 				return { ok: true };
@@ -1025,12 +968,12 @@ describe("relay integration", () => {
 		expect(session.calls.length).toBe(0);
 		const stop = await emitStop(host, ctx);
 		expect(stop).toBeUndefined();
-		expect(session.calls.length).toBe(3);
+		expect(session.calls.length).toBe(2);
 		expect(session.settings.sets).toEqual([
 			["compaction.keepRecentTokens", 1],
 			["compaction.keepRecentTokens", 20000],
 		]);
-		expect(host.messages[0].text).toContain("You are the relay successor");
+		expect(host.messages).toHaveLength(0);
 	});
 
 	test("print session_stop continues on scope, missing evaluation, and non-empty ledger", async () => {
@@ -1223,10 +1166,7 @@ describe("tui handoff integration", () => {
 			expect(tui.renders).toBe(1);
 			expect(handoffSignal(started.manager)).toBeUndefined();
 			expect(stateFor(started.ctx).state.relay.generation).toBe(1);
-			expect(started.host.messages[0].text).toContain("You are the relay successor");
-			expect(
-				started.host.messages.some((entry) => entry.text.trim() === "/handoff"),
-			).toBe(false);
+			expect(started.host.messages).toHaveLength(0);
 		} finally {
 			rememberTui(null);
 		}
@@ -1263,7 +1203,7 @@ describe("tui handoff integration", () => {
 			expect(tui.renders).toBe(1);
 			expect(countHandoffCompactions(started.manager)).toBe(1);
 			expect(stateFor(started.ctx).state.relay.generation).toBe(1);
-			expect(started.host.messages[0].text).toContain("You are the relay successor");
+			expect(started.host.messages).toHaveLength(0);
 		} finally {
 			rememberTui(null);
 		}
@@ -1291,13 +1231,13 @@ describe("tui handoff integration", () => {
 			expect(started.session.calls.length).toBe(1);
 			expect(tui.renders).toBe(1);
 			expect(handoffSignal(started.manager)).toBeUndefined();
-			expect(started.host.messages[0].text).toContain("You are the relay successor");
+			expect(started.host.messages).toHaveLength(0);
 		} finally {
 			rememberTui(null);
 		}
 	});
 
-	test("without a TUI, success appends a visible handoff signal", async () => {
+	test("without a TUI, the handoff adds no separate transcript message", async () => {
 		rememberTui(null);
 		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
 		const result = await runAssistant(
@@ -1308,13 +1248,9 @@ describe("tui handoff integration", () => {
 		expect(result[0].output.content.at(-1).text).toContain("before the next model request");
 		const stop = await emitStop(started.host, started.ctx);
 		expect(stop).toBeUndefined();
-		const signal = handoffSignal(started.manager);
-		expect(signal).toBeDefined();
-		expect(signal.message.display).toBe(true);
-		expect(signal.message.content[0].text).toBe(
-			"Handoff complete: generation 1 -> successor evaluating",
-		);
-		expect(started.host.messages[0].text).toContain("You are the relay successor");
+		expect(countHandoffCompactions(started.manager)).toBe(1);
+		expect(handoffSignal(started.manager)).toBeUndefined();
+		expect(started.host.messages).toHaveLength(0);
 	});
 });
 
@@ -1670,7 +1606,7 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 			expect(stop).toBeUndefined();
 			expect(focusSeen.length).toBe(1);
 			expect(countHandoffCompactions(manager)).toBe(1);
-			expect(host.messages[0].text).toContain("You are the relay successor (generation 1)");
+			expect(host.messages).toHaveLength(0);
 		}
 	});
 
@@ -1701,8 +1637,7 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		resolveHandoff();
 		await sleep(15);
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages.length).toBe(1);
-		expect(host.messages[0].text).toContain("You are the relay successor (generation 1)");
+		expect(host.messages).toHaveLength(0);
 	});
 
 	test.each([0, 1])("the first provider request after an empty ledger in generation %i belongs to its successor", async (generation) => {
@@ -1786,9 +1721,10 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		const messages = providerRequests[0].messages;
 		expect(messages[0].content[0].text).toBe("compacted summary");
 		expect(JSON.stringify(messages)).not.toContain("stale history");
-		const prompt = `You are the relay successor (generation ${generation + 1})`;
-		expect(messages.filter((message) => message.content?.[0]?.text?.includes(prompt))).toHaveLength(1);
-		expect(manager.getBranch().some((entry) => entry.message?.content?.[0]?.text?.includes(prompt))).toBe(true);
+		const instruction = `Include these relay instructions in the handoff document for generation ${generation + 1}`;
+		expect(session.calls[0]).toContain(instruction);
+		expect(JSON.stringify(messages)).not.toContain(instruction);
+		expect(JSON.stringify(manager.getBranch().filter((entry) => entry.type === "message"))).not.toContain(instruction);
 		expect(host.messages).toHaveLength(0);
 	});
 
@@ -1810,11 +1746,32 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 
 		await gate(undefined, outbound);
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(outbound.messages.at(-1).content[0].text).toContain("You are the relay successor");
+		expect(outbound.messages).toHaveLength(0);
 		expect(host.messages).toHaveLength(0);
 	});
 
-	test("dispatchSuccessorToHost via sendUserMessage does not deadlock on modelCallGateTicket", async () => {
+	test("a refused system slash command never falls through to a conversation prompt", async () => {
+		const { host, ctx, session } = await start();
+		let command;
+		let options;
+		let gate;
+		session.agent.addBeforeModelCallHook = (hook) => { gate = hook; };
+		session.sendSlashPrompt = async (text, params) => {
+			command = text;
+			options = params;
+			return { handled: false, residual: text };
+		};
+		session.prompt = () => { throw new Error("unexpected conversation prompt"); };
+		await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
+		await expect(gate(undefined, { messages: [] })).rejects.toThrow("system /handoff command did not complete");
+		expect(command).toStartWith("/handoff Relay: empty-ledger handoff.");
+		expect(command).toContain("You must independently verify the previous holder's work.");
+		expect(options.slashOnly).toBe(true);
+		expect(stateFor(ctx).state.relay.generation).toBe(0);
+		expect(host.messages).toHaveLength(0);
+	});
+
+	test("idle fallback handoff does not send a user message or start a model call", async () => {
 		const beforeModelCallHooks = [];
 		let modelCalls = 0;
 		const { host, ctx, manager, session } = await start({
@@ -1854,8 +1811,8 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		const stopResult = await emitStop(host, ctx);
 		expect(stopResult).toBeUndefined();
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages.length).toBe(1);
-		expect(modelCalls).toBe(1);
+		expect(host.messages).toHaveLength(0);
+		expect(modelCalls).toBe(0);
 	});
 
 	test("Headless TUI Adapter supports /vibe, /vibe <prompt>, /new, /fresh, and arbitrary slash commands uniformly", async () => {

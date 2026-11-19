@@ -2,7 +2,6 @@
 // short-branch recovery. No station state lives here.
 
 import { sessionFor } from "../host/capture.mjs";
-import { appendHistoryMessage } from "../host/hack-context.mjs";
 
 const KEEP_RECENT_KEY = "compaction.keepRecentTokens";
 
@@ -60,28 +59,10 @@ function managerOf(session, ctx) {
 	}
 }
 
-function appendHandoffCheckpoint(session) {
-	const manager = session?.sessionManager;
-	if (!manager || typeof manager.appendMessage !== "function") return false;
-	const message = {
-		role: "user",
-		content: [
-			{
-				type: "text",
-				text: "Relay handoff audit checkpoint. The previous holder's ledger was empty; the successor must verify it with todo.",
-			},
-		],
-		timestamp: Date.now(),
-	};
-	return appendHistoryMessage(manager, message, session);
-}
-
 /**
  * A manual handoff on a very small or already compacted branch fails with
- * "Nothing to hand off (already compacted)". First append a real user
- * checkpoint: it forms a compressible tail without changing settings. Only if
- * that still fails, re-run with a temporary keepRecentTokens=1 and restore the
- * user's setting in `finally`. Never make the change permanent.
+ * "Nothing to hand off (already compacted)". Retry with a temporary smaller
+ * retained tail. Never add messages to make the branch compressible.
  */
 async function callHandoffWithRecovery(session, focus) {
 	let firstError;
@@ -90,15 +71,6 @@ async function callHandoffWithRecovery(session, focus) {
 	} catch (error) {
 		if (!isAlreadyCompacted(error)) throw error;
 		firstError = error;
-	}
-	let checkpointError = null;
-	if (appendHandoffCheckpoint(session)) {
-		try {
-			return await session.handoff(focus);
-		} catch (error) {
-			if (!isAlreadyCompacted(error)) throw error;
-			checkpointError = error;
-		}
 	}
 	const settings = session?.settings;
 	const canAdjust =
@@ -115,7 +87,7 @@ async function callHandoffWithRecovery(session, focus) {
 			// No setting change means no third attempt.
 		}
 	}
-	if (!adjusted) throw checkpointError ?? firstError;
+	if (!adjusted) throw firstError;
 	try {
 		return await session.handoff(focus);
 	} finally {
@@ -133,6 +105,5 @@ export {
 	errorText,
 	isAlreadyCompacted,
 	managerOf,
-	appendHandoffCheckpoint,
 	callHandoffWithRecovery,
 };

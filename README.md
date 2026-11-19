@@ -20,6 +20,19 @@ In default mode the four non-framing stages may be opened in any order, repeated
 
 The stage sections for `decision-framing`, `acceptance-cases`, `architecture-design`, and `orchestration-plan` live in the system prompt as a stable prefix, so a provider can reuse its prompt cache. A begin receipt only names its stage; it does not repeat the prompt text. `direct-execution` has no section: it follows the `orchestration-plan` artifact.
 
+## Scope permission
+
+Every `scope({ begin })` declares `permission: "ro" | "rw"`. The declaration is mistake-proofing, not an enforcement boundary: `"ro"` is trusted, and the harness never blocks a write because a scope called itself read-only.
+
+An omitted (or null) `permission` is treated as `"rw"`: forgetting to declare the field must not bypass the gate.
+
+`"rw"` is refused in two cases:
+
+- the scope's stage is `decision-framing`, which answers why rather than what;
+- the relay has not recorded its first submitted `todo` ledger for the current generation. A `todo` view is a read-only inspection and does not count.
+
+A refused begin changes no state. Submit a ledger first, or open the scope with `"ro"`.
+
 ## Herd mode
 
 Herd mode is toggled only by the user, with `/herd`. No stage or model turn can enter or leave it.

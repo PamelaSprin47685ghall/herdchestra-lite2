@@ -14,7 +14,7 @@ import {
 import {
   beatShares,
   formatAmount,
-  isFreeTool,
+  isFreeCall,
   normalizeBudget,
   normalizeToolName,
   roundAmount,
@@ -119,13 +119,13 @@ function groupAlreadyCharged(state, scopeId, tool, groupKey) {
 }
 
 export function chargeTool(state, params) {
-  const { toolCallId, toolName, groupKey, beatTools } = params || {};
+  const { toolCallId, toolName, groupKey, beatTools, input } = params || {};
   const normalized = normalizeToolName(toolName);
   const scope = currentScope(state);
   if (!scope) {
     return failure("NOT_IN_SCOPE", "Not in a scope. Call scope with begin first.");
   }
-  if (isFreeTool(toolName)) {
+  if (isFreeCall(toolName, input)) {
     return { ok: true, remaining: copyCounts(scope.remaining) };
   }
   if (

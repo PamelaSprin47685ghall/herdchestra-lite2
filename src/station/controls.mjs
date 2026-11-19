@@ -123,6 +123,42 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     );
   }
 
+  // Poka-yoke only: "rw" means the scope may write; "ro" is a trusted
+  // declaration and is never enforced. An omitted (or null) permission is
+  // treated as "rw", because forgetting to declare is exactly the mistake this
+  // gate exists to catch; the handler must not depend on host-side schema
+  // validation. The guard runs before any state transition, so a refused begin
+  // cannot damage the open scope.
+  if (hasBegin) {
+    const rawPermission = args.begin?.permission;
+    if (rawPermission !== undefined && rawPermission !== null && rawPermission !== "ro" && rawPermission !== "rw") {
+      return errorResult(
+        "INVALID_ARGUMENT",
+        'scope.begin.permission must be "ro" or "rw".',
+        { field: "permission" },
+      );
+    }
+    const declared = rawPermission ?? "rw";
+    if (declared === "rw" && args.begin?.stage === DECISION_FRAMING) {
+      return errorResult(
+        "RW_IN_DECISION_FRAMING",
+        'stage "decision-framing" answers why, not what, so it cannot carry a write scope. Declare permission: "ro" (trusted, never enforced), or open the write scope in a later stage.',
+        { field: "permission", stage: args.begin?.stage },
+      );
+    }
+    if (declared === "rw" && station.relayOn(ctx) && state.relay?.firstEvaluation === null) {
+      return errorResult(
+        "RW_BEFORE_LEDGER",
+        'This generation has not submitted its first todo ledger yet, so permission "rw" is refused. Close all scopes and call todo with a write operation to submit the ledger (a todo view does not count), or declare permission: "ro" for a read-only scope. permission "ro" is trusted and never enforced.',
+        {
+          field: "permission",
+          generation: state.relay?.generation ?? 0,
+          firstEvaluation: state.relay?.firstEvaluation ?? null,
+        },
+      );
+    }
+  }
+
   const stage = args.begin?.stage;
   // Pre-validate an opening scope without touching live state so a failed
   // begin cannot damage the scope being closed in a combined call.

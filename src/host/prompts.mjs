@@ -58,10 +58,11 @@ const systemPromptEnd = "<!-- /herdchestra-lite2:system-prompt -->";
 // stable prefix; only the small dynamic receipt changes from turn to turn.
 export const persistentOperatingSkill = [
   '<skill version="1.0">Persistent operating rules (unchanged every turn):',
-  '- Only the innermost scope budget is used. scope, regret, defer and pin are free; todo is allowed only outside all scopes.',
+  '- Only the innermost scope budget is used. scope, regret, defer and pin are free; the write that resolves a staged ast_edit preview (path xd://resolve or xd://reject) is free; todo is allowed only outside all scopes.',
   '- One assistant message spends at most one unit, split across its tool calls by count. A tool whose balance runs out is blocked while the rest of the message still runs.',
   '- Never write the final user-facing answer while inside a scope. Close every scope first.',
   '- Close a scope with scope({ end: true }). Pass the previous scope summary in the next sibling begin.elder_report.',
+  '- scope({ begin: ... }) declares permission: "ro" or "rw". "rw" is refused in decision-framing and until this generation submits its first todo ledger; "ro" is trusted and never enforced. An omitted permission counts as "rw".',
   '- Outside all scopes, evaluate the ledger with todo; a non-empty ledger forbids stopping. Finishing is not a tool call.',
   '- Scope stages: the stage named by the innermost open scope governs; the other stage sections in the Stage Prompts block are reference only and never override it. Outside all scopes no stage section applies.',
   '- ask and wait are free tools that consume no scope budget; ask only works while herd mode is on and the innermost scope stage is decision-framing, wait is only valid inside a scope.',

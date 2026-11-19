@@ -18,7 +18,7 @@ function beginText(scope) {
 		`Intent: ${scope.intent}`,
 		stageLine(scope),
 		`Budget (innermost scope only): ${budgetText(scope) || "none"}.`,
-		"Only the innermost scope's budget is used. An unlisted budgeted tool has zero budget calls. scope, regret, defer, pin, ask, and wait are free where allowed.",
+		"Only the innermost scope's budget is used. An unlisted budgeted tool has zero budget calls. scope, regret, defer, pin, ask, and wait are free where allowed; the write that resolves a staged ast_edit preview (xd://resolve or xd://reject) is free.",
 		"todo is free but forbidden inside any active scope. Close every scope before updating the ledger.",
 		"Calls in one assistant message spend at most one unit in total, split across budgeted tools by call count and rounded to two decimals. A tool whose balance runs out is blocked while the rest of the message still runs.",
 		framing
@@ -137,6 +137,9 @@ export function skillReceiptText(state, relayOn = true) {
 		: ["You are outside all scopes."];
 	lines.push(`Herd mode: ${state.herdMode ? "on" : "off"}.`);
 	if (scope?.stage) lines.push(`Stage: ${scope.stage}.`);
+	if (relayOn && state.relay && state.relay.firstEvaluation === null) {
+		lines.push('No todo ledger submitted yet: new scopes must declare permission: "ro"; permission "rw" (including an omitted value) is refused.');
+	}
 	if (state.herdMode) {
 		lines.push('New scopes must use stage: "decision-framing". ask is allowed only when that stage is innermost. You may stop naturally to wait for the user.');
 	} else if (relayOn) {

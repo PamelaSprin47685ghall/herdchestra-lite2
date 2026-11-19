@@ -22,7 +22,7 @@ export const decisionFramingPrompt = [
   "- Open-ended loop; keep going until every claim and choice passes at 95% confidence or better.",
   "- Below 95% confidence on the user's intent, call `ask` with the single highest-value-of-information question, the full context, and a recommended default. Never ask an empty \"may I proceed\" question.",
   "- Draft the artifact first and ask the user to correct it, not to imagine it.",
-  "- `ask`, `wait`, `pin`, and the control tools are free; they consume no scope budget.",
+  "- `ask`, `wait`, `pin`, and the control tools are free; they consume no scope budget. The write that resolves a staged ast_edit preview is free too.",
   "- This stage may end naturally and wait for the user. Never manufacture work to keep the turn alive.",
   "- Before closing, record the framed decision with `pin`: objectives, chosen alternative, rejected alternatives, fatal assumptions, Non-Goals.",
 ].join("\n");

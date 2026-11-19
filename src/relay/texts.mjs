@@ -88,7 +88,7 @@ const PINNED_READING_RULE =
 	"Before starting work, use read to read each important document on disk listed in Pinned Context in full. Do not substitute grep excerpts for reading the whole document.";
 
 const SUCCESSOR_RULE =
-	"An empty ledger triggers a relay handoff: the predecessor writes the handoff report directly in its message body, a compaction boundary is placed, and the successor takes over from that report. The successor may first open any number of scopes to investigate, then make its first todo evaluation; todo does not have to be its first tool call. Only a successor whose first todo evaluation is an empty ledger may stop naturally. If successor A's first evaluation is a non-empty ledger, A enters rework; after that, even if A changes the ledger to empty, A is not the last holder and must hand off again to B; only when B's first todo evaluation is empty is stopping allowed.";
+	"An empty ledger triggers a relay handoff: the predecessor writes the handoff report directly in its message body, a compaction boundary is placed, and the successor takes over from that report. The successor may first open any number of scopes to investigate, then make its first todo evaluation; todo does not have to be its first tool call. Until that first ledger is submitted, a new scope must declare permission: \"ro\"; permission \"rw\" (including an omitted value) is refused. Only a successor whose first todo evaluation is an empty ledger may stop naturally. If successor A's first evaluation is a non-empty ledger, A enters rework; after that, even if A changes the ledger to empty, A is not the last holder and must hand off again to B; only when B's first todo evaluation is empty is stopping allowed.";
 
 export function handoffFocus(relay) {
 	const current = copyRelay(relay);
@@ -106,6 +106,7 @@ export function handoffFocus(relay) {
 		"Write every ledger item so the next agent can understand the work: the user requirement, acceptance evidence, unresolved risks, and the next concrete action.",
 		"Only your first todo evaluation being an empty ledger promotes you and allows a natural stop. If it is non-empty, you enter rework and must hand off again later; you are not the last holder.",
 		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",
+		"Until that ledger is submitted, open scopes with permission: \"ro\"; permission \"rw\" (including an omitted value) is refused.",
 	].join("\n");
 }
 

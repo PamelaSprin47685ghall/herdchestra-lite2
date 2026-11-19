@@ -9,7 +9,7 @@ export const SCOPE_DESCRIPTION = `Scope is the only way to use tools in this ses
 
 A moderate scope names an outcome and the evidence that proves it. Its budget should cover the calls the work really needs; sqrt(n) only helps judge how large a block should be when you first plan the split, not how many calls the finished task must take. Aim for each scope to make a concrete contribution to the user's goal, such as a usable change or a completed deliverable; combine necessary investigation with action when practical instead of routinely spending whole scopes on research alone. Research-only scopes remain appropriate when investigation is itself the requested deliverable or is necessary before safe, informed action. For a heavy task, also budget task: parallel subagent workers take independent slices at once, and one batch of task calls costs one task unit. A scope is neither a single operation nor the whole user goal.
 
-Call scope({ begin: { intent, stage, budget, elder_report } }) before using any other functional tool. The innermost scope determines the current stage; outside all scopes there is no stage. Only the user can toggle herd mode with /herd. In herd mode, only decision-framing can open. Otherwise, acceptance-cases, architecture-design, orchestration-plan, and direct-execution can open in any order. ask is allowed only in a decision-framing scope with herd mode on. wait is allowed only inside a scope. todo is the only functional tool allowed outside all scopes; it is forbidden inside every scope. One assistant message spends at most one unit in total, split across budgeted calls in proportion to their call counts and rounded to two decimals. scope, regret, defer, pin, todo, ask, and wait are free and take no share. Any other tool not listed in the budget has zero budget. Scopes nest, and only the innermost scope's budget is used.
+Call scope({ begin: { intent, stage, budget, elder_report, permission } }) before using any other functional tool. The innermost scope determines the current stage; outside all scopes there is no stage. Only the user can toggle herd mode with /herd. In herd mode, only decision-framing can open. Otherwise, acceptance-cases, architecture-design, orchestration-plan, and direct-execution can open in any order. ask is allowed only in a decision-framing scope with herd mode on. wait is allowed only inside a scope. todo is the only functional tool allowed outside all scopes; it is forbidden inside every scope. One assistant message spends at most one unit in total, split across budgeted calls in proportion to their call counts and rounded to two decimals. scope, regret, defer, pin, todo, ask, and wait are free and take no share. Any other tool not listed in the budget has zero budget. Scopes nest, and only the innermost scope's budget is used. begin.permission is "ro" or "rw": "ro" is trusted and never enforced; "rw" is refused in decision-framing and until this generation submits its first todo ledger.
 
 Budget by assistant turns, not individual calls. One assistant message spends at most one unit in total, however many tools and calls it makes; that unit is split across the tools in proportion to their call counts and rounded to two decimals. Two read calls in one message cost one read unit; a read and a bash in one message cost about half a read unit and half a bash unit. When a tool's balance is smaller than its share, that tool alone is blocked and the rest of the message still runs. Plan integer budgets around the number of turns you expect to use each tool in.
 
@@ -28,6 +28,9 @@ export const BEGIN_INTENT_DESCRIPTION =
 
 export const BUDGET_DESCRIPTION =
 	'Map each tool name to an integer budget of assistant turns. One assistant message spends at most one unit in total: that unit is split across budgeted calls in proportion to their call counts, rounded to two decimals. Several read calls issued together consume one read share once, while a read in a later message consumes another share. Use actual tool names (bash, read, write, edit, glob, grep, lsp, task, web_search, debug, eval, etc.), not semantic descriptions. Example: {"bash": 6, "read": 7, "edit": 4}. Size each number by the number of turns you expect to use that tool in, not by individual calls. For a heavy task, also budget task: parallel subagent workers take independent slices at once, and one batch of task calls costs one task unit. Only the innermost scope\'s budget is used. Do not budget scope, regret, defer, pin, todo, ask, or wait. A budget can be empty if only free tools are needed. An unlisted budgeted tool has zero budget. Values must be non-negative integers; the accounting splits them into two-decimal shares, and a tool whose balance is below its share is blocked while the rest of the message still runs.';
+
+export const PERMISSION_DESCRIPTION =
+	'Declare the scope\'s write intent. "ro" is a read-only declaration and is trusted: the harness never enforces it. "rw" is refused in stage "decision-framing" and while this generation has not submitted its first todo ledger (a todo view does not count); submit the ledger first, or choose a later stage. An omitted or null value is treated as "rw", so forgetting the declaration never bypasses the gate.';
 
 export const END_DESCRIPTION =
 	"Close the current scope by passing true. No report is written at close time and no summary is required. The closed scope stays visible as the hot workbench at its level. If you later open another sibling scope at that level, pass this scope's summary in that begin's elder_report; if you leave the level or finish the task instead, write no summary at all.";
@@ -75,7 +78,7 @@ export const scopeParameters = {
 		begin: {
 			type: "object",
 			additionalProperties: false,
-			required: ["intent", "stage", "budget", "elder_report"],
+			required: ["intent", "stage", "budget", "elder_report", "permission"],
 			properties: {
 				intent: { type: "string", minLength: 1, description: BEGIN_INTENT_DESCRIPTION },
 				stage: {
@@ -92,6 +95,11 @@ export const scopeParameters = {
 					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
 					description: ELDER_REPORT_DESCRIPTION,
 				},
+				permission: {
+					type: "string",
+					enum: ["ro", "rw"],
+					description: PERMISSION_DESCRIPTION,
+				},
 				model: {
 					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
 					description:
@@ -99,7 +107,7 @@ export const scopeParameters = {
 				},
 			},
 			description:
-				"Open a new innermost scope with a task of moderate scope (use sqrt(n), where n is the estimated tool call count for the whole request, only as a heuristic for how much work one scope should hold, never as the required number of calls) and a per-tool integer budget of assistant turns. elder_report archives the previous scope at this level: a non-empty summary when one is pending, otherwise null. For a heavy task, budget task too so parallel subagent workers can take independent slices.",
+				"Open a new innermost scope with a task of moderate scope (use sqrt(n), where n is the estimated tool call count for the whole request, only as a heuristic for how much work one scope should hold, never as the required number of calls) and a per-tool integer budget of assistant turns. permission declares ro|rw; rw is refused until this generation submits its first todo ledger. elder_report archives the previous scope at this level: a non-empty summary when one is pending, otherwise null. For a heavy task, budget task too so parallel subagent workers can take independent slices.",
 		},
 		end: {
 			type: "boolean",

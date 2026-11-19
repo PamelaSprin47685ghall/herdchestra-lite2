@@ -5,6 +5,7 @@
 import {
 	chargeTool,
 	currentScope,
+	isFreeCall,
 	truncateForHostBoundary,
 } from "../scope/index.mjs";
 import { DECISION_FRAMING } from "../scope/stages.mjs";
@@ -131,7 +132,7 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 			return {
 				block: true,
 				reason:
-					"Not in a scope. Outside all scopes only todo and the free control tools (scope, regret, defer, pin) may be called. Open a scope with scope({ begin: { intent, stage, budget, elder_report } }) before using any other tool.",
+					"Not in a scope. Outside all scopes only todo and the free control tools (scope, regret, defer, pin) may be called. Open a scope with scope({ begin: { intent, stage, budget, elder_report, permission } }) before using any other tool.",
 			};
 		}
 		if (toolName === "wait") return undefined;
@@ -140,13 +141,18 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 		const groupKey =
 			station.callGroups.get(toolCallId) ??
 			(found ? beatKey(found.message) : undefined);
+		const input = event.input ?? event.arguments ?? {};
 		const beatTools = toolCalls(found?.message ?? station.messageForToolCall(toolCallId))
-			.map((call) => call.name);
+			.map((call) => ({
+				name: call.name,
+				free: isFreeCall(call.name, call.arguments),
+			}));
 		const charged = chargeTool(state, {
 			toolCallId,
 			toolName,
 			groupKey,
 			beatTools,
+			input,
 		});
 		if (!charged.ok) return { block: true, reason: charged.reason };
 		station.persist();

@@ -16,6 +16,8 @@ import {
 	sessionFor,
 } from "../src/host/index.mjs";
 import { createStationRegistry, stateFor } from "../src/station/index.mjs";
+import { scopeParameters } from "../src/tools/descriptions.mjs";
+import { beginGenerationAfterHandoff } from "../src/relay/index.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -562,7 +564,7 @@ describe("relay integration", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
 		);
 		const blocked = await runAssistant(
 			host,
@@ -599,9 +601,7 @@ describe("relay integration", () => {
 
 	test("scope barriers preserve todo order when the host prepares the entire batch first", async () => {
 		const { host, ctx } = await start();
-		const open = call("b1", "scope", {
-			begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
-		});
+		const open = call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } });
 		const [before, outsideRead, opened, insideRead, inside] = await runAssistant(host, ctx, assistant([
 			call("t1", "todo", {
 				op: "init",
@@ -632,9 +632,7 @@ describe("relay integration", () => {
 		const { host, ctx } = await start();
 		const [todo, scope, read] = await runAssistant(host, ctx, assistant([
 			call("t1", "todo", { op: "init", list: [] }),
-			call("b1", "scope", {
-				begin: { intent: "later", stage: "architecture-design", budget: { read: 1 }, elder_report: null },
-			}),
+			call("b1", "scope", { begin: { intent: "later", stage: "architecture-design", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
 			call("r1", "read", { path: "must-not-run" }),
 		]), { prepareAll: true });
 		expect(todo.output.details.relay.handoffPending).toBe(true);
@@ -710,7 +708,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([
 				call("t_view", "todo", { op: "view" }),
-				call("s_begin", "scope", { begin: { intent: "sneak", stage: "direct-execution", budget: { read: 1 }, elder_report: null } }),
+				call("s_begin", "scope", { begin: { intent: "sneak", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
 				call("r_read", "read", { path: "a" }),
 			]),
 		);
@@ -892,7 +890,7 @@ describe("relay integration", () => {
 		await runAssistant(
 			inScope.host,
 			inScope.ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
 		);
 		const scoped = await emitStop(inScope.host, inScope.ctx);
 		expect(scoped.continue).toBe(true);
@@ -906,7 +904,7 @@ describe("relay integration", () => {
 		const blocked = await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "early", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b1", "scope", { begin: { intent: "early", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
 		);
 		expect(blocked[0].blocked).toBe(true);
 		expect(blocked[0].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
@@ -924,7 +922,7 @@ describe("relay integration", () => {
 		const allowed = await runAssistant(
 			fresh.host,
 			fresh.ctx,
-			assistant([call("b2", "scope", { begin: { intent: "audit", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b2", "scope", { begin: { intent: "audit", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
 		);
 		expect(allowed[0].blocked).toBe(false);
 	});
@@ -1036,7 +1034,7 @@ describe("scope model switching", () => {
 			const [entry] = await runAssistant(host, ctx, assistant([call(id, "scope", args)]));
 			return entry.result;
 		};
-		const begin = (model, elder_report = null) => ({ intent: "model check", stage: "direct-execution", budget: { read: 1 }, model, elder_report });
+		const begin = (model, elder_report = null) => ({ intent: "model check", stage: "direct-execution", budget: { read: 1 }, model, elder_report, permission: "ro" });
 		return { host, ctx, session, switches, scope, begin };
 	}
 
@@ -1183,18 +1181,14 @@ describe("host truncation", () => {
 			started.host,
 			started.ctx,
 			assistant([
-				call("b1", "scope", {
-					begin: { intent: "outer", stage: "direct-execution", budget: { read: 2 }, elder_report: null },
-				}),
+				call("b1", "scope", { begin: { intent: "outer", stage: "direct-execution", budget: { read: 2 }, elder_report: null, permission: "ro" } }),
 			]),
 		);
 		await runAssistant(
 			started.host,
 			started.ctx,
 			assistant([
-				call("b2", "scope", {
-					begin: { intent: "inner", stage: "orchestration-plan", budget: { read: 2 }, elder_report: null },
-				}),
+				call("b2", "scope", { begin: { intent: "inner", stage: "orchestration-plan", budget: { read: 2 }, elder_report: null, permission: "ro" } }),
 			]),
 		);
 		expect(stateFor(started.ctx).state.scopes.length).toBe(2);
@@ -1360,7 +1354,7 @@ describe("handoff transaction recovery", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b_pre", "scope", { begin: { intent: "predecessor work", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b_pre", "scope", { begin: { intent: "predecessor work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
 		);
 		await runAssistant(
 			host,
@@ -1395,7 +1389,7 @@ describe("handoff transaction recovery", () => {
 		const auditBegin = await runAssistant(
 			host,
 			ctx,
-			assistant([call("b_audit", "scope", { begin: { intent: "audit", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b_audit", "scope", { begin: { intent: "audit", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
 		);
 		expect(auditBegin[0].blocked).toBe(false);
 		expect(auditBegin[0].result.isError).toBe(false);
@@ -1414,5 +1408,155 @@ describe("handoff transaction recovery", () => {
 		expect(promoted[0].output.details.relay.canStop).toBe(true);
 		expect(promoted[0].output.details.relay.promotionInvalidated).toBe(false);
 		expect(await emitStop(host, ctx)).toBeUndefined();
+	});
+});
+
+describe("scope begin permission", () => {
+	test("the schema requires permission ro|rw", () => {
+		const begin = scopeParameters.properties.begin;
+		expect(begin.required).toContain("permission");
+		expect(begin.properties.permission.enum).toEqual(["ro", "rw"]);
+	});
+
+	test("permission ro opens before the first ledger submission", async () => {
+		const { host, ctx } = await start();
+		const [opened] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "inspect", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
+		]));
+		expect(opened.result.isError).toBeFalsy();
+		expect(opened.result.content[0].text).toContain("You are now inside this scope.");
+		expect(stateFor(ctx).state.scopes).toHaveLength(1);
+	});
+
+	test("permission rw is refused before the first ledger submission", async () => {
+		const { host, ctx } = await start();
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: "rw" } }),
+		]));
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("permission rw is refused in decision-framing even after a ledger exists", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.firstEvaluation = "nonempty";
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "frame", stage: "decision-framing", budget: { read: 1 }, elder_report: null, permission: "rw" } }),
+		]));
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("RW_IN_DECISION_FRAMING");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("permission rw opens after the first ledger submission", async () => {
+		const { host, ctx } = await start();
+		await runAssistant(host, ctx, assistant([
+			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["write the change"] }] }),
+		]));
+		expect(stateFor(ctx).state.relay.firstEvaluation).toBe("nonempty");
+		const [opened] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: "rw" } }),
+		]));
+		expect(opened.result.isError).toBeFalsy();
+		expect(stateFor(ctx).state.scopes).toHaveLength(1);
+	});
+
+	test("an invalid permission value is rejected", async () => {
+		const { host, ctx } = await start();
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "write" } }),
+		]));
+		expect(refused.result.content[0].text).toContain("INVALID_ARGUMENT");
+		expect(refused.result.content[0].text).toContain("permission");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("a todo view does not lift the rw gate", async () => {
+		const { host, ctx } = await start();
+		await runAssistant(host, ctx, assistant([
+			call("t1", "todo", { op: "view" }),
+		]));
+		expect(stateFor(ctx).state.relay.firstEvaluation).toBeNull();
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: "rw" } }),
+		]));
+		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("a handoff resets the rw gate for the successor", async () => {
+		const { host, ctx } = await start();
+		await runAssistant(host, ctx, assistant([
+			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["ship it"] }] }),
+		]));
+		const station = stateFor(ctx);
+		station.state.relay = beginGenerationAfterHandoff(station.state.relay, { fromGeneration: 0 });
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "audit", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "rw" } }),
+		]));
+		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
+		expect(station.state.scopes).toHaveLength(0);
+	});
+
+	test("an omitted permission is treated as rw and refused before the first ledger", async () => {
+		const { host, ctx } = await start();
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null } }),
+		]));
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("a null permission is treated like an omitted one", async () => {
+		const { host, ctx } = await start();
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: null } }),
+		]));
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("an omitted permission is refused in decision-framing even after a ledger exists", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.firstEvaluation = "nonempty";
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "frame", stage: "decision-framing", budget: { read: 1 }, elder_report: null } }),
+		]));
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("RW_IN_DECISION_FRAMING");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("an omitted permission opens after the first ledger submission", async () => {
+		const { host, ctx } = await start();
+		await runAssistant(host, ctx, assistant([
+			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["write the change"] }] }),
+		]));
+		const [opened] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null } }),
+		]));
+		expect(opened.result.isError).toBeFalsy();
+		expect(stateFor(ctx).state.scopes).toHaveLength(1);
+	});
+});
+
+describe("free resolution write", () => {
+	test("a write to xd://resolve needs no write budget", async () => {
+		const { host, ctx } = await start();
+		await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
+		]));
+		const [resolved] = await runAssistant(host, ctx, assistant([
+			call("w1", "write", { path: "xd://resolve", content: "apply" }),
+		]));
+		expect(resolved.blocked).toBe(false);
+		const [real] = await runAssistant(host, ctx, assistant([
+			call("w2", "write", { path: "src/out.txt", content: "x" }),
+		]));
+		expect(real.blocked).toBe(true);
+		expect(real.result.content[0].text).toContain("no budget left");
 	});
 });

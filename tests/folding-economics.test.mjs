@@ -167,16 +167,12 @@ const texts = (messages) =>
 describe("scope contract gate", () => {
 	test("end:true closes with no report; a following begin needs elder_report", async () => {
 		const { host, ctx } = await start();
-		await run(host, ctx, assistant([call("b1", "scope", {
-			begin: { intent: "first", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
-		})]));
+		await run(host, ctx, assistant([call("b1", "scope", { begin: { intent: "first", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
 		const closed = await run(host, ctx, assistant([call("e1", "scope", { end: true })]));
 		expect(closed[0].text).toContain("Scope closed.");
 		expect(closed[0].text).toContain("No elder sibling scope was collapsed.");
 
-		await run(host, ctx, assistant([call("b2", "scope", {
-			begin: { intent: "second", stage: "direct-execution", budget: { read: 1 } },
-		})]));
+		await run(host, ctx, assistant([call("b2", "scope", { begin: { intent: "second", stage: "direct-execution", budget: { read: 1 }, permission: "ro" } })]));
 		expect(stateFor(ctx).state.scopes).toHaveLength(0);
 		// await run above already consumed a tool result with the gate message.
 		const pending = findPendingReportElder(stateFor(ctx).state, null, 0, 0);
@@ -186,38 +182,28 @@ describe("scope contract gate", () => {
 
 	test("MISSING_ELDER_REPORT does not open a sibling scope", async () => {
 		const { host, ctx } = await start();
-		await run(host, ctx, assistant([call("b1", "scope", {
-			begin: { intent: "first", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
-		})]));
+		await run(host, ctx, assistant([call("b1", "scope", { begin: { intent: "first", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
 		await run(host, ctx, assistant([call("e1", "scope", { end: true })]));
-		const blocked = await run(host, ctx, assistant([call("b2", "scope", {
-			begin: { intent: "second", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
-		})]));
+		const blocked = await run(host, ctx, assistant([call("b2", "scope", { begin: { intent: "second", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
 		expect(blocked[0].text).toContain("MISSING_ELDER_REPORT");
 		expect(stateFor(ctx).state.scopes).toHaveLength(0);
 	});
 
 	test("blank elder_report is rejected too", async () => {
 		const { host, ctx } = await start();
-		await run(host, ctx, assistant([call("b1", "scope", {
-			begin: { intent: "first", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
-		})]));
+		await run(host, ctx, assistant([call("b1", "scope", { begin: { intent: "first", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
 		await run(host, ctx, assistant([call("e1", "scope", { end: true })]));
-		const blocked = await run(host, ctx, assistant([call("b2", "scope", {
-			begin: { intent: "second", stage: "direct-execution", budget: { read: 1 }, elder_report: "   " },
-		})]));
+		const blocked = await run(host, ctx, assistant([call("b2", "scope", { begin: { intent: "second", stage: "direct-execution", budget: { read: 1 }, elder_report: "   ", permission: "ro" } })]));
 		expect(blocked[0].text).toContain("MISSING_ELDER_REPORT");
 	});
 
 	test("combined end+begin with missing elder_report keeps the current scope open", async () => {
 		const { host, ctx } = await start();
-		await run(host, ctx, assistant([call("b1", "scope", {
-			begin: { intent: "outer", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
-		})]));
+		await run(host, ctx, assistant([call("b1", "scope", { begin: { intent: "outer", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
 		const before = stateFor(ctx).state.scopes.length;
 		const blocked = await run(host, ctx, assistant([call("t1", "scope", {
 			end: true,
-			begin: { intent: "next", stage: "direct-execution", budget: { read: 1 } },
+			begin: { intent: "next", stage: "direct-execution", budget: { read: 1 }, permission: "ro" },
 		})]));
 		expect(blocked[0].text).toContain("MISSING_ELDER_REPORT");
 		expect(stateFor(ctx).state.scopes).toHaveLength(before);
@@ -227,12 +213,10 @@ describe("scope contract gate", () => {
 
 	test("combined end+begin with elder_report archives and opens", async () => {
 		const { host, ctx } = await start();
-		await run(host, ctx, assistant([call("b1", "scope", {
-			begin: { intent: "outer", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
-		})]));
+		await run(host, ctx, assistant([call("b1", "scope", { begin: { intent: "outer", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
 		const transition = await run(host, ctx, assistant([call("t1", "scope", {
 			end: true,
-			begin: { intent: "next", stage: "direct-execution", budget: { read: 1 }, elder_report: "outer summary" },
+			begin: { intent: "next", stage: "direct-execution", budget: { read: 1 }, elder_report: "outer summary", permission: "ro" },
 		})]));
 		expect(transition[0].text).toContain("Scope closed.");
 		expect(transition[0].text).toContain("You are now inside this scope.");
@@ -241,9 +225,7 @@ describe("scope contract gate", () => {
 
 	test("legacy string end is rejected", async () => {
 		const { host, ctx } = await start();
-		await run(host, ctx, assistant([call("b1", "scope", {
-			begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
-		})]));
+		await run(host, ctx, assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
 		const bad = await run(host, ctx, assistant([call("e1", "scope", {
 			end: { return_markdown: "old style" },
 		})]));
@@ -254,7 +236,7 @@ describe("scope contract gate", () => {
 		const { host, ctx } = await start();
 		const opened = await run(host, ctx, assistant([call("b1", "scope", {
 			end: false,
-			begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
+			begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" },
 		})]));
 		expect(opened[0].text).toContain("You are now inside this scope.");
 		expect(stateFor(ctx).state.scopes).toHaveLength(1);

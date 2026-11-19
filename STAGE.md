@@ -8,7 +8,7 @@
 2. **开 `scope` 必选阶段**：每次调用 `scope({ begin })` 必须显式指定 `stage`。
 3. **运行模式由 `/herd` 独占切换**：`herdMode` 只能由用户通过 `/herd` 命令手动开关，不设自动退出或审批回调。
 4. **阶段与 `relay` 正交解耦**：不新增阶段间强制接力或阶段状态机，`relay` 仅在 `herdMode === false` 时按原规则运作。
-5. **无读写校验、无写入门禁**：不对 `read`、`grep`、`edit`、`write` 施加任何阶段级权限拦截或已读校验。
+5. **声明式防呆，不拦截读写**：`scope.begin.permission` 只接受 `"ro"` 或 `"rw"`；`"ro"` 被信任，系统永不因 scope 自称只读而拦截 `edit`/`write`。`"rw"` 在 `decision-framing` 阶段，以及当前代际尚未提交首次 `todo` 账本时被拒绝。该门禁只防呆、不防贼，不校验工具调用与声明是否一致。
 6. **`pin` 跨压缩永不丢失**：产物路径不作为 `scope` 参数或状态台账，落盘后直接 `pin`，并在 handoff 时将全部历史 `pin` 灌入继任者上下文。
 7. **阶段提示词常驻全局系统提示词**：五个阶段的完整提示词统一并入全局系统提示词的管理块，`beginText(scope)` 只按名字引用当前阶段，不再逐 scope 注入大段文案。系统提示词是稳定前缀，可被提供方提示缓存复用；逐 scope 注入则会让同一段文案随对话历史在每次请求中反复回放并重复计费。
 
@@ -98,6 +98,14 @@
    - 将 `ask` 与 `wait` 视为免费工具（与 `CONTROL_TOOLS`、`todo` 同等对待）：
      - `beatShares()` 跳过 `ask` 与 `wait`，不参与单元分摊。
      - `begin.budget` 中无需为 `ask` 或 `wait` 分配额度。
+
+4. **声明式 permission 门禁（`tools/descriptions.mjs`、`station/controls.mjs`）**：
+   - 在 `scopeParameters.properties.begin.required` 中加入 `"permission"`，并在 `properties` 中新增 `permission: { type: "string", enum: ["ro", "rw"] }`。
+   - `handleScopeCall` 在任何状态变更之前校验：
+     - 显式给出非 `"ro"` / `"rw"` 的值：`INVALID_ARGUMENT`。
+     - `"rw"`（显式声明或缺省）且 `begin.stage === "decision-framing"`：`RW_IN_DECISION_FRAMING`。
+     - `"rw"`（显式声明或缺省）且 `station.relayOn(ctx)` 为真、`state.relay.firstEvaluation === null`：`RW_BEFORE_LEDGER`；`todo` 的 `view` 不算提交。
+   - `"ro"` 永远放行且从不校验实际工具调用；缺省或 `null` 的 permission 按 `"rw"` 处理，漏填不会绕过门禁。
 
 ---
 

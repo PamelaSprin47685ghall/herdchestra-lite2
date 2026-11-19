@@ -368,6 +368,30 @@ describe("chargeTool", () => {
     expect(state.charges).toEqual({});
   });
 
+  test("does not charge the write that resolves a staged ast_edit preview", () => {
+    const { state, scope } = openScope("work", { bash: 1 });
+    const resolved = chargeTool(state, {
+      toolCallId: "call_resolve",
+      toolName: "write",
+      input: { path: "xd://resolve", content: "apply" },
+      groupKey: "beat_1",
+      beatTools: [
+        { name: "write", free: true },
+        { name: "bash", free: false },
+      ],
+    });
+    expect(resolved.ok).toBe(true);
+    expect(scope.spent).toEqual({ bash: 0 });
+    expect(state.charges).toEqual({});
+    // A real file write still needs its own budget.
+    const blocked = chargeTool(state, {
+      toolCallId: "call_real_write",
+      toolName: "write",
+      input: { path: "src/runtime.txt", content: "x" },
+    });
+    expect(blocked.code).toBe("BUDGET_EXHAUSTED");
+  });
+
   test("blocks a zero budget", () => {
     const { state, scope } = openScope("work", { bash: 0 });
     const result = chargeTool(state, {
@@ -509,6 +533,15 @@ describe("beatShares", () => {
       beatShares(["scope", "defer", "pin", "todo", "ask", "wait", "apply_patch"]),
     ).toEqual({ edit: 1 });
     expect(beatShares([])).toEqual({});
+  });
+
+  test("ignores the write that resolves a staged ast_edit preview", () => {
+    expect(
+      beatShares([{ name: "write", free: true }, { name: "bash", free: false }]),
+    ).toEqual({ bash: 1 });
+    expect(
+      beatShares([{ name: "write", free: false }, { name: "bash", free: false }]),
+    ).toEqual({ write: 0.5, bash: 0.5 });
   });
 });
 

@@ -1636,6 +1636,50 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(host.messages.length).toBe(0);
 	});
 
+	test("dispatchSuccessorToHost via sendUserMessage does not deadlock on modelCallGateTicket", async () => {
+		const beforeModelCallHooks = [];
+		let modelCalls = 0;
+		const { host, ctx, manager, session } = await start({
+			mode: "rpc",
+			handoff: async () => {
+				manager.appendCompaction("handoff", { focus: "successor" });
+				session.agent.state.messages = [
+					{ role: "user", content: [{ type: "text", text: "compacted" }] },
+				];
+				return { ok: true };
+			},
+		});
+		session.agent = {
+			state: { messages: [] },
+			addBeforeModelCallHook: (hook) => {
+				beforeModelCallHooks.push(hook);
+				return () => {};
+			},
+		};
+		const originalSend = host.pi.sendUserMessage;
+		host.pi.sendUserMessage = async (text, options) => {
+			originalSend(text, options);
+			const outboundContext = {
+				messages: [{ role: "user", content: [{ type: "text", text }] }],
+			};
+			await Promise.all(
+				beforeModelCallHooks.map((hook) => hook(undefined, outboundContext)),
+			);
+			modelCalls += 1;
+		};
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("t1", "todo", { op: "init", list: [] })]),
+		);
+		const stopResult = await emitStop(host, ctx);
+		expect(stopResult).toBeUndefined();
+		expect(stateFor(ctx).state.relay.generation).toBe(1);
+		expect(host.messages.length).toBe(1);
+		expect(modelCalls).toBe(1);
+	});
+
 	test("Headless TUI Adapter supports /vibe, /vibe <prompt>, /new, /fresh, and arbitrary slash commands uniformly", async () => {
 		const events = [];
 		const modeChanges = [];

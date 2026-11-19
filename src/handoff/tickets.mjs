@@ -132,11 +132,12 @@ async function dispatchSuccessorToHost(station, ctx, pi) {
 }
 
 async function runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier) {
+	let shouldDispatch = false;
 	try {
 		const outcome = await performHandoff(station, ctx, pi);
-		if (outcome?.ok && !outcome.inProgress && station.handoffWaiters === 0) {
-			await dispatchSuccessorToHost(station, ctx, pi);
-		}
+		shouldDispatch = Boolean(
+			outcome?.ok && !outcome.inProgress && station.handoffWaiters === 0,
+		);
 	} catch (error) {
 		debugLog("handoff.background_error", { error: errorText(error) });
 		try {
@@ -150,6 +151,9 @@ async function runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier) {
 		}
 		station.handoffScheduled = false;
 		resolveBarrier();
+	}
+	if (shouldDispatch) {
+		await dispatchSuccessorToHost(station, ctx, pi);
 	}
 }
 

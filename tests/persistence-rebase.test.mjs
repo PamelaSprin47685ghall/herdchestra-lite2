@@ -157,4 +157,44 @@ describe("persistence across a branch-rewriting fold", () => {
 		expect(reopened.state.collapses[0].collapsed).toBe(true);
 		expect(serializeState(reopened.state)).toEqual(serializeState(station.state));
 	});
+
+	/**
+	 * A fold is not the only caller that may rewrite the branch: an export,
+	 * a history tool, or a future fold path can move the leaf too. The station
+	 * must therefore re-check its own anchor instead of trusting the writer.
+	 * Here the rewrite is done straight on the manager, with no fold and no
+	 * `rebased` flag, and the second write must still be a checkpoint.
+	 */
+	test("an unannounced branch rewrite forces the next write to be a checkpoint", () => {
+		const manager = makeManager();
+		manager.appendMessage({ role: "user", content: "start" });
+		const station = makeStation(manager);
+
+		station.state.seq = 1;
+		station.state.pins.push("a");
+		station.persist();
+		const checkpointId = manager.entries.find(
+			(entry) => entry.type === "custom" && entry.customType === SESSION_STATE_TYPE,
+		).id;
+
+		station.state.seq = 2;
+		station.state.pins.push("b");
+		station.persist();
+		expect(isStateCheckpoint(stateEntries(manager).at(-1))).toBe(false);
+
+		// The leaf moves back onto the checkpoint, dropping the delta. Nobody
+		// tells the station.
+		manager.branch(checkpointId);
+		station.state.seq = 3;
+		station.persist();
+
+		const chain = stateEntries(manager);
+		expect(isStateCheckpoint(chain.at(-1))).toBe(true);
+		expect(foldStateChain(chain)).toEqual(serializeState(station.state));
+
+		const reopened = makeStation(manager);
+		expect(reopened.state.seq).toBe(3);
+		expect(reopened.state.pins).toEqual(["a", "b"]);
+		expect(serializeState(reopened.state)).toEqual(serializeState(station.state));
+	});
 });

@@ -48,6 +48,30 @@ export function hasPersistedBase(manager) {
 	}
 }
 
+/**
+ * The newest state entry on the live branch, when the host can say.
+ *
+ * `persist` holds the serialized state it last wrote, and a delta is only
+ * meaningful while the entry carrying that state is still reachable. This id
+ * is how the station re-checks the anchor after a fold or any other rewrite
+ * of the branch.
+ */
+export function persistedBaseId(manager) {
+	try {
+		const branch = manager?.getBranch?.() ?? [];
+		for (let index = branch.length - 1; index >= 0; index -= 1) {
+			const entry = branch[index];
+			if (entry?.type !== "custom" || entry.customType !== SESSION_STATE_TYPE) {
+				continue;
+			}
+			return typeof entry.id === "string" ? entry.id : null;
+		}
+	} catch {
+		// A host that cannot walk its branch leaves the anchor unverifiable.
+	}
+	return null;
+}
+
 function restoreState(manager) {
 	try {
 		const { chain, anchored } = collectChain(manager);

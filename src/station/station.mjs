@@ -105,6 +105,7 @@ import {
 } from "./models.mjs";
 import {
 	hasPersistedBase,
+	persistedBaseId,
 	restoreState,
 	SESSION_STATE_TYPE,
 } from "./restore.mjs";
@@ -133,6 +134,9 @@ export class SessionStation {
 		this.lastPersisted = hasPersistedBase(manager)
 			? serializeState(this.state)
 			: null;
+		// The entry that carries `lastPersisted`. A delta may only be written
+		// while that entry is still on the branch.
+		this.lastStateEntryId = this.lastPersisted === null ? null : persistedBaseId(manager);
 		this.stateWrites = 0;
 		this.handled = new Map();
 		this.processedCalls = new Set();
@@ -230,14 +234,46 @@ export class SessionStation {
 		const manager = this.manager;
 		if (!manager || typeof manager.appendCustomEntry !== "function") return;
 		try {
+			// Anything that rewrites the branch (a fold, an export, a future
+			// history tool) drops the entry that anchors `lastPersisted`. A
+			// delta written next would replay onto a truncated chain or onto
+			// none at all, so the anchor is re-checked here rather than
+			// trusted from whichever caller rewrote the branch.
+			if (this.lastPersisted !== null && !this.anchorOnBranch()) {
+				this.lastPersisted = null;
+				this.stateWrites = 0;
+				this.lastStateEntryId = null;
+			}
 			const next = serializeState(this.state);
 			const entry = planStateEntry(this.lastPersisted, next, this.stateWrites);
 			if (!entry) return;
-			manager.appendCustomEntry(SESSION_STATE_TYPE, entry);
+			const entryId = manager.appendCustomEntry(SESSION_STATE_TYPE, entry);
+			this.lastStateEntryId = typeof entryId === "string" ? entryId : null;
 			this.lastPersisted = next;
 			this.stateWrites = entry.kind === "checkpoint" ? 0 : this.stateWrites + 1;
 		} catch (error) {
 			this.noteError("persist", error);
+		}
+	}
+
+	/**
+	 * True when the entry carrying `lastPersisted` is still reachable from the
+	 * leaf. An unknowable answer forces a checkpoint: one extra full write
+	 * costs a state serialization, a lost base costs the whole session state.
+	 */
+	anchorOnBranch() {
+		if (this.lastStateEntryId === null) return true;
+		const manager = this.manager;
+		if (typeof manager?.getBranch !== "function") return true;
+		try {
+			const branch = manager.getBranch();
+			if (!Array.isArray(branch)) return true;
+			for (let index = branch.length - 1; index >= 0; index -= 1) {
+				if (branch[index]?.id === this.lastStateEntryId) return true;
+			}
+			return false;
+		} catch {
+			return false;
 		}
 	}
 
@@ -251,6 +287,7 @@ export class SessionStation {
 	rebasePersistedBase() {
 		this.lastPersisted = null;
 		this.stateWrites = 0;
+		this.lastStateEntryId = null;
 		this.persist();
 	}
 

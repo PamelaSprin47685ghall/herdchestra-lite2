@@ -4,6 +4,24 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] — 2026-11-19
+
+### Fixed
+
+- `persist()` trusted the snapshot it had last written as a delta base without
+  checking that the entry carrying it was still on `getBranch()`. The fold
+  paths invalidate that base explicitly, so the guarantee held only for as long
+  as every future branch rewrite remembered to do the same. The station now
+  records the id `appendCustomEntry()` returns and re-checks it against the
+  live branch before writing a delta; an unreachable or unknowable anchor
+  forces a checkpoint.
+
+### Added
+
+- `tests/persistence-rebase.test.mjs`: an unannounced rewrite — `branch()`
+  called directly, with no fold and no `rebased` flag — must not downgrade the
+  next write to a delta, and the reopened station must keep every pin.
+
 ## [2.1.2] — 2026-11-19
 
 ### Fixed

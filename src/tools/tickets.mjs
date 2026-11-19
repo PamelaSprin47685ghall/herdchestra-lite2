@@ -9,7 +9,12 @@
 
 import { errorResult, textResult } from "./results.mjs";
 import { sendSlashPrompt, sessionFor } from "../host/capture.mjs";
+import { modelFrom, modelOf, thinkingFrom, thinkingOf } from "../host/adapter.mjs";
 import { record } from "../host/diagnostics.mjs";
+
+import { loadDoc, render } from "../prompts/index.mjs";
+
+const errors = loadDoc("errors");
 
 function safeSession(ctx) {
 	try {
@@ -123,22 +128,11 @@ function sameModelKey(actual, expectedKey) {
 }
 
 function liveModelFor(ctx, session, target) {
-	for (const holder of [session, ctx?.session, target, ctx]) {
-		const model = holder?.model ?? holder?.agent?.state?.model;
-		if (model) return model;
-	}
-	return null;
+	return modelFrom(target) ?? modelFrom(session) ?? modelOf(ctx);
 }
 
 function liveThinkingFor(ctx, session, target) {
-	for (const holder of [session, ctx?.session, target, ctx]) {
-		const level =
-			holder?.thinkingLevel ??
-			holder?.agent?.state?.thinkingLevel ??
-			holder?.thinking;
-		if (typeof level === "string" && level) return level;
-	}
-	return null;
+	return thinkingFrom(target) ?? thinkingFrom(session) ?? thinkingOf(ctx);
 }
 
 function normalizeThinking(level) {
@@ -287,9 +281,10 @@ export async function switchModelTicket(pi, ctx, req) {
 }
 
 function appendModelSwitchWarning(result, req, outcome) {
-	const warning = `WARNING: ${req?.command ?? "model switch"} failed: ${
-		outcome?.reason ?? outcome?.error ?? "unverified"
-	}`;
+	const warning = render(errors["model-switch-warning"], {
+		command: req?.command ?? "model switch",
+		reason: outcome?.reason ?? outcome?.error ?? "unverified",
+	});
 	const base =
 		result && typeof result === "object" ? result : textResult(String(result ?? ""));
 	const content = Array.isArray(base.content)

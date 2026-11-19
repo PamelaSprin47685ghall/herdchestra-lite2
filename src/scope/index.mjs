@@ -48,3 +48,11 @@ export {
   MAX_DELTA_BYTES,
 } from "./persistence.mjs";
 export { createUsageLedger } from "./usage-ledger.mjs";
+export {
+  createStageFlags,
+  copyStageFlags,
+  missingStages,
+  applyStageBegin,
+  GATED_STAGES,
+  EXECUTION_STAGE,
+} from "./stage-flags.mjs";

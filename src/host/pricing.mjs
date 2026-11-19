@@ -7,7 +7,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { sessionFor } from "./capture.mjs";
+import { modelOf, modelRegistryOf } from "./adapter.mjs";
 import { usageField, usageSnapshot } from "./usage.mjs";
 
 // Fallback when no model configuration and no usage cost are available.
@@ -192,19 +192,8 @@ function entryFromCandidate(catalog, value, fallbackProvider, fallbackId) {
 
 function resolveModelFromCatalog(catalog, ctx, hint) {
 	const data = hint && typeof hint === "object" ? hint : {};
-	let session = null;
-	try {
-		session = sessionFor(ctx);
-	} catch {
-		session = null;
-	}
-	// Priority 1: a live model object on the context or captured session.
-	const candidates = [
-		ctx?.model,
-		session?.model,
-		session?.agent?.state?.model,
-		data.model,
-	];
+	// Priority 1: the live model, resolved once by the host adapter.
+	const candidates = [modelOf(ctx), data.model];
 	for (const candidate of candidates) {
 		const found = entryFromCandidate(catalog, candidate);
 		if (found) return found;
@@ -218,7 +207,7 @@ function resolveModelFromCatalog(catalog, ctx, hint) {
 	if (provider && modelId) {
 		let registryModel = null;
 		try {
-			const found = ctx?.modelRegistry?.find?.(provider, modelId);
+			const found = modelRegistryOf(ctx)?.find?.(provider, modelId);
 			if (found && typeof found === "object") registryModel = found;
 		} catch {
 			registryModel = null;

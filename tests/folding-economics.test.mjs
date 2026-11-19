@@ -20,6 +20,7 @@ import {
 import { createEmptyCatalog, resolveModelPolicy } from "../src/host/pricing.mjs";
 import { charsToTokens } from "../src/host/pricing.mjs";
 import { createState, deserializeState, findPendingReportElder, serializeState, truncateForHostBoundary } from "../src/scope/index.mjs";
+import { allStagesRan } from "./helpers/stage-flags.mjs";
 
 // -- Fake host ----------------------------------------------------------------
 
@@ -116,6 +117,7 @@ async function start() {
 	const host = makeHost();
 	await activate(host.pi);
 	const ctx = { sessionManager: manager, agentMessages: [] };
+	stateFor(ctx).state.stageFlags = allStagesRan();
 	manager.appendMessage({ role: "user", content: "do", timestamp: Date.now() });
 	return { host, ctx, manager };
 }

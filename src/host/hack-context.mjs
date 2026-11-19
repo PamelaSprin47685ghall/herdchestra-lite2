@@ -5,7 +5,7 @@
 // the next request then replays the same prefix instead of breaking the
 // provider cache when an ephemeral tail disappears.
 
-import { sessionFor } from "./capture.mjs";
+import { messagesOf } from "./adapter.mjs";
 
 /**
  * The single history-write channel. Append one message to disk, and, when a
@@ -21,8 +21,8 @@ export function appendHistoryMessage(manager, message, source = null) {
 	}
 	if (source) {
 		try {
-			const messages = sessionFor(source)?.agent?.state?.messages;
-			if (Array.isArray(messages) && !messages.includes(message)) messages.push(message);
+			const messages = messagesOf(source);
+			if (messages && !messages.includes(message)) messages.push(message);
 		} catch {
 			// A host without a live agent still got the manager entry.
 		}

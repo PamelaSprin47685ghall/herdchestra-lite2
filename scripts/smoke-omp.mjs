@@ -26,6 +26,7 @@ import { captureDiagnosis, installRunnerCapture } from "../src/host/capture.mjs"
 const HOST = process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi";
 const AGENT_SESSION = join(HOST, "packages/coding-agent/src/session/agent-session.ts");
 const REQUIRED_TOOLS = ["scope", "regret", "defer", "pin", "todo"];
+const STRICT = process.env.OMP_SMOKE_STRICT === "1";
 
 const results = [];
 
@@ -48,7 +49,7 @@ function assert(condition, message) {
 
 if (!existsSync(AGENT_SESSION)) {
 	console.log(`SKIP: no omp checkout at ${HOST}`);
-	process.exit(0);
+	process.exit(STRICT ? 1 : 0);
 }
 
 const source = readFileSync(AGENT_SESSION, "utf8");
@@ -358,7 +359,7 @@ let failed = 0;
 for (const result of results) {
 	const suffix = result.note ? `  ${result.note}` : "";
 	console.log(`${result.status}  ${result.name}${suffix}`);
-	if (result.status === "FAIL") failed += 1;
+	if (result.status === "FAIL" || (STRICT && result.status === "SKIP")) failed += 1;
 }
 console.log(`\n${results.length - failed}/${results.length} checks passed`);
 process.exit(failed === 0 ? 0 : 1);

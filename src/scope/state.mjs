@@ -2,6 +2,7 @@
 // Pure data. No I/O.
 
 import { createRelay } from "../relay/state.mjs";
+import { createStageFlags } from "./stage-flags.mjs";
 
 const VERSION = 2;
 
@@ -115,6 +116,9 @@ export function createState() {
     // cachedUntilPos is the exclusive message index the provider still
     // holds. Persisted with the snapshot.
     modelCaches: {},
+    // Boolean stage flags: S2/S3/S4 start false, S5 requires all three true,
+    // and opening S1 clears them.
+    stageFlags: createStageFlags(),
   };
 }
 

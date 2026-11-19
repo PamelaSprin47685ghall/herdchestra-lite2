@@ -1,5 +1,6 @@
-import { sessionFor } from "../host/capture.mjs";
 import { preparseModelSpec } from "../host/pricing.mjs";
+import { capabilities, modelOf, thinkingOf } from "../host/adapter.mjs";
+import { record } from "../host/diagnostics.mjs";
 import { currentScope } from "../scope/index.mjs";
 
 export function modelKey(model) {
@@ -10,12 +11,12 @@ export function modelKey(model) {
 }
 
 export function actualModel(ctx) {
-	return (sessionFor(ctx) ?? ctx?.session)?.model ?? ctx?.model ?? null;
+	return modelOf(ctx);
 }
 
 function liveSelector(ctx, key) {
-	const level = (sessionFor(ctx) ?? ctx?.session)?.thinkingLevel ?? ctx?.thinkingLevel;
-	return typeof level === "string" && level ? `${key}:${level}` : key;
+	const level = thinkingOf(ctx);
+	return level ? `${key}:${level}` : key;
 }
 
 export function modelChoice(station, ctx, spec, key) {
@@ -48,6 +49,10 @@ function setChoice(state, scope, spec, key) {
 }
 
 export function observeActualModel(station, ctx) {
+	if (!station.hostCapabilities) {
+		station.hostCapabilities = capabilities(ctx);
+		record("host", "capabilities", station.hostCapabilities);
+	}
 	const live = actualModel(ctx);
 	const key = modelKey(live);
 	if (!key) return;

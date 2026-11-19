@@ -16,3 +16,21 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun test tests
+
+  host-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - run: bun install --frozen-lockfile
+      - name: Check out the latest omp host
+        run: git clone --depth 1 https://github.com/can1357/oh-my-pi.git "$RUNNER_TEMP/oh-my-pi"
+      - name: Install host dependencies
+        run: bun install --cwd "$RUNNER_TEMP/oh-my-pi"
+      - name: Run the host seam smoke
+        env:
+          OMP_HOST: ${{ runner.temp }}/oh-my-pi
+          OMP_SMOKE_STRICT: "1"
+        run: bun scripts/smoke-omp.mjs

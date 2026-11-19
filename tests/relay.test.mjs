@@ -14,6 +14,7 @@ import {
 	successorOpeningText,
 	successorStartNudge,
 } from "../src/relay/index.mjs";
+import { loadDoc } from "../src/prompts/index.mjs";
 
 function phases(tasks) {
 	return [{ name: "P", tasks }];
@@ -236,6 +237,8 @@ describe("handoff transitions", () => {
 });
 
 describe("relay text", () => {
+	const doc = loadDoc("receipts/relay");
+
 	test("status names the generation, first evaluation, ledger, and next step", () => {
 		const promoted = applyLedgerEvaluation(
 			beginGenerationAfterHandoff(createRelay(), { at: 1, fromGeneration: 0 }),
@@ -245,77 +248,41 @@ describe("relay text", () => {
 		const text = relayStatusText(promoted.relay, promoted.stats, {
 			action: promoted.action,
 		});
-		expect(text).toContain("RELAY STATE");
+		expect(text).toContain(doc["status.title"]);
 		expect(text).toContain("Generation: 1 (successor)");
-		expect(text).toContain("First todo evaluation of this generation: empty ledger");
-		expect(text).toContain("Ledger: empty");
-		expect(text).toContain("Can stop now: yes");
-		expect(text).toContain("promotion");
+		expect(text).toContain(doc["next.promoted"]);
 	});
 
-	test("handoff text carries the relay rules in English", () => {
+	test("handoff text is assembled from the document sections", () => {
 		const relay = { ...createRelay(), generation: 2 };
-		expect(handoffFocus(relay)).toContain(
-			"The successor may first open any number of scopes to investigate",
-		);
-		expect(handoffFocus(relay)).toContain(
-			"Only a successor whose first todo evaluation is an empty ledger may stop naturally",
-		);
-		expect(handoffFocus(relay)).toContain("An empty ledger triggers a relay handoff");
-		expect(handoffFocus(relay)).toContain(
-			"only when B's first todo evaluation is empty is stopping allowed",
-		);
+		const text = handoffFocus(relay);
+		for (const key of [
+			"successor-rule",
+			"stop-rule",
+			"successor-mandate",
+			"requirements-reminder",
+			"pinned-reading",
+		]) {
+			expect(text).toContain(doc[key]);
+		}
+		expect(text).toContain(doc["handoff-focus.lead"].split("{{")[0].trim());
 		expect(handoffFailureNudge("boom")).toContain("HANDOFF FAILED: boom");
 	});
 
-	test("the handoff argument demands both the audit and the successor's own contribution", () => {
+	test("the handoff argument carries the successor mandate and opening tail", () => {
 		const relay = { ...createRelay(), generation: 2 };
 		const texts = [handoffFocus(relay), successorOpeningText(relay, "Report body")];
 		for (const text of texts) {
-			expect(text).toContain("Your mandate has two halves. Both are mandatory.");
-			expect(text).toContain("You serve the user, not the previous holder.");
-			expect(text).toContain("they do not define the task");
-			expect(text).toContain("The user's original request is the only authority.");
-			expect(text).toContain(
-				"Independently verify the previous holder's work. Do not trust its empty ledger or its conclusion.",
-			);
-			expect(text).toContain(
-				"Re-read the user's original request; inspect the repository, the actual diff, and the tests.",
-			);
-			expect(text).toContain(
-				"Run the relevant tests yourself; look for omitted, stubbed, falsely marked-complete, or silently narrowed work.",
-			);
-			expect(text).toContain(
-				"An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
-			);
-			expect(text).toContain("B. Make your own contribution.");
-			expect(text).toContain(
-				"Work that the previous holder never planned",
-			);
-			expect(text).toContain(
-				"The ledger is your own judgment, not an inherited checklist.",
-			);
-			expect(text).toContain(
-				"Do not stop merely because the previous holder's items are marked complete.",
-			);
-			expect(text).toContain(
-				"The user's requirements are the authority for both generations.",
-			);
-			expect(text).toContain(
-				"You do not need to quote the original wording in the ledger or handoff summary.",
-			);
+			expect(text).toContain(doc["successor-mandate"]);
+			expect(text).toContain(doc["requirements-reminder"]);
 		}
-		expect(successorStartNudge(relay)).toContain(
-			"You serve the user, not the previous holder. Audit the inherited work, then judge for yourself what the user still needs and do that work.",
-		);
-		expect(firstEvaluationNudge()).toContain(
-			"The ledger must state what the user still needs, not merely what is easy to mark complete.",
-		);
+		expect(successorStartNudge(relay)).toContain(doc["successor-start"].split("{{")[0].trim());
+		expect(firstEvaluationNudge()).toContain(doc["stop-rule"]);
 		expect(
 			relayStatusText({ ...createRelay(), generation: 2 }, null, {
 				action: "handoff",
 			}),
-		).toContain("do not write instructions that bind what it may decide");
+		).toContain(doc["next.handoff"]);
 	});
 });
 

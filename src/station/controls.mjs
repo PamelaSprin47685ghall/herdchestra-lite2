@@ -31,18 +31,24 @@ import {
 } from "./fold.mjs";
 import { modelChoice, queueModelSwitch } from "./models.mjs";
 
+import { loadDoc, render } from "../prompts/index.mjs";
+import { applyStageBegin, missingStages } from "../scope/stage-flags.mjs";
+
+const E = loadDoc("errors");
+const L = loadDoc("labels");
+
 function handleRegretCall(station, call, base, currentIndex) {
   const state = station.state;
   const args = parseArgs(call);
   const reflection = trimText(args.reflection);
   if (!reflection) {
-    return errorResult("INVALID_ARGUMENT", "regret.reflection must be a non-empty string.", {
+    return errorResult("INVALID_ARGUMENT", E["regret-reflection"], {
       field: "reflection",
     });
   }
   const scope = currentScope(state);
   if (!scope) {
-    return errorResult("NOT_IN_SCOPE", "regret is only allowed inside a scope.");
+    return errorResult("NOT_IN_SCOPE", E["regret-scope"]);
   }
   const target = station.findRegretTarget(base, currentIndex, scope);
   if (!target.ok) return errorResult(target.code, target.reason);
@@ -60,7 +66,7 @@ function handleDeferCall(station, call) {
   const args = parseArgs(call);
   const intent = trimText(args.intent);
   if (!intent) {
-    return errorResult("INVALID_ARGUMENT", "defer.intent must be a non-empty string.", { field: "intent" });
+    return errorResult("INVALID_ARGUMENT", E["defer-intent"], { field: "intent" });
   }
   const out = station.deferIntent(call.id, intent);
   if (!out.ok) return errorResult(out.code, out.reason);
@@ -89,29 +95,27 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   const hasEnd = args.end === true;
   const rawModel = hasBegin ? args.begin?.model : null;
   if (rawModel != null && (typeof rawModel !== "string" || !rawModel.trim())) {
-    return errorResult("INVALID_ARGUMENT", "scope.begin.model must be a non-empty string or null.", { field: "model" });
+    return errorResult("INVALID_ARGUMENT", E["scope-model"], { field: "model" });
   }
   // Only a non-boolean end is illegal. `end: false` means "do not close" and
   // is valid alongside begin; without begin it simply does nothing.
   if (endPresent && typeof args.end !== "boolean") {
     return errorResult(
       "INVALID_ARGUMENT",
-      "scope.end must be the boolean true; closing a scope no longer takes a report.",
+      E["scope-end-type"],
     );
   }
   if (!hasBegin && !hasEnd) {
     return errorResult(
       "INVALID_ARGUMENT",
-      endPresent
-        ? "scope.end:false does not close a scope; provide begin or end:true."
-        : "Provide begin, end, or both.",
+      endPresent ? E["scope-end-false"] : E["scope-neither"],
     );
   }
   const elderReport = hasBegin ? args.begin?.elder_report : undefined;
   if (hasBegin && elderReport !== undefined && elderReport !== null && typeof elderReport !== "string") {
     return errorResult(
       "INVALID_ARGUMENT",
-      "scope.begin.elder_report must be a non-empty string or null.",
+      E["scope-elder-report"],
       { field: "elder_report" },
     );
   }
@@ -119,7 +123,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   if (hasBegin && !state.herdMode && state.relay?.handoffPending) {
     return errorResult(
       "RELAY_HANDOFF_PENDING",
-      "A relay handoff is pending. Do not open a new scope; wait for the successor.",
+      E["scope-handoff-pending"],
     );
   }
 
@@ -134,7 +138,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     if (rawPermission !== undefined && rawPermission !== null && rawPermission !== "ro" && rawPermission !== "rw") {
       return errorResult(
         "INVALID_ARGUMENT",
-        'scope.begin.permission must be "ro" or "rw".',
+        E["scope-permission"],
         { field: "permission" },
       );
     }
@@ -142,14 +146,14 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     if (declared === "rw" && args.begin?.stage === DECISION_FRAMING) {
       return errorResult(
         "RW_IN_DECISION_FRAMING",
-        'stage "decision-framing" answers why, not what, so it cannot carry a write scope. Declare permission: "ro" (trusted, never enforced), or open the write scope in a later stage.',
+        E["rw-decision-framing"],
         { field: "permission", stage: args.begin?.stage },
       );
     }
     if (declared === "rw" && station.relayOn(ctx) && state.relay?.firstEvaluation === null) {
       return errorResult(
         "RW_BEFORE_LEDGER",
-        'This generation has not submitted its first todo ledger yet, so permission "rw" is refused. Close all scopes and call todo with a write operation to submit the ledger (a todo view does not count), or declare permission: "ro" for a read-only scope. permission "ro" is trusted and never enforced.',
+        E["rw-before-ledger"],
         {
           field: "permission",
           generation: state.relay?.generation ?? 0,
@@ -164,10 +168,25 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   // begin cannot damage the scope being closed in a combined call.
   if (hasBegin) {
     if (state.herdMode && stage !== DECISION_FRAMING) {
-      return errorResult("INVALID_STAGE", `Herd mode is on. Only stage: "${DECISION_FRAMING}" can open.`);
+      return errorResult(
+        "INVALID_STAGE",
+        render(E["herd-only-framing"], { stage: DECISION_FRAMING }),
+      );
     }
     if (!state.herdMode && !NORMAL_STAGES.includes(stage)) {
-      return errorResult("INVALID_STAGE", `Herd mode is off. Choose a stage: ${NORMAL_STAGES.join(" | ")}.`);
+      return errorResult(
+        "INVALID_STAGE",
+        render(E["normal-stage"], { stages: NORMAL_STAGES.join(" | ") }),
+      );
+    }
+    if (stage === "direct-execution") {
+      const missing = missingStages(state.stageFlags);
+      if (missing.length > 0) {
+        return errorResult(
+          "STAGE_FLAGS_UNMET",
+          render(E["stage-flags-unmet"], { missing: missing.join(", ") }),
+        );
+      }
     }
     const validation = beginScope(createState(), {
       toolCallId: call.id,
@@ -212,7 +231,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
         if (!(typeof elderReport === "string" && trimText(elderReport))) {
           return errorResult(
             "MISSING_ELDER_REPORT",
-            "An unarchived elder scope is pending at this level. Pass its summary in begin.elder_report.",
+            E["missing-elder-report"],
             { intent: pending.intent },
           );
         }
@@ -240,6 +259,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       budget: args.begin?.budget,
     });
     if (!out.ok) return errorResult(out.code, out.reason);
+    state.stageFlags = applyStageBegin(state.stageFlags, stage);
     if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
     attachModel(station, out.scope, target, outer, from);
     out.scope.preBeginInputTokens =
@@ -250,12 +270,12 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   // --- End (only or combined) ---------------------------------------------
   const scope = currentScope(state);
   if (!scope) {
-    return errorResult("NOT_IN_SCOPE", "scope end is only allowed inside a scope.");
+    return errorResult("NOT_IN_SCOPE", E["scope-end-outside"]);
   }
   if (sameMessageBeginIds?.has(scope.beginToolCallId)) {
     return errorResult(
       "SAME_MESSAGE_BOUNDARY",
-      "A scope cannot begin and end in the same assistant message. Begin it in one message, do the work, then end it in a later message.",
+      E["same-message"],
     );
   }
   // In a combined call the elder report must be valid before anything closes.
@@ -265,7 +285,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     if (selfVisible && !(typeof elderReport === "string" && trimText(elderReport))) {
       return errorResult(
         "MISSING_ELDER_REPORT",
-        "An unarchived elder scope is pending at this level. Pass its summary in begin.elder_report.",
+        E["missing-elder-report"],
         { intent: scope.intent },
       );
     }
@@ -376,6 +396,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     });
     text += `\n\n${beginText(opened.scope)}`;
     if (opened.ok) {
+      state.stageFlags = applyStageBegin(state.stageFlags, stage);
       if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
       attachModel(station, opened.scope, target, outer, from);
       opened.scope.preBeginInputTokens =
@@ -420,7 +441,15 @@ function prepareWindow(station, { base, target, state, currentMessage, currentPe
 }
 
 function windowError(target, postFoldTokens) {
-  return errorResult("MODEL_CONTEXT_EXCEEDED", `The retained context is estimated at ${postFoldTokens} tokens; ${target.spec ?? "the target model"} has a ${target.window}-token window.`, { postFoldTokens, contextWindow: target.window });
+  return errorResult(
+    "MODEL_CONTEXT_EXCEEDED",
+    render(E["context-exceeded"], {
+      tokens: postFoldTokens,
+      model: target.spec ?? L["target-model"],
+      window: target.window,
+    }),
+    { postFoldTokens, contextWindow: target.window },
+  );
 }
 
 function floodPools(station, { state, base, currentMessage, currentPersisted }) {

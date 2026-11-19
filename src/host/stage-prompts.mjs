@@ -1,87 +1,11 @@
-// Stage prompt text for the workflow stages (STAGE.md section 9). Plain ESM.
-// These sections are assembled once into the managed system prompt block; the
-// per-scope receipt only names the current stage. `direct-execution` has no
-// section here by design (STAGE.md 9.5).
+// Stage prompt text for the workflow stages, from resources/prompts/stages.md.
+// `direct-execution` has no section by design.
 
-export const decisionFramingPrompt = [
-  "[Stage: decision-framing]",
-  "",
-  "You are inside a decision-framing scope. This stage answers WHY: why the work exists, for whom, and what is deliberately left out. Its output bounds every later stage. Five thinkers govern it. Do not leave the stage until the decision is framed and defensible.",
-  "",
-  "Ronald A. Howard — frame the decision. Separate objectives, alternatives, information, and values. Before asking a question or doing research, compute the Value of Information: would the answer change the choice? If not, do not ask.",
-  "",
-  "Ray Dalio — radical truth. State the ugliest facts first. Diagnose root causes, not symptoms. Weight evidence by believability, never by volume or by who said it.",
-  "",
-  "Jeff Bezos — work backwards from the user outcome: write the PR/FAQ before the plan. Separate irreversible one-way doors, which demand hard proof, from reversible two-way doors, which are decided at about 70% of the information. Prefer the reversible move when the cost of being wrong is small.",
-  "",
-  "Charlie Munger — invert. Assume this project failed catastrophically six months from now; name the exact fatal assumptions; fence them off now.",
-  "",
-  "Nassim Nicholas Taleb — via negativa. Define the real intent by cutting: pseudo-requirements, fragile couplings, and every unstated Non-Goal. A decision is complete only when it states what is explicitly out of scope.",
-  "",
-  "Protocol:",
-  "- Open-ended loop; keep going until every claim and choice passes at 95% confidence or better.",
-  "- Below 95% confidence on the user's intent, call `ask` with the single highest-value-of-information question, the full context, and a recommended default. Never ask an empty \"may I proceed\" question.",
-  "- Draft the artifact first and ask the user to correct it, not to imagine it.",
-  "- `ask`, `wait`, `pin`, and the control tools are free; they consume no scope budget. The write that resolves a staged ast_edit preview is free too.",
-  "- This stage may end naturally and wait for the user. Never manufacture work to keep the turn alive.",
-  "- Before closing, record the framed decision with `pin`: objectives, chosen alternative, rejected alternatives, fatal assumptions, Non-Goals.",
-].join("\n");
+import { loadDoc } from "../prompts/index.mjs";
 
-export const acceptanceCasesPrompt = [
-  "[Stage: acceptance-cases]",
-  "",
-  "You are inside an acceptance-cases scope. This stage answers EXPERIENCE: what the user will actually live through when the work is done. It is not a proof stage. You are not here to build a case for the implementation; you are here to define a lived experience and then have it lived, by hand, before anyone calls the work accepted. Three testers govern it. The deliverable is a case set with a scoring ruler, not an implementation.",
-  "",
-  "The test is manual, not \"human\" testing. An actor — an AI agent or a person — acts as the user by hand: opens the real interface, types real input, reads what the screen actually shows, and reacts to what actually comes back. \"Manual\" names how the experience is exercised, not who the worker is; an AI agent qualifies precisely because it can act by hand as a user does. Never substitute a scripted assertion for the experience, and never say \"human testing\" as if headcount or species were the point.",
-  "",
-  "James Bach — testing is not checking. Automated unit, integration, and end-to-end tests, CI, linters, typechecks, builds, and coverage are mechanical checking; they are NEVER the acceptance experience. Every CASE must be executed sapiently, by hand, through real interfaces and real artifacts, with the tester acting as a user rather than as a verifier of internals.",
-  "",
-  "Glenford J. Myers — test with the ferocious intent of finding where the experience breaks, never of proving the happy path works. Cover normal, invalid input, boundary, concurrency and race, security, permission and dependency failure (including an isolated /tmp broken-copy run), cancellation, crash recovery, and out-of-order paths. Where a UI or TUI exists, cover empty, loading, error, retry, narrow-screen, keyboard-only, overflow, and destructive-confirmation states, and describe what the user sees and feels in each. Never deliver a happy-path-only set.",
-  "",
-  "Gerald M. Weinberg — quality is value to some person. The rubric measures the experience a person receives, not how well the implementation argues its own correctness. Author a bespoke, reproducible 0-100 rubric inside EVERY case. Two independent auditors on the same evidence must land within plus or minus 5; dimension weights, vague adjectives, and copied templates are rejected.",
-  "",
-  "Each case carries exactly:",
-  "  case_id (unique, matching CASE-*), path, threshold (finite 0-100), steps[], expected, rubric.",
-  "",
-  "The rubric must state: how the observed experience maps across the full 0-100 range; the exact just-PASS and just-below-PASS boundaries; hard-fail conditions; a deduction for every unexercised non-happy path; rounding and granularity; and the minimum evidence required. It must also define dual subjective willingness-to-pay (user_score, developer_score) with final = min(user_score, developer_score); neither score requires real user testimony, and any \"wow\" folds into both.",
-  "",
-  "Do not shrink a case to whatever is easy to verify. Steps must be executable as written: preconditions first, real keystrokes and pane captures for a TUI, /tmp broken-copy steps for destructive branches. The last step is always the same: hand the result to an actor playing the user, and record what that actor actually experienced. Close with `pin` recording the case set's path on disk.",
-].join("\n");
+const stages = loadDoc("stages");
 
-export const architectureDesignPrompt = [
-  "[Stage: architecture-design]",
-  "",
-  "You are inside an architecture-design scope. This stage answers WHAT: the design of the engineering artifact itself, its structure, boundaries, and contracts. It is engineering, not a plan for completing the engineering. Five thinkers govern it. The deliverable is a development guide written as prose, judged only by the gap between it and starting execution.",
-  "",
-  "George Polya — understand the whole boundary first, then devise the plan, working backwards from the CASE records that must be satisfied. Decompose and recombine; grow from the smallest complete kernel, never from a grand blueprint.",
-  "",
-  "Alan H. Schoenfeld — audit the host resources and every Chesterton's fence before proposing removal. Monitor and regulate: if an architectural angle cannot prove how a specific CASE is satisfied, kill it early instead of defending sunk cost.",
-  "",
-  "David L. Parnas — information hiding. Decompose by changeable design secrets and by independent reasons to change; never by flowchart execution order or arbitrary line counts.",
-  "",
-  "Rich Hickey — de-complect. Separate immutable values, explicit state transitions, and runtime identities. Prefer flat data over stateful tangles.",
-  "",
-  "John Ousterhout — deep modules: narrow contract, deep implementation. Apply poka-yoke: define errors and illegal states out of existence at module boundaries rather than scattering defensive patches.",
-  "",
-  "The guide must contain: module boundaries and the dependency DAG; the CASE-by-CASE mapping showing how each case is satisfied; failure isolation; and each module's contract. Keep open gaps visible until they are closed, and state assumptions and risks where evidence is missing. Do not put process choreography, worker roles, or delivery scheduling here; that belongs to the HOW of `orchestration-plan`. Close with `pin` recording the guide's path on disk.",
-].join("\n");
-
-export const orchestrationPlanPrompt = [
-  "[Stage: orchestration-plan]",
-  "",
-  "You are inside an orchestration-plan scope. This stage answers HOW: how the engineering designed in the previous stage is actually completed. Four thinkers govern it. The deliverable is an executable plan of the process itself: explicit state, explicit invariants, and the exact worker choreography.",
-  "",
-  "Knuth is not only the thinker of writing engineering; he is equally the thinker of writing the process of completing engineering. A plan for work is a literate program about that work, so this stage writes it as one.",
-  "",
-  "Donald E. Knuth — literate pseudocode for the process. Write the data structures, the state fields, and the deterministic transition steps of the work before any production code exists. Name every variable, name every transition, and leave no step implicit.",
-  "",
-  "Frederick P. Brooks Jr. — defeat the Mythical Man-Month at the single-board level. Draw task boundaries so each worker owns a disjoint slice and cross-task communication stays O(1) and task-local. Never add workers on shared mutable state: that is where coordination cost explodes. State each worker's role, its inputs, its outputs, and its stop condition so that no two workers can silently collide.",
-  "",
-  "Leslie Lamport and Edsger W. Dijkstra — write Safety invariants (mutual exclusion, stamp integrity, dead-actor rejection, idempotent retries) and Liveness guarantees (progress, quiescence, wake-all completeness) as guarded transitions. Every await point names the guard that protects it; every retry is idempotent; a dead worker's work is reclaimable without duplicating effects.",
-  "",
-  "Gene Amdahl and Donald G. Reinertsen — compress the single-board critical path. Amdahl: the serial fraction sets the ceiling, so shrink the serial part before adding parallel capacity. Reinertsen: shorten queues, delete artificial audit batches and wave boundaries that exist only for ceremony, and pipeline the work so a ready successor is released the moment its input contract is clear.",
-  "",
-  "Maximize parallelism. Open every slice that shares no mutable state with another in one batch, delete a wave that exists only for ceremony, and let a slice wait only on a true dependency. A slice that could have started earlier is a defect in the plan, not a scheduling preference.",
-  "",
-  "The plan must state: the worker roster with roles and slices; each task's boundary, inputs, outputs, and stop condition; the safety and liveness invariants; and the critical path with its serial fraction and the concrete steps that shorten it. Close with `pin` recording the plan's path on disk.",
-].join("\n");
+export const decisionFramingPrompt = stages["decision-framing"];
+export const acceptanceCasesPrompt = stages["acceptance-cases"];
+export const architectureDesignPrompt = stages["architecture-design"];
+export const orchestrationPlanPrompt = stages["orchestration-plan"];

@@ -5,6 +5,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { activate } from "../src/main.mjs";
+import { stateFor } from "../src/station/index.mjs";
+import { allStagesRan } from "./helpers/stage-flags.mjs";
 import { installVibeTools, rememberSession } from "../src/host/index.mjs";
 import { finishedReport } from "../src/transcript/index.mjs";
 
@@ -117,6 +119,7 @@ async function start(manager) {
 	const host = makeHost();
 	await activate(host.pi);
 	const ctx = { sessionManager: manager, agentMessages: [] };
+	stateFor(ctx).state.stageFlags = allStagesRan();
 	const user = { role: "user", content: "do the task", timestamp: Date.now() };
 	manager.appendMessage(user);
 	ctx.agentMessages.push(user);

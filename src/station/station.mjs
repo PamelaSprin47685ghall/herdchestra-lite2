@@ -53,11 +53,6 @@ import {
 	resolveModelPolicy,
 } from "../host/pricing.mjs";
 import {
-	firstEvaluationNudge,
-	handoffEmptyReportNudge,
-	openLedgerNudge,
-} from "../relay/index.mjs";
-import {
 	handleDeferCall,
 	handleRegretCall,
 } from "./controls.mjs";
@@ -109,7 +104,9 @@ import {
 	restoreState,
 	SESSION_STATE_TYPE,
 } from "./restore.mjs";
-import { insideScopeNudge, skillReceiptText } from "./texts.mjs";
+import { skillReceiptText } from "./texts.mjs";
+import { planDispatch } from "./dispatch.mjs";
+import { nudgeDecision } from "./nudge.mjs";
 
 export function receiptTextOf(message) {
 	const content = message?.content;
@@ -177,54 +174,6 @@ export class SessionStation {
 	// handoff-state.mjs read the watermark through the station, so the ledger
 	// stays the station's own secret. Do not move these readers onto
 	// `station.usage`; that would hand the ledger's internals to its siblings.
-
-	get lastTotalInput() {
-		return this.usage.lastTotalInput;
-	}
-
-	set lastTotalInput(value) {
-		this.usage.lastTotalInput = value;
-	}
-
-	get lastOutputTokens() {
-		return this.usage.lastOutputTokens;
-	}
-
-	set lastOutputTokens(value) {
-		this.usage.lastOutputTokens = value;
-	}
-
-	get lastUsageCost() {
-		return this.usage.lastUsageCost;
-	}
-
-	set lastUsageCost(value) {
-		this.usage.lastUsageCost = value;
-	}
-
-	get lastCtxModel() {
-		return this.usage.lastCtxModel;
-	}
-
-	set lastCtxModel(value) {
-		this.usage.lastCtxModel = value;
-	}
-
-	get lastUsageModelKey() {
-		return this.usage.lastUsageModelKey;
-	}
-
-	set lastUsageModelKey(value) {
-		this.usage.lastUsageModelKey = value;
-	}
-
-	get sentContext() {
-		return this.usage.sentContext;
-	}
-
-	set sentContext(value) {
-		this.usage.sentContext = value;
-	}
 
 	onUsageMessage(message, ctx) {
 		this.usage.onMessage(message, ctx);
@@ -453,13 +402,9 @@ export class SessionStation {
 	prepareScopeDispatch(message, id, name) {
 		if (this.dispatchMessage !== message) {
 			this.dispatchMessage = message;
-			this.dispatchPositions.clear();
-			let afterScope = false;
-			for (const call of toolCalls(message)) {
-				this.dispatchPositions.set(call.id, { name: call.name, afterScope });
-				if (call.name === "scope") afterScope = true;
-			}
-			this.dispatchHasScope = afterScope;
+			const plan = planDispatch(message);
+			this.dispatchPositions = plan.positions;
+			this.dispatchHasScope = plan.hasScope;
 			this.rememberCallGroups(message);
 		}
 		const position = this.dispatchPositions.get(id);
@@ -657,45 +602,17 @@ export class SessionStation {
 	// -- Nudge -----------------------------------------------------------------
 
 	maybeNudge(message, ctx) {
-		if (this.state.herdMode) return;
 		if (!message || message.role !== "assistant") return;
 		if (!this.relayOn(ctx)) return;
-		if (toolCalls(message).length > 0) return;
 		if (this.nudged.has(message)) return;
+		const decision = nudgeDecision(this.state, {
+			hasToolCalls: toolCalls(message).length > 0,
+			hasHandoffReport: Boolean(this.handoffReport),
+		});
+		if (decision.kind === "none") return;
 		this.nudged.add(message);
-		if (currentScope(this.state)) {
-			this.deliverSteer(insideScopeNudge(this.state));
-			return;
-		}
-		const relay = this.state.relay;
-		if (!relay) {
-			this.deliverSteer(firstEvaluationNudge());
-			return;
-		}
-		if (relay.canStop) return;
-		if (relay.handoffPending) {
-			if (!this.handoffReport) {
-				this.deliverSteer(handoffEmptyReportNudge());
-			}
-			return;
-		}
-		if (!relay.lastLedger) {
-			this.deliverSteer(firstEvaluationNudge());
-			return;
-		}
-		// After a handoff, lastLedger still holds the previous holder's empty
-		// snapshot. The successor has not evaluated yet, so do not hand off again;
-		// require its first todo evaluation first.
-		if (relay.generation > 0 && relay.firstEvaluation === null) {
-			this.deliverSteer(firstEvaluationNudge());
-			return;
-		}
-		if (relay.lastLedger.empty) {
-			this.armHandoff(ctx);
-			this.deliverSteer(handoffEmptyReportNudge());
-			return;
-		}
-		this.deliverSteer(openLedgerNudge(relay, relay.lastLedger));
+		if (decision.kind === "handoff") this.armHandoff(ctx);
+		this.deliverSteer(decision.text);
 	}
 
 	// -- Rebase -----------------------------------------------------------------
@@ -828,3 +745,33 @@ export class SessionStation {
 		return onBeforeAgentStart(this, event, ctx);
 	}
 }
+
+// The usage ledger stays the station's secret. One table replaces twelve
+// hand-written getters and setters, and the surface stays the same.
+const USAGE_FIELDS = [
+	"lastTotalInput",
+	"lastOutputTokens",
+	"lastUsageCost",
+	"lastCtxModel",
+	"lastUsageModelKey",
+	"sentContext",
+];
+
+Object.defineProperties(
+	SessionStation.prototype,
+	Object.fromEntries(
+		USAGE_FIELDS.map((field) => [
+			field,
+			{
+				configurable: true,
+				enumerable: false,
+				get() {
+					return this.usage[field];
+				},
+				set(value) {
+					this.usage[field] = value;
+				},
+			},
+		]),
+	),
+);

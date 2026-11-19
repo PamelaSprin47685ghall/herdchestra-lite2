@@ -6,6 +6,27 @@ All notable changes to this extension. The format follows
 
 ## [2.3.0] — 2026-11-19
 
+## [Unreleased]
+
+### Changed
+
+- Every model-facing string now lives in `resources/prompts/` as Markdown
+  documents with `## section` blocks: tool contracts, parameter descriptions,
+  stage prompts, system rules, scope and relay receipts, and error text. Code
+  loads them through `src/prompts/index.mjs`; source modules only map and
+  compose. `package.json` ships `resources/`.
+- Stage flags replace the free jump into `direct-execution`:
+  `acceptance-cases`, `architecture-design`, and `orchestration-plan` start
+  false and turn true when their scope opens; `direct-execution` requires all
+  three and does not clear them; opening `decision-framing` clears them. Flags
+  persist across snapshots, compaction, and handoff.
+- Prompt tests now assert that each export equals its document section and that
+  templates render strictly, instead of pinning prose by substring.
+- The model name fallback in the context-window error moved into
+  `resources/prompts/labels.md`, so no model-facing sentence stays hardcoded in
+  source. The duplicated stage prompt copy in `docs/design/stages.md` is gone:
+  `resources/prompts/stages.md` is the only copy.
+
 This release numbers the workflow work accumulated since 2.1.0 as a minor
 release rather than a patch: the diagnostics ring, delta state persistence, the
 host seam self-check, the silent-failure fixes, and now the cross-stage

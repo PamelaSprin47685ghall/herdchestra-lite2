@@ -146,6 +146,11 @@ describe("createState", () => {
       baseModelKey: null,
       modelRecovery: null,
       modelCaches: {},
+      stageFlags: {
+        "acceptance-cases": false,
+        "architecture-design": false,
+        "orchestration-plan": false,
+      },
       herdMode: false,
       pins: [],
       version: 2,

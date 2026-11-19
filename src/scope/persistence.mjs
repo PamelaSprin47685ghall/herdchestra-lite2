@@ -12,6 +12,7 @@ import {
 } from "./state.mjs";
 import { copyRelay, createRelay, isValidRelay } from "../relay/state.mjs";
 import { WORKFLOW_STAGES } from "./stages.mjs";
+import { copyStageFlags } from "./stage-flags.mjs";
 
 function copyPins(pins) {
   return Array.isArray(pins) ? pins.filter(isNonEmptyString) : [];
@@ -179,6 +180,7 @@ export function serializeState(state) {
         : null,
     modelRecovery: copyModelRecovery(state.modelRecovery),
     modelCaches: copyModelCaches(state.modelCaches),
+    stageFlags: copyStageFlags(state.stageFlags),
   };
 }
 
@@ -520,6 +522,7 @@ export function deserializeState(input) {
           : null,
       modelRecovery: copyModelRecovery(data.modelRecovery),
       modelCaches: copyModelCaches(data.modelCaches),
+      stageFlags: copyStageFlags(data.stageFlags),
     };
   } catch {
     return createState();

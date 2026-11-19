@@ -18,6 +18,7 @@ import {
 import { createStationRegistry, stateFor } from "../src/station/index.mjs";
 import { scopeParameters } from "../src/tools/descriptions.mjs";
 import { beginGenerationAfterHandoff } from "../src/relay/index.mjs";
+import { allStagesRan } from "./helpers/stage-flags.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -313,6 +314,7 @@ async function start(options = {}) {
 		},
 		invokeTool: (params) => native.execute(params),
 	};
+	stateFor(ctx).state.stageFlags = allStagesRan();
 	if (options.sessionInit) manager.appendSessionInit(options.sessionInit);
 	const user = { role: "user", content: "do the task", timestamp: Date.now() };
 	manager.appendMessage(user);

@@ -266,3 +266,35 @@ describe("subagents and degraded hosts", () => {
 		expect(ui.working).toEqual([]);
 	});
 });
+
+describe("diagnostic count on the status line", () => {
+	test("stays off the line when no diagnostic is recorded", () => {
+		const { pi, handlers } = makeHost();
+		const runtime = createStatusRuntime({ diagnostics: { total: () => 0 } });
+		runtime.install(pi);
+		const ui = makeUi();
+		const ctx = { hasUI: true, ui, sessionManager: makeManager() };
+		emit(handlers, "session_start", {}, ctx);
+		expect(herdLine(ui)).not.toContain("⚠");
+	});
+
+	test("appends the count once a diagnostic is recorded", () => {
+		let issues = 0;
+		const { pi, handlers } = makeHost();
+		const runtime = createStatusRuntime({
+			diagnostics: { total: () => issues },
+		});
+		runtime.install(pi);
+		const ui = makeUi();
+		const ctx = { hasUI: true, ui, sessionManager: makeManager() };
+		emit(handlers, "session_start", {}, ctx);
+		issues = 3;
+		emit(
+			handlers,
+			"message_end",
+			{ message: { role: "assistant", usage: usage(10) } },
+			ctx,
+		);
+		expect(herdLine(ui)).toContain("⚠ 3");
+	});
+});

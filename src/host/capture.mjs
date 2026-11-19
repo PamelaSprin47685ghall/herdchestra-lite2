@@ -42,7 +42,10 @@ function patchGetter(prototype, name, marker, createGetter) {
 
 function state() {
 	const existing = globalThis[STATE_KEY];
-	if (existing) return existing;
+	if (existing) {
+		if (!existing.seams) existing.seams = freshSeams();
+		return existing;
+	}
 	const created = {
 		installed: false,
 		error: null,
@@ -50,6 +53,7 @@ function state() {
 		descriptor: null,
 		sessions: new WeakMap(),
 		builtinSlashExecutor: null,
+		seams: freshSeams(),
 	};
 	Object.defineProperty(globalThis, STATE_KEY, {
 		value: created,
@@ -57,6 +61,33 @@ function state() {
 		configurable: true,
 	});
 	return created;
+}
+
+/** The three host seams this extension patches, and their last verdict. */
+function freshSeams() {
+	return { vibeTools: false, runnerGetter: false, sessionMessages: null };
+}
+
+/**
+ * Summarize the host seam state. A missing seam degrades folding and the
+ * relay silently, so a caller must be able to see it.
+ *
+ * `agent.state.messages` stays unknown (null) until the first write, so an
+ * idle session does not report a seam it never touched.
+ */
+export function captureDiagnosis() {
+	const captured = state();
+	const missing = [];
+	if (!captured.seams.vibeTools) missing.push("activateVibeTools");
+	if (!captured.seams.runnerGetter) missing.push("extensionRunner");
+	if (captured.seams.sessionMessages === false) {
+		missing.push("agent.state.messages");
+	}
+	return {
+		ok: missing.length === 0 && captured.error === null,
+		missing,
+		error: captured.error,
+	};
 }
 
 function remember(session) {
@@ -94,7 +125,7 @@ export function sessionFor(context) {
 
 /** Keep registered scope tools in the host's atomic vibe-mode activation. */
 export function installVibeTools(AgentSession) {
-	patchMethod(
+	const patched = patchMethod(
 		AgentSession?.prototype,
 		"activateVibeTools",
 		VIBE_PATCH,
@@ -107,6 +138,9 @@ export function installVibeTools(AgentSession) {
 				]);
 			},
 	);
+	const captured = state();
+	captured.seams.vibeTools = Boolean(captured.seams.vibeTools || patched);
+	return captured.seams.vibeTools;
 }
 
 /**
@@ -184,8 +218,10 @@ export function setAgentMessages(context, messages) {
 		const agentState = session?.agent?.state;
 		if (!agentState || !Array.isArray(messages)) return false;
 		agentState.messages = messages.slice();
+		state().seams.sessionMessages = true;
 		return true;
 	} catch {
+		state().seams.sessionMessages = false;
 		return false;
 	}
 }
@@ -218,6 +254,7 @@ export function installRunnerCapture(AgentSession) {
 				return runner;
 			},
 	);
+	captured.seams.runnerGetter = true;
 	captured.error = null;
 	return captured;
 }

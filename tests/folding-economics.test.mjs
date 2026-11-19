@@ -500,23 +500,17 @@ describe("watermark response and measurement", () => {
 	});
 
 	test("rebaseBaselines shifts younger scopes but not the folded ancestor", () => {
-		const state = createState();
 		const scope = (id, baseModelKey = "fixture/current") => ({ id, baseInputTokens: 5000, baseModelKey });
-		state.scopes = [scope("scope-1"), scope("scope-9"), scope("scope-10", null)];
-		const station = { state, lastTotalInput: 6000, lastUsageModelKey: "fixture/current" };
-		const { rebaseBaselines } = stationForRebase();
-		rebaseBaselines.call(station, { savedTokens: 1000, maxOrder: 4 });
-		expect(state.scopes[0].baseInputTokens).toBe(5000);
-		expect(state.scopes[1].baseInputTokens).toBe(4000);
-		expect(state.scopes[2].baseInputTokens).toBe(5000);
+		const station = makeStation(makeManager());
+		station.state.scopes = [scope("scope-1"), scope("scope-9"), scope("scope-10", null)];
+		station.usage.lastTotalInput = 6000;
+		station.usage.lastUsageModelKey = "fixture/current";
+		station.rebaseBaselines({ savedTokens: 1000, maxOrder: 4 });
+		expect(station.state.scopes[0].baseInputTokens).toBe(5000);
+		expect(station.state.scopes[1].baseInputTokens).toBe(4000);
+		expect(station.state.scopes[2].baseInputTokens).toBe(5000);
 		expect(station.lastTotalInput).toBe(5000);
 	});
-
-	// Pull the real method off a station so the test exercises production code.
-	function stationForRebase() {
-		const fakeManager = makeManager();
-		return { rebaseBaselines: makeStation(fakeManager).rebaseBaselines };
-	}
 
 	function makeStation(manager) {
 		const { SessionStation } = requireSessionStation();

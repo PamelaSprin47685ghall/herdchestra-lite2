@@ -33,4 +33,18 @@ export {
   markSubsumedDescendants,
   truncateForHostBoundary,
 } from "./accounting.mjs";
-export { serializeState, deserializeState } from "./persistence.mjs";
+export {
+  serializeState,
+  deserializeState,
+  diffState,
+  applyDelta,
+  planStateEntry,
+  foldStateChain,
+  isStateCheckpoint,
+  normalizeStateEntry,
+  STATE_ENTRY_VERSION,
+  CHECKPOINT_EVERY,
+  MAX_DELTA_OPS,
+  MAX_DELTA_BYTES,
+} from "./persistence.mjs";
+export { createUsageLedger } from "./usage-ledger.mjs";

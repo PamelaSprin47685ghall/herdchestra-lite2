@@ -1,17 +1,73 @@
 // Station restore: rebuild state from the newest persisted snapshot.
 
-import { createState, deserializeState } from "../scope/index.mjs";
+import {
+	createState,
+	deserializeState,
+	foldStateChain,
+	isStateCheckpoint,
+} from "../scope/index.mjs";
 import { toolCalls } from "../transcript/index.mjs";
+import { record as recordDiagnostic } from "../host/diagnostics.mjs";
 
 const SESSION_STATE_TYPE = "scope.state";
+const MAX_REPLAY_ENTRIES = 512;
+
+/** Walk the branch newest-first and collect the state chain, oldest-first. */
+function collectChain(manager) {
+	const branch = manager?.getBranch?.() ?? [];
+	const chain = [];
+	let anchored = false;
+	for (let index = branch.length - 1; index >= 0; index -= 1) {
+		const entry = branch[index];
+		if (entry?.type !== "custom" || entry.customType !== SESSION_STATE_TYPE) {
+			continue;
+		}
+		chain.push(entry.data);
+		if (isStateCheckpoint(entry.data)) {
+			anchored = true;
+			break;
+		}
+		if (chain.length >= MAX_REPLAY_ENTRIES) break;
+	}
+	chain.reverse();
+	return { chain, anchored };
+}
+
+/**
+ * True when the branch holds a replayable base.
+ *
+ * A fresh session has none, so its first write must be a checkpoint rather
+ * than a delta against a snapshot no entry carries.
+ */
+export function hasPersistedBase(manager) {
+	try {
+		const { chain, anchored } = collectChain(manager);
+		return chain.length > 0 && anchored;
+	} catch {
+		return false;
+	}
+}
 
 function restoreState(manager) {
 	try {
-		const branch = manager?.getBranch?.() ?? [];
-		for (let index = branch.length - 1; index >= 0; index -= 1) {
-			const entry = branch[index];
-			if (entry?.type === "custom" && entry.customType === SESSION_STATE_TYPE) {
-				const restored = deserializeState(entry.data);
+		const { chain, anchored } = collectChain(manager);
+		if (chain.length > 0) {
+			if (!anchored) {
+				recordDiagnostic(
+					"restore",
+					new Error(
+						`state chain has no checkpoint within ${MAX_REPLAY_ENTRIES} entries`,
+					),
+				);
+				return createState();
+			}
+			const folded = foldStateChain(chain);
+			if (folded === null) {
+				recordDiagnostic("restore", new Error("state chain starts with a delta"));
+				return createState();
+			}
+			{
+				const restored = deserializeState(folded);
 				// A crash can leave an active scope whose begin message never
 				// reached the transcript. Drop such scopes instead of charging
 				// every later tool call to a scope that can never be closed.
@@ -48,8 +104,9 @@ function restoreState(manager) {
 				return restored;
 			}
 		}
-	} catch {
+	} catch (error) {
 		// Corrupt or absent history: start empty rather than guess.
+		recordDiagnostic("restore", error);
 	}
 	return createState();
 }

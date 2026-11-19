@@ -57,7 +57,8 @@ function hostLabelFromProcess() {
 }
 
 /** Build one isolated status runtime. Production installs one per extension. */
-export function createStatusRuntime() {
+export function createStatusRuntime(options = {}) {
+	const diagnostics = options.diagnostics ?? null;
 	const sessions = new WeakMap();
 	const totals = new Map();
 	const orphanKey = {};
@@ -146,6 +147,8 @@ export function createStatusRuntime() {
 		if (session.host) parts.push(stylePart(ctx, "accent", session.host));
 		if (session.usageText) parts.push(styleUsage(ctx, session.usageText));
 		if (session.prefix) parts.push(stylePart(ctx, "dim", session.prefix));
+		const issues = diagnostics ? diagnostics.total() : 0;
+		if (issues > 0) parts.push(stylePart(ctx, "dim", `⚠ ${issues}`));
 		if (parts.length === 0) return;
 		const line = parts.join(stylePart(ctx, "dim", "  ---  "));
 		if (line === session.widgetLine) return;
@@ -280,6 +283,6 @@ export function createStatusRuntime() {
 }
 
 /** Register the one-line status widget on a host. */
-export function installStatus(pi) {
-	return createStatusRuntime().install(pi);
+export function installStatus(pi, options) {
+	return createStatusRuntime(options).install(pi);
 }

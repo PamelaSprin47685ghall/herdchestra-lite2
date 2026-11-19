@@ -1,19 +1,26 @@
 {
 	"name": "herdchestra-lite2",
-	"version": "2.0.0",
-	"description": "Minimal budgeted-scope extension for omp",
+	"version": "2.1.0",
+	"description": "Budgeted work scopes, a five-stage workflow, herd mode, and a handoff relay for omp",
 	"type": "module",
 	"license": "MIT",
 	"private": true,
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/PamelaSprin47685ghall/herdchestra-lite2.git"
+	},
+	"keywords": [
+		"omp",
+		"extension",
+		"agent",
+		"workflow",
+		"scope"
+	],
 	"omp": {
-		"extensions": [
-			"./src/main.mjs"
-		]
+		"extensions": ["./src/main.mjs"]
 	},
 	"pi": {
-		"extensions": [
-			"./src/main.mjs"
-		]
+		"extensions": ["./src/main.mjs"]
 	},
 	"exports": {
 		".": "./src/main.mjs",
@@ -27,6 +34,10 @@
 		"bun": ">=1.4.4"
 	},
 	"scripts": {
-		"test": "bun test tests"
+		"test": "bun test tests",
+		"lint": "eslint ."
+	},
+	"devDependencies": {
+		"eslint": "^9.0.0"
 	}
 }

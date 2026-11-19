@@ -4,6 +4,7 @@
  */
 
 import {
+	captureDiagnosis,
 	installRunnerCapture,
 	installBuiltinSlashExecutor,
 } from "../host/capture.mjs";
@@ -25,4 +26,5 @@ export async function installCapture(pi, builtinExecutor) {
 	} catch {
 		// Optional. Scope enforcement uses only the public session manager.
 	}
+	return captureDiagnosis();
 }

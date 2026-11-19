@@ -8,6 +8,7 @@
 
 import { wireExtension, installCapture } from "./activation/index.mjs";
 import { installStatus, loadPricingCatalog } from "./host/index.mjs";
+import { total as diagnosticsTotal } from "./host/diagnostics.mjs";
 
 export async function activate(pi) {
 	// Resolve the builtin at the extension entry so compiled omp can bind its
@@ -19,10 +20,10 @@ export async function activate(pi) {
 	} catch {
 		// The standalone test environment has no omp module registry.
 	}
-	await installCapture(pi, builtinExecutor);
+	const diagnosis = await installCapture(pi, builtinExecutor);
 	const pricingCatalog = await loadPricingCatalog();
-	wireExtension(pi, pricingCatalog);
-	installStatus(pi);
+	wireExtension(pi, pricingCatalog, diagnosis);
+	installStatus(pi, { diagnostics: { total: diagnosticsTotal } });
 }
 
 export default activate;

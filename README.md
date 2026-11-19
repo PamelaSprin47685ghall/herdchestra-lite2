@@ -8,6 +8,14 @@ When a scope folds, its user messages move before its opening `scope` call. Thei
 
 Every `scope({ begin })` must name a stage. The innermost open scope determines the current stage; outside all scopes there is no stage.
 
+## Design records
+
+The contract lives here. The reasoning behind it lives in three places:
+
+- [Stage design](docs/design/stages.md) — why the five stages exist, and the line between designing the artifact and designing the work.
+- [ADR 0001: stage names](docs/adr/0001-stage-names.md) — the S1–S5 renaming, kept as history only.
+- [Changelog](CHANGELOG.md) — what changed and how to migrate.
+
 | Stage | Question | Allowed when |
 |---|---|---|
 | `decision-framing` | Why: intent, non-goals, the decision and its bounds | Herd mode only |
@@ -57,6 +65,21 @@ When `todo` empties the ledger, the relay arms a handoff transaction and the nex
 The ticket waits for `session.waitForRunEnd()`, then calls `session.compact(focus, { mode: "handoff" })`. That is exactly what the builtin `/handoff` and the RPC `handoff` command call; `focus` is the command's only argument, so no prompt, user message, or developer message is sent. The call resolves only after its background compaction commits. The ticket then advances the relay generation and calls `agent.continue()`; the successor's first request is a fresh request on the compacted transcript.
 
 The transaction records the session id, the branch handoff count, and the source generation before compaction. After the commit, the count must grow before the generation advances. If the process stops between the commit and the advance, the next gate recognizes the new handoff entry and advances idempotently instead of compacting twice. A pending station belongs to its session manager: a `/new` or session switch never routes the next stop to the old session.
+
+## Diagnostics
+
+Failures the extension once swallowed now land in a 64-entry ring: `herd-diag`
+prints it, and the status line carries `⚠ N` while records remain.
+
+On the first `session_start` of a session, a host seam that failed to install
+(the `activateVibeTools` method or the `extensionRunner` getter) raises a
+visible error naming it, so folding and the relay never degrade in silence.
+
+Session state is append-only. Each turn appends a delta against the previous
+snapshot under the host's `parentId` tree, with a checkpoint every 64 writes;
+`restore` replays back to the nearest checkpoint and still reads the older
+full-snapshot entries. A measured 400-turn session writes 4.5% of what
+per-turn snapshots would write.
 
 ## Model selection
 

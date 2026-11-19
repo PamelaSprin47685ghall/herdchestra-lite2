@@ -16,20 +16,13 @@
 
 ## 2. 去梯子化阶段枚举
 
-去掉 `S1`–`S5` 代号，统一采用职责明确的双词英文阶段名：
-
-| 原代号（改名溯源） | 阶段枚举值 | 职责说明 | 允许开启条件 |
-|---|---|---|---|
-| S1 | `decision-framing` | 需求澄清、非目标裁剪、方案决策（支持 `ask` 交互） | 仅 `herdMode === true` |
-| S2 | `acceptance-cases` | 用户体验验收：用例设计、AI 或人手工扮演用户的实测、体验评分标尺 | 仅 `herdMode === false` |
-| S3 | `architecture-design` | 模块边界、数据流与开发指南设计 | 仅 `herdMode === false` |
-| S4 | `orchestration-plan` | 文学化伪代码、不变量定义与并发任务协调编排 | 仅 `herdMode === false` |
-| S5 | `direct-execution` | 实干：代码实现、测试执行、实测验收与交付闭环 | 仅 `herdMode === false` |
+去掉 `S1`–`S5` 代号，统一采用职责明确的双词英文阶段名。改名对照与来历保留在
+[ADR 0001](../adr/0001-stage-names.md)，只在查阅旧对话时才需要。
 
 - 在 `herdMode === false`（默认模式）下，模型可在 `acceptance-cases`、`architecture-design`、`orchestration-plan`、`direct-execution` 之间**任意跳转、回退或重复开启**，不设前置阶段门禁。
 - 一旦进入 `herdMode === true`，模型开启新 `scope` 时**只能**指定 `stage: "decision-framing"`。
 - 离开所有 `scope` 后，当前天然处于无阶段状态，不在 `state` 中维护全局 `stage`。
-- 表首列仅用于记录本次改名的来源，便于审阅旧对话；运行时枚举、`scope.begin.stage` 的 schema、提示词与工具契约中**一律不得出现 `S1`–`S5`**。
+- 运行时枚举、`scope.begin.stage` 的 schema、提示词与工具契约中**一律不得出现 `S1`–`S5`**。
 
 ### 2.1 语义轴：why、what、how、do
 

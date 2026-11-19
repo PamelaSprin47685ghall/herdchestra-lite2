@@ -1,0 +1,72 @@
+// Diagnostics: a bounded ring of the last failures.
+//
+// The station records a failure in `lastError`, and the next failure
+// overwrites it. One string is not a history. This ring keeps the last 64
+// records, oldest first, so a user can see what broke and in which order.
+//
+// The buffer is synchronous and allocation-light. A record costs one object.
+
+const DEFAULT_LIMIT = 64;
+
+/**
+ * Build one isolated ring.
+ *
+ * @param {number} limit Number of records to keep.
+ */
+export function createDiagnostics(limit = DEFAULT_LIMIT) {
+	const size = Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_LIMIT;
+	const slots = new Array(size);
+	let cursor = 0;
+	let total = 0;
+
+	/**
+	 * Append one record. The oldest record is overwritten when the ring is
+	 * full.
+	 *
+	 * @param {string} domain Short source name, such as "usage" or "persist".
+	 * @param {unknown} error Error or value that describes the failure.
+	 * @param {unknown} [detail] Optional extra evidence.
+	 */
+	function record(domain, error, detail) {
+		const message =
+			error instanceof Error ? error.message : String(error ?? "");
+		const entry = { t: Date.now(), domain, message };
+		if (detail !== undefined) entry.detail = detail;
+		slots[cursor] = entry;
+		cursor = (cursor + 1) % size;
+		total += 1;
+		return entry;
+	}
+
+	/** Return the retained records, oldest first. */
+	function snapshot() {
+		const count = Math.min(total, size);
+		const out = new Array(count);
+		for (let step = count; step > 0; step -= 1) {
+			out[count - step] = slots[(cursor - step + size) % size];
+		}
+		return out;
+	}
+
+	/** Drop every record and reset the running count. */
+	function reset() {
+		slots.fill(undefined);
+		cursor = 0;
+		total = 0;
+	}
+
+	return {
+		limit: size,
+		record,
+		snapshot,
+		reset,
+		total: () => total,
+	};
+}
+
+const shared = createDiagnostics();
+
+export const record = shared.record;
+export const snapshot = shared.snapshot;
+export const reset = shared.reset;
+export const total = shared.total;

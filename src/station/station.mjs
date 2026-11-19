@@ -25,12 +25,11 @@
  */
 
 import {
+	createUsageLedger,
 	currentScope,
 	deferIntent,
-	findActivePools,
-	modelCacheFor,
+	planStateEntry,
 	serializeState,
-	touchModelCache,
 } from "../scope/index.mjs";
 import {
 	applyCollapses,
@@ -48,9 +47,8 @@ import {
 	READ_WRITE_SUBAGENT,
 } from "../host/policy.mjs";
 import { sessionFor, setAgentMessages } from "../host/capture.mjs";
-import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
+import { record } from "../host/diagnostics.mjs";
 import {
-	charsToTokens,
 	createEmptyCatalog,
 	resolveModelPolicy,
 } from "../host/pricing.mjs";
@@ -105,7 +103,11 @@ import {
 	reconcileActualModel,
 	takePendingModelSwitch,
 } from "./models.mjs";
-import { restoreState, SESSION_STATE_TYPE } from "./restore.mjs";
+import {
+	hasPersistedBase,
+	restoreState,
+	SESSION_STATE_TYPE,
+} from "./restore.mjs";
 import { insideScopeNudge, skillReceiptText } from "./texts.mjs";
 
 export function receiptTextOf(message) {
@@ -125,6 +127,13 @@ export class SessionStation {
 		this.registry = registry;
 		this.pricingCatalog = pricingCatalog ?? createEmptyCatalog();
 		this.state = restoreState(manager);
+		// Only a replayable base on disk can anchor a delta. A fresh session,
+		// or a chain whose anchor fell outside the replay window, starts with a
+		// checkpoint instead.
+		this.lastPersisted = hasPersistedBase(manager)
+			? serializeState(this.state)
+			: null;
+		this.stateWrites = 0;
 		this.handled = new Map();
 		this.processedCalls = new Set();
 		this.processedMessages = new Set();
@@ -141,123 +150,78 @@ export class SessionStation {
 		this.handoffReport = null;
 		this.relayState = true;
 		this.todoGrantKey = null;
-		// Measured usage baseline. Populated from live messages and restored
-		// from the branch tail so a session reload (-r) keeps the watermark.
-		this.lastTotalInput = null;
-		this.lastOutputTokens = 0;
-		this.lastUsageCost = null;
-		this.lastCtxModel = null;
-		this.lastUsageModelKey = null;
 		this.pendingModelSwitch = null;
 		this.modelSwitchInFlight = null;
-		this.recordedUsageMessages = new WeakSet();
-		this.sentContext = null;
-		this.restoreUsageFromBranch();
+		this.usage = createUsageLedger({
+			state: this.state,
+			contextMessages: () => this.contextMessages(),
+			persist: () => this.persist(),
+			foldBatch: (args) => this.foldBatch(args),
+			noteError: (domain, error) => this.noteError(domain, error),
+			sliceChars,
+			netRemovableTokens,
+			modelKeyOf: (message) => modelKey(message),
+			actualModelOf: (ctx) => actualModel(ctx),
+		});
+		this.usage.restoreFromBranch(this.manager);
 	}
 
-	// -- Usage baseline -------------------------------------------------------
+	// -- Usage ledger ---------------------------------------------------------
 
-	/** Recover the most recent usage from the persisted branch tail. */
-	restoreUsageFromBranch() {
-		try {
-			const branch = this.manager?.getBranch?.();
-			if (!Array.isArray(branch)) return;
-			for (let index = branch.length - 1; index >= 0; index -= 1) {
-				const entry = branch[index];
-				const message = entry?.message;
-				const usage = entryUsage(entry);
-				if (!usage) continue;
-				const snap = usageSnapshot(usage);
-				const tIn = totalInput(snap);
-				this.lastTotalInput = tIn;
-				this.lastUsageModelKey = modelKey(message);
-				this.lastOutputTokens = snap.output;
-				this.lastUsageCost = usage.cost ?? null;
-				for (const scope of this.state.scopes ?? []) {
-					if (scope.baseInputTokens === null || scope.baseInputTokens === undefined) {
-						scope.baseInputTokens = tIn;
-						scope.baseModelKey = this.lastUsageModelKey;
-					}
-				}
-				break;
-			}
-		} catch {
-			// A host without a branch keeps the null baseline.
-		}
+	// The measured usage facts live in ../scope/usage-ledger.mjs. These
+	// accessors keep the station's public surface stable for the modules that
+	// read the watermark directly.
+
+	get lastTotalInput() {
+		return this.usage.lastTotalInput;
 	}
 
-	/**
-	 * Synchronously fold one assistant usage payload into the station's live
-	 * baseline. Called at the head of assistant_message, message_end, and the
-	 * extra message_end listener. Idempotent per message object.
-	 */
+	set lastTotalInput(value) {
+		this.usage.lastTotalInput = value;
+	}
+
+	get lastOutputTokens() {
+		return this.usage.lastOutputTokens;
+	}
+
+	set lastOutputTokens(value) {
+		this.usage.lastOutputTokens = value;
+	}
+
+	get lastUsageCost() {
+		return this.usage.lastUsageCost;
+	}
+
+	set lastUsageCost(value) {
+		this.usage.lastUsageCost = value;
+	}
+
+	get lastCtxModel() {
+		return this.usage.lastCtxModel;
+	}
+
+	set lastCtxModel(value) {
+		this.usage.lastCtxModel = value;
+	}
+
+	get lastUsageModelKey() {
+		return this.usage.lastUsageModelKey;
+	}
+
+	set lastUsageModelKey(value) {
+		this.usage.lastUsageModelKey = value;
+	}
+
+	get sentContext() {
+		return this.usage.sentContext;
+	}
+
+	set sentContext(value) {
+		this.usage.sentContext = value;
+	}
+
 	onUsageMessage(message, ctx) {
-		if (!message || message.role !== "assistant") return;
-		try {
-			if (!message.usage || this.recordedUsageMessages.has(message)) return;
-			this.recordedUsageMessages.add(message);
-			const snap = usageSnapshot(message.usage);
-			const tIn = totalInput(snap);
-			const live = actualModel(ctx) ?? this.lastCtxModel;
-			const key = message.provider ? modelKey(message) : modelKey(live) ?? modelKey(message);
-			this.lastUsageModelKey = key;
-			this.lastTotalInput = tIn;
-			this.lastOutputTokens = snap.output;
-			this.lastUsageCost = message.usage.cost ?? null;
-			if (key) {
-				const messages = this.contextMessages();
-				const index = messages.findLastIndex((item) => item === message ||
-					(item?.role === "assistant" && message.timestamp != null && item.timestamp === message.timestamp &&
-						(modelKey(item) ?? key) === key));
-				const sent = this.sentContext;
-				const frontier = index < 0 ? messages.length : index;
-				const chars = sent?.key === key ? sent.chars : sliceChars(index < 0 ? messages : messages.slice(0, index));
-				this.sentContext = null;
-				touchModelCache(this.state, key, {
-					cachedUntilPos: sent?.key === key ? Math.min(frontier, sent.frontier) : frontier,
-					lastUsedAt: Date.now(),
-					tokensPerChar: chars > 0 && tIn > 0 ? Math.min(0.8, Math.max(0.15, tIn / chars)) :
-						modelCacheFor(this.state, key)?.tokensPerChar ?? 0.3,
-				});
-			}
-			const callIds = new Set(toolCalls(message).map((call) => call.id));
-			for (const scope of this.state.scopes ?? []) {
-				if (callIds.has(scope.beginToolCallId)) continue;
-				if (scope.baseInputTokens === null || scope.baseInputTokens === undefined) {
-					scope.baseInputTokens = tIn;
-					scope.baseModelKey = key;
-				}
-			}
-			// A tool_call may close a scope before its assistant usage arrives.
-			// Complete the deferred measured interior once usage is visible.
-			const collapses = this.state.collapses ?? [];
-			for (let index = collapses.length - 1; index >= 0; index -= 1) {
-				const record = collapses[index];
-				if (record.endInputTokensPending !== true) continue;
-				if (!callIds.has(record.endToolCallId)) continue;
-				record.endInputTokens = tIn;
-				const base = record.baseInputTokens;
-				record.measuredModelKey = key;
-				record.interiorTokens =
-					key && typeof base === "number" && record.baseModelKey === key
-						? Math.max(0, tIn - base)
-						: Number.isFinite(record.interiorChars)
-							? Math.ceil(charsToTokens(record.interiorChars, this.tokensPerCharFor(key)))
-							: null;
-				record.endInputTokensPending = false;
-				for (const scope of this.state.scopes ?? []) {
-					if (
-						scope.preBeginInputTokens === null ||
-						scope.preBeginInputTokens === undefined
-					) {
-						scope.preBeginInputTokens = tIn;
-					}
-				}
-			}
-			this.persist();
-		} catch (error) {
-			this.lastError = String(error?.message ?? error);
-		}
+		this.usage.onMessage(message, ctx);
 	}
 
 	// -- Persistence ---------------------------------------------------------
@@ -266,10 +230,25 @@ export class SessionStation {
 		const manager = this.manager;
 		if (!manager || typeof manager.appendCustomEntry !== "function") return;
 		try {
-			manager.appendCustomEntry(SESSION_STATE_TYPE, serializeState(this.state));
+			const next = serializeState(this.state);
+			const entry = planStateEntry(this.lastPersisted, next, this.stateWrites);
+			if (!entry) return;
+			manager.appendCustomEntry(SESSION_STATE_TYPE, entry);
+			this.lastPersisted = next;
+			this.stateWrites = entry.kind === "checkpoint" ? 0 : this.stateWrites + 1;
 		} catch (error) {
-			this.lastError = String(error?.message ?? error);
+			this.noteError("persist", error);
 		}
+	}
+
+	/**
+	 * Record one failure. `lastError` stays for compatibility with any reader;
+	 * the ring in ../host/diagnostics.mjs keeps the history a single field
+	 * loses on the next failure.
+	 */
+	noteError(domain, error) {
+		this.lastError = String(error?.message ?? error);
+		record(domain, error);
 	}
 
 	// -- Policy --------------------------------------------------------------
@@ -470,103 +449,39 @@ export class SessionStation {
 
 	/** Observed token density, clamped to a safe band. */
 	tokensPerChar(messages) {
-		const totalIn = this.lastTotalInput;
-		if (!Number.isFinite(totalIn) || totalIn <= 0) return 0.3;
-		const source = Array.isArray(messages) ? messages : this.contextMessages();
-		const chars = sliceChars(source);
-		if (!(chars > 0)) return 0.3;
-		const rate = totalIn / chars;
-		return Math.min(0.8, Math.max(0.15, rate));
+		return this.usage.tokensPerChar(messages);
 	}
 
 	tokensPerCharFor(key) {
-		return key ? modelCacheFor(this.state, key)?.tokensPerChar ?? 0.3 : this.tokensPerChar();
+		return this.usage.tokensPerCharFor(key);
 	}
 
 	/** Live outbound watermark from the last usage plus fresh pending messages. */
-	currentContextTokens(messages, key = this.lastUsageModelKey) {
-		const source = Array.isArray(messages) ? messages : this.contextMessages();
-		const tpc = this.tokensPerCharFor(key);
-		if (!Number.isFinite(this.lastTotalInput) || (key && key !== this.lastUsageModelKey)) {
-			return charsToTokens(sliceChars(source), tpc);
-		}
-		let pendingChars = 0;
-		let usageIndex = -1;
-		for (let index = 0; index < source.length; index += 1) {
-			if (source[index]?.role === "assistant" && source[index]?.usage) usageIndex = index;
-		}
-		for (let index = usageIndex + 1; index < source.length; index += 1) {
-			if (source[index]?.role === "custom") continue;
-			pendingChars += sliceChars([source[index]]);
-		}
-		return (
-			this.lastTotalInput +
-			(Number.isFinite(this.lastOutputTokens) ? this.lastOutputTokens : 0) +
-			charsToTokens(pendingChars, tpc)
-		);
+	currentContextTokens(messages, key) {
+		return this.usage.currentContextTokens(messages, key);
 	}
 
 	/** True when a message already carries the usage that closes a scope. */
 	usageArrivedFor(message) {
-		return Boolean(message?.usage) || this.recordedUsageMessages.has(message);
+		return this.usage.usageArrivedFor(message);
 	}
 
 	usagePricingHint() {
-		return this.lastUsageCost ? { usage: { cost: this.lastUsageCost } } : undefined;
+		return this.usage.pricingHint();
 	}
 
 	resetUsageWatermark() {
-		this.lastTotalInput = null;
-		this.lastOutputTokens = 0;
-		if (this.sentContext) this.sentContext.frontier = 0;
+		this.usage.resetWatermark();
 	}
 
 	/** After a fold, shift younger baselines down by the reclaimed tokens. */
 	rebaseBaselines(folded) {
-		if (!folded || typeof folded.savedTokens !== "number" || folded.savedTokens <= 0) return;
-		const saved = folded.savedTokens;
-		for (const scope of this.state.scopes ?? []) {
-			const orderMatch = /^scope-(\d+)$/.exec(String(scope.id ?? ""));
-			const order = orderMatch ? Number(orderMatch[1]) : 0;
-			if (Number.isInteger(folded.maxOrder) && order <= folded.maxOrder) continue;
-			if (this.lastUsageModelKey && scope.baseModelKey === this.lastUsageModelKey && Number.isFinite(scope.baseInputTokens)) {
-				scope.baseInputTokens = Math.max(0, scope.baseInputTokens - saved);
-			}
-		}
-		if (Number.isFinite(this.lastTotalInput)) {
-			this.lastTotalInput = Math.max(0, this.lastTotalInput - saved);
-		}
+		this.usage.rebase(folded);
 	}
 
 	/** Accrue per-step cache rent and flood the pools at the 90% watermark. */
 	accrueRentAndFlood(original, pricing, contextTokens, key) {
-		const pools = findActivePools(this.state);
-		if (pools.length === 0) return false;
-		const tpc = this.tokensPerCharFor(key);
-		const pHit = Number.isFinite(pricing?.pHit) ? Math.max(0, pricing.pHit) : 1e-6;
-		let dirty = false;
-		for (const group of pools) {
-			for (const record of group.pool) {
-				const rent = netRemovableTokens(record, tpc, key) * pHit;
-				if (rent > 0) {
-					record.paidRentCost = (Number.isFinite(record.paidRentCost) ? record.paidRentCost : 0) + rent;
-					dirty = true;
-				}
-			}
-		}
-		const cw = Number.isFinite(pricing?.contextWindow) ? pricing.contextWindow : null;
-		const emergency = cw && Number.isFinite(contextTokens) && contextTokens >= 0.9 * cw;
-		if (emergency) {
-			const tree = Array.isArray(original) ? original : this.contextMessages();
-			const batch = pools.flatMap(({ pool }) => pool).sort((a, b) => a.order - b.order);
-			const folded = this.foldBatch({ batch, base: tree, epoch: this.state.epoch });
-			if (folded.rebased) {
-				this.rebaseBaselines(folded);
-				dirty = true;
-			}
-		}
-		if (dirty) this.persist();
-		return dirty;
+		return this.usage.accrue(original, pricing, contextTokens, key);
 	}
 
 	findRegretTarget(base, currentIndex, scope) {
@@ -766,7 +681,7 @@ export class SessionStation {
 			}
 			return { messages };
 		} catch (error) {
-			this.lastError = String(error?.message ?? error);
+			this.noteError("context", error);
 			return { messages: original };
 		}
 	}

@@ -525,3 +525,164 @@ export function deserializeState(input) {
     return createState();
   }
 }
+
+// -- Append-only state entries ---------------------------------------------
+//
+// The host session is a tree of entries linked by `parentId`, and
+// `appendCustomEntry` only ever adds a child. A full snapshot per turn grows
+// the session file by the whole state each time. These helpers write what
+// changed instead: a delta against the previous snapshot, with a periodic
+// checkpoint that bounds replay length.
+//
+// A checkpoint carries the full serialized state. A delta carries JSON-patch
+// style operations over that state. A legacy entry carries the state alone,
+// with no envelope, and still restores.
+
+export const STATE_ENTRY_VERSION = 2;
+export const CHECKPOINT_EVERY = 64;
+export const MAX_DELTA_OPS = 32;
+export const MAX_DELTA_BYTES = 16 * 1024;
+
+function isStateEnvelope(value) {
+  return (
+    isPlainObject(value) &&
+    value.version === STATE_ENTRY_VERSION &&
+    (value.kind === "checkpoint" || value.kind === "delta")
+  );
+}
+
+/** True when an entry can anchor a replay: a checkpoint or a legacy snapshot. */
+export function isStateCheckpoint(value) {
+  if (!isStateEnvelope(value)) return true;
+  return value.kind === "checkpoint";
+}
+
+/** Wrap any stored payload as an envelope a chain reader understands. */
+export function normalizeStateEntry(value) {
+  if (isStateEnvelope(value)) return value;
+  return {
+    version: STATE_ENTRY_VERSION,
+    kind: "checkpoint",
+    state: value,
+  };
+}
+
+function diffInto(prev, next, path, ops) {
+  if (prev === next) return;
+  if (Array.isArray(prev) && Array.isArray(next)) {
+    const common = Math.min(prev.length, next.length);
+    for (let index = 0; index < common; index += 1) {
+      diffInto(prev[index], next[index], [...path, index], ops);
+    }
+    for (let index = common; index < next.length; index += 1) {
+      ops.push({ op: "set", path: [...path, index], value: next[index] });
+    }
+    if (next.length < prev.length) {
+      ops.push({ op: "trunc", path, length: next.length });
+    }
+    return;
+  }
+  if (isPlainObject(prev) && isPlainObject(next)) {
+    for (const key of Object.keys(next)) {
+      if (Object.hasOwn(prev, key)) {
+        diffInto(prev[key], next[key], [...path, key], ops);
+      } else {
+        ops.push({ op: "set", path: [...path, key], value: next[key] });
+      }
+    }
+    for (const key of Object.keys(prev)) {
+      if (!Object.hasOwn(next, key)) {
+        ops.push({ op: "del", path: [...path, key] });
+      }
+    }
+    return;
+  }
+  ops.push({ op: "set", path, value: next });
+}
+
+/** Operations that turn `prev` into `next`. Both are serialized states. */
+export function diffState(prev, next) {
+  const ops = [];
+  diffInto(prev, next, [], ops);
+  return ops;
+}
+
+function cloneValue(value) {
+  return typeof structuredClone === "function"
+    ? structuredClone(value)
+    : JSON.parse(JSON.stringify(value));
+}
+
+/** Apply operations to a copy of `base`. The input is never mutated. */
+export function applyDelta(base, ops) {
+  const root = cloneValue(base);
+  if (!Array.isArray(ops)) return root;
+  for (const op of ops) {
+    if (!Array.isArray(op?.path) || op.path.length === 0) continue;
+    if (op.op === "trunc") {
+      // A truncation names the array itself, not a key inside it.
+      let target = root;
+      for (const key of op.path) {
+        target = target?.[key];
+        if (target === undefined || target === null) break;
+      }
+      if (Array.isArray(target)) target.length = op.length;
+      continue;
+    }
+    let parent = root;
+    for (let index = 0; index < op.path.length - 1; index += 1) {
+      parent = parent?.[op.path[index]];
+      if (parent === undefined || parent === null) break;
+    }
+    if (parent === undefined || parent === null) continue;
+    const key = op.path[op.path.length - 1];
+    if (op.op === "set") {
+      parent[key] = op.value;
+    } else if (op.op === "del") {
+      delete parent[key];
+    }
+  }
+  return root;
+}
+
+/**
+ * Choose the next entry for `next`.
+ *
+ * Returns null when nothing changed, so an idle turn writes nothing.
+ */
+export function planStateEntry(prev, next, writesSinceCheckpoint = 0) {
+  if (!prev) {
+    return { version: STATE_ENTRY_VERSION, kind: "checkpoint", state: next };
+  }
+  const ops = diffState(prev, next);
+  if (ops.length === 0) return null;
+  const bytes = JSON.stringify(ops).length;
+  if (
+    writesSinceCheckpoint >= CHECKPOINT_EVERY - 1 ||
+    ops.length > MAX_DELTA_OPS ||
+    bytes > MAX_DELTA_BYTES
+  ) {
+    return { version: STATE_ENTRY_VERSION, kind: "checkpoint", state: next };
+  }
+  return { version: STATE_ENTRY_VERSION, kind: "delta", ops };
+}
+
+/**
+ * Replay a chain, oldest first, into one serialized state.
+ *
+ * @param {unknown[]} entries Stored payloads, oldest first.
+ * @returns {object|null} The state, or null when a delta has no anchor.
+ */
+export function foldStateChain(entries) {
+  let base = null;
+  for (const raw of entries) {
+    const entry = normalizeStateEntry(raw);
+    if (entry.kind === "delta") {
+      if (base === null) return null;
+      base = applyDelta(base, entry.ops);
+    } else {
+      base = entry.state;
+    }
+  }
+  return base;
+}

@@ -1,6 +1,7 @@
 // Activation hooks: bind each host event to its station gatekeeper.
 
 import { sessionFor } from "../host/capture.mjs";
+import { hackContext } from "../host/hack-context.mjs";
 import { installScopeDispatch } from "../host/scope-dispatch.mjs";
 
 export function wireHooks(pi, registry) {
@@ -45,7 +46,7 @@ export function wireHooks(pi, registry) {
 	pi.on("tool_call", (event, ctx) =>
 		registry.stationFor(ctx).onToolCall(event, ctx),
 	);
-	pi.on("context", (event, ctx) =>
+	hackContext(pi, (event, ctx) =>
 		bindDispatch(ctx).onContext(event?.messages, ctx),
 	);
 	pi.on("before_agent_start", (event, ctx) =>

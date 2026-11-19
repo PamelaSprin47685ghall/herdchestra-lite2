@@ -1,4 +1,4 @@
-// Transcript tail: vibe wording and the final user tail. Pure. No I/O.
+// Rewrite vibe wording on outbound messages. Pure. No I/O.
 
 const VIBE_WORKER_LINE = "drive two worker CLIs";
 const VIBE_WORKER_REPLACEMENT =
@@ -26,15 +26,3 @@ export function rewriteVibeMessage(message) {
 	return content === message.content ? message : { ...message, content };
 }
 
-/** Append one final user message with a single text block. */
-export function appendUserTail(messages, text) {
-	const source = Array.isArray(messages) ? messages : [];
-	return [
-		...source,
-		{
-			role: "user",
-			content: [{ type: "text", text }],
-			timestamp: Date.now(),
-		},
-	];
-}

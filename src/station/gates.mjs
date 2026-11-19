@@ -7,9 +7,9 @@ import {
 	currentScope,
 	truncateForHostBoundary,
 } from "../scope/index.mjs";
-import { appendUserTail, beatKey, toolCalls } from "../transcript/index.mjs";
+import { beatKey, toolCalls } from "../transcript/index.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../host/policy.mjs";
-import { injectSystemPrompt, languageSkill } from "../host/prompts.mjs";
+import { injectSystemPrompt } from "../host/prompts.mjs";
 import {
 	firstEvaluationNudge,
 	isTodoView,
@@ -146,24 +146,22 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 	}
 }
 
+function observeHostBoundary(station, messages) {
+	const boundaryKey = hostBoundaryKey(messages);
+	if (!boundaryKey || boundaryKey === station.hostBoundaryKey) return;
+	station.hostBoundaryKey = boundaryKey;
+	truncateForHostBoundary(station.state);
+	station.resetUsageWatermark();
+	station.persist();
+}
+
 function onContext(station, messages, ctx) {
 	const original = Array.isArray(messages) ? messages : [];
-	if (station.policy(ctx) === READ_ONLY_SUBAGENT) {
-		return {
-			messages: appendUserTail(
-				original,
-				`<system-reminder>${languageSkill}</system-reminder>`,
-			),
-		};
-	}
+	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return { messages: original };
 	station.ensureTools(ctx);
 	const relayOn = station.relayOn(ctx);
-	const boundaryKey = hostBoundaryKey(original);
-	if (boundaryKey && boundaryKey !== station.hostBoundaryKey) {
-		station.hostBoundaryKey = boundaryKey;
-		truncateForHostBoundary(station.state);
-		station.persist();
-	}
+	observeHostBoundary(station, original);
+	station.observeActualModel(ctx);
 	const relay = station.state.relay;
 	const gen0FirstEmpty =
 		relay?.generation === 0 &&
@@ -172,7 +170,10 @@ function onContext(station, messages, ctx) {
 	if (relayOn && relay?.handoffPending && relay.lastLedger?.empty && !gen0FirstEmpty) {
 		return station.tickets.contextHandoff(station, ctx, original);
 	}
-	return station.transformContext(original, ctx);
+	const restore = station.tickets.restoreScopedModel;
+	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
+	if (req) return restore(station, ctx, req, original, (messages) => station.withSkillReceipt(original, station.transformContext(messages, ctx), ctx));
+	return station.withSkillReceipt(original, station.transformContext(original, ctx), ctx);
 }
 
 function onSessionStop(station, ctx) {
@@ -209,6 +210,7 @@ function onSessionSwitch(station, event, ctx) {
 	const reason = event?.reason ?? event?.handoffReason;
 	if (reason !== "handoff" && event?.handoff !== true) return;
 	truncateForHostBoundary(station.state);
+	station.resetUsageWatermark();
 	if (station.handoffExecuting) station.advanceRelayForHandoff();
 	station.persist();
 }
@@ -216,7 +218,12 @@ function onSessionSwitch(station, event, ctx) {
 function onSessionCompact(station, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return;
 	truncateForHostBoundary(station.state);
+	station.hostBoundaryKey = hostBoundaryKey(station.contextMessages()) ?? station.hostBoundaryKey;
+	station.resetUsageWatermark();
 	station.persist();
+	const restore = station.tickets.restoreScopedModel;
+	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
+	if (req) return restore(station, ctx, req);
 }
 
 function onAutoCompactionEnd(station, event, ctx) {
@@ -227,15 +234,21 @@ function onAutoCompactionEnd(station, event, ctx) {
 }
 
 function onBeforeAgentStart(station, event, ctx) {
-	if (ctx?.model) station.lastCtxModel = ctx.model;
 	const policy = station.policy(ctx);
 	const prompt = injectSystemPrompt(event?.systemPrompt);
 	const promptChanged = prompt !== event?.systemPrompt;
 	// Relay and `todo` share one verdict: `ensureTools` owns that rule, so no
 	// second `getActiveTools` check may live here.
 	if (policy === READ_WRITE_SUBAGENT) station.ensureTools(ctx);
-	if (!promptChanged) return undefined;
-	return { systemPrompt: prompt };
+	const result = promptChanged ? { systemPrompt: prompt } : undefined;
+	if (policy === READ_ONLY_SUBAGENT) return result;
+	// The host selects the provider model before it calls the context hook.
+	observeHostBoundary(station, station.contextMessages());
+	station.observeActualModel(ctx);
+	const restore = station.tickets.restoreScopedModel;
+	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
+	if (req) return restore(station, ctx, req, result);
+	return result;
 }
 
 export {

@@ -28,11 +28,12 @@ import {
 	currentScope,
 	deferIntent,
 	findActivePools,
+	modelCacheFor,
 	serializeState,
+	touchModelCache,
 } from "../scope/index.mjs";
 import {
 	applyCollapses,
-	appendUserTail,
 	beatKey,
 	filterRegrets,
 	findRegretTarget,
@@ -46,7 +47,7 @@ import {
 	MAIN_AGENT,
 	READ_WRITE_SUBAGENT,
 } from "../host/policy.mjs";
-import { setAgentMessages } from "../host/capture.mjs";
+import { sessionFor, setAgentMessages } from "../host/capture.mjs";
 import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
 import {
 	charsToTokens,
@@ -100,8 +101,24 @@ import {
 	onToolCall,
 } from "./gates.mjs";
 import { CONTROL_TOOLS, controlsIn, processedKey, sameTail } from "./messages.mjs";
+import {
+	modelKey,
+	actualModel,
+	observeActualModel,
+	reconcileActualModel,
+	takePendingModelSwitch,
+} from "./models.mjs";
 import { restoreState, SESSION_STATE_TYPE } from "./restore.mjs";
-import { insideScopeNudge, tailText } from "./texts.mjs";
+import { insideScopeNudge, skillReceiptText } from "./texts.mjs";
+
+export function receiptTextOf(message) {
+	const content = message?.content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((block) => block?.type === "text")
+		.map((block) => block.text)
+		.join("\n");
+}
 
 export class SessionStation {
 	constructor(manager, pi, tickets, registry, pricingCatalog) {
@@ -142,10 +159,13 @@ export class SessionStation {
 		// from the branch tail so a session reload (-r) keeps the watermark.
 		this.lastTotalInput = null;
 		this.lastOutputTokens = 0;
-		this.lastModelHint = null;
 		this.lastUsageCost = null;
 		this.lastCtxModel = null;
+		this.lastUsageModelKey = null;
+		this.pendingModelSwitch = null;
+		this.modelSwitchInFlight = null;
 		this.recordedUsageMessages = new WeakSet();
+		this.sentContext = null;
 		this.restoreUsageFromBranch();
 	}
 
@@ -159,22 +179,18 @@ export class SessionStation {
 			for (let index = branch.length - 1; index >= 0; index -= 1) {
 				const entry = branch[index];
 				const message = entry?.message;
-				if ((message?.model || message?.provider) && !this.lastModelHint) {
-					this.lastModelHint = {
-						model: message.model,
-						provider: message.provider,
-					};
-				}
 				const usage = entryUsage(entry);
 				if (!usage) continue;
 				const snap = usageSnapshot(usage);
 				const tIn = totalInput(snap);
 				this.lastTotalInput = tIn;
+				this.lastUsageModelKey = modelKey(message);
 				this.lastOutputTokens = snap.output;
 				this.lastUsageCost = usage.cost ?? null;
 				for (const scope of this.state.scopes ?? []) {
 					if (scope.baseInputTokens === null || scope.baseInputTokens === undefined) {
 						scope.baseInputTokens = tIn;
+						scope.baseModelKey = this.lastUsageModelKey;
 					}
 				}
 				break;
@@ -192,25 +208,38 @@ export class SessionStation {
 	onUsageMessage(message, ctx) {
 		if (!message || message.role !== "assistant") return;
 		try {
-			if ((message.model || message.provider) && !this.lastModelHint) {
-				this.lastModelHint = {
-					model: message.model,
-					provider: message.provider,
-				};
-			}
-			if (ctx?.model && !this.lastCtxModel) this.lastCtxModel = ctx.model;
 			if (!message.usage || this.recordedUsageMessages.has(message)) return;
 			this.recordedUsageMessages.add(message);
 			const snap = usageSnapshot(message.usage);
 			const tIn = totalInput(snap);
+			const live = actualModel(ctx) ?? this.lastCtxModel;
+			const key = message.provider ? modelKey(message) : modelKey(live) ?? modelKey(message);
+			this.lastUsageModelKey = key;
 			this.lastTotalInput = tIn;
 			this.lastOutputTokens = snap.output;
 			this.lastUsageCost = message.usage.cost ?? null;
+			if (key) {
+				const messages = this.contextMessages();
+				const index = messages.findLastIndex((item) => item === message ||
+					(item?.role === "assistant" && message.timestamp != null && item.timestamp === message.timestamp &&
+						(modelKey(item) ?? key) === key));
+				const sent = this.sentContext;
+				const frontier = index < 0 ? messages.length : index;
+				const chars = sent?.key === key ? sent.chars : sliceChars(index < 0 ? messages : messages.slice(0, index));
+				this.sentContext = null;
+				touchModelCache(this.state, key, {
+					cachedUntilPos: sent?.key === key ? Math.min(frontier, sent.frontier) : frontier,
+					lastUsedAt: Date.now(),
+					tokensPerChar: chars > 0 && tIn > 0 ? Math.min(0.8, Math.max(0.15, tIn / chars)) :
+						modelCacheFor(this.state, key)?.tokensPerChar ?? 0.3,
+				});
+			}
 			const callIds = new Set(toolCalls(message).map((call) => call.id));
 			for (const scope of this.state.scopes ?? []) {
 				if (callIds.has(scope.beginToolCallId)) continue;
 				if (scope.baseInputTokens === null || scope.baseInputTokens === undefined) {
 					scope.baseInputTokens = tIn;
+					scope.baseModelKey = key;
 				}
 			}
 			// A tool_call may close a scope before its assistant usage arrives.
@@ -222,11 +251,12 @@ export class SessionStation {
 				if (!callIds.has(record.endToolCallId)) continue;
 				record.endInputTokens = tIn;
 				const base = record.baseInputTokens;
+				record.measuredModelKey = key;
 				record.interiorTokens =
-					typeof base === "number"
+					key && typeof base === "number" && record.baseModelKey === key
 						? Math.max(0, tIn - base)
 						: Number.isFinite(record.interiorChars)
-							? charsToTokens(record.interiorChars)
+							? Math.ceil(charsToTokens(record.interiorChars, this.tokensPerCharFor(key)))
 							: null;
 				record.endInputTokensPending = false;
 				for (const scope of this.state.scopes ?? []) {
@@ -237,9 +267,8 @@ export class SessionStation {
 						scope.preBeginInputTokens = tIn;
 					}
 				}
-				this.persist();
-				break;
 			}
+			this.persist();
 		} catch (error) {
 			this.lastError = String(error?.message ?? error);
 		}
@@ -426,19 +455,24 @@ export class SessionStation {
 	}
 
 	foldElder(args) {
-		const folded = foldElderInBranch({ manager: this.manager, ...args });
+		const folded = foldElderInBranch({ manager: this.manager, state: this.state, ...args });
 		if (folded.rebased) this.needsRebase = true;
 		return folded;
 	}
 
 	/** Fold a whole elder pool in one branch operation. */
 	foldBatch(args) {
-		return foldBatchInBranch({
+		const folded = foldBatchInBranch({
 			manager: this.manager,
 			state: this.state,
-			tokensPerChar: this.tokensPerChar(),
+			tokensPerChar: this.tokensPerCharFor(this.lastUsageModelKey),
 			...args,
 		});
+		if (folded.rebased) {
+			this.needsRebase = true;
+			if (this.sentContext) this.sentContext.frontier = Math.min(this.sentContext.frontier, folded.foldStartIdx ?? 0);
+		}
+		return folded;
 	}
 
 	/** Observed token density, clamped to a safe band. */
@@ -452,11 +486,15 @@ export class SessionStation {
 		return Math.min(0.8, Math.max(0.15, rate));
 	}
 
+	tokensPerCharFor(key) {
+		return key ? modelCacheFor(this.state, key)?.tokensPerChar ?? 0.3 : this.tokensPerChar();
+	}
+
 	/** Live outbound watermark from the last usage plus fresh pending messages. */
-	currentContextTokens(messages) {
+	currentContextTokens(messages, key = this.lastUsageModelKey) {
 		const source = Array.isArray(messages) ? messages : this.contextMessages();
-		const tpc = this.tokensPerChar(source);
-		if (!Number.isFinite(this.lastTotalInput)) {
+		const tpc = this.tokensPerCharFor(key);
+		if (!Number.isFinite(this.lastTotalInput) || (key && key !== this.lastUsageModelKey)) {
 			return charsToTokens(sliceChars(source), tpc);
 		}
 		let pendingChars = 0;
@@ -484,6 +522,12 @@ export class SessionStation {
 		return this.lastUsageCost ? { usage: { cost: this.lastUsageCost } } : undefined;
 	}
 
+	resetUsageWatermark() {
+		this.lastTotalInput = null;
+		this.lastOutputTokens = 0;
+		if (this.sentContext) this.sentContext.frontier = 0;
+	}
+
 	/** After a fold, shift younger baselines down by the reclaimed tokens. */
 	rebaseBaselines(folded) {
 		if (!folded || typeof folded.savedTokens !== "number" || folded.savedTokens <= 0) return;
@@ -492,7 +536,7 @@ export class SessionStation {
 			const orderMatch = /^scope-(\d+)$/.exec(String(scope.id ?? ""));
 			const order = orderMatch ? Number(orderMatch[1]) : 0;
 			if (Number.isInteger(folded.maxOrder) && order <= folded.maxOrder) continue;
-			if (Number.isFinite(scope.baseInputTokens)) {
+			if (this.lastUsageModelKey && scope.baseModelKey === this.lastUsageModelKey && Number.isFinite(scope.baseInputTokens)) {
 				scope.baseInputTokens = Math.max(0, scope.baseInputTokens - saved);
 			}
 		}
@@ -502,15 +546,15 @@ export class SessionStation {
 	}
 
 	/** Accrue per-step cache rent and flood the pools at the 90% watermark. */
-	accrueRentAndFlood(original, pricing, contextTokens) {
+	accrueRentAndFlood(original, pricing, contextTokens, key) {
 		const pools = findActivePools(this.state);
 		if (pools.length === 0) return false;
-		const tpc = this.tokensPerChar(original);
+		const tpc = this.tokensPerCharFor(key);
 		const pHit = Number.isFinite(pricing?.pHit) ? Math.max(0, pricing.pHit) : 1e-6;
 		let dirty = false;
 		for (const group of pools) {
 			for (const record of group.pool) {
-				const rent = netRemovableTokens(record, tpc) * pHit;
+				const rent = netRemovableTokens(record, tpc, key) * pHit;
 				if (rent > 0) {
 					record.paidRentCost = (Number.isFinite(record.paidRentCost) ? record.paidRentCost : 0) + rent;
 					dirty = true;
@@ -521,13 +565,11 @@ export class SessionStation {
 		const emergency = cw && Number.isFinite(contextTokens) && contextTokens >= 0.9 * cw;
 		if (emergency) {
 			const tree = Array.isArray(original) ? original : this.contextMessages();
-			for (const group of pools) {
-				const folded = this.foldBatch({ batch: group.pool.slice(), base: tree, epoch: group.epoch });
-				if (folded.rebased) {
-					this.needsRebase = true;
-					this.rebaseBaselines(folded);
-					dirty = true;
-				}
+			const batch = pools.flatMap(({ pool }) => pool).sort((a, b) => a.order - b.order);
+			const folded = this.foldBatch({ batch, base: tree, epoch: this.state.epoch });
+			if (folded.rebased) {
+				this.rebaseBaselines(folded);
+				dirty = true;
 			}
 		}
 		if (dirty) this.persist();
@@ -612,8 +654,8 @@ export class SessionStation {
 
 	// -- Execute cores (called by tickets) -------------------------------------
 
-	executeScope(toolCallId, params) {
-		return executeScope(this, toolCallId, params);
+	executeScope(toolCallId, params, ctx) {
+		return executeScope(this, toolCallId, params, ctx);
 	}
 
 	executeRegret(toolCallId, params) {
@@ -628,8 +670,20 @@ export class SessionStation {
 		return executePin(this, toolCallId, params);
 	}
 
-	directScope(toolCallId, params) {
-		return directScope(this, toolCallId, params);
+	directScope(toolCallId, params, ctx) {
+		return directScope(this, toolCallId, params, ctx);
+	}
+
+	observeActualModel(ctx) {
+		observeActualModel(this, ctx);
+	}
+
+	takePendingModelSwitch(ctx) {
+		return takePendingModelSwitch(this, ctx);
+	}
+
+	reconcileActualModel(ctx, req, outcome) {
+		return reconcileActualModel(this, ctx, req, outcome);
 	}
 
 	directRegret(toolCallId, params) {
@@ -700,13 +754,16 @@ export class SessionStation {
 
 	transformContext(original, ctx) {
 		try {
+			const model = actualModel(ctx);
+			const key = modelKey(model);
 			const pricing = resolveModelPolicy(
 				this.pricingCatalog,
-				ctx,
-				this.usagePricingHint(),
+				model ? { model } : ctx,
+				key === this.lastUsageModelKey ? this.usagePricingHint() : undefined,
 			);
-			const contextTokens = this.currentContextTokens(original);
-			this.accrueRentAndFlood(original, pricing, contextTokens);
+			const contextTokens = this.currentContextTokens(original, key);
+			const contextWindow = model?.contextWindow ?? pricing.contextWindow;
+			this.accrueRentAndFlood(original, { ...pricing, contextWindow }, contextTokens, key);
 			let messages = filterRegrets(original, this.state.regrets);
 			messages = applyCollapses(
 				messages,
@@ -715,17 +772,17 @@ export class SessionStation {
 			);
 			messages = messages.map(rewriteVibeMessage);
 			this.maybeRebase(ctx, messages);
-			messages = appendUserTail(messages, tailText(this.state, this.relayOn(ctx)));
+			if (key) {
+				this.sentContext = {
+					key,
+					chars: sliceChars(messages),
+					frontier: messages.length,
+				};
+			}
 			return { messages };
 		} catch (error) {
 			this.lastError = String(error?.message ?? error);
-			try {
-				return {
-					messages: appendUserTail(original, tailText(this.state, this.relayOn(ctx))),
-				};
-			} catch {
-				return { messages: original };
-			}
+			return { messages: original };
 		}
 	}
 
@@ -782,6 +839,31 @@ export class SessionStation {
 
 	onToolCall(event, ctx) {
 		return onToolCall(this, event, ctx);
+	}
+
+	/**
+	 * Build the dynamic skill message for this turn. The hack-context wrapper
+	 * persists it into session history, so the request and the history stay in
+	 * sync. Reuse an identical trailing receipt to stay idempotent within a turn.
+	 */
+	skillReceipt(ctx) {
+		const text = skillReceiptText(this.state, this.relayOn(ctx));
+		return {
+			role: "developer",
+			content: [{ type: "text", text }],
+			attribution: "agent",
+			timestamp: Date.now(),
+			herdSkill: true,
+		};
+	}
+
+	withSkillReceipt(original, result, ctx) {
+		const messages = Array.isArray(result?.messages) ? result.messages : original;
+		const last = messages.at(-1);
+		const text = skillReceiptText(this.state, this.relayOn(ctx));
+		if (last?.herdSkill === true && receiptTextOf(last) === text) return result;
+		const skill = this.skillReceipt(ctx);
+		return { ...result, messages: [...messages, skill] };
 	}
 
 	onContext(messages, ctx) {

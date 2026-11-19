@@ -188,3 +188,20 @@ describe("loadPricingCatalog", () => {
 		expect(catalog.byFullId.size).toBeGreaterThanOrEqual(0);
 	});
 });
+test("scope preparse keeps exact colon IDs and resolves role thinking suffixes", async () => {
+	const { createEmptyCatalog, preparseModelSpec } = await import("../src/host/pricing.mjs");
+	const first = { provider: "fixture", id: "qwen:high", contextWindow: 12_000, cost: { input: 2, cacheRead: 0.2 } };
+	const second = { provider: "fixture", id: "qwen", contextWindow: 50_000, cost: { input: 3, cacheRead: 0.3 } };
+	const ctx = { settings: { modelRoles: { fast: "fixture/qwen" } }, modelRegistry: {
+		getAll: () => [first, second],
+		find: (provider, id) => [first, second].find((model) => model.provider === provider && model.id === id),
+	} };
+	const catalog = createEmptyCatalog();
+	const exact = preparseModelSpec(catalog, ctx, "fixture/qwen:high");
+	expect(exact.canonicalKey).toBe("fixture/qwen:high");
+	expect(exact.contextWindow).toBe(12_000);
+	expect(exact.pricing.pHit).toBeCloseTo(0.2e-6, 12);
+	const role = preparseModelSpec(catalog, ctx, "@fast:low");
+	expect(role.canonicalKey).toBe("fixture/qwen");
+	expect(role.contextWindow).toBe(50_000);
+});

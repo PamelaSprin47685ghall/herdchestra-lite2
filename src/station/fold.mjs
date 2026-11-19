@@ -1,6 +1,8 @@
-// Station fold: measured interior accounting, pool economics, and single-fork
-// batch folding. Pure host-session manipulation plus pure analysis helpers;
-// no business state lives here.
+/**
+ * Station fold: measured interior accounting, pool economics, and single-fork
+ * batch folding. Pure host-session manipulation plus pure analysis helpers;
+ * no business state lives here.
+ */
 
 import {
 	applyCollapses,
@@ -12,9 +14,16 @@ import {
 	toolCalls,
 } from "../transcript/index.mjs";
 import { crossesHandoffBoundary } from "../transcript/collapse.mjs";
-import { cloneMessage, finishedResultMessage } from "./messages.mjs";
+import { cloneMessage } from "./messages.mjs";
 import { charsToTokens } from "../host/pricing.mjs";
-import { markSubsumedDescendants } from "../scope/index.mjs";
+import { appendHistoryMessage } from "../host/hack-context.mjs";
+import {
+	CACHE_TTL_MS,
+	capCachePositions,
+	cacheIsFresh,
+	markSubsumedDescendants,
+	modelCacheFor,
+} from "../scope/index.mjs";
 
 const WATERMARK_ECONOMIC = 0.82;
 const WATERMARK_EMERGENCY = 0.9;
@@ -56,18 +65,24 @@ export function sliceChars(messages) {
 	return chars;
 }
 
-/** Net tokens an archived elder saves once its receipt and pins are kept. */
-export function netRemovableTokens(record, tokensPerChar = 0.3) {
+/**
+ * Net tokens an archived elder saves after keeping its receipt, pins, and user messages.
+ */
+export function netRemovableTokens(record, tokensPerChar = 0.3, key = null) {
 	if (!record || record.collapsed !== false) return 0;
-	const interior = Number.isFinite(record.interiorTokens)
+	const sameTokenizer = key === (record.measuredModelKey ?? null);
+	const interior = sameTokenizer && Number.isFinite(record.interiorTokens)
 		? record.interiorTokens
 		: charsToTokens(record.interiorChars ?? 0, tokensPerChar);
 	const reportTokens = charsToTokens(
 		finishedReport(record.report ?? "").length,
 		tokensPerChar,
 	);
-	const pinTokens = Number.isFinite(record.pinTokens) ? record.pinTokens : 0;
-	return Math.max(0, interior - reportTokens - pinTokens);
+	const pinTokens = Number.isFinite(record.pinChars)
+		? charsToTokens(record.pinChars, tokensPerChar)
+		: sameTokenizer && Number.isFinite(record.pinTokens) ? record.pinTokens : 0;
+	const userTokens = charsToTokens(record.userChars ?? 0, tokensPerChar);
+	return Math.max(0, interior - reportTokens - pinTokens - userTokens);
 }
 
 /** Measure a closing scope's open interior using the exact open interval. */
@@ -81,7 +96,7 @@ export function measureScopeInterior(
 	const begin = findBegin(base, beginToolCallId);
 	const endIndex = findToolCallIndex(base, endToolCallId);
 	if (!begin || endIndex < 0 || endIndex <= begin.resultIndex) {
-		return { interiorChars: 0, pinTokens: 0 };
+		return { interiorChars: 0, pinTokens: 0, pinChars: 0, userChars: 0 };
 	}
 	const slice = filterRegrets(
 		base.slice(begin.resultIndex + 1, endIndex),
@@ -89,8 +104,10 @@ export function measureScopeInterior(
 	);
 	const interiorChars = sliceChars(slice);
 	const pinned = collectPinnedMessages(slice, {});
-	const pinTokens = charsToTokens(sliceChars(pinned), tokensPerChar);
-	return { interiorChars, pinTokens };
+	const pinChars = sliceChars(pinned);
+	const pinTokens = charsToTokens(pinChars, tokensPerChar);
+	const userChars = sliceChars(slice.filter((message) => message?.role === "user"));
+	return { interiorChars, pinTokens, pinChars, userChars };
 }
 
 function budgetSteps(budget) {
@@ -107,13 +124,223 @@ function beginResultTokens(record, tokensPerChar) {
 	return charsToTokens(finishedReport(record?.report ?? "").length, tokensPerChar);
 }
 
+// -- Multi-model fold economics ---------------------------------------------
+
+/**
+ * Cache view for one model key: the provider still holds messages
+ * [0, cachedUntilPos) while lastUsedAt sits inside the five-minute TTL.
+ * Returns { pos, tpc, fresh }; pos is an exclusive message index and tpc is
+ * the model's measured tokens-per-char density.
+ */
+function cacheView(state, key, now, fallbackTpc) {
+	const entry = modelCacheFor(state, key);
+	const fallback =
+		Number.isFinite(fallbackTpc) && fallbackTpc > 0 ? fallbackTpc : 0.3;
+	if (!entry) return { pos: 0, tpc: fallback, fresh: false };
+	const fresh = cacheIsFresh(entry, now, CACHE_TTL_MS);
+	const pos =
+		fresh && Number.isInteger(entry.cachedUntilPos) && entry.cachedUntilPos > 0
+			? entry.cachedUntilPos
+			: 0;
+	const tpc =
+		Number.isFinite(entry.tokensPerChar) && entry.tokensPerChar > 0
+			? entry.tokensPerChar
+			: fallback;
+	return { pos, tpc, fresh };
+}
+
+/** Normalize an outer-model descriptor's pricing defensively. */
+function outerPricing(descriptor, fallback) {
+	const raw = descriptor && typeof descriptor === "object" ? descriptor.pricing : null;
+	const source = raw && typeof raw === "object" ? raw : {};
+	const pick = (a, b) =>
+		Number.isFinite(a) ? Math.max(0, a) : Number.isFinite(b) ? Math.max(0, b) : null;
+	return {
+		pHit: pick(source.pHit, fallback.pHit) ?? 0,
+		pMiss: pick(source.pMiss, fallback.pMiss) ?? 0,
+	};
+}
+
+/** Locate the pool's collapsible interiors in source coordinates. */
+function foldIntervals(source, records) {
+	const intervals = [];
+	for (const record of records) {
+		const begin = findBegin(source, record.beginToolCallId);
+		const end = findToolCallIndex(source, record.endToolCallId);
+		if (!begin || end <= begin.resultIndex || crossesHandoffBoundary(source, begin.resultIndex + 1, end)) continue;
+		intervals.push({ record, begin, end });
+	}
+	return intervals.sort((a, b) => a.begin.assistantIndex - b.begin.assistantIndex);
+}
+
+/**
+ * Multi-model fold economics. The caller names the target model (`modelKey`)
+ * and every still-returnable outer model (`outerModels`, descriptors with
+ * { key, spec, pricing }); the popped child is simply absent from the list.
+ *
+ *   value = A_paid + nHat*pHit*cachedB + (pMiss+(nHat-1)*pHit)*uncachedB
+ *   cost  = sum over distinct target+outer caches of (pMiss-pHit) * retained
+ *           cached tail tokens
+ *   fold  = value > cost   (one comparison, not a per-model AND)
+ *
+ * Token counts are projected per model from character counts, so no
+ * subtraction ever crosses tokenizers. cachedUntilPos is an exclusive
+ * message index; a cache counts only while lastUsedAt is inside the TTL.
+ */
+function shouldFoldPoolMulti({
+	pool,
+	state,
+	base,
+	budget,
+	pricing,
+	contextTokens,
+	tokensPerChar = 0.3,
+	emergency = false,
+	modelKey,
+	outerModels,
+	now,
+}) {
+	const records = (Array.isArray(pool) ? pool : []).filter(
+		(record) => record && record.collapsed !== true,
+	);
+	if (records.length === 0) {
+		return { fold: false, reason: "empty", mode: "multi-model" };
+	}
+
+	const pHit = Number.isFinite(pricing?.pHit) ? Math.max(0, pricing.pHit) : 1e-6;
+	const pMiss = Number.isFinite(pricing?.pMiss) ? Math.max(0, pricing.pMiss) : 10e-6;
+	const cw = Number.isFinite(pricing?.contextWindow) ? pricing.contextWindow : null;
+	const threshold = emergency ? WATERMARK_EMERGENCY : WATERMARK_ECONOMIC;
+
+	let A_paid = 0;
+	for (const record of records) {
+		A_paid += Number.isFinite(record?.paidRentCost) ? record.paidRentCost : 0;
+	}
+
+	if (cw && Number.isFinite(contextTokens) && contextTokens >= threshold * cw) {
+		return { fold: true, reason: "watermark", A_paid, pHit, pMiss, mode: "multi-model" };
+	}
+
+	const at = Number.isFinite(now) ? now : Date.now();
+	const fallbackTpc =
+		Number.isFinite(tokensPerChar) && tokensPerChar > 0 ? tokensPerChar : 0.3;
+
+	// Position-exact split of the removable interior against the target
+	// cache's cachedUntilPos. Characters are canonical; tokens are projected
+	// per model so tokenizers never mix.
+	const source = Array.isArray(base) ? base : [];
+	const intervals = foldIntervals(source, records);
+	const target = cacheView(state, modelKey, at, fallbackTpc);
+	const position = Symbol("sourceIndex");
+	const start = intervals[0]?.begin.assistantIndex ?? source.length;
+	const tagged = source.slice(start).map((message, index) => ({ ...message, [position]: start + index }));
+	const epoch = state?.epoch ?? 0;
+	let B_pool = 0;
+	let cachedB = 0;
+	for (const { record, begin, end } of intervals) {
+		const recordDensity = record.interiorChars > 0 && record.interiorTokens > 0 ? record.interiorTokens / record.interiorChars : fallbackTpc;
+		const density = modelCacheFor(state, modelKey)?.tokensPerChar ?? recordDensity;
+		const saved = netRemovableTokens(record, density, modelKey);
+		B_pool += saved;
+		if (target.pos <= begin.resultIndex || saved === 0) continue;
+		if (target.pos >= end) {
+			cachedB += saved;
+			continue;
+		}
+		const segment = tagged.slice(begin.assistantIndex - start, end - start + 1);
+		const folded = applyCollapses(segment, [{ ...record, collapsed: true }], epoch);
+		const removed = Math.max(0, sliceChars(segment) - sliceChars(folded));
+		const prefix = (list) => sliceChars(list.filter((message) => message[position] < target.pos));
+		if (removed > 0) cachedB += saved * Math.min(1, Math.max(0, prefix(segment) - prefix(folded)) / removed);
+	}
+	if (!(B_pool > 0)) {
+		return { fold: false, reason: "no-savings", A_paid, mode: "multi-model" };
+	}
+	const uncachedB = Math.max(0, B_pool - cachedB);
+
+	const nHat = budgetSteps(budget);
+	const value =
+		A_paid +
+		nHat * pHit * cachedB +
+		(pMiss + (nHat - 1) * pHit) * uncachedB;
+
+	// Cost: every distinct cache among target + still-returnable outer
+	// models pays the miss-hit gap once on the retained cached tail. The
+	// retained set includes hot workbench content, receipts, users, and pins:
+	// everything not marked removed inside each cache's cached prefix.
+	const views = new Map();
+	views.set(modelKey, {
+		key: modelKey,
+		pHit,
+		pMiss,
+		pos: target.pos,
+		tpc: target.tpc,
+	});
+	for (const descriptor of Array.isArray(outerModels) ? outerModels : []) {
+		const key = typeof descriptor?.key === "string" ? descriptor.key : null;
+		if (!key || views.has(key)) continue;
+		const prices = outerPricing(descriptor, { pHit, pMiss });
+		const view = cacheView(state, key, at, fallbackTpc);
+		views.set(key, {
+			key,
+			pHit: prices.pHit,
+			pMiss: prices.pMiss,
+			pos: view.pos,
+			tpc: view.tpc,
+		});
+	}
+
+	const perModel = [];
+	let cost = 0;
+	const retained = applyCollapses(tagged, intervals.map(({ record }) => ({ ...record, collapsed: true })), epoch);
+	for (const view of views.values()) {
+		const retainedChars = view.pos <= start ? 0 : sliceChars(retained.filter((message) => message[position] < view.pos));
+		const retainedTokens = retainedChars * view.tpc;
+		const gap = Math.max(0, view.pMiss - view.pHit);
+		const modelCost = gap * retainedTokens;
+		cost += modelCost;
+		perModel.push({
+			key: view.key,
+			pHit: view.pHit,
+			pMiss: view.pMiss,
+			cachedUntilPos: view.pos,
+			tokensPerChar: view.tpc,
+			retainedCachedTokens: retainedTokens,
+			gap,
+			cost: modelCost,
+		});
+	}
+
+	const fold = value > cost;
+	return {
+		fold,
+		reason: fold ? "economics" : "hold",
+		B_pool,
+		cachedB,
+		uncachedB,
+		A_paid,
+		M_after: null,
+		nHat,
+		value,
+		cost,
+		perModel,
+		pHit,
+		pMiss,
+		mode: "multi-model",
+	};
+}
+
 /**
  * Decide whether a foldable pool should be folded in a single batch.
  * Pure so the economics can be tested without a host session.
+ *
+ * Multi-model mode activates when `modelKey` names the target model;
+ * `outerModels` lists every still-returnable outer model descriptor
+ * ({ key, spec, pricing }). Without modelKey the legacy single-model
+ * formula runs unchanged.
  */
 export function shouldFoldPool({
 	pool,
-	hotRecord,
 	state,
 	base,
 	persistedEnd,
@@ -123,9 +350,27 @@ export function shouldFoldPool({
 	contextTokens,
 	tokensPerChar = 0.3,
 	emergency = false,
+	modelKey = null,
+	outerModels = null,
+	now = null,
 }) {
 	const records = Array.isArray(pool) ? pool : [];
 	if (records.length === 0) return { fold: false, reason: "empty" };
+	if (typeof modelKey === "string" && modelKey !== "") {
+		return shouldFoldPoolMulti({
+			pool,
+			state,
+			base,
+			budget,
+			pricing,
+			contextTokens,
+			tokensPerChar,
+			emergency,
+			modelKey,
+			outerModels,
+			now,
+		});
+	}
 	const pHit = Number.isFinite(pricing?.pHit) ? Math.max(0, pricing.pHit) : 1e-6;
 	const pMiss = Number.isFinite(pricing?.pMiss) ? Math.max(0, pricing.pMiss) : 10e-6;
 	const cw = Number.isFinite(pricing?.contextWindow) ? pricing.contextWindow : null;
@@ -192,6 +437,11 @@ function persistedTail(base, currentMessage, currentPersisted) {
 /**
  * Fold a batch of archived elders into one branch operation. Records whose
  * begin/end left the branch are marked collapsed without a fork.
+ *
+ * After a successful physical fold every provider cache is capped at
+ * `foldStartIdx` (the first folded begin's assistantIndex): content at or
+ * after that index changed, so the cached prefix ends there. foldStartIdx is
+ * returned so the station can cap an in-flight usage snapshot too.
  */
 export function foldBatch({
 	manager,
@@ -223,7 +473,7 @@ export function foldBatch({
 		valid.push({ record, begin, endIndex });
 	}
 	if (valid.length === 0) {
-		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1 };
+		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 
 	let first = valid[0];
@@ -236,7 +486,7 @@ export function foldBatch({
 	}
 	if (!beginEntry) {
 		first.record.collapsed = true;
-		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1 };
+		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 
 	const useEpoch = Number.isInteger(epoch) ? epoch : (state?.epoch ?? 0);
@@ -244,6 +494,7 @@ export function foldBatch({
 	const records = valid.map((entry) => entry.record);
 	const collapsed = records.map((record) => ({ ...record, collapsed: true }));
 	const tailAfter = applyCollapses(tailBefore, collapsed, useEpoch);
+	const foldStartIdx = first.begin.assistantIndex;
 
 	if (
 		!manager ||
@@ -251,25 +502,30 @@ export function foldBatch({
 		typeof manager.branch !== "function"
 	) {
 		for (const record of records) record.collapsed = true;
-		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1 };
+		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 	try {
 		const parentId = beginEntry.parentId ?? null;
 		if (parentId) manager.branch(parentId);
 		else if (typeof manager.resetLeaf === "function") manager.resetLeaf();
 		else throw new Error("resetLeaf unavailable");
-		for (const message of tailAfter) manager.appendMessage(cloneMessage(message));
+		for (const message of tailAfter) {
+			if (!appendHistoryMessage(manager, cloneMessage(message))) {
+				throw new Error("fold append failed");
+			}
+		}
 	} catch {
 		for (const record of records) record.collapsed = true;
-		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1 };
+		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 
 	for (const record of records) record.collapsed = true;
 	markSubsumedDescendants(state, records);
-	const savedTokens = Math.max(
-		0,
-		charsToTokens(sliceChars(tailBefore) - sliceChars(tailAfter), tokensPerChar),
-	);
+	// The fold physically rewrote the branch at foldStartIdx: every provider
+	// cache keeps only the prefix before it.
+	capCachePositions(state, foldStartIdx);
+	const savedChars = Math.max(0, sliceChars(tailBefore) - sliceChars(tailAfter));
+	const savedTokens = charsToTokens(savedChars, tokensPerChar);
 	const maxOrder = records.reduce(
 		(max, record) => (Number.isInteger(record.order) && record.order > max ? record.order : max),
 		-1,
@@ -278,8 +534,10 @@ export function foldBatch({
 		foldedCount: records.length,
 		reports: records.map((record) => record.report),
 		savedTokens,
+		savedChars,
 		maxOrder,
 		rebased: true,
+		foldStartIdx,
 	};
 }
 

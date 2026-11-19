@@ -2,6 +2,7 @@
 
 import { debugLog } from "./debug.mjs";
 import { errorText } from "./session.mjs";
+import { appendHistoryMessage } from "../host/hack-context.mjs";
 
 async function renderTui(tui) {
 	if (!tui || typeof tui.renderInitialMessages !== "function") return false;
@@ -21,24 +22,17 @@ async function renderTui(tui) {
  */
 function appendHandoffSignal(manager, ctx, generation) {
 	const text = `Handoff complete: generation ${generation} -> successor evaluating`;
-	try {
-		if (manager && typeof manager.appendMessage === "function") {
-			manager.appendMessage({
-				role: "custom",
-				customType: "herd-relay-handoff",
-				display: true,
-				content: [{ type: "text", text }],
-				timestamp: Date.now(),
-			});
-			debugLog("handoff_signal", { via: "custom_message", generation });
-			return true;
-		}
-	} catch (error) {
-		debugLog("handoff_signal.error", {
-			via: "custom_message",
-			error: errorText(error),
-		});
+	if (appendHistoryMessage(manager, {
+		role: "custom",
+		customType: "herd-relay-handoff",
+		display: true,
+		content: [{ type: "text", text }],
+		timestamp: Date.now(),
+	}, ctx)) {
+		debugLog("handoff_signal", { via: "custom_message", generation });
+		return true;
 	}
+	debugLog("handoff_signal.error", { via: "custom_message", generation });
 	try {
 		const ui = ctx?.ui;
 		if (ui && typeof ui.showStatus === "function") {

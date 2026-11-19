@@ -276,6 +276,94 @@ function createEditorStub() {
 	};
 }
 
+async function handleModelSwitch(session, spec, options, station) {
+	const command = typeof spec === "string" ? spec.trim() : String(spec ?? "").trim();
+	const handler =
+		typeof options?.onSwitchModel === "function"
+			? options.onSwitchModel
+			: typeof session?.onSwitchModel === "function"
+				? session.onSwitchModel.bind(session)
+				: typeof session?.setModel === "function"
+					? (value) => session.setModel(value)
+					: null;
+	if (!handler) {
+		station.recordOutput(
+			"warning",
+			"Model switching is unavailable in headless mode.",
+		);
+		return { handled: false, spec: command };
+	}
+	try {
+		const result = await handler(command, { session, options });
+		station.setResult(result);
+		station.recordOutput(
+			"status",
+			typeof result?.message === "string" && result.message
+				? result.message
+				: `Model switch requested: ${command}`,
+		);
+		return { handled: true, spec: command, result };
+	} catch (error) {
+		const message = String(error?.message ?? error ?? "Model switch failed");
+		station.recordOutput("error", message);
+		return { handled: false, spec: command, error: message };
+	}
+}
+
+async function handleSwitchSessionModel(
+	session,
+	model,
+	thinkingLevel,
+	options,
+	station,
+) {
+	const label =
+		model?.provider && model?.id
+			? `${model.provider}/${model.id}`
+			: String(model?.id ?? model ?? "model");
+	const notifyError = (message) => {
+		station.recordOutput("error", message);
+		options?.onOutput?.("error", message);
+	};
+	if (typeof session?.setModelTemporary === "function") {
+		try {
+			const result = await session.setModelTemporary(model, thinkingLevel);
+			station.setResult(result);
+			station.recordOutput("status", `Session-only model: ${label}.`);
+			return { handled: true, model, thinkingLevel, result };
+		} catch (error) {
+			const message = String(error?.message ?? error ?? "Failed to switch model");
+			notifyError(message);
+			return { handled: false, model, thinkingLevel, error: message };
+		}
+	}
+	if (typeof session?.setModel === "function") {
+		try {
+			const result = await session.setModel(model);
+			if (
+				thinkingLevel !== undefined &&
+				typeof session.setThinkingLevel === "function"
+			) {
+				await session.setThinkingLevel(thinkingLevel);
+			}
+			station.setResult(result);
+			station.recordOutput("status", `Session-only model: ${label}.`);
+			return { handled: true, model, thinkingLevel, result };
+		} catch (error) {
+			const message = String(error?.message ?? error ?? "Failed to switch model");
+			notifyError(message);
+			return { handled: false, model, thinkingLevel, error: message };
+		}
+	}
+	notifyError("Session model switching is unavailable in headless mode.");
+	return {
+		handled: false,
+		model,
+		thinkingLevel,
+		error: "Session model switching is unavailable in headless mode.",
+	};
+}
+
 /**
  * Build a headless `InteractiveModeContext`-compatible adapter for a session.
  */
@@ -305,6 +393,17 @@ export function createHeadlessTuiContext(session, options = {}) {
 		session,
 		sessionManager: session?.sessionManager,
 		settings: session?.settings,
+		get modelRegistry() {
+			return options?.modelRegistry ?? session?.modelRegistry ?? options?.ctx?.modelRegistry;
+		},
+		get model() {
+			return (
+				session?.model ??
+				session?.agent?.state?.model ??
+				options?.model ??
+				null
+			);
+		},
 		editor,
 		ui: uiStub,
 		collabGuest: false,
@@ -349,6 +448,15 @@ export function createHeadlessTuiContext(session, options = {}) {
 			handleVibeModeTicket(session, prompt, options, station),
 		handleNewCommand: () => handleNewTicket(session, station),
 		handleFreshCommand: () => handleFreshTicket(session, station),
+		onSwitchModel: (spec, switchOptions) =>
+			handleModelSwitch(
+				session,
+				spec,
+				{ ...options, ...switchOptions },
+				station,
+			),
+		switchSessionModel: (model, thinkingLevel) =>
+			handleSwitchSessionModel(session, model, thinkingLevel, options, station),
 	};
 
 	const ctx = new Proxy(explicit, {
@@ -398,6 +506,13 @@ export async function executeFallbackBuiltinSlashCommand(parsed, headlessCtx) {
 		case "fresh":
 			await headlessCtx.handleFreshCommand();
 			return true;
+		case "model":
+		case "switch":
+			if (typeof headlessCtx.onSwitchModel === "function") {
+				await headlessCtx.onSwitchModel(parsed.args || "");
+				return true;
+			}
+			return false;
 		default:
 			return false;
 	}

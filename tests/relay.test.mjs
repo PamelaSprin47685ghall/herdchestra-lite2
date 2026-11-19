@@ -274,10 +274,10 @@ describe("relay text", () => {
 				"An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
 			);
 			expect(text).toContain(
-				"preserve the user's original requirements verbatim when handing off",
+				"Summarize the user's requirements without omitting or narrowing them.",
 			);
 			expect(text).toContain(
-				"Do not paraphrase, compress, or narrow them; retelling is where requirements drift.",
+				"You do not need to quote the original wording in the ledger or handoff summary.",
 			);
 		}
 	});

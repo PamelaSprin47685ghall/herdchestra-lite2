@@ -63,18 +63,23 @@ function copyCollapse(collapse) {
     "interiorTokens",
     "interiorChars",
     "pinTokens",
+    "pinChars",
+    "userChars",
     "paidRentCost",
     "baseInputTokens",
     "preBeginInputTokens",
     "endInputTokens",
     "endInputTokensPending",
+    "measuredModelKey",
+    "baseModelKey",
   ]) {
     if (collapse[key] !== undefined) put(copied, key, collapse[key]);
   }
   return copied;
 }
 
-// Scope-level measured fields follow the same presence-only rule.
+// Scope-level measured and model-identity fields follow the same
+// presence-only rule.
 function measuredFields(source) {
   const out = {};
   for (const key of [
@@ -83,10 +88,50 @@ function measuredFields(source) {
     "endInputTokens",
     "endInputTokensPending",
     "beginResultChars",
+    "modelSpec",
+    "modelKey",
+    "previousModelSpec",
+    "previousModelKey",
+    "baseModelKey",
   ]) {
     if (source[key] !== undefined) put(out, key, source[key]);
   }
   return out;
+}
+
+// Model cache entries: { cachedUntilPos, lastUsedAt, tokensPerChar }.
+function copyModelCaches(source) {
+  const out = {};
+  if (!isPlainObject(source)) return out;
+  for (const key of Reflect.ownKeys(source)) {
+    if (typeof key !== "string" || key === "") continue;
+    const entry = source[key];
+    if (!isPlainObject(entry)) continue;
+    const copied = {};
+    if (Number.isInteger(entry.cachedUntilPos) && entry.cachedUntilPos >= 0) {
+      put(copied, "cachedUntilPos", entry.cachedUntilPos);
+    }
+    if (Number.isFinite(entry.lastUsedAt) && entry.lastUsedAt >= 0) {
+      put(copied, "lastUsedAt", entry.lastUsedAt);
+    }
+    if (Number.isFinite(entry.tokensPerChar) && entry.tokensPerChar >= 0) {
+      put(copied, "tokensPerChar", entry.tokensPerChar);
+    }
+    if (Object.keys(copied).length > 0) put(out, key, copied);
+  }
+  return out;
+}
+
+function copyModelRecovery(source) {
+  if (!isPlainObject(source)) return null;
+  const out = {};
+  if (typeof source.targetSpec === "string" || source.targetSpec === null) {
+    put(out, "targetSpec", source.targetSpec ?? null);
+  }
+  if (typeof source.expectedKey === "string" || source.expectedKey === null) {
+    put(out, "expectedKey", source.expectedKey ?? null);
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 export function serializeState(state) {
@@ -118,6 +163,14 @@ export function serializeState(state) {
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
     relay: copyRelay(state.relay),
+    baseModelSpec:
+      typeof state.baseModelSpec === "string" ? state.baseModelSpec : null,
+    baseModelKey:
+      typeof state.baseModelKey === "string" && state.baseModelKey !== ""
+        ? state.baseModelKey
+        : null,
+    modelRecovery: copyModelRecovery(state.modelRecovery),
+    modelCaches: copyModelCaches(state.modelCaches),
   };
 }
 
@@ -197,6 +250,17 @@ function validScope(scope) {
   ) {
     return false;
   }
+  // Optional model identity fields must be string-or-null when present.
+  for (const key of [
+    "modelSpec",
+    "modelKey",
+    "previousModelSpec",
+    "previousModelKey",
+    "baseModelKey",
+  ]) {
+    if (scope[key] === undefined) continue;
+    if (scope[key] !== null && typeof scope[key] !== "string") return false;
+  }
   return true;
 }
 
@@ -216,6 +280,48 @@ function validCharges(value) {
       return false;
     }
     if (charge.groupKey !== undefined && typeof charge.groupKey !== "string") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validModelCaches(value) {
+  if (value === undefined) return true;
+  if (!isPlainObject(value)) return false;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || key === "") return false;
+    const entry = value[key];
+    if (!isPlainObject(entry)) return false;
+    if (
+      entry.cachedUntilPos !== undefined &&
+      (!Number.isInteger(entry.cachedUntilPos) || entry.cachedUntilPos < 0)
+    ) {
+      return false;
+    }
+    if (
+      entry.lastUsedAt !== undefined &&
+      (!Number.isFinite(entry.lastUsedAt) || entry.lastUsedAt < 0)
+    ) {
+      return false;
+    }
+    if (
+      entry.tokensPerChar !== undefined &&
+      (typeof entry.tokensPerChar !== "number" ||
+        !Number.isFinite(entry.tokensPerChar) ||
+        entry.tokensPerChar < 0)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validModelRecovery(value) {
+  if (value === undefined || value === null) return true;
+  if (!isPlainObject(value)) return false;
+  for (const key of ["targetSpec", "expectedKey"]) {
+    if (value[key] !== undefined && value[key] !== null && typeof value[key] !== "string") {
       return false;
     }
   }
@@ -289,11 +395,25 @@ function validCollapses(value) {
         return false;
       }
     }
-    for (const key of ["interiorChars", "pinTokens", "paidRentCost"]) {
+    for (const key of ["interiorChars", "pinTokens", "pinChars", "userChars", "paidRentCost"]) {
       if (item[key] === undefined) continue;
       if (typeof item[key] !== "number" || !Number.isFinite(item[key]) || item[key] < 0) {
         return false;
       }
+    }
+    if (
+      item.measuredModelKey !== undefined &&
+      item.measuredModelKey !== null &&
+      typeof item.measuredModelKey !== "string"
+    ) {
+      return false;
+    }
+    if (
+      item.baseModelKey !== undefined &&
+      item.baseModelKey !== null &&
+      typeof item.baseModelKey !== "string"
+    ) {
+      return false;
     }
     if (
       item.endInputTokensPending !== undefined &&
@@ -344,6 +464,17 @@ export function deserializeState(input) {
     ) {
       return createState();
     }
+    if (!validModelCaches(data.modelCaches)) return createState();
+    if (!validModelRecovery(data.modelRecovery)) return createState();
+    for (const key of ["baseModelSpec", "baseModelKey"]) {
+      if (
+        data[key] !== undefined &&
+        data[key] !== null &&
+        typeof data[key] !== "string"
+      ) {
+        return createState();
+      }
+    }
     return {
       version: VERSION,
       seq: data.seq,
@@ -370,6 +501,14 @@ export function deserializeState(input) {
       regrets: data.regrets.slice(),
       collapses: data.collapses.map(copyCollapse),
       relay: data.version === VERSION ? copyRelay(data.relay) : createRelay(),
+      baseModelSpec:
+        typeof data.baseModelSpec === "string" ? data.baseModelSpec : null,
+      baseModelKey:
+        typeof data.baseModelKey === "string" && data.baseModelKey !== ""
+          ? data.baseModelKey
+          : null,
+      modelRecovery: copyModelRecovery(data.modelRecovery),
+      modelCaches: copyModelCaches(data.modelCaches),
     };
   } catch {
     return createState();

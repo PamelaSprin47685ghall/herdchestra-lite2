@@ -5,6 +5,7 @@ import {
   injectSystemPrompt,
   languageSkill,
   outsideScopeInstruction,
+  persistentOperatingSkill,
   rewriteVibeModeContext,
 } from "../src/host/index.mjs";
 import { BUDGET_DESCRIPTION } from "../src/tools/index.mjs";
@@ -12,10 +13,10 @@ import { BUDGET_DESCRIPTION } from "../src/tools/index.mjs";
 const HEADING = "# Repo-aware Rules";
 const START = "<!-- herdchestra-lite2:system-prompt v1 -->";
 const END = "<!-- /herdchestra-lite2:system-prompt -->";
-const BLOCK = `${START}\n${commonRulesText}\n${END}`;
+const BLOCK = `${START}\n${commonRulesText}\n\n${persistentOperatingSkill}\n${END}`;
 
 describe("languageSkill", () => {
-  test("is the exact reminder the host appends", () => {
+  test("holds the exact Chinese instruction now carried by the system prompt", () => {
     expect(languageSkill).toBe(
       '<skill version="1.0">(Routine reminder appended by the host extension at the end of every turn; not a new user message. Continue the current work.) 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。</skill>',
     );
@@ -26,6 +27,15 @@ describe("languageSkill", () => {
     expect(languageSkill.endsWith("</skill>")).toBe(true);
     expect(languageSkill).toBe(languageSkill.trim());
     expect(languageSkill.split("<skill").length - 1).toBe(1);
+  });
+});
+
+describe("persistentOperatingSkill", () => {
+  test("carries the static rules and Chinese instruction in the system prompt", () => {
+    expect(persistentOperatingSkill).toContain("强制以简体中文思考");
+    expect(persistentOperatingSkill).toContain("scope({ end: true })");
+    expect(persistentOperatingSkill).toContain("evaluate the ledger with todo");
+    expect(persistentOperatingSkill.split('<skill version="1.0">').length - 1).toBe(1);
   });
 });
 

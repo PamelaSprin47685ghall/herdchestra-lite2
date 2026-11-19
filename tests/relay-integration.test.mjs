@@ -1348,6 +1348,168 @@ describe("tui handoff integration", () => {
 	});
 });
 
+describe("scope model switching", () => {
+	const large = { provider: "fixture", id: "large", contextWindow: 100_000 };
+	const small = { provider: "fixture", id: "small", contextWindow: 50_000 };
+	const tiny = { provider: "fixture", id: "tiny", contextWindow: 10 };
+
+	test("slash-only cannot fall through when a host executor declines or returns residual text", async () => {
+		const { sendSlashPrompt } = await import("../src/host/capture.mjs");
+		const deliveries = [];
+		const session = { prompt: async (text) => { deliveries.push(text); } };
+		for (const outcome of [false, "residual prompt"]) {
+			const result = await sendSlashPrompt(session, "/switch unknown", {
+				slashOnly: true,
+				builtinExecutor: async () => outcome,
+				fallbackSend: async (text) => { deliveries.push(text); },
+			});
+			expect(result.handled).toBe(false);
+		}
+		expect(deliveries).toEqual([]);
+	});
+
+	async function fixture() {
+		const { host, ctx, session } = await start({ mode: "print" });
+		const switches = [];
+		const models = [large, small, tiny];
+		session.model = large;
+		session.modelRegistry = {
+			getAll: () => models,
+			find: (provider, id) => models.find((model) => model.provider === provider && model.id === id),
+		};
+		ctx.modelRegistry = session.modelRegistry;
+		for (const name of ["setModel", "setModelTemporary"]) {
+			session[name] = async (model) => {
+				const target = typeof model === "string"
+					? models.find((candidate) => `${candidate.provider}/${candidate.id}` === model)
+					: model;
+				if (!target) throw new Error("model not found");
+				switches.push(target.id);
+				session.model = target;
+			};
+		}
+		const scope = async (id, args) => {
+			const [entry] = await runAssistant(host, ctx, assistant([call(id, "scope", args)]));
+			return entry.result;
+		};
+		const begin = (model, elder_report = null) => ({ intent: "model check", budget: { read: 1 }, model, elder_report });
+		return { host, ctx, session, switches, scope, begin };
+	}
+
+	test("combined end/begin inherits the parent, not the closed sibling", async () => {
+		const { ctx, session, switches, scope, begin } = await fixture();
+		await scope("outer", { begin: begin(null) });
+		const child = await scope("child", { begin: begin("fixture/small") });
+		expect(child.details?.modelSwitch ?? null).toBeNull();
+		expect(session.model).toBe(small);
+		await scope("sibling", { end: true, begin: begin(null, "child completed") });
+		expect(switches).toEqual(["small", "large"]);
+		expect(session.model).toBe(large);
+		expect(stateFor(ctx).state.scopes.at(-1).modelKey).toBe("fixture/large");
+	});
+
+	test("rejects an overfull combined begin without closing the active scope", async () => {
+		const { ctx, switches, scope, begin } = await fixture();
+		await scope("outer", { begin: begin(null) });
+		const refused = await scope("overfull", { end: true, begin: begin("fixture/tiny", "done") });
+		expect(refused.content.map((part) => part.text).join(" ")).toContain("MODEL_CONTEXT_EXCEEDED");
+		expect(stateFor(ctx).state.scopes.map((active) => active.beginToolCallId)).toEqual(["outer"]);
+		expect(switches).toEqual([]);
+	});
+
+	test("host truncation restores the surviving scope model", async () => {
+		const { host, ctx, session, switches, scope, begin } = await fixture();
+		await scope("outer", { begin: begin(null) });
+		await scope("child", { begin: begin("fixture/small") });
+		await emit(host.handlers, "session_compact", {}, ctx);
+		expect(session.model).toBe(large);
+		expect(switches).toEqual(["small", "large"]);
+		expect(stateFor(ctx).state.scopes).toHaveLength(1);
+	});
+
+	test("before_agent_start restores the model when the handoff is only visible in history", async () => {
+		const { host, ctx, session, switches, scope, begin } = await fixture();
+		await scope("outer", { begin: begin(null) });
+		await scope("child", { begin: begin("fixture/small") });
+		ctx.sessionManager.appendMessage({ role: "custom", customType: "handoff", content: "handoff summary", timestamp: 42 });
+		await emit(host.handlers, "before_agent_start", { systemPrompt: "base" }, ctx);
+		expect(session.model).toBe(large);
+		expect(switches).toEqual(["small", "large"]);
+		expect(stateFor(ctx).state.scopes.map((active) => active.beginToolCallId)).toEqual(["outer"]);
+	});
+
+	test("return to a smaller parent floods older siblings but keeps the closing workbench", async () => {
+		const { host, ctx, session, scope, begin } = await fixture();
+		await scope("outer", { begin: begin("fixture/small") });
+		await scope("old", { begin: begin(null) });
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "old interior to remove" }]));
+		await scope("middle", { end: true, begin: begin(null, "archive ".repeat(100)) });
+		await scope("wide", { end: true, begin: begin("fixture/large", "middle complete") });
+		const records = () => stateFor(ctx).state.collapses;
+		expect(records().find((record) => record.beginToolCallId === "old").collapsed).toBe(false);
+		const workbench = "wide workbench " + "x".repeat(140_000);
+		await runAssistant(host, ctx, assistant([{ type: "text", text: workbench }]));
+		await scope("wide-end", { end: true });
+		expect(session.model).toBe(small);
+		const messages = ctx.sessionManager.buildSessionContext().messages;
+		expect(messages.some((message) => message.content?.[0]?.text === "old interior to remove")).toBe(false);
+		expect(messages.some((message) => message.content?.[0]?.text === workbench)).toBe(true);
+		expect(records().find((record) => record.beginToolCallId === "wide").collapsed).toBe(false);
+	});
+
+	test("an unmatched selector never becomes a nested prompt", async () => {
+		const { ctx, session, switches, scope, begin } = await fixture();
+		let prompts = 0;
+		session.prompt = async () => { prompts += 1; };
+		const result = await scope("unknown", { begin: begin("unrecognized-fixture-selector") });
+		expect(result.content.map((part) => part.text).join(" ")).toContain("WARNING:");
+		expect(stateFor(ctx).state.scopes.at(-1).modelKey).toBe("fixture/large");
+		expect(switches).toEqual([]);
+		expect(prompts).toBe(0);
+	});
+
+	test("a scope closed under another tokenizer uses its interior characters", async () => {
+		const { host, ctx, session, scope, begin } = await fixture();
+		await scope("measured", { begin: begin(null) });
+		const largeUsage = { ...assistant([{ type: "text", text: "a".repeat(500) }], 11),
+			model: "large", provider: "fixture", usage: { input: 30_000, output: 10 } };
+		await runAssistant(host, ctx, largeUsage);
+		await scope("nested", { begin: begin("fixture/small") });
+		const close = { ...assistant([call("nested-end", "scope", { end: true })], 12),
+			model: "small", provider: "fixture", usage: { input: 900, output: 10 } };
+		await runAssistant(host, ctx, close);
+		session.model = small;
+		await runAssistant(host, ctx, { ...assistant([call("measured-end", "scope", { end: true })], 13),
+			model: "small", provider: "fixture", usage: { input: 1_000, output: 10 } });
+		const { state } = stateFor(ctx);
+		const record = state.collapses.find((item) => item.beginToolCallId === "measured");
+		expect(record.baseModelKey).toBe("fixture/large");
+		expect(record.measuredModelKey).toBe("fixture/small");
+		expect(record.interiorTokens).toBe(Math.ceil(record.interiorChars * state.modelCaches["fixture/small"].tokensPerChar));
+		expect(record.interiorTokens).toBeGreaterThan(0);
+		expect(state.modelCaches["fixture/large"].cachedUntilPos).toBeLessThan(state.modelCaches["fixture/small"].cachedUntilPos);
+	});
+
+	for (const delayed of [false, true]) {
+		test(`unidentified usage uses a character estimate (${delayed ? "late" : "immediate"})`, async () => {
+			const { host, ctx, session, scope, begin } = await fixture();
+			session.model = undefined;
+			await scope("unidentified", { begin: begin(null) });
+			await runAssistant(host, ctx, { ...assistant([{ type: "text", text: "interior ".repeat(80) }], 71), usage: { input: 20_000 } });
+			const closing = assistant([call("unidentified-end", "scope", { end: true })], 72);
+			const usage = { input: 10 };
+			await runAssistant(host, ctx, delayed ? closing : { ...closing, usage });
+			if (delayed) await emit(host.handlers, "message_end", { message: { ...closing, usage } }, ctx);
+			const record = stateFor(ctx).state.collapses.find((item) => item.beginToolCallId === "unidentified");
+			expect(record.baseInputTokens).toBe(20_000);
+			expect(record.endInputTokens).toBe(10);
+			expect(record.baseModelKey).toBeNull();
+			expect(record.measuredModelKey).toBeNull();
+			expect(record.interiorTokens).toBeGreaterThan(0);
+		});
+	}
+});
+
 describe("host truncation", () => {
 	async function openNestedScopes() {
 		const started = await start({ mode: "print" });

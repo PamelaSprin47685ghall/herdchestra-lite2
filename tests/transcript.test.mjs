@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-	appendUserTail,
 	applyCollapses,
 	beatKey,
 	exitBeat,
@@ -812,22 +811,3 @@ describe("rewriteVibeMessage", () => {
 	});
 });
 
-describe("appendUserTail", () => {
-	test("appends one final user message with a single text block", () => {
-		const messages = [
-			{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
-		];
-		const before = Date.now();
-		const out = appendUserTail(messages, "tail text");
-		const after = Date.now();
-
-		expect(out).toHaveLength(2);
-		expect(out[0]).toBe(messages[0]);
-		expect(out[1].role).toBe("user");
-		expect(out[1].content).toEqual([{ type: "text", text: "tail text" }]);
-		expect(typeof out[1].timestamp).toBe("number");
-		expect(out[1].timestamp).toBeGreaterThanOrEqual(before);
-		expect(out[1].timestamp).toBeLessThanOrEqual(after);
-		expect(messages).toHaveLength(1);
-	});
-});

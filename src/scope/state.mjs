@@ -7,6 +7,9 @@ const VERSION = 2;
 
 const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
 
+/** Provider prompt-cache entries live for five minutes. */
+export const CACHE_TTL_MS = 5 * 60 * 1000;
+
 function isPlainObject(value) {
   if (typeof value !== "object" || value === null) return false;
   const proto = Object.getPrototypeOf(value);
@@ -76,6 +79,13 @@ function makeScope(state, toolCallId, intent, budget) {
     endInputTokens: null,
     endInputTokensPending: false,
     beginResultChars: 0,
+    // Model identity fields. Populated by the host integration through
+    // beginScope's optional `model` argument; strings or null.
+    modelSpec: null,
+    modelKey: null,
+    previousModelSpec: null,
+    previousModelKey: null,
+    baseModelKey: null,
   };
 }
 
@@ -89,7 +99,93 @@ export function createState() {
     regrets: [],
     collapses: [],
     relay: createRelay(),
+    // Persisted base model identity. The base model lives outside all
+    // scopes; the host integration fills these from preparseModelSpec.
+    baseModelSpec: null,
+    baseModelKey: null,
+    // Recovery target written by truncateForHostBoundary when inner scopes
+    // are dropped: { targetSpec, expectedKey }. Persisted so a reload can
+    // resume the pending switch.
+    modelRecovery: null,
+    // Provider prompt caches keyed by canonical model key (provider/id).
+    // Entries: { cachedUntilPos, lastUsedAt, tokensPerChar } where
+    // cachedUntilPos is the exclusive message index the provider still
+    // holds. Persisted with the snapshot.
+    modelCaches: {},
   };
+}
+
+// -- Model cache helpers (pure; state.modelCaches is a plain object) -------
+
+function validKey(key) {
+  return typeof key === "string" && key !== "";
+}
+
+/** Return the cache entry for a canonical key, or null. */
+export function modelCacheFor(state, key) {
+  if (!state || !isPlainObject(state.modelCaches) || !validKey(key)) return null;
+  const entry = state.modelCaches[key];
+  return isPlainObject(entry) ? entry : null;
+}
+
+/** True when the entry's last use is inside the five-minute TTL. */
+export function cacheIsFresh(entry, now = Date.now(), ttl = CACHE_TTL_MS) {
+  if (!isPlainObject(entry)) return false;
+  const at = Number.isFinite(entry.lastUsedAt) ? entry.lastUsedAt : null;
+  if (at === null || !Number.isFinite(now)) return false;
+  return now - at <= ttl;
+}
+
+/**
+ * Create or update a cache entry. cachedUntilPos is the exclusive message
+ * index up to which the provider cache is valid; lastUsedAt refreshes the
+ * TTL clock; tokensPerChar is this model's measured token density.
+ */
+export function touchModelCache(state, key, fields = {}, options = {}) {
+  if (!state || typeof state !== "object" || !validKey(key)) return null;
+  if (!isPlainObject(state.modelCaches)) state.modelCaches = {};
+  const existing = isPlainObject(state.modelCaches[key]) ? state.modelCaches[key] : {};
+  const entry = {
+    cachedUntilPos:
+      Number.isInteger(fields.cachedUntilPos) && fields.cachedUntilPos >= 0
+        ? fields.cachedUntilPos
+        : (Number.isInteger(existing.cachedUntilPos) ? existing.cachedUntilPos : 0),
+    lastUsedAt:
+      Number.isFinite(fields.lastUsedAt) && fields.lastUsedAt >= 0
+        ? fields.lastUsedAt
+        : (Number.isFinite(options.at) && options.at >= 0
+            ? options.at
+            : (Number.isFinite(existing.lastUsedAt) ? existing.lastUsedAt : Date.now())),
+    tokensPerChar:
+      Number.isFinite(fields.tokensPerChar) && fields.tokensPerChar >= 0
+        ? fields.tokensPerChar
+        : (Number.isFinite(existing.tokensPerChar) ? existing.tokensPerChar : null),
+  };
+  put(state.modelCaches, key, entry);
+  return entry;
+}
+
+/**
+ * Cap every cache's cachedUntilPos at a message index. Used after a
+ * physical fold (cap = first removed begin's assistantIndex) or a host
+ * boundary (cap = 0): content at or after the cap no longer matches the
+ * provider cache. lastUsedAt and tokensPerChar are preserved.
+ */
+export function capCachePositions(state, maxPos) {
+  if (!state || !isPlainObject(state.modelCaches)) return 0;
+  const cap = Number.isInteger(maxPos) && maxPos >= 0 ? maxPos : 0;
+  let changed = 0;
+  for (const key of Reflect.ownKeys(state.modelCaches)) {
+    if (typeof key !== "string") continue;
+    const entry = state.modelCaches[key];
+    if (!isPlainObject(entry)) continue;
+    const pos = Number.isInteger(entry.cachedUntilPos) ? entry.cachedUntilPos : 0;
+    if (pos > cap) {
+      entry.cachedUntilPos = cap;
+      changed += 1;
+    }
+  }
+  return changed;
 }
 
 export function currentScope(state) {

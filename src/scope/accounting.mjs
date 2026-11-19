@@ -7,8 +7,10 @@ import {
   isNonEmptyString,
   put,
   copyCounts,
+  isPlainObject,
   currentScope,
   makeScope,
+  capCachePositions,
 } from "./state.mjs";
 import {
   beatShares,
@@ -64,6 +66,21 @@ export function beginScope(state, params) {
     );
   }
   const scope = makeScope(state, toolCallId, intent, normalized);
+  // Optional model identity: { modelSpec, modelKey, previousModelSpec,
+  // previousModelKey, baseModelKey }. Strings or null only.
+  const model = isPlainObject(params?.model) ? params.model : null;
+  if (model) {
+    for (const key of [
+      "modelSpec",
+      "modelKey",
+      "previousModelSpec",
+      "previousModelKey",
+      "baseModelKey",
+    ]) {
+      const value = model[key];
+      if (typeof value === "string" || value === null) put(scope, key, value);
+    }
+  }
   state.scopes.push(scope);
   return { ok: true, scope };
 }
@@ -367,12 +384,29 @@ export function truncateForHostBoundary(state) {
     }
   }
   state.epoch = nextEpoch;
+  // A host boundary physically rewrote history: every provider cache prefix
+  // is invalidated conservatively, even when no scope survives.
+  capCachePositions(state, 0);
   if (!Array.isArray(state.scopes) || state.scopes.length === 0) return true;
   const kept = state.scopes[0];
   const dropped = state.scopes.slice(1);
   state.scopes = [kept];
   kept.epoch = nextEpoch;
   kept.baseInputTokens = null;
+  // When inner scopes were dropped, record the recovery target for the
+  // pending model switch. The base model lives outside all scopes and is
+  // never rewritten here; the target is the surviving outer scope's model,
+  // falling back to the persisted base model.
+  if (dropped.length > 0) {
+    const targetSpec =
+      typeof kept.modelSpec === "string" ? kept.modelSpec : state.baseModelSpec;
+    const expectedKey =
+      typeof kept.modelKey === "string" ? kept.modelKey : state.baseModelKey;
+    state.modelRecovery =
+      targetSpec != null || expectedKey != null
+        ? { targetSpec: targetSpec ?? null, expectedKey: expectedKey ?? null }
+        : null;
+  }
   const charges = state.charges;
   if (charges && typeof charges === "object") {
     for (const key of Object.keys(charges)) {

@@ -34,6 +34,7 @@ export {
 	outsideScopeInstruction,
 	rewriteVibeModeContext,
 	injectSystemPrompt,
+	persistentOperatingSkill,
 } from "./prompts.mjs";
 export { createStatusRuntime, installStatus } from "./status.mjs";
 export {

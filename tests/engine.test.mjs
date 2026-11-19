@@ -134,6 +134,10 @@ describe("handoff boundaries", () => {
 describe("createState", () => {
   test("returns a fresh version 2 state with an empty relay", () => {
     expect(createState()).toEqual({
+      baseModelSpec: null,
+      baseModelKey: null,
+      modelRecovery: null,
+      modelCaches: {},
       version: 2,
       seq: 0,
       epoch: 0,
@@ -174,6 +178,11 @@ describe("beginScope", () => {
     });
     expect(result.ok).toBe(true);
     expect(result.scope).toEqual({
+      modelSpec: null,
+      modelKey: null,
+      previousModelSpec: null,
+      previousModelKey: null,
+      baseModelKey: null,
       id: "scope-1",
       boundary: 0,
       epoch: 0,

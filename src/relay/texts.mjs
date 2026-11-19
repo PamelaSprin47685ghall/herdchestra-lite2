@@ -71,8 +71,8 @@ const INDEPENDENT_AUDIT_EN = [
 	"4. An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
 ].join("\n");
 
-const VERBATIM_REQUIREMENTS_REMINDER =
-	"Friendly reminder: preserve the user's original requirements verbatim when handing off. Do not paraphrase, compress, or narrow them; retelling is where requirements drift. Quote the exact request in the ledger and in the handoff focus.";
+const REQUIREMENTS_REMINDER =
+	"Summarize the user's requirements without omitting or narrowing them. You do not need to quote the original wording in the ledger or handoff summary.";
 
 const SUCCESSOR_RULE =
 	"An empty ledger triggers a relay handoff: make a real call to the built-in /handoff and hand the successor prompt to the successor. The successor may first open any number of scopes to investigate, then make its first todo evaluation; todo does not have to be its first tool call. Only a successor whose first todo evaluation is an empty ledger may stop naturally. If successor A's first evaluation is a non-empty ledger, A enters rework; after that, even if A changes the ledger to empty, A is not the last holder and must call /handoff again to B; only when B's first todo evaluation is empty is stopping allowed.";
@@ -84,11 +84,11 @@ export function handoffFocus(relay) {
 		SUCCESSOR_RULE,
 		STOP_RULE,
 		INDEPENDENT_AUDIT_EN,
-		VERBATIM_REQUIREMENTS_REMINDER,
+		REQUIREMENTS_REMINDER,
 		`Previous generation: ${current.generation}. Its ledger was empty when it called the built-in /handoff.`,
 		"Your first real task is an independent audit of that empty ledger. Do not trust the previous holder blindly: check whether unfinished user-requested work was marked completed or abandoned.",
 		"You may open any number of scopes to investigate before your first todo evaluation; todo need not be your first tool call. todo itself is forbidden inside every scope. Close every scope before calling todo.",
-		"Write every ledger item at a granularity where the next agent understands the work from the ledger alone: the verbatim user requirement, the evidence that proves it, the unresolved risk, and the next concrete action.",
+		"Write every ledger item so the next agent can understand the work: the user requirement, acceptance evidence, unresolved risks, and the next concrete action.",
 		"Only your first todo evaluation being an empty ledger promotes you and allows a natural stop. If it is non-empty, you enter rework and must hand off again later; you are not the last holder.",
 		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",
 	].join("\n");
@@ -102,12 +102,12 @@ export function successorPrompt(relay, stats) {
 		SUCCESSOR_RULE,
 		STOP_RULE,
 		INDEPENDENT_AUDIT_EN,
-		VERBATIM_REQUIREMENTS_REMINDER,
+		REQUIREMENTS_REMINDER,
 		"You may first open any number of scopes to investigate. todo does not have to be your first tool call. But todo is forbidden inside every scope; close all scopes before you call todo.",
 		"Your first todo evaluation decides everything: empty -> you are promoted and may write the final user-facing answer; non-empty -> rework, you are not the last holder, and after finishing the work an empty ledger must trigger another real /handoff to the next successor.",
 		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",
 		"You have no /handoff tool to call. When the ledger is empty, stop; the runtime's session_stop hook performs the real AgentSession.handoff().",
-		"Write the ledger so the next agent understands the whole work from the ledger alone: verbatim user requirements, acceptance evidence, unresolved risks, and the next concrete action.",
+		"Write the ledger so the next agent can understand the whole task: user requirements, acceptance evidence, unresolved risks, and the next concrete action.",
 		relayStatusText(current, ledger),
 	].join("\n\n");
 }

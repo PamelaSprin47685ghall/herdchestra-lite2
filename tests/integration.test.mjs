@@ -309,8 +309,8 @@ describe("scope lifecycle", () => {
 		expect(joined).toContain("read:config-one");
 		expect(joined).not.toContain("read:config-two");
 		expect(joined).toContain("read:config-three");
-		expect(joined).toContain("You are outside all scopes. Only todo and the free control tools");
-		expect(joined).toContain("强制以简体中文思考");
+		expect(joined).toContain("You are outside all scopes.");
+		expect(joined).toContain("Before stopping, call todo to evaluate the ledger");
 	});
 
 	test("collapses one scope behind across three scopes", async () => {

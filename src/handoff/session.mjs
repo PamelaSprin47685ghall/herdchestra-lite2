@@ -2,6 +2,7 @@
 // short-branch recovery. No station state lives here.
 
 import { sessionFor } from "../host/capture.mjs";
+import { appendHistoryMessage } from "../host/hack-context.mjs";
 
 const KEEP_RECENT_KEY = "compaction.keepRecentTokens";
 
@@ -72,23 +73,7 @@ function appendHandoffCheckpoint(session) {
 		],
 		timestamp: Date.now(),
 	};
-	try {
-		manager.appendMessage(message);
-	} catch {
-		return false;
-	}
-	// The compaction reads the live agent transcript, not only the session
-	// manager. Keep them aligned, or the checkpoint never forms a compressible
-	// tail and the retry fails with "already compacted" again.
-	try {
-		const messages = session?.agent?.state?.messages;
-		if (Array.isArray(messages) && !messages.includes(message)) {
-			messages.push(message);
-		}
-	} catch {
-		// A host without a live agent still got the manager entry.
-	}
-	return true;
+	return appendHistoryMessage(manager, message, session);
 }
 
 /**

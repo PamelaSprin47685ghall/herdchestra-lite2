@@ -216,13 +216,29 @@ async function resolveBuiltinSlashExecutor() {
  *   `createHeadlessTuiContext(session, options)`.
  * - Residual prompts returned by builtin commands, extension/custom slash
  *   commands, and plain text delegate to `session.prompt(text, options)`.
+ * - `options.slashOnly` never falls through to `session.prompt` or
+ *   `options.fallbackSend`; it returns a structured handled/residual result.
  */
+function slashOnlyResult(handled, command, residual, headless) {
+	const result = {
+		handled,
+		mode: "slash-only",
+		command,
+		outputs: headless?.outputs ?? [],
+		result: headless?.station?.lastResult,
+	};
+	if (residual !== undefined) result.residual = residual;
+	return result;
+}
+
 export async function sendSlashPrompt(target, text, options = {}) {
 	const session = sessionFor(target) ?? target;
 	const parsed = parseSlashCommand(text);
+	const slashOnly = options.slashOnly === true || options.slash_only === true;
+	let headless = null;
 
 	if (parsed) {
-		const headless = createHeadlessTuiContext(session, options);
+		headless = createHeadlessTuiContext(session, options);
 		const executor =
 			typeof options.builtinExecutor === "function"
 				? options.builtinExecutor
@@ -239,6 +255,7 @@ export async function sendSlashPrompt(target, text, options = {}) {
 		}
 
 		if (outcome === true) {
+			if (slashOnly) return slashOnlyResult(true, parsed.name, undefined, headless);
 			return {
 				handled: true,
 				mode: "session",
@@ -248,8 +265,15 @@ export async function sendSlashPrompt(target, text, options = {}) {
 			};
 		}
 		if (typeof outcome === "string") {
+			if (slashOnly) {
+				return slashOnlyResult(false, parsed.name, outcome, headless);
+			}
 			text = outcome;
 		}
+	}
+
+	if (slashOnly) {
+		return slashOnlyResult(false, parsed?.name ?? null, text, headless);
 	}
 
 	if (session && typeof session.prompt === "function") {

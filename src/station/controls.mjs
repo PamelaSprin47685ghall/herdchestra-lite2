@@ -8,12 +8,13 @@ import {
   closeScope,
   createState,
   currentScope,
+  findActivePools,
   findFoldablePool,
   findPendingReportElder,
   sealClosedParentChildren,
   scopeOrder,
 } from "../scope/index.mjs";
-import { findBegin } from "../transcript/index.mjs";
+import { applyCollapses, findBegin, findToolCallIndex } from "../transcript/index.mjs";
 import { invalidatePromotion } from "../relay/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
@@ -25,7 +26,9 @@ import {
 import {
   measureScopeInterior,
   shouldFoldPool,
+  sliceChars,
 } from "./fold.mjs";
+import { modelChoice, queueModelSwitch } from "./models.mjs";
 
 function handleRegretCall(station, call, base, currentIndex) {
   const state = station.state;
@@ -67,12 +70,16 @@ function handlePinCall() {
   return textResult("OK");
 }
 
-function handleScopeCall(station, call, { base, currentMessage, currentPersisted, sameMessageBeginIds }) {
+function handleScopeCall(station, call, { base, currentMessage, currentPersisted, sameMessageBeginIds, ctx }) {
   const state = station.state;
   const args = parseArgs(call);
   const hasBegin = args.begin !== undefined && args.begin !== null;
   const endPresent = args.end !== undefined && args.end !== null;
   const hasEnd = args.end === true;
+  const rawModel = hasBegin ? args.begin?.model : null;
+  if (rawModel != null && (typeof rawModel !== "string" || !rawModel.trim())) {
+    return errorResult("INVALID_ARGUMENT", "scope.begin.model must be a non-empty string or null.", { field: "model" });
+  }
   // Only a non-boolean end is illegal. `end: false` means "do not close" and
   // is valid alongside begin; without begin it simply does nothing.
   if (endPresent && typeof args.end !== "boolean") {
@@ -116,7 +123,21 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     if (!validation.ok) return errorResult(validation.code, validation.reason);
   }
 
+  station.observeActualModel(ctx);
   const current = currentScope(state);
+  const from = modelChoice(station, ctx, current?.modelSpec ?? state.baseModelSpec, current?.modelKey ?? state.baseModelKey);
+  const parent = state.scopes.at(-2);
+  const outer = hasEnd && current
+    ? modelChoice(station, ctx, parent?.modelSpec ?? current.previousModelSpec ?? state.baseModelSpec,
+      parent?.modelKey ?? current.previousModelKey ?? state.baseModelKey)
+    : from;
+  const target = rawModel == null ? outer : modelChoice(station, ctx, rawModel);
+  const changingModel = target.spec !== from.spec && (!target.key || !from.key || target.key !== from.key);
+  const projectedTokens = target.window > 0 ? station.currentContextTokens(base, target.key) : null;
+  const beginFlood = hasBegin && target.window > 0 && projectedTokens >= 0.82 * target.window;
+  const returnFlood = hasEnd && !hasBegin && changingModel && target.window > 0 &&
+    (!from.window || target.window < from.window) && projectedTokens >= 0.82 * target.window;
+  const foldContext = { state, args, base, currentMessage, currentPersisted, target, ctx };
   // The level whose siblings are archived is the parent of the active scope:
   // for a begin-only call it is the current scope id (the new scope is nested);
   // for closing it is the parent level of the closing scope.
@@ -127,8 +148,9 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   // --- Begin only ---------------------------------------------------------
   if (hasBegin && !hasEnd) {
     const pending = findPendingReportElder(state, beginParentId, boundary, epoch);
+    let visible = false;
     if (pending) {
-      const visible =
+      visible =
         findBegin(base, pending.beginToolCallId) !== null &&
         station.findBeginEntry(pending.beginToolCallId) !== null;
       if (visible) {
@@ -139,6 +161,14 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
             { intent: pending.intent },
           );
         }
+      }
+    }
+    if (beginFlood) {
+      const overflow = prepareWindow(station, foldContext, projectedTokens, state);
+      if (overflow) return overflow;
+    }
+    if (pending) {
+      if (visible) {
         pending.report = trimText(elderReport);
         pending.sealed = false;
       } else {
@@ -147,16 +177,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
         pending.sealed = true;
       }
     }
-    foldEligiblePool(station, {
-      state,
-      parentId: beginParentId,
-      boundary,
-      epoch,
-      args,
-      base,
-      currentMessage,
-      currentPersisted,
-    });
+    if (!beginFlood) foldEligiblePool(station, { ...foldContext, parentId: beginParentId, boundary, epoch });
     const out = beginScope(state, {
       toolCallId: call.id,
       intent: args.begin?.intent,
@@ -164,6 +185,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     });
     if (!out.ok) return errorResult(out.code, out.reason);
     state.relay = invalidatePromotion(state.relay);
+    attachModel(station, out.scope, target, outer, from);
     out.scope.preBeginInputTokens =
       Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
     return textResult(beginText(out.scope));
@@ -181,17 +203,25 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     );
   }
   // In a combined call the elder report must be valid before anything closes.
+  const selfVisible = findBegin(base, scope.beginToolCallId) !== null &&
+    station.findBeginEntry(scope.beginToolCallId) !== null;
   if (hasBegin) {
-    const visible =
-      findBegin(base, scope.beginToolCallId) !== null &&
-      station.findBeginEntry(scope.beginToolCallId) !== null;
-    if (visible && !(typeof elderReport === "string" && trimText(elderReport))) {
+    if (selfVisible && !(typeof elderReport === "string" && trimText(elderReport))) {
       return errorResult(
         "MISSING_ELDER_REPORT",
         "An unarchived elder scope is pending at this level. Pass its summary in begin.elder_report.",
         { intent: scope.intent },
       );
     }
+  }
+
+  const parentId = state.scopes.at(-2)?.id ?? null;
+  const order = scopeOrder(scope);
+  if (beginFlood) {
+    const preview = { ...state, scopes: state.scopes.slice(0, -1), collapses: state.collapses.slice() };
+    if (selfVisible) preview.collapses.push({ parentId, order, boundary: scope.boundary, epoch: scope.epoch, collapsed: false });
+    const overflow = prepareWindow(station, foldContext, projectedTokens, preview);
+    if (overflow) return overflow;
   }
 
   sealClosedParentChildren(state, scope.id);
@@ -201,33 +231,23 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     scope.beginToolCallId,
     call.id,
     state.regrets,
-    station.tokensPerChar?.() ?? 0.3,
+    station.tokensPerCharFor(station.lastUsageModelKey ?? from.key),
   );
   const baseTokens = Number.isFinite(scope.baseInputTokens) ? scope.baseInputTokens : null;
   const usageArrived = station.usageArrivedFor?.(currentMessage) ?? Boolean(currentMessage?.usage);
   let interiorTokens = null;
-  let endInputTokens = null;
-  let endPending = false;
-  if (baseTokens !== null && Number.isFinite(station.lastTotalInput)) {
-    endInputTokens = station.lastTotalInput;
+  const endInputTokens = usageArrived && Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
+  const endPending = !usageArrived;
+  const measuredModelKey = usageArrived ? station.lastUsageModelKey : from.key;
+  if (measuredModelKey && endInputTokens !== null && baseTokens !== null && scope.baseModelKey === measuredModelKey) {
     interiorTokens = Math.max(0, endInputTokens - baseTokens);
   } else {
-    interiorTokens = charsToTokens(measured.interiorChars);
-    endPending = !usageArrived;
+    interiorTokens = Math.ceil(charsToTokens(measured.interiorChars, station.tokensPerCharFor(measuredModelKey)));
   }
 
   // A close is a state transition, not a history edit. The begin may be gone
   // after compaction, restore, or an earlier fork; close anyway and record a
   // collapse only when its begin is still addressable.
-  const selfVisible =
-    findBegin(base, scope.beginToolCallId) !== null &&
-    station.findBeginEntry(scope.beginToolCallId) !== null;
-
-  const parentId =
-    state.scopes.length > 1
-      ? state.scopes[state.scopes.length - 2].id
-      : null;
-  const order = scopeOrder(scope);
   const closed = closeScope(state, { toolCallId: call.id });
   if (!closed.ok) return errorResult(closed.code, closed.reason);
 
@@ -250,8 +270,12 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       collapsed: false,
       sealed: false,
       interiorTokens,
+      measuredModelKey,
+      baseModelKey: scope.baseModelKey,
       interiorChars: measured.interiorChars,
       pinTokens: measured.pinTokens,
+      pinChars: measured.pinChars,
+      userChars: measured.userChars,
       paidRentCost: 0,
       baseInputTokens: baseTokens,
       preBeginInputTokens:
@@ -262,20 +286,14 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     });
   }
 
-  // Folding only happens on an opening call (begin-only or combined), never
-  // on an end-only close. Archiving the current elder above makes the pool
-  // eligibility advance by one sibling.
-  if (hasBegin) {
-    const poolParentId = parentId;
+  if (returnFlood) {
+    floodPools(station, foldContext);
+  } else if (!beginFlood && (hasBegin || changingModel)) {
     foldEligiblePool(station, {
-      state,
-      parentId: poolParentId,
+      ...foldContext,
+      parentId,
       boundary: scope.boundary ?? 0,
       epoch: scope.epoch ?? 0,
-      args,
-      base,
-      currentMessage,
-      currentPersisted,
     });
   }
 
@@ -301,18 +319,61 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     text += `\n\n${beginText(opened.scope)}`;
     if (opened.ok) {
       state.relay = invalidatePromotion(state.relay);
+      attachModel(station, opened.scope, target, outer, from);
       opened.scope.preBeginInputTokens =
         Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
     }
-  }
+  } else queueModelSwitch(station, target, from, remainingScope?.id ?? null);
   return textResult(text, {
     scopeId: scope.id,
     deferred: deferred.length,
   });
 }
 
+function attachModel(station, scope, target, outer, from) {
+  scope.modelSpec = target.spec;
+  scope.modelKey = target.key;
+  scope.previousModelSpec = outer.spec;
+  scope.previousModelKey = outer.key;
+  queueModelSwitch(station, target, from, scope.id);
+}
+
+function floodBatch(state) {
+  return findActivePools(state).flatMap(({ pool }) => pool).sort((a, b) => a.order - b.order);
+}
+
+function prepareWindow(station, { base, target, state, currentMessage, currentPersisted }, projected, preview) {
+  const cut = currentPersisted === false && base.at(-1) === currentMessage ? base.length - 1 : base.length;
+  const batch = floodBatch(preview).filter((rec) => {
+    const begin = findBegin(base, rec.beginToolCallId);
+    const end = findToolCallIndex(base, rec.endToolCallId);
+    return begin && end > begin.resultIndex && end < cut && station.findBeginEntry(rec.beginToolCallId);
+  });
+  const after = applyCollapses(base, batch.map((rec) => ({ ...rec, collapsed: true })), state.epoch);
+  const removedChars = Math.max(0, sliceChars(base) - sliceChars(after));
+  const postFoldTokens = Math.max(0, projected - charsToTokens(removedChars, station.tokensPerCharFor(target.key)));
+  if (postFoldTokens >= 0.95 * target.window) return windowError(target, postFoldTokens);
+  if (batch.length === 0) return;
+  const folded = station.foldBatch({ batch, base, currentMessage, currentPersisted, epoch: state.epoch });
+  if (folded.rebased) station.rebaseBaselines(folded);
+  const actuallyRemoved = folded.rebased ? folded.savedChars ?? removedChars : 0;
+  const actualTokens = Math.max(0, projected - charsToTokens(actuallyRemoved, station.tokensPerCharFor(target.key)));
+  if (actualTokens >= 0.95 * target.window) return windowError(target, actualTokens);
+}
+
+function windowError(target, postFoldTokens) {
+  return errorResult("MODEL_CONTEXT_EXCEEDED", `The retained context is estimated at ${postFoldTokens} tokens; ${target.spec ?? "the target model"} has a ${target.window}-token window.`, { postFoldTokens, contextWindow: target.window });
+}
+
+function floodPools(station, { state, base, currentMessage, currentPersisted }) {
+  const batch = floodBatch(state);
+  if (batch.length === 0) return;
+  const folded = station.foldBatch({ batch, base, currentMessage, currentPersisted, epoch: state.epoch });
+  if (folded.rebased) station.rebaseBaselines(folded);
+}
+
 /** Fold a whole eligible elder pool in one decision, when economics allow. */
-function foldEligiblePool(station, { state, parentId, boundary, epoch, args, base, currentMessage, currentPersisted }) {
+function foldEligiblePool(station, { state, parentId, boundary, epoch, args, base, currentMessage, currentPersisted, target, ctx }) {
   const pool = findFoldablePool(state, parentId, boundary, epoch);
   if (pool.length === 0) return { foldedCount: 0 };
   const lastIn = Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
@@ -323,11 +384,12 @@ function foldEligiblePool(station, { state, parentId, boundary, epoch, args, bas
           lastTotalInput: lastIn,
           lastOutput: Number.isFinite(station.lastOutputTokens) ? station.lastOutputTokens : 0,
           cost: station.lastUsageCost ?? null,
+          modelKey: station.lastUsageModelKey,
         };
-  const pricing = resolveModelPolicy(
+  const pricing = target.pricing ?? resolveModelPolicy(
     station.pricingCatalog,
-    station.lastCtxModel ? { model: station.lastCtxModel } : undefined,
-    { usage: station.lastUsageCost ? { cost: station.lastUsageCost } : undefined },
+    target.key === station.lastUsageModelKey && station.lastCtxModel ? { model: station.lastCtxModel } : undefined,
+    target.key === station.lastUsageModelKey ? station.usagePricingHint() : undefined,
   );
   const decision = shouldFoldPool({
     pool,
@@ -336,8 +398,13 @@ function foldEligiblePool(station, { state, parentId, boundary, epoch, args, bas
     budget: args.begin?.budget,
     usageSnapshot,
     pricing,
-    contextTokens: station.currentContextTokens?.() ?? lastIn,
-    tokensPerChar: station.tokensPerChar?.() ?? 0.3,
+    contextTokens: station.currentContextTokens(base, target.key),
+    tokensPerChar: station.tokensPerCharFor(target.key),
+    modelKey: target.key,
+    outerModels: [
+      modelChoice(station, ctx, state.baseModelSpec, state.baseModelKey),
+      ...state.scopes.map((scope) => modelChoice(station, ctx, scope.modelSpec, scope.modelKey)),
+    ],
     emergency: false,
   });
   if (!decision.fold) return { foldedCount: 0 };

@@ -47,8 +47,21 @@ export function rewriteVibeModeContext(content) {
 const systemPromptStart = "<!-- herdchestra-lite2:system-prompt v1 -->";
 const systemPromptEnd = "<!-- /herdchestra-lite2:system-prompt -->";
 
+// Static operating rules. They live in the system prompt so they occupy a
+// stable prefix; only the small dynamic receipt changes from turn to turn.
+export const persistentOperatingSkill = [
+  '<skill version="1.0">Persistent operating rules (unchanged every turn):',
+  '- Only the innermost scope budget is used. scope, regret, defer and pin are free; todo is allowed only outside all scopes.',
+  '- One assistant message spends at most one unit, split across its tool calls by count. A tool whose balance runs out is blocked while the rest of the message still runs.',
+  '- Never write the final user-facing answer while inside a scope. Close every scope first.',
+  '- Close a scope with scope({ end: true }). Pass the previous scope summary in the next sibling begin.elder_report.',
+  '- Outside all scopes, evaluate the ledger with todo; a non-empty ledger forbids stopping. Finishing is not a tool call.',
+  '- 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。',
+  '</skill>',
+].join('\n');
+
 function managedBlock() {
-  return `${systemPromptStart}\n${commonRulesText}\n${systemPromptEnd}`;
+  return `${systemPromptStart}\n${commonRulesText}\n\n${persistentOperatingSkill}\n${systemPromptEnd}`;
 }
 
 function replaceManaged(text) {

@@ -15,4 +15,4 @@ export {
 	isCollapsed,
 	finishedReport,
 } from "./collapse.mjs";
-export { rewriteVibeMessage, appendUserTail } from "./tail.mjs";
+export { rewriteVibeMessage } from "./tail.mjs";

@@ -32,7 +32,7 @@ export function wireTools(pi, registry) {
 		executionMode: "sequential",
 		concurrency: "exclusive",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-			scopeTicket(registry.stationFor(ctx), toolCallId, params),
+			scopeTicket(registry.stationFor(ctx), toolCallId, params, ctx),
 	});
 	pi.registerTool({
 		name: "regret",

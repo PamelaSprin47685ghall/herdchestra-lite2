@@ -19,7 +19,7 @@ When a scope closes, its elder at the same level remains the hot workbench until
 
 Scope is an execution barrier in a batch: calls listed before it finish first, and calls listed after it wait for it. Put todo before a scope opening or after the final scope closes.
 
-Provide begin, end: true, or both. With both, close the current scope first, archive it with begin.elder_report, then open the new scope in the same call. end: true outside a scope is rejected, including when begin is also supplied. Do not open a fresh scope and close it in the same assistant message; begin a scope in one message, do the work in later messages, then end it.`;
+Provide begin, end: true, or both. begin.model optionally names a model spec for the new scope (provider/id, alias, role, or a :off/:minimal/:low/:medium/:high/:xhigh thinking suffix); the host performs the real model switch and restores the previous model when the scope closes. With both, close the current scope first, archive it with begin.elder_report, then open the new scope in the same call. end: true outside a scope is rejected, including when begin is also supplied. Do not open a fresh scope and close it in the same assistant message; begin a scope in one message, do the work in later messages, then end it.`;
 
 export const BEGIN_INTENT_DESCRIPTION =
 	"A task of moderate scope: one outcome that can be completed and reviewed in a bounded stretch, plus the evidence that proves completion. As a heuristic for how much work one scope should hold, if the whole user request seems to need about n tool calls, a moderate scope covers roughly sqrt(n) of them; this is not a target for the call count and does not decide how many calls the task actually takes. Name the outcome and its proof, not a single file operation and not the whole user request. One to three sentences.";
@@ -31,7 +31,7 @@ export const END_DESCRIPTION =
 	"Close the current scope by passing true. No report is written at close time and no summary is required. The closed scope stays visible as the hot workbench at its level. If you later open another sibling scope at that level, pass this scope's summary in that begin's elder_report; if you leave the level or finish the task instead, write no summary at all.";
 
 export const ELDER_REPORT_DESCRIPTION =
-	"The summary of the previous scope at this level. Pass a non-empty string only when an unarchived elder scope is pending at this level: the tail instruction names it and its intent. That summary archives the elder, turning it from pending into the hot workbench so older folded elders become eligible for batching. Pass null when no elder is pending, when the previous scope is not visible on the branch, or when this is the first scope at the level. This is a handoff receipt, not the user-facing answer.";
+	"The summary of the previous scope at this level. Record its outcomes and remaining work; do not repeat user messages, which folding keeps before the scope's begin call. Pass a non-empty string only when an unarchived elder scope is pending at this level: the tail instruction names it and its intent. That summary archives the elder, turning it from pending into the hot workbench so older folded elders become eligible for batching. Pass null when no elder is pending, when the previous scope is not visible on the branch, or when this is the first scope at the level. This is a handoff receipt, not the user-facing answer.";
 
 export const REGRET_DESCRIPTION = `Undo the most recent completed beat inside the current scope. A beat is one assistant message (thinking and output) together with its tool calls and their results. On the next LLM request, that beat disappears completely, and the budget spent by its tool calls is refunded to the current scope. An assistant message spends at most one unit in total, split across the tools it calls, so undoing its beat refunds exactly what those calls consumed. Multiple regret calls in the same beat undo several earlier beats, one per call. All regret calls in a beat are processed before any normal tool in that beat, so a refund can fund a later call.
 
@@ -83,6 +83,11 @@ export const scopeParameters = {
 				elder_report: {
 					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
 					description: ELDER_REPORT_DESCRIPTION,
+				},
+				model: {
+					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
+					description:
+						"Optional model spec for this scope: provider/id, settings alias or role, or a model with an off/minimal/low/medium/high/xhigh thinking suffix. The host performs the real model switch and restores the previous model when the scope closes.",
 				},
 			},
 			description:

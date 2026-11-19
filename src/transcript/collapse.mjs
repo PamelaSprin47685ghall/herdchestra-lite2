@@ -1,6 +1,6 @@
 /**
  * Transcript collapse: rewrite a finished scope's interior into its begin
- * receipt while preserving pin records. Pure. No I/O.
+ * receipt while preserving user messages and pin records. Pure. No I/O.
  */
 
 import {
@@ -100,6 +100,10 @@ export function applyCollapses(messages, collapses, epoch = 0) {
 	for (const collapse of active) {
 		const begin = findBegin(result, collapse.beginToolCallId);
 		if (!begin) continue;
+		const report = finishedReport(collapse.report);
+		// A later sibling can move users before a shared end/begin call.
+		// Those messages do not belong to this already-folded scope.
+		if (joinedText(begin.result) === report) continue;
 
 		const endAssistantIndex = findToolCallIndex(result, collapse.endToolCallId);
 		if (endAssistantIndex < 0 || endAssistantIndex <= begin.resultIndex) continue;
@@ -121,11 +125,18 @@ export function applyCollapses(messages, collapses, epoch = 0) {
 			for (const message of pinned) next.push(message);
 		};
 		for (let index = 0; index < result.length; index += 1) {
+			if (index === begin.assistantIndex) {
+				// Move whole user messages before the begin call, not between
+				// the call and its results.
+				for (let pos = begin.resultIndex + 1; pos < endAssistantIndex; pos += 1) {
+					if (result[pos]?.role === "user") next.push(result[pos]);
+				}
+			}
 			if (index === begin.resultIndex) {
 				next.push({
 					...begin.result,
 					// Keep the omp tool-result shape: one text block.
-					content: [{ type: "text", text: finishedReport(collapse.report) }],
+					content: [{ type: "text", text: report }],
 					isError: false,
 				});
 				continue;

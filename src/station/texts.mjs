@@ -1,7 +1,6 @@
 // Station texts: every model-facing scope string. Pure. No I/O.
 
 import { budgetText, currentScope } from "../scope/index.mjs";
-import { languageSkill, outsideScopeInstruction } from "../host/prompts.mjs";
 
 function beginText(scope) {
 	return [
@@ -12,8 +11,7 @@ function beginText(scope) {
 		"todo is free but forbidden inside any active scope. Close every scope before updating the ledger; a natural stop requires a successful todo evaluation outside all scopes.",
 		"Calls in one assistant message spend at most one unit in total, split across the tools used in proportion to their call counts and rounded to two decimals. A tool whose balance runs out is blocked while the rest of the message still runs. Budget and spend by assistant turns.",
 		"Do not write the final user-facing answer while inside a scope. Close every scope first; only after every scope closes may you answer the user.",
-		"When this scope closes, its elder sibling at the same level is collapsed; this scope stays visible until a younger sibling closes.",
-		'Call scope({ end: { return_markdown: "<report for your future self>" } }) when this task is complete. return_markdown is a self-delivery report; write the user-facing answer as ordinary assistant text.',
+		"Close with scope({ end: true }). This scope stays visible as the hot workbench. When opening its next sibling, pass its summary in begin.elder_report.",
 	].join("\n");
 }
 
@@ -100,37 +98,26 @@ function regretText(applied) {
 	return lines.join("\n");
 }
 
-function budgetLine(scope) {
-	return scope ? budgetText(scope) || "none" : "none";
-}
-
-function scopeTailInstruction(state) {
-	const scope = currentScope(state);
-	if (!scope) return outsideScopeInstruction;
-	return `You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetLine(scope)}. Only the innermost scope's budget is used; scope, regret, defer, and pin are free. todo is free but forbidden inside any active scope; close every scope before updating the ledger. Calls in one assistant message share at most one unit, split across the tools used in proportion to their call counts and rounded to two decimals; a tool whose balance runs out is blocked while the rest of the message still runs. Do not write the final user-facing answer while inside a scope. When this task is complete, call scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, you will return inside it; only when every scope is closed may you write the final answer as ordinary assistant text. Finishing is not a tool call.`;
-}
-
-const outsideScopeInstructionNoRelay =
-	"You are outside all scopes. Only the free control tools (scope, regret, defer, pin) may be called here; todo is unavailable in this session. Finishing is not a tool call.";
-
-function scopeTailInstructionNoRelay(state) {
-	const scope = currentScope(state);
-	if (!scope) return outsideScopeInstructionNoRelay;
-	return `You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetLine(scope)}. Only the innermost scope's budget is used; scope, regret, defer, and pin are free. Calls in one assistant message share at most one unit, split across the tools used in proportion to their call counts and rounded to two decimals; a tool whose balance runs out is blocked while the rest of the message still runs. Do not write the final user-facing answer while inside a scope. When this task is complete, call scope({ end: { return_markdown: "<report for your future self>" } }). If an enclosing scope remains, you will return inside it; only when every scope is closed may you write the final answer as ordinary assistant text. Finishing is not a tool call.`;
-}
-
-/** The exact outbound user tail: additional-system-instructions + language skill. */
-export function tailText(state, relayOn = true) {
-	return [
-		`<additional-system-instructions><skill version="1.0">${relayOn ? scopeTailInstruction(state) : scopeTailInstructionNoRelay(state)}</skill></additional-system-instructions>`,
-		`<system-reminder>${languageSkill}</system-reminder>`,
-	].join("\n\n");
-}
-
 function insideScopeNudge(state) {
 	const scope = currentScope(state);
 	if (!scope) return "";
-	return `You are still inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Do not write the final user-facing conclusion yet. Continue the task; when it is complete, close this scope with scope({ end: { return_markdown: "<report for your future self>" } }). todo is forbidden inside every scope, so close this scope and every enclosing scope before updating the ledger. Only outside all scopes may you write the final answer as ordinary assistant text, and only after a promoted empty-ledger successor evaluation. If you are permanently blocked, close the scope with a return_markdown report explaining the block, then answer outside only after the relay evaluation.`;
+	return `You are still inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Do not write the final user-facing conclusion. Continue the task or close it with scope({ end: true }). Close all scopes before using todo. Only after the relay allows stopping may you write the final user-facing answer.`;
+}
+
+/** Dynamic, persistent receipt. Appended to history only when text changes. */
+export function skillReceiptText(state, relayOn = true) {
+	const scope = currentScope(state);
+	const lines = scope
+		? [
+			`You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetText(scope) || "none"}.`,
+		]
+		: ["You are outside all scopes."];
+	if (relayOn) {
+		lines.push("Before stopping, call todo to evaluate the ledger; finishing is not a tool call.");
+	} else if (!scope) {
+		lines.push("Finishing is not a tool call.");
+	}
+	return `<skill version="1.0">${lines.join(" ")}</skill>`;
 }
 
 function insideScopeText(state) {
@@ -143,8 +130,6 @@ export {
 	beginText,
 	endText,
 	regretText,
-	budgetLine,
-	scopeTailInstruction,
 	insideScopeNudge,
 	insideScopeText,
 };

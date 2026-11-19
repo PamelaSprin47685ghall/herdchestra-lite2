@@ -10,13 +10,13 @@ import {
 } from "./controls.mjs";
 import { controlsIn, parseArgs } from "./messages.mjs";
 
-function executeScope(station, toolCallId, params) {
+function executeScope(station, toolCallId, params, ctx) {
 	const cached = station.handled.get(toolCallId);
 	if (cached) return cached;
 	station.processControlsForTool(toolCallId);
 	const processed = station.handled.get(toolCallId);
 	if (processed) return processed;
-	return directScope(station, toolCallId, params);
+	return directScope(station, toolCallId, params, ctx);
 }
 
 function executeRegret(station, toolCallId, params) {
@@ -46,7 +46,7 @@ function executePin(station, toolCallId, params) {
 	return directPin(station, toolCallId, params);
 }
 
-function directScope(station, toolCallId, params) {
+function directScope(station, toolCallId, params, ctx) {
 	const found = station.assistantForToolCall(toolCallId);
 	if (found) {
 		station.processAssistantMessage(found.message, { persisted: true });
@@ -68,6 +68,7 @@ function directScope(station, toolCallId, params) {
 		currentMessage,
 		currentPersisted: Boolean(found),
 		sameMessageBeginIds: beginIds,
+		ctx,
 	});
 	station.setHandled(toolCallId, result);
 	station.processedCalls.add(toolCallId);

@@ -290,11 +290,357 @@ export function resolveModelPolicy(catalog, ctx, hint) {
 	}
 }
 
-function freezeCatalog(byFullId, byId, defaultModelKey) {
+const THINKING_SUFFIX =
+	/(?:\s*[:@]\s*|\s+)(off|minimal|low|medium|high|xhigh)\s*$/i;
+
+function splitThinkingSuffix(text) {
+	const match = THINKING_SUFFIX.exec(text);
+	if (!match) return { model: text, thinking: null };
+	return {
+		model: text.slice(0, match.index).trim(),
+		thinking: match[1].toLowerCase(),
+	};
+}
+
+function safeProperty(target, key) {
+	try {
+		return target?.[key];
+	} catch {
+		return undefined;
+	}
+}
+
+function settingValue(source, names) {
+	if (!source || typeof source !== "object") return undefined;
+	if (typeof source.get === "function") {
+		for (const name of names) {
+			try {
+				const value = source.get(name);
+				if (value !== undefined) return value;
+			} catch {
+				// Try the next accepted key.
+			}
+		}
+	}
+	if (source instanceof Map) {
+		for (const name of names) {
+			if (source.has(name)) return source.get(name);
+		}
+	}
+	for (const name of names) {
+		const value = safeProperty(source, name);
+		if (value !== undefined) return value;
+	}
+	return undefined;
+}
+
+function addConfiguredEntries(target, value) {
+	if (!value) return;
+	const entries = value instanceof Map ? value.entries() : Object.entries(value);
+	for (const [key, entry] of entries) {
+		if (typeof key !== "string" || entry === null || entry === undefined) continue;
+		const spec =
+			typeof entry === "string" || typeof entry === "number"
+				? String(entry)
+				: safeProperty(entry, "model") ??
+					safeProperty(entry, "spec") ??
+					safeProperty(entry, "target");
+		if (typeof spec === "string" && spec !== "") {
+			target.set(key.trim().toLowerCase(), spec.trim());
+		}
+	}
+}
+
+function configuredMaps(ctx, catalog) {
+	let session = null;
+	try {
+		session = sessionFor(ctx);
+	} catch {
+		session = null;
+	}
+	const sources = [
+		ctx?.settings,
+		session?.settings,
+		ctx?.session?.settings,
+		ctx?.sessionManager?.settings,
+	];
+	const aliases = new Map(catalog?.modelAliases);
+	const roles = new Map(catalog?.modelRoles);
+	for (const source of sources) {
+		addConfiguredEntries(
+			aliases,
+			settingValue(source, ["aliases", "modelAliases", "model_aliases"]),
+		);
+		addConfiguredEntries(
+			roles,
+			settingValue(source, ["modelRoles", "model_roles", "roles"]),
+		);
+	}
+	return { aliases, roles };
+}
+
+function lookupConfigured(map, key) {
+	return map.get(key.trim().toLowerCase());
+}
+
+function resolveConfiguredSpec(ctx, catalog, text) {
+	const { aliases, roles } = configuredMaps(ctx, catalog);
+	let current = text.trim();
+	let thinking = null;
+	const seen = new Set();
+	for (let depth = 0; depth < 8; depth += 1) {
+		if (!current) return { model: "", thinking };
+		const key = current.toLowerCase();
+		if (seen.has(key)) break;
+		seen.add(key);
+		const name = current.replace(/^@/, "");
+		const next = lookupConfigured(aliases, name) ?? lookupConfigured(roles, name);
+		if (next !== undefined) {
+			current = next;
+			continue;
+		}
+		const exact = resolveModelEntry(ctx, catalog, current, true);
+		if (exact) return { model: current, thinking, entry: exact };
+		const parts = splitThinkingSuffix(current);
+		if (!parts.thinking) break;
+		thinking ??= parts.thinking;
+		current = parts.model;
+	}
+	return { model: current, thinking };
+}
+
+function registryFor(ctx) {
+	let session = null;
+	try {
+		session = sessionFor(ctx);
+	} catch {
+		session = null;
+	}
+	const candidates = [
+		ctx?.modelRegistry,
+		session?.modelRegistry,
+		ctx?.session?.modelRegistry,
+	];
+	for (const candidate of candidates) {
+		if (
+			candidate &&
+			(typeof candidate.find === "function" ||
+				typeof candidate.getAll === "function")
+		) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+function registryAll(registry) {
+	if (!registry) return [];
+	let all = null;
+	if (typeof registry.getAll === "function") {
+		try {
+			all = registry.getAll();
+		} catch {
+			all = null;
+		}
+	} else if (Array.isArray(registry.models)) {
+		all = registry.models;
+	} else if (registry.models && typeof registry.models === "object") {
+		all = Object.values(registry.models);
+	}
+	if (!all || typeof all.then === "function") return [];
+	return Array.isArray(all) ? all : Object.values(all);
+}
+
+function registryFind(registry, provider, id) {
+	if (!registry || typeof registry.find !== "function" || !provider) return null;
+	try {
+		const found = registry.find(provider, id);
+		return found && typeof found.then !== "function" ? found : null;
+	} catch {
+		return null;
+	}
+}
+
+function registryEntry(value, providerHint, idHint) {
+	if (typeof value === "string") {
+		const id = value.trim();
+		if (!id) return null;
+		return Object.freeze({
+			id,
+			provider: providerHint ?? "unknown",
+			fullId: id.includes("/") ? id : `${providerHint ?? "unknown"}/${id}`,
+			label: id,
+			cost: Object.freeze({}),
+			contextWindow: null,
+		});
+	}
+	if (!value || typeof value !== "object") return null;
+	const rawId = asNonEmptyString(
+		value.id ?? value.modelId ?? value.name ?? value.key ?? idHint,
+	);
+	const provider = asNonEmptyString(value.provider ?? providerHint);
+	const fullId =
+		asNonEmptyString(value.fullId ?? value.full_id ?? value.key) ??
+		(rawId?.includes("/")
+			? rawId
+			: provider && rawId
+				? `${provider}/${rawId}`
+				: rawId);
+	const id =
+		asNonEmptyString(value.id ?? value.modelId ?? value.name) ??
+		(fullId?.includes("/") ? fullId.slice(fullId.indexOf("/") + 1) : fullId);
+	if (!id && !fullId) return null;
+	const finalId = id ?? fullId;
+	const finalFullId = fullId ?? (provider ? `${provider}/${finalId}` : finalId);
+	return Object.freeze({
+		id: finalId,
+		provider: provider ?? "unknown",
+		fullId: finalFullId,
+		label: asNonEmptyString(value.label ?? value.name) ?? finalId,
+		cost: Object.freeze(normalizeCost(value.cost ?? value.pricing ?? value)),
+		contextWindow: asPositiveNumber(
+			value.contextWindow ?? value.context_window ?? value.maxContextTokens,
+		),
+	});
+}
+
+function splitProviderId(text) {
+	const index = text.indexOf("/");
+	if (index <= 0 || index === text.length - 1) return { provider: null, id: text };
+	return { provider: text.slice(0, index), id: text.slice(index + 1) };
+}
+
+function normalized(value) {
+	return String(value ?? "").trim().toLowerCase();
+}
+
+function exactEntry(entry, text) {
+	const target = normalized(text);
+	return normalized(entry?.fullId) === target || normalized(entry?.id) === target;
+}
+
+function substringEntry(entry, text) {
+	const target = normalized(text);
+	if (!target) return false;
+	return [entry?.fullId, entry?.id, entry?.label].some(
+		(value) => value && normalized(value).includes(target),
+	);
+}
+
+function mapGetCI(map, key) {
+	if (!map || typeof map.get !== "function") return null;
+	const direct = map.get(key) ?? map.get(key.toLowerCase());
+	if (direct) return direct;
+	const target = normalized(key);
+	for (const [candidate, value] of map.entries()) {
+		if (normalized(candidate) === target) return value;
+	}
+	return null;
+}
+
+function catalogExact(catalog, text) {
+	if (!catalog) return null;
+	const direct =
+		mapGetCI(catalog.byFullId, text) ?? mapGetCI(catalog.byId, text);
+	if (direct) return direct;
+	const { provider, id } = splitProviderId(text);
+	if (provider) {
+		return mapGetCI(catalog.byFullId, `${provider}/${id}`);
+	}
+	return mapGetCI(catalog.byId, id);
+}
+
+function catalogEntries(catalog) {
+	if (!catalog) return [];
+	if (catalog.byFullId && catalog.byFullId.size > 0) {
+		return [...catalog.byFullId.values()];
+	}
+	if (catalog.byId && catalog.byId.size > 0) {
+		return [...catalog.byId.values()];
+	}
+	return [];
+}
+
+function resolveModelEntry(ctx, catalog, modelText, exactOnly = false) {
+	const registry = registryFor(ctx);
+	const { provider, id } = splitProviderId(modelText);
+
+	const found = registryEntry(
+		registryFind(registry, provider, id),
+		provider,
+		id,
+	);
+	if (found) return found;
+
+	const registryEntries = registryAll(registry)
+		.map((value) => registryEntry(value, provider, id))
+		.filter(Boolean);
+	const registryExact = registryEntries.filter((entry) =>
+		exactEntry(entry, modelText),
+	);
+	if (registryExact.length > 0) return registryExact[0];
+
+	const catalogHit = catalogExact(catalog, modelText);
+	if (catalogHit) return catalogHit;
+	if (exactOnly) return null;
+
+	const registrySubstring = registryEntries.filter((entry) =>
+		substringEntry(entry, modelText),
+	);
+	if (registrySubstring.length === 1) return registrySubstring[0];
+
+	const catalogSubstring = catalogEntries(catalog).filter((entry) =>
+		substringEntry(entry, modelText),
+	);
+	if (catalogSubstring.length === 1) return catalogSubstring[0];
+	return null;
+}
+
+/**
+ * Synchronous model-spec preparse for host `/model`-style commands.
+ *
+ * Resolves settings aliases/roles, strips a trailing thinking suffix
+ * (`:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, or the same after
+ * `@`/whitespace), then tries the live model registry before the pricing
+ * catalog. Unknown specs stay unrecognized so the host can apply its own
+ * fuzzy resolution.
+ */
+export function preparseModelSpec(catalog, ctx, rawSpec) {
+	const raw = typeof rawSpec === "string" ? rawSpec : String(rawSpec ?? "");
+	const unresolved = {
+		rawSpec: raw,
+		canonicalKey: "",
+		pricing: null,
+		contextWindow: null,
+		recognized: false,
+	};
+	const resolved = resolveConfiguredSpec(ctx, catalog, raw.trim());
+	const modelText = resolved.model.trim();
+	if (!modelText) return unresolved;
+	const entry = resolved.entry ?? resolveModelEntry(ctx, catalog, modelText);
+	if (!entry) {
+		return { ...unresolved, canonicalKey: modelText };
+	}
+	const fromCatalog = catalogExact(catalog, entry.fullId ?? modelText);
+	const contextWindow = asPositiveNumber(entry.contextWindow ?? fromCatalog?.contextWindow);
+	const cost = { ...fromCatalog?.cost, ...entry.cost };
+	return {
+		rawSpec: raw,
+		canonicalKey: entry.fullId ?? entry.id ?? modelText,
+		pricing: Object.keys(cost).length ? policyFromCatalogEntry({ ...entry, cost, contextWindow }) : null,
+		contextWindow,
+		recognized: true,
+		thinkingLevel: resolved.thinking,
+	};
+}
+
+function freezeCatalog(byFullId, byId, defaultModelKey, modelRoles = new Map(), modelAliases = new Map()) {
 	const catalog = {
 		byFullId,
 		byId,
 		defaultModelKey,
+		modelRoles,
+		modelAliases,
 		resolveModel(ctx, hint) {
 			return resolveModelFromCatalog(catalog, ctx, hint);
 		},
@@ -337,14 +683,18 @@ export async function loadPricingCatalog() {
 		process.env?.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"),
 	];
 	let defaultModelKey = null;
-	for (const root of roots) {
+	const modelRoles = new Map();
+	const modelAliases = new Map();
+	for (const root of roots.reverse()) {
 		const models = await readJson(join(root, "models.json"));
 		if (models) ingestModels(target, models);
 		const settings = await readJson(join(root, "settings.json"));
+		addConfiguredEntries(modelRoles, settings?.modelRoles);
+		addConfiguredEntries(modelAliases, settings?.modelAliases ?? settings?.aliases);
 		const key = asNonEmptyString(settings?.defaultModel ?? settings?.model);
-		if (!defaultModelKey && key) defaultModelKey = key;
+		if (key) defaultModelKey = key;
 	}
 	if (!defaultModelKey) defaultModelKey = asNonEmptyString(process.env?.OMP_DEFAULT_MODEL);
 
-	return freezeCatalog(byFullId, byId, defaultModelKey);
+	return freezeCatalog(byFullId, byId, defaultModelKey, modelRoles, modelAliases);
 }

@@ -4,6 +4,46 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] — 2026-11-19
+
+### Fixed
+
+- A fold rewrites the session branch from an earlier entry, so every
+  `scope.state` entry appended after that point leaves `getBranch()`.
+  `SessionStation` kept its previous snapshot as the delta base and appended a
+  delta onto the rebased branch, which carried no checkpoint: a restart within
+  the next 64 writes restored an empty state, silently losing pins, scopes,
+  herd mode, and the relay. `foldElder()` and `foldBatch()` now invalidate the
+  persisted base when a fold reports `rebased`, and write a checkpoint
+  immediately on the new branch.
+
+### Added
+
+- `tests/persistence-rebase.test.mjs`: drives the real station through
+  `foldBatch` against an omp-shaped session tree, then restores a second
+  station from the same manager and demands the same state. It fails without
+  the checkpoint.
+
+## [2.1.1] — 2026-11-19
+
+### Fixed
+
+- `installRunnerCapture()` returned the internal capture record, which has no
+  `ok` field, so a caller that checked `diagnosis.ok` saw a failure with an
+  empty reason. It now returns the same `{ ok, missing, error }` shape as
+  `captureDiagnosis()`. The host smoke only reached this path once the seam
+  could load, which is how the defect surfaced.
+
+### Changed
+
+- `scripts/smoke-omp.mjs` verifies the two prototype seams against the real
+  `AgentSession` even when the checkout's native addon predates its source: it
+  borrows a matching prebuilt addon from `~/.omp/natives/<version>` (or
+  `PI_NATIVES_DIR`), re-running itself with `PI_COMPILED` and `PI_NATIVES_DIR`
+  set. `OMP_SMOKE_BORROW=0` restores the previous honest skip. On a machine
+  with the 19.0.0 addon, all ten checks pass; the stale addon had blocked the
+  seam check, not the seam itself.
+
 ## [2.1.0] — 2026-11-19
 
 ### Added
@@ -59,26 +99,6 @@ All notable changes to this extension. The format follows
 - Existing sessions keep working: their last `scope.state` entry has no
   envelope and is treated as a checkpoint. The first write after upgrade
   appends a delta against it.
-
-## [2.1.1] — 2026-11-19
-
-### Fixed
-
-- `installRunnerCapture()` returned the internal capture record, which has no
-  `ok` field, so a caller that checked `diagnosis.ok` saw a failure with an
-  empty reason. It now returns the same `{ ok, missing, error }` shape as
-  `captureDiagnosis()`. The host smoke only reached this path once the seam
-  could load, which is how the defect surfaced.
-
-### Changed
-
-- `scripts/smoke-omp.mjs` verifies the two prototype seams against the real
-  `AgentSession` even when the checkout's native addon predates its source: it
-  borrows a matching prebuilt addon from `~/.omp/natives/<version>` (or
-  `PI_NATIVES_DIR`), re-running itself with `PI_COMPILED` and `PI_NATIVES_DIR`
-  set. `OMP_SMOKE_BORROW=0` restores the previous honest skip. On a machine
-  with the 19.0.0 addon, all ten checks pass; the stale addon had blocked the
-  seam check, not the seam itself.
 
 ## [2.0.0] — earlier
 

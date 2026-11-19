@@ -242,6 +242,19 @@ export class SessionStation {
 	}
 
 	/**
+	 * A fold rewrites the branch from an earlier entry, so every state entry
+	 * appended after that point leaves `getBranch()`. A delta written next
+	 * would replay onto a truncated chain or onto none at all, and a restart
+	 * would come back empty. Drop the baseline and write a checkpoint while
+	 * the rebased branch is the live one.
+	 */
+	rebasePersistedBase() {
+		this.lastPersisted = null;
+		this.stateWrites = 0;
+		this.persist();
+	}
+
+	/**
 	 * Record one failure. `lastError` stays for compatibility with any reader;
 	 * the ring in ../host/diagnostics.mjs keeps the history a single field
 	 * loses on the next failure.
@@ -428,7 +441,10 @@ export class SessionStation {
 
 	foldElder(args) {
 		const folded = foldElderInBranch({ manager: this.manager, state: this.state, ...args });
-		if (folded.rebased) this.needsRebase = true;
+		if (folded.rebased) {
+			this.needsRebase = true;
+			this.rebasePersistedBase();
+		}
 		return folded;
 	}
 
@@ -443,6 +459,7 @@ export class SessionStation {
 		if (folded.rebased) {
 			this.needsRebase = true;
 			if (this.sentContext) this.sentContext.frontier = Math.min(this.sentContext.frontier, folded.foldStartIdx ?? 0);
+			this.rebasePersistedBase();
 		}
 		return folded;
 	}

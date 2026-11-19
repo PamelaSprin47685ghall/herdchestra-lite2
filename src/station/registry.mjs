@@ -15,6 +15,21 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog)
 	let orphanStation = null;
 	let pendingStation = null;
 
+	// The pending handoff belongs to one session. A `/new` or a session switch
+	// must never route the next stop to the old station.
+	function sameManager(station, ctx) {
+		const key = ctx?.sessionManager ?? ctx;
+		if (!key || !station?.manager) return false;
+		if (station.manager === key) return true;
+		try {
+			const live = key.getSessionId?.();
+			const armed = station.manager.getSessionId?.();
+			return Boolean(live && armed && live === armed);
+		} catch {
+			return false;
+		}
+	}
+
 	const registry = {
 		stationFor(ctx) {
 			const key = ctx?.sessionManager ?? ctx;
@@ -34,11 +49,19 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog)
 		stationForStop(ctx) {
 			const station = registry.stationFor(ctx);
 			if (station.state.relay?.handoffPending) return station;
-			if (pendingStation?.state.relay?.handoffPending) return pendingStation;
+			if (!pendingStation) return station;
+			if (!sameManager(pendingStation, ctx)) {
+				pendingStation = null;
+				return station;
+			}
+			if (pendingStation.state.relay?.handoffPending) return pendingStation;
 			return station;
 		},
 		markPending(station) {
 			pendingStation = station;
+		},
+		clearPending(station) {
+			if (!station || pendingStation === station) pendingStation = null;
 		},
 	};
 

@@ -143,9 +143,10 @@ export function retainedTailSetting() {
 /**
  * Execute one system slash command and wait for its completion promise.
  *
- * There is no prompt fallback: an unhandled command or an absent builtin
- * executor is an error, never an extra send. `/handoff` is dispatched with its
- * focus as the only argument.
+ * This route remains for model selection (`/switch`, `/model`). The relay
+ * handoff no longer passes through the slash dispatcher: it calls
+ * `session.compact(focus, { mode: "handoff" })`, the same call the builtin
+ * `/handoff` makes, so no prompt or message is ever sent.
  */
 export async function sendSlashPrompt(target, text, options = {}) {
 	const session = sessionFor(target) ?? target;
@@ -160,19 +161,17 @@ export async function sendSlashPrompt(target, text, options = {}) {
 			"The system slash-command executor is unavailable; /handoff cannot run",
 		);
 	}
-	const headless = createHeadlessTuiContext(session, options, parsed.name);
+	const headless = createHeadlessTuiContext(session, options);
 	const outcome = await executor(parsed.raw, {
 		ctx: headless.ctx,
 		input: options.input,
 		draftDetached: false,
 	});
-	if (headless.completion) await headless.completion;
 	if (outcome !== true) {
 		return {
 			handled: false,
 			command: parsed.name,
 			outputs: headless.outputs,
-			result: headless.result,
 			residual: typeof outcome === "string" ? outcome : undefined,
 		};
 	}
@@ -181,7 +180,6 @@ export async function sendSlashPrompt(target, text, options = {}) {
 		mode: "slash",
 		command: parsed.name,
 		outputs: headless.outputs,
-		result: headless.result,
 	};
 }
 

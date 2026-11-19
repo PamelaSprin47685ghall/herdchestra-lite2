@@ -187,7 +187,7 @@ function onSessionStop(station, ctx) {
 		return continueFeedback(firstEvaluationNudge());
 	}
 	if (relay.lastLedger.empty) {
-		station.armHandoff();
+		station.armHandoff(ctx);
 		return station.tickets.sessionStop(station, ctx);
 	}
 	return continueFeedback(openLedgerNudge(relay, relay.lastLedger));

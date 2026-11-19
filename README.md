@@ -6,9 +6,11 @@ When a scope folds, its user messages move before its opening `scope` call. Thei
 
 ## Relay handoff
 
-When `todo` empties the ledger, the relay marks a handoff pending. One persistent before-model-call hook then runs the real system `/handoff` command to completion before the next request is built. The successor and audit instructions are that command's only argument: no prompt, user message, or developer message is sent. The command resolves only after its background compaction commits; the hook advances the relay generation and replaces the outbound messages with the compacted transcript. The same request proceeds as the successor's first request, so the handoff completes before anything continues, with no extra model turn.
+When `todo` empties the ledger, the relay arms a handoff transaction and the next provider request is refused by a synchronous `agent.addBeforeModelCall` gate. The gate never awaits the handoff: it starts one background ticket and returns `{ stop: true }`, so no request is built on the empty ledger and no extra model turn is spent.
 
-The hook is an awaited host hook inside the live run, not an extension event callback, so it never races a callback timeout. A failed handoff rejects the request, records the native error, and is retried at the next boundary. `session_stop` starts the same single-flight handoff in the background, returns immediately, and calls `agent.continue()` only after the commit.
+The ticket waits for `session.waitForRunEnd()`, then calls `session.compact(focus, { mode: "handoff" })`. That is exactly what the builtin `/handoff` and the RPC `handoff` command call; `focus` is the command's only argument, so no prompt, user message, or developer message is sent. The call resolves only after its background compaction commits. The ticket then advances the relay generation and calls `agent.continue()`; the successor's first request is a fresh request on the compacted transcript.
+
+The transaction records the session id, the branch handoff count, and the source generation before compaction. After the commit, the count must grow before the generation advances. If the process stops between the commit and the advance, the next gate recognizes the new handoff entry and advances idempotently instead of compacting twice. A pending station belongs to its session manager: a `/new` or session switch never routes the next stop to the old session.
 
 ## Model selection
 

@@ -1,15 +1,13 @@
 // Handoff tickets: the only async entry points into the relay handoff flow.
 //
-// The model-call ticket is the relay barrier. The host awaits
-// `addBeforeModelCallHook` hooks inside the live run, before a request is
-// built, so an empty ledger cannot become a request until the real system
-// /handoff has committed. The same request then proceeds on the compacted
-// transcript: no stop/continue dance, no extra model turn, and no blocking
-// inside a host event callback.
-//
-// session_stop starts the same single-flight handoff in the background. It
-// returns immediately (the host's event budget is never held), and only after
-// the commit does it advance the relay and ask the agent to continue.
+// The model-call gate is synchronous. It refuses the next provider request
+// while a handoff is owed, starts the single-flight background ticket, and
+// returns `{ stop: true }` immediately. The run ends; the ticket waits for
+// `session.waitForRunEnd()`, runs the system handoff via `session.compact`, and
+// advances the relay generation only after the compaction commit. The successor
+// continues from `agent.continue()` after that commit. Nothing in a live run
+// awaits the compaction, so the compaction boundary and the run cannot wait on
+// each other.
 
 import { debugLog } from "./debug.mjs";
 import { performHandoff } from "./perform.mjs";
@@ -25,6 +23,30 @@ function retryable(relay) {
 	);
 }
 
+function sameLiveSession(station, session) {
+	if (!session || session.isDisposed === true) return false;
+	if (session.isSessionTransitioning === true) return false;
+	if (station.manager && session.sessionManager && session.sessionManager !== station.manager) {
+		return false;
+	}
+	const expected = station.handoffSessionId;
+	if (!expected) return true;
+	try {
+		const live = session.sessionManager?.getSessionId?.();
+		return !live || live === expected;
+	} catch {
+		return false;
+	}
+}
+
+async function waitForRunEnd(session) {
+	if (typeof session?.waitForRunEnd === "function") {
+		await session.waitForRunEnd();
+		return;
+	}
+	if (typeof session?.waitForIdle === "function") await session.waitForIdle();
+}
+
 /**
  * Start the one in-flight handoff, or join it. The station owns the promise
  * slot and records both outcomes; this ticket owns the async flow and never
@@ -32,8 +54,15 @@ function retryable(relay) {
  */
 function startHandoff(station, session) {
 	if (station.handoffPromise) return station.handoffPromise;
+	if (station.recoverHandoffCommit(session)) {
+		return Promise.resolve({ ok: true, recovered: true });
+	}
 	const flow = (async () => {
 		try {
+			await waitForRunEnd(session);
+			if (!sameLiveSession(station, session)) {
+				throw new Error("The live session changed before /handoff could start");
+			}
 			await performHandoff(station, session);
 			return { ok: true };
 		} catch (error) {
@@ -49,86 +78,70 @@ function startHandoff(station, session) {
 	return flow;
 }
 
-function awaitWithAbort(promise, signal) {
-	if (!signal) return promise;
-	if (signal.aborted) {
-		return Promise.reject(signal.reason ?? new Error("Aborted while waiting for handoff"));
-	}
-	return new Promise((resolve, reject) => {
-		const onAbort = () => {
-			reject(signal.reason ?? new Error("Aborted while waiting for handoff"));
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		promise.then(
-			(value) => {
-				signal.removeEventListener("abort", onAbort);
-				resolve(value);
-			},
-			(error) => {
-				signal.removeEventListener("abort", onAbort);
-				reject(error);
-			},
-		);
-	});
-}
-
-/**
- * The model-call ticket. Synchronous until it must wait: it reads the relay,
- * arms the pending flag, opens (or joins) the handoff, and only then awaits.
- * A failed handoff rejects, so the request is never sent on a stale ledger.
- */
-async function modelCallTicket(station, session, signal, context, ctx) {
-	if (signal?.aborted) return;
-	if (!station.relayOn(ctx)) return;
-	const relay = station.state.relay;
-	if (!relay || relay.canStop) return;
-	if (!relay.handoffPending && !retryable(relay)) return;
-	if (!relay.handoffPending) station.armHandoff();
-
-	const active = safeSession(ctx) ?? session ?? station.handoffSession;
-	if (!active) {
-		throw new Error("Cannot resolve the live AgentSession for the system /handoff");
-	}
-	debugLog("model_call_gate.wait", {
-		generation: station.state.relay?.generation ?? null,
-	});
-	const outcome = await awaitWithAbort(startHandoff(station, active), signal);
-	if (signal?.aborted) return;
-	if (!outcome.ok) {
-		throw new Error(`Relay handoff did not complete: ${outcome.error}`);
-	}
-	const latest = active.agent?.state?.messages;
-	if (Array.isArray(context?.messages) && Array.isArray(latest) && context.messages !== latest) {
-		context.messages = latest.slice();
-	}
-}
-
 /**
  * Resume the successor after a stop-triggered handoff. Never called before the
- * barrier resolves, and never when another run already owns the session.
+ * barrier resolves, and never when the session has moved on. One generation
+ * yields at most one continuation even when the gate and the stop hook both
+ * join the same handoff.
  */
-async function continueAfterStopHandoff(station, session) {
-	const outcome = await startHandoff(station, session);
-	if (!outcome.ok) return;
-	if (session?.isDisposed) return;
-	if (session?.agent?.state?.isStreaming) return;
-	const agent = session?.agent;
-	if (typeof agent?.continue !== "function") return;
-	try {
-		await agent.continue();
-	} catch (error) {
-		station.lastError = errorText(error);
-	}
+function continueAfterStopHandoff(station, session) {
+	const generation = station.state.relay?.generation ?? 0;
+	if (station.successorStartedGeneration === generation) return undefined;
+	const flow = (async () => {
+		const outcome = await startHandoff(station, session);
+		if (!outcome.ok) return;
+		if (!sameLiveSession(station, session)) return;
+		if (session?.agent?.state?.isStreaming) return;
+		const agent = session?.agent;
+		if (typeof agent?.continue !== "function") return;
+		const nextGeneration = station.state.relay?.generation ?? 0;
+		if (station.successorStartedGeneration === nextGeneration) return;
+		station.successorStartedGeneration = nextGeneration;
+		try {
+			await agent.continue();
+		} catch (error) {
+			station.successorStartedGeneration = null;
+			station.lastError = errorText(error);
+		}
+	})();
+	return flow;
 }
 
 /**
- * Install the relay barrier on this agent. `addBeforeModelCallHook` iterates a
- * live set and is awaited by the host, so installing it inside a run takes
- * effect on that run's next request: the handoff cannot be missed.
+ * The model-call gate. Synchronous: it reads the relay, arms the transaction,
+ * starts the single-flight ticket, and refuses the request without awaiting the
+ * compaction. The host runs it immediately before the provider call, so no
+ * request can be built on the empty ledger.
+ */
+function modelCallGate(station, session, _context, signal, ctx) {
+	if (signal?.aborted) return undefined;
+	if (!station.relayOn(ctx)) return undefined;
+	const relay = station.state.relay;
+	if (!relay || relay.canStop) return undefined;
+	if (!relay.handoffPending && !retryable(relay)) return undefined;
+	const active = safeSession(ctx) ?? session ?? station.handoffSession ?? null;
+	if (!active) return undefined;
+	station.handoffSession = active;
+	if (!station.state.relay.handoffPending) station.armHandoff(ctx);
+	if (!station.state.relay.handoffTarget) station.ensureHandoffTarget(active);
+	void continueAfterStopHandoff(station, active);
+	return {
+		stop: true,
+		reason:
+			"RELAY_HANDOFF_PENDING: the system /handoff is committing. This request is refused; the successor continues after the commit.",
+	};
+}
+
+/**
+ * Install the relay gate on this agent. `addBeforeModelCall` gates are sampled
+ * when a run starts, so installing the gate in `before_agent_start` takes
+ * effect on that run's requests, including the next request after an empty
+ * ledger.
  */
 export function installRelayGate(station, ctx) {
-	const session = safeSession(ctx) ?? station.handoffSession;
-	return station.ensureModelCallGate(ctx, modelCallTicket, session);
+	const session = safeSession(ctx) ?? station.handoffSession ?? null;
+	if (session) station.handoffSession = session;
+	return station.ensureModelCallGate(ctx, modelCallGate, session);
 }
 
 /**
@@ -139,16 +152,16 @@ export function installRelayGate(station, ctx) {
  */
 export function sessionStopTicket(station, ctx) {
 	if (!station.relayOn(ctx)) return undefined;
-	if (station.handoffPromise) return undefined;
 	const relay = station.state.relay;
 	if (!relay || relay.canStop) return undefined;
 	if (!relay.handoffPending && !retryable(relay)) return undefined;
-	if (!relay.handoffPending) station.armHandoff();
-	const session = safeSession(ctx) ?? station.handoffSession;
+	const session = safeSession(ctx) ?? station.handoffSession ?? null;
 	if (!session) return undefined;
-	debugLog("session_stop.schedule", {
-		generation: station.state.relay?.generation ?? null,
-	});
+	station.handoffSession = session;
+	if (!station.state.relay.handoffPending) station.armHandoff(ctx);
+	if (!station.state.relay.handoffTarget) {
+		station.ensureHandoffTarget(session);
+	}
 	void continueAfterStopHandoff(station, session);
 	return undefined;
 }

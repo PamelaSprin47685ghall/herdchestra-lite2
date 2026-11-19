@@ -1,17 +1,16 @@
 /**
- * Headless InteractiveModeContext adapter for the system /handoff command.
+ * Headless InteractiveModeContext adapter for system slash commands.
  *
- * omp's builtin dispatcher prefers a command's TUI handler. `/handoff` is
- * `/compact handoff`: its TUI handler calls `ctx.handleCompactCommand(focus,
- * "handoff")` and returns immediately because handoff compaction is
- * background. This adapter records the single completion promise that handler
- * starts; `sendSlashPrompt` awaits it as the commit barrier before the relay
- * advances.
+ * The relay handoff does not use this path. It calls
+ * `session.compact(focus, { mode: "handoff" })` directly: that is the same call
+ * the builtin `/handoff` and the RPC `handoff` command make, and `focus` is the
+ * command's only argument. No prompt, user message, or developer message is
+ * sent.
  *
- * The context is an explicit object, not a catch-all Proxy. A capability the
- * command actually needs must exist, or the command fails loudly. In
- * particular `runCommandInBackground` is absent, so the non-TUI `/compact`
- * path cannot mistake a stub for a dispatcher and silently drop the run.
+ * This adapter remains for `/switch` and `/model`, which must go through the
+ * host's builtin slash executor. The context is an explicit object, not a
+ * catch-all Proxy. A capability the command actually needs must exist, or the
+ * command fails loudly.
  */
 
 function recordOutput(outputs, kind, message, options) {
@@ -79,35 +78,8 @@ async function handleSwitchSessionModel(session, model, thinkingLevel, options, 
 	return { handled: false, model, thinkingLevel, error: "unavailable" };
 }
 
-export function createHeadlessTuiContext(session, options = {}, command) {
+export function createHeadlessTuiContext(session, options = {}) {
 	const outputs = [];
-	let result;
-	let completion;
-
-	const runHandoff = (focus) => {
-		if (completion) return completion;
-		const run = () => {
-			if (!session || typeof session.compact !== "function") {
-				throw new Error(
-					"The live session does not expose compact(); the system /handoff cannot run",
-				);
-			}
-			return session.compact(focus, { mode: "handoff" });
-		};
-		const flow =
-			typeof options.onSessionHandoff === "function"
-				? Promise.resolve().then(() => options.onSessionHandoff(run, focus))
-				: Promise.resolve().then(run);
-		completion = flow.then((value) => {
-			result = value;
-			return value;
-		});
-		// The native background dispatcher does not await its UI handler; keep
-		// an unhandled rejection from escaping while sendSlashPrompt still sees
-		// the rejection through `completion`.
-		void completion.catch(() => {});
-		return completion;
-	};
 
 	const editor = {
 		getText: () => "",
@@ -134,13 +106,10 @@ export function createHeadlessTuiContext(session, options = {}, command) {
 		updatePendingMessagesDisplay: () => {},
 		refreshSlashCommandState: async () => {},
 		applySessionPin: () => {},
-		handleCompactCommand: (focus, mode) => {
-			if (command !== "handoff" || mode !== "handoff") {
-				throw new Error(
-					`Unsupported headless compaction: ${command ?? "?"} ${mode ?? ""}`.trim(),
-				);
-			}
-			return runHandoff(focus);
+		handleCompactCommand: () => {
+			throw new Error(
+				"Headless compaction is unavailable; relay handoff calls session.compact directly.",
+			);
 		},
 		onSwitchModel: (spec, switchOptions) =>
 			handleModelSwitch(
@@ -159,14 +128,5 @@ export function createHeadlessTuiContext(session, options = {}, command) {
 			),
 	};
 
-	return {
-		ctx,
-		outputs,
-		get completion() {
-			return completion;
-		},
-		get result() {
-			return result;
-		},
-	};
+	return { ctx, outputs };
 }

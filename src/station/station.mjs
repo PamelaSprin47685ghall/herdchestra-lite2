@@ -83,7 +83,8 @@ import {
 import {
 	advanceRelayForHandoff,
 	armHandoff,
-	rememberHandoffSession,
+	ensureHandoffTarget,
+	recoverHandoffCommit,
 	recordHandoffFailureAt,
 	recordLedgerEvaluation,
 } from "./handoff-state.mjs";
@@ -141,6 +142,8 @@ export class SessionStation {
 		this.handoffPromise = null;
 		this.gatedAgentHooks = new WeakSet();
 		this.handoffSession = null;
+		this.handoffSessionId = null;
+		this.successorStartedGeneration = null;
 		this.relayState = true;
 		this.todoGrantKey = null;
 		// Measured usage baseline. Populated from live messages and restored
@@ -720,8 +723,7 @@ export class SessionStation {
 			return;
 		}
 		if (relay.lastLedger.empty) {
-			this.armHandoff();
-			this.rememberHandoffSession(ctx);
+			this.armHandoff(ctx);
 			return;
 		}
 		this.deliverSteer(openLedgerNudge(relay, relay.lastLedger));
@@ -774,12 +776,20 @@ export class SessionStation {
 
 	// -- Handoff state transitions (sync) ---------------------------------------
 
-	armHandoff() {
-		return armHandoff(this);
+	armHandoff(ctx) {
+		return armHandoff(this, ctx);
 	}
 
-	advanceRelayForHandoff() {
-		return advanceRelayForHandoff(this);
+	advanceRelayForHandoff(options = {}) {
+		return advanceRelayForHandoff(this, options);
+	}
+
+	ensureHandoffTarget(session) {
+		return ensureHandoffTarget(this, session);
+	}
+
+	recoverHandoffCommit(session) {
+		return recoverHandoffCommit(this, session);
 	}
 
 	recordLedgerEvaluation(phases, op, options = {}) {
@@ -790,19 +800,15 @@ export class SessionStation {
 		return recordHandoffFailureAt(this, error, at);
 	}
 
-	rememberHandoffSession(ctx) {
-		rememberHandoffSession(this, ctx);
-	}
-
 	ensureModelCallGate(ctx, gateTicket, resolvedSession = null) {
 		if (typeof gateTicket !== "function") return false;
 		const session = resolvedSession ?? this.handoffSession ?? null;
 		const agent = session?.agent ?? null;
-		if (!agent || typeof agent.addBeforeModelCallHook !== "function") return false;
+		if (!agent || typeof agent.addBeforeModelCall !== "function") return false;
 		if (this.gatedAgentHooks.has(agent)) return true;
 		this.gatedAgentHooks.add(agent);
-		agent.addBeforeModelCallHook((signal, context) =>
-			gateTicket(this, session, signal, context, ctx),
+		agent.addBeforeModelCall((context, signal) =>
+			gateTicket(this, session, context, signal, ctx),
 		);
 		return true;
 	}

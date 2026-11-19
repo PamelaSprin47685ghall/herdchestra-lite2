@@ -140,7 +140,7 @@ export async function todoTicket(station, params, ctx) {
 		action: applied.action,
 	});
 	if (applied.action === "handoff") {
-		station.rememberHandoffSession(ctx);
+		station.armHandoff(ctx);
 		installRelayGate(station, ctx);
 	}
 

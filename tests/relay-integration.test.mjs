@@ -15,7 +15,7 @@ import {
 	rememberSession,
 	sessionFor,
 } from "../src/host/index.mjs";
-import { stateFor } from "../src/station/index.mjs";
+import { createStationRegistry, stateFor } from "../src/station/index.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -233,8 +233,8 @@ async function start(options = {}) {
 					toolName: toolCall.name, input: args,
 				}, ctx);
 			},
-			addBeforeModelCallHook(hook) {
-				beforeModelCallHooks.push(hook);
+			addBeforeModelCall(gate) {
+				beforeModelCallHooks.push(gate);
 				return () => {};
 			},
 		},
@@ -254,10 +254,16 @@ async function start(options = {}) {
 			if (compactOptions.mode !== "handoff") {
 				throw new Error(`unexpected compaction mode: ${compactOptions.mode}`);
 			}
-			if (typeof options.handoff === "function") {
-				return await options.handoff({ focus, session, call: session.calls.length });
+			const before = countHandoffCompactions(manager) ?? 0;
+			const result =
+				typeof options.handoff === "function"
+					? await options.handoff({ focus, session, call: session.calls.length })
+					: { ok: true };
+			if (options.appendHandoff !== false) {
+				const after = countHandoffCompactions(manager) ?? 0;
+				if (after <= before) manager.appendCompaction("handoff", { focus });
 			}
-			return { ok: true };
+			return result;
 		},
 	};
 	rememberSession(session);
@@ -906,7 +912,7 @@ describe("relay integration", () => {
 	});
 
 	test("a handoff that returns success without advancing never allows a stop", async () => {
-		const { host, ctx } = await start({ mode: "print", handoff: () => {
+		const { host, ctx } = await start({ mode: "print", appendHandoff: false, handoff: () => {
 			// Simulate a host that reports success but clears the pending flag
 			// before the runtime can advance the generation.
 			const rec = stateFor(ctx);
@@ -925,7 +931,7 @@ describe("relay integration", () => {
 		expect(rec.state.relay.canStop).toBe(false);
 		expect(rec.state.relay.handoffPending).toBe(false);
 		expect(rec.state.relay.handoffError).toBe(
-			"handoff completed but relay did not advance",
+			"handoff completed without a new handoff compaction entry",
 		);
 		expect(rec.state.relay.lastHandoff.ok).toBe(false);
 	});
@@ -1374,15 +1380,14 @@ describe("host truncation", () => {
 });
 
 describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across TUI, RPC, and Print modes", () => {
-	test("a provider request waits for the system /handoff commit and carries no extra message", async () => {
+	test("the gate refuses the request and hands the focus to session.compact only", async () => {
 		const focused = [];
-		const { host, ctx, session, beforeModelCallHooks } = await start({
+		const committed = Promise.withResolvers();
+		const { host, ctx, beforeModelCallHooks } = await start({
 			mode: "rpc",
 			handoff: async ({ focus }) => {
 				focused.push(focus);
-				session.agent.state.messages = [
-					{ role: "user", content: [{ type: "text", text: "compacted" }] },
-				];
+				committed.resolve();
 				return { ok: true };
 			},
 		});
@@ -1395,13 +1400,15 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		const outbound = {
 			messages: [{ role: "user", content: [{ type: "text", text: "stale" }] }],
 		};
-		await beforeModelCallHooks[0](undefined, outbound);
+		const gateResult = beforeModelCallHooks[0](outbound, undefined);
+		expect(gateResult).toMatchObject({ stop: true });
+		await committed.promise;
+		await sleep(10);
 		expect(focused).toHaveLength(1);
 		expect(focused[0]).toContain("Include these relay instructions");
-		expect(outbound.messages[0].content[0].text).toBe("compacted");
-		expect(JSON.stringify(outbound.messages)).not.toContain(
-			"Include these relay instructions",
-		);
+		// The gate never rewrites the outbound request; the host discards it.
+		expect(outbound.messages[0].content[0].text).toBe("stale");
+		expect(stateFor(ctx).state.relay.generation).toBe(1);
 		expect(host.messages).toHaveLength(0);
 	});
 
@@ -1466,23 +1473,18 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(host.messages).toHaveLength(0);
 	});
 
-	test.each([0, 1])("the first provider request after an empty ledger in generation %i belongs to its successor", async (generation) => {
-		let resolveHandoff;
-		let handoffStarted;
-		const handoffGate = new Promise((resolve) => {
-			resolveHandoff = resolve;
-		});
-		const started = new Promise((resolve) => {
-			handoffStarted = resolve;
-		});
+	test.each([0, 1])("the gate stops the generation %i request until the handoff commits", async (generation) => {
+		const handoffGate = Promise.withResolvers();
+		const started = Promise.withResolvers();
 		const { host, ctx, manager, session, beforeModelCallHooks } = await start({
 			mode: "rpc",
+			appendHandoff: false,
 			handoff: async () => {
 				expect(manager.getBranch().some((entry) =>
 					entry.message?.toolCallId === "empty",
 				)).toBe(true);
-				handoffStarted();
-				await handoffGate;
+				started.resolve();
+				await handoffGate.promise;
 				manager.appendCompaction("handoff", { focus: "slow" });
 				session.agent.state.messages = [
 					{ role: "user", content: [{ type: "text", text: "compacted summary" }] },
@@ -1508,43 +1510,41 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		const outboundContext = {
 			messages: [{ role: "user", content: [{ type: "text", text: "stale history" }] }],
 		};
-		const request = beforeModelCallHooks[0](undefined, outboundContext);
-		await started;
+		const gateResult = beforeModelCallHooks[0](outboundContext, undefined);
+		expect(gateResult).toMatchObject({ stop: true });
+		await started.promise;
 		expect(session.calls).toHaveLength(1);
 		expect(stateFor(ctx).state.relay.generation).toBe(generation);
 
-		resolveHandoff();
-		await request;
+		handoffGate.resolve();
+		await sleep(10);
 		expect(stateFor(ctx).state.relay.generation).toBe(generation + 1);
-		const messages = outboundContext.messages;
-		expect(messages[0].content[0].text).toBe("compacted summary");
-		expect(JSON.stringify(messages)).not.toContain("stale history");
+		expect(outboundContext.messages[0].content[0].text).toBe("stale history");
 		const instruction = `Include these relay instructions in the handoff document for generation ${generation + 1}`;
 		expect(session.calls[0]).toContain(instruction);
-		expect(JSON.stringify(messages)).not.toContain(instruction);
+		expect(JSON.stringify(outboundContext.messages)).not.toContain(instruction);
 		expect(JSON.stringify(manager.getBranch().filter((entry) => entry.type === "message"))).not.toContain(instruction);
 		expect(host.messages).toHaveLength(0);
 	});
 
-	test("a failed handoff blocks the old request and the next attempt serves the successor", async () => {
-		const { host, ctx, session } = await start({
+	test("a failed handoff leaves the request stopped and the next gate retries", async () => {
+		const { host, ctx, session, beforeModelCallHooks } = await start({
 			handoff: ({ call: attempt }) => {
 				if (attempt === 1) throw new Error("handoff unavailable");
 				return { ok: true };
 			},
 		});
-		let gate;
-		session.agent.addBeforeModelCallHook = (hook) => { gate = hook; };
 		await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
+		const gate = beforeModelCallHooks[0];
 		const outbound = { messages: [] };
-		await expect(gate(undefined, outbound)).rejects.toThrow("handoff unavailable");
+		expect(gate(outbound, undefined)).toMatchObject({ stop: true });
+		await sleep(10);
 		expect(stateFor(ctx).state.relay.generation).toBe(0);
-		expect(outbound.messages).toHaveLength(0);
-		expect(host.messages).toHaveLength(0);
+		expect(stateFor(ctx).state.relay.handoffError).toContain("handoff unavailable");
 
-		await gate(undefined, outbound);
+		expect(gate(outbound, undefined)).toMatchObject({ stop: true });
+		await sleep(10);
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(outbound.messages).toHaveLength(0);
 		expect(host.messages).toHaveLength(0);
 	});
 
@@ -1594,42 +1594,20 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(result.residual).toBe(command);
 	});
 
-	test("a consumed background /handoff alias waits for its own native compact result", async () => {
-		const { sendSlashPrompt } = await import("../src/host/index.mjs");
-		const committed = Promise.withResolvers();
-		const started = Promise.withResolvers();
-		const calls = [];
-		const session = {
-			isStreaming: true,
-			compact(focus, options) {
-				calls.push([focus, options]);
-				started.resolve();
-				return committed.promise;
-			},
-			prompt() { throw new Error("unexpected conversation prompt"); },
-		};
-		const focus = "relay audit\nverify independently";
-		let finished = false;
-		const pending = sendSlashPrompt(session, `/handoff ${focus}`, {
-			slashOnly: true,
-			builtinExecutor: async (raw, { ctx }) => {
-				void ctx.handleCompactCommand(raw.slice("/handoff ".length), "handoff");
-				return true;
-			},
-		}).then((result) => { finished = true; return result; });
-		await started.promise;
-		await sendSlashPrompt(session, "/model", {
-			builtinExecutor: async (_raw, { ctx }) => {
-				ctx.showStatus("unrelated command");
-				return true;
-			},
+	test("the relay handoff calls session.compact directly, not the slash dispatcher", async () => {
+		const { host, ctx, session } = await start({ mode: "rpc" });
+		let slashCalls = 0;
+		installBuiltinSlashExecutor(async () => {
+			slashCalls += 1;
+			return false;
 		});
-		expect(finished).toBe(false);
-		expect(calls).toEqual([[focus, { mode: "handoff" }]]);
-		committed.resolve({ summary: "compacted audit" });
-		const result = await pending;
-		expect(result.result).toEqual({ summary: "compacted audit" });
-		expect(result.outputs.map((output) => output.text)).not.toContain("unrelated command");
+		await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
+		await emitStop(host, ctx);
+		await sleep(10);
+		expect(session.calls).toHaveLength(1);
+		expect(session.calls[0]).toContain("Include these relay instructions");
+		expect(slashCalls).toBe(0);
+		expect(host.messages).toHaveLength(0);
 	});
 
 	test("idle fallback handoff does not send a user message or start a model call", async () => {
@@ -1647,8 +1625,8 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		});
 		session.agent = {
 			state: { messages: [] },
-			addBeforeModelCallHook: (hook) => {
-				beforeModelCallHooks.push(hook);
+			addBeforeModelCall: (gate) => {
+				beforeModelCallHooks.push(gate);
 				return () => {};
 			},
 		};
@@ -1659,7 +1637,7 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 				messages: [{ role: "user", content: [{ type: "text", text }] }],
 			};
 			await Promise.all(
-				beforeModelCallHooks.map((hook) => hook(undefined, outboundContext)),
+				beforeModelCallHooks.map((gate) => gate(outboundContext, undefined)),
 			);
 			modelCalls += 1;
 		};
@@ -1676,23 +1654,53 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(modelCalls).toBe(0);
 	});
 
-	test("the headless handoff adapter is explicit and has no background dispatcher", async () => {
+	test("the headless adapter has no compaction path", async () => {
 		const { createHeadlessTuiContext } = await import("../src/host/index.mjs");
-		const calls = [];
-		const session = {
-			compact: async (focus, options) => {
-				calls.push([focus, options]);
-				return { ok: true };
-			},
-		};
-		const headless = createHeadlessTuiContext(session, {}, "handoff");
+		const headless = createHeadlessTuiContext({});
 		expect("runCommandInBackground" in headless.ctx).toBe(false);
-		expect(() => headless.ctx.handleCompactCommand("x", "soft")).toThrow(
-			"Unsupported headless compaction",
+		expect(() => headless.ctx.handleCompactCommand("x", "handoff")).toThrow(
+			"Headless compaction is unavailable",
 		);
-		await headless.ctx.handleCompactCommand("focus", "handoff");
-		await headless.completion;
-		expect(calls).toEqual([["focus", { mode: "handoff" }]]);
-		expect(headless.result).toEqual({ ok: true });
+		expect("completion" in headless).toBe(false);
+	});
+});
+
+describe("handoff transaction recovery", () => {
+	test("a committed handoff advances on the next gate without compacting twice", async () => {
+		const { host, ctx, manager, session, beforeModelCallHooks } = await start({
+			mode: "rpc",
+			appendHandoff: false,
+		});
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("empty", "todo", { op: "init", list: [] })]),
+		);
+		const station = stateFor(ctx);
+		expect(station.state.relay.handoffTarget.baseline).toBe(0);
+		expect(beforeModelCallHooks).toHaveLength(1);
+
+		// Simulate a crash after the compaction commit but before the relay
+		// advance. The next gate must recognize the commit, not compact again.
+		manager.appendCompaction("handoff", { focus: "committed" });
+		const result = beforeModelCallHooks[0]({ messages: [] }, undefined);
+		expect(result).toMatchObject({ stop: true });
+		await sleep(10);
+		expect(station.state.relay.generation).toBe(1);
+		expect(session.calls).toHaveLength(0);
+		expect(host.messages).toHaveLength(0);
+	});
+
+	test("a pending station is not reused by a different session", async () => {
+		const registry = createStationRegistry(null);
+		const managerA = { getSessionId: () => "session-a" };
+		const managerB = { getSessionId: () => "session-b" };
+		const stationA = registry.stationFor({ sessionManager: managerA });
+		const stationB = registry.stationFor({ sessionManager: managerB });
+		stationA.state.relay = { ...stationA.state.relay, handoffPending: true };
+		registry.markPending(stationA);
+
+		expect(registry.stationForStop({ sessionManager: managerB })).toBe(stationB);
+		expect(registry.stationForStop({ sessionManager: managerA })).toBe(stationA);
 	});
 });

@@ -107,6 +107,7 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 					firstEvaluation: "empty",
 					canStop: true,
 					handoffPending: false,
+					handoffTarget: null,
 					promotionInvalidated: false,
 					handoffError: null,
 					lastLedger,
@@ -122,6 +123,7 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 				firstEvaluation: first ? "empty" : current.firstEvaluation,
 				canStop: false,
 				handoffPending: true,
+				handoffTarget: current.handoffTarget ?? null,
 				lastLedger,
 			},
 			stats,
@@ -135,6 +137,7 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 			firstEvaluation: first ? "nonempty" : current.firstEvaluation,
 			canStop: false,
 			handoffPending: false,
+			handoffTarget: null,
 			promotionInvalidated:
 				current.promotionInvalidated || current.canStop === true,
 			lastLedger,
@@ -154,6 +157,7 @@ export function beginGenerationAfterHandoff(relay, options = {}) {
 		firstEvaluation: null,
 		canStop: false,
 		handoffPending: false,
+		handoffTarget: null,
 		promotionInvalidated: false,
 		handoffError: null,
 		lastHandoff: {
@@ -181,6 +185,7 @@ export function recordHandoffFailure(relay, error, options = {}) {
 	return {
 		...current,
 		handoffPending: false,
+		handoffTarget: null,
 		handoffError: message,
 		lastHandoff: {
 			at,

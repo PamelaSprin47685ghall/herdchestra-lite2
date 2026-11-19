@@ -3,9 +3,9 @@ import {
 	applyCollapses,
 	beatKey,
 	exitBeat,
-	filterRegrets,
+	filterAmends,
 	findBegin,
-	findRegretTarget,
+	findAmendTarget,
 	findToolCallIndex,
 	finishedReport,
 	isCollapsed,
@@ -85,7 +85,7 @@ function beginResult(overrides = {}) {
 }
 
 function newState(overrides = {}) {
-	return { regrets: [], charges: {}, ...overrides };
+	return { amends: [], charges: {}, ...overrides };
 }
 
 const scope = { id: "scope-1", beginToolCallId: BEGIN_ID };
@@ -233,7 +233,7 @@ describe("findBegin", () => {
 	});
 });
 
-describe("findRegretTarget", () => {
+describe("findAmendTarget", () => {
 	test("returns the nearest earlier assistant beat in the scope", () => {
 		const messages = [
 			{ role: "user", content: "go", timestamp: 0 },
@@ -241,13 +241,13 @@ describe("findRegretTarget", () => {
 			beginResult(),
 			callMessage([{ id: "call_bash", name: "bash", arguments: { command: "ls" } }], [], 110),
 			toolResultMessage("call_bash", "bash", { timestamp: 111 }),
-			callMessage([{ id: "call_regret", name: "regret", arguments: { reflection: "redo" } }], [], 120),
+			callMessage([{ id: "call_amend", name: "amend", arguments: { reflection: "redo" } }], [], 120),
 		];
 		const state = newState({
 			charges: { call_bash: { scopeId: "scope-1", tool: "bash", amount: 1 } },
 		});
 
-		const target = findRegretTarget(state, messages, 5, scope);
+		const target = findAmendTarget(state, messages, 5, scope);
 		expect(target.ok).toBe(true);
 		expect(target.beat.key).toBe("tc:call_bash");
 		expect(target.beat.toolCallIds).toEqual(["call_bash"]);
@@ -257,18 +257,18 @@ describe("findRegretTarget", () => {
 		expect(target.toolCalls).toEqual(target.beat.calls);
 	});
 
-	test("skips already regretted beats", () => {
+	test("skips already amended beats", () => {
 		const messages = [
 			{ role: "user", content: "go", timestamp: 0 },
 			beginAssistant(),
 			beginResult(),
 			callMessage([{ id: "call_bash", name: "bash", arguments: {} }], [], 110),
 			textMessage("newer assistant", 111),
-			callMessage([{ id: "call_regret", name: "regret", arguments: {} }], [], 120),
+			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
 		];
-		const state = newState({ regrets: [textBeat("newer assistant", 111)] });
+		const state = newState({ amends: [textBeat("newer assistant", 111)] });
 
-		const target = findRegretTarget(state, messages, 5, scope);
+		const target = findAmendTarget(state, messages, 5, scope);
 		expect(target.ok).toBe(true);
 		expect(target.beat.key).toBe("tc:call_bash");
 	});
@@ -278,10 +278,10 @@ describe("findRegretTarget", () => {
 			textMessage("older assistant", 5),
 			beginAssistant(),
 			beginResult(),
-			callMessage([{ id: "call_regret", name: "regret", arguments: {} }], [], 120),
+			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
 		];
 
-		const target = findRegretTarget(newState(), messages, 3, scope);
+		const target = findAmendTarget(newState(), messages, 3, scope);
 		expect(target.ok).toBe(false);
 		expect(target.code).toBe("SCOPE_BOUNDARY");
 	});
@@ -292,10 +292,10 @@ describe("findRegretTarget", () => {
 			beginResult(),
 			endAssistant(),
 			toolResultMessage(END_ID, "scope"),
-			callMessage([{ id: "call_regret", name: "regret", arguments: {} }], [], 120),
+			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
 		];
 
-		const target = findRegretTarget(newState(), messages, 4, scope);
+		const target = findAmendTarget(newState(), messages, 4, scope);
 		expect(target.ok).toBe(false);
 		expect(target.code).toBe("SCOPE_BOUNDARY");
 	});
@@ -313,7 +313,7 @@ describe("findRegretTarget", () => {
 				110,
 			),
 			toolResultMessage("call_other", "read", { timestamp: 111 }),
-			callMessage([{ id: "call_regret", name: "regret", arguments: {} }], [], 120),
+			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
 		];
 		const state = newState({
 			charges: {
@@ -322,7 +322,7 @@ describe("findRegretTarget", () => {
 			},
 		});
 
-		const target = findRegretTarget(state, messages, 4, scope);
+		const target = findAmendTarget(state, messages, 4, scope);
 		expect(target.ok).toBe(false);
 		expect(target.code).toBe("OUTSIDE_SCOPE");
 	});
@@ -336,10 +336,10 @@ describe("findRegretTarget", () => {
 				[],
 				110,
 			),
-			callMessage([{ id: "call_regret", name: "regret", arguments: {} }], [], 120),
+			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
 		];
 
-		const target = findRegretTarget(newState(), messages, 3, scope);
+		const target = findAmendTarget(newState(), messages, 3, scope);
 		expect(target.ok).toBe(true);
 		expect(target.beat.key).toBe("tc:call_defer");
 	});
@@ -347,7 +347,7 @@ describe("findRegretTarget", () => {
 	test("rejects NO_BEAT when no earlier assistant exists", () => {
 		const messages = [beginAssistant()];
 
-		const target = findRegretTarget(newState(), messages, 0, scope);
+		const target = findAmendTarget(newState(), messages, 0, scope);
 		expect(target.ok).toBe(false);
 		expect(target.code).toBe("NO_BEAT");
 	});
@@ -355,20 +355,20 @@ describe("findRegretTarget", () => {
 	test("rejects when the scope begin message is absent", () => {
 		const messages = [textMessage("anything", 1), textMessage("current", 2)];
 
-		const target = findRegretTarget(newState(), messages, 1, scope);
+		const target = findAmendTarget(newState(), messages, 1, scope);
 		expect(target.ok).toBe(false);
 		expect(target.code).toBe("SCOPE_BOUNDARY");
 	});
 
 	test("requires an active scope", () => {
-		const target = findRegretTarget(newState(), [textMessage("x", 1)], 1, null);
+		const target = findAmendTarget(newState(), [textMessage("x", 1)], 1, null);
 		expect(target.ok).toBe(false);
 		expect(target.code).toBe("OUTSIDE_SCOPE");
 	});
 });
 
-describe("filterRegrets", () => {
-	test("drops a regretted assistant and its tool results", () => {
+describe("filterAmends", () => {
+	test("drops an amended assistant and its tool results", () => {
 		const dropped = callMessage(
 			[{ id: "call_drop", name: "bash", arguments: {} }],
 			[{ type: "text", text: "drop me" }],
@@ -384,7 +384,7 @@ describe("filterRegrets", () => {
 			toolResultMessage("call_unknown"),
 		];
 
-		const filtered = filterRegrets(messages, ["tc:call_drop"]);
+		const filtered = filterAmends(messages, ["tc:call_drop"]);
 
 		expect(filtered).toEqual([
 			messages[0],
@@ -406,14 +406,14 @@ describe("filterRegrets", () => {
 			{ role: "user", content: "after", timestamp: 32 },
 		];
 
-		const filtered = filterRegrets(messages, [beatKey(first), beatKey(second)]);
+		const filtered = filterAmends(messages, [beatKey(first), beatKey(second)]);
 
 		expect(filtered).toEqual([messages[1], messages[3]]);
 	});
 
 	test("returns a new array when there is nothing to drop", () => {
 		const messages = [textMessage("keep", 1)];
-		const filtered = filterRegrets(messages, []);
+		const filtered = filterAmends(messages, []);
 
 		expect(filtered).toEqual(messages);
 		expect(filtered).not.toBe(messages);

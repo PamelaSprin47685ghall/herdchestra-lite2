@@ -7,7 +7,7 @@
 import {
 	applyCollapses,
 	collectPinnedMessages,
-	filterRegrets,
+	filterAmends,
 	findBegin,
 	findToolCallIndex,
 	finishedReport,
@@ -90,7 +90,7 @@ export function measureScopeInterior(
 	base,
 	beginToolCallId,
 	endToolCallId,
-	regrets,
+	amends,
 	tokensPerChar = 0.3,
 ) {
 	const begin = findBegin(base, beginToolCallId);
@@ -98,9 +98,9 @@ export function measureScopeInterior(
 	if (!begin || endIndex < 0 || endIndex <= begin.resultIndex) {
 		return { interiorChars: 0, pinTokens: 0, pinChars: 0, userChars: 0 };
 	}
-	const slice = filterRegrets(
+	const slice = filterAmends(
 		base.slice(begin.resultIndex + 1, endIndex),
-		regrets ?? [],
+		amends ?? [],
 	);
 	const interiorChars = sliceChars(slice);
 	const pinned = collectPinnedMessages(slice, {});

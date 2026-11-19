@@ -7,7 +7,7 @@ export {
 	BUDGET_DESCRIPTION,
 	END_DESCRIPTION,
 	ELDER_REPORT_DESCRIPTION,
-	REGRET_DESCRIPTION,
+	AMEND_DESCRIPTION,
 	REFLECTION_DESCRIPTION,
 	DEFER_DESCRIPTION,
 	DEFER_INTENT_DESCRIPTION,
@@ -18,7 +18,7 @@ export {
 	PIN_FINDING_DESCRIPTION,
 	PIN_CONCLUSION_DESCRIPTION,
 	scopeParameters,
-	regretParameters,
+	amendParameters,
 	deferParameters,
 	pinParameters,
 } from "./descriptions.mjs";
@@ -26,7 +26,7 @@ export {
 	sendSteerTicket,
 	activateToolsTicket,
 	scopeTicket,
-	regretTicket,
+	amendTicket,
 	deferTicket,
 	pinTicket,
 } from "./tickets.mjs";

@@ -612,7 +612,7 @@ describe("scope lifecycle", () => {
 	});
 });
 
-describe("regret", () => {
+describe("amend", () => {
 	test("undoes the previous beat, refunds budget, and filters outbound", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
@@ -630,11 +630,12 @@ describe("regret", () => {
 			host,
 			ctx,
 			assistant([
-				call("g1", "regret", { reflection: "the second read was redundant" }),
+				call("g1", "amend", { reflection: "the second read was redundant" }),
 				call("r3", "read", { path: "three" }),
 			]),
 		);
-		expect(third[0].output.content[0].text).toContain("Undid the previous beat");
+		expect(third[0].output.content[0].text).toContain("Amended the previous beat away");
+		expect(third[0].output.content[0].text).toContain("the second read was redundant");
 		expect(third[0].output.content[0].text).toContain("Refunded 1 tool call");
 		expect(third[1].blocked).toBe(false);
 
@@ -645,7 +646,7 @@ describe("regret", () => {
 		expect(JSON.stringify(view)).toContain("the second read was redundant");
 	});
 
-	test("cannot regret across the scope begin", async () => {
+	test("cannot amend across the scope begin", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		await runAssistant(
@@ -656,7 +657,7 @@ describe("regret", () => {
 		const result = await runAssistant(
 			host,
 			ctx,
-			assistant([call("g1", "regret", { reflection: "nothing before this scope" })]),
+			assistant([call("g1", "amend", { reflection: "nothing before this scope" })]),
 		);
 		expect(result[0].output.content[0].text).toContain("SCOPE_BOUNDARY");
 	});
@@ -677,7 +678,7 @@ describe("defer", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("g1", "regret", { reflection: "the defer beat was premature" })]),
+			assistant([call("g1", "amend", { reflection: "the defer beat was premature" })]),
 		);
 		const end = await runAssistant(
 			host,
@@ -844,9 +845,9 @@ describe("vibe mode", () => {
 		}
 		installVibeTools(Session);
 		installVibeTools(Session);
-		const session = new Session(["read", "scope", "regret", "defer", "pin"]);
+		const session = new Session(["read", "scope", "amend", "defer", "pin"]);
 		await session.activateVibeTools(["read", "scope"]);
-		expect(session.active).toEqual(["read", "scope", "regret", "defer", "pin", "task"]);
+		expect(session.active).toEqual(["read", "scope", "amend", "defer", "pin", "task"]);
 		const other = new Session(["read"]);
 		await other.activateVibeTools(["read"]);
 		expect(other.active).toEqual(["read", "task"]);
@@ -962,7 +963,7 @@ describe("same-message scope and command co-dispatch", () => {
 		expect(results[1].output.content[0].text).toContain("Scope closed. You are outside all scopes.");
 	});
 
-	test("regret + functional command in one message refunds before tool_call budget check", async () => {
+	test("amend + functional command in one message refunds before tool_call budget check", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		await runHostPrepareOrder(
@@ -981,12 +982,13 @@ describe("same-message scope and command co-dispatch", () => {
 			host,
 			ctx,
 			assistant([
-				call("g1", "regret", { reflection: "read wrong file" }),
+				call("g1", "amend", { reflection: "read wrong file" }),
 				call("r2", "read", { path: "right.mjs" }),
 			]),
 		);
 		expect(retried[0].blocked).toBe(false);
-		expect(retried[0].output.content[0].text).toContain("Undid the previous beat.");
+		expect(retried[0].output.content[0].text).toContain("Amended the previous beat away");
+		expect(retried[0].output.content[0].text).toContain("read wrong file");
 		expect(retried[1].blocked).toBe(false);
 	});
 });

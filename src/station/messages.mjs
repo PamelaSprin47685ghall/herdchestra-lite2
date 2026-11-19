@@ -2,7 +2,7 @@
 
 import { toolCalls } from "../transcript/index.mjs";
 
-const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
+const CONTROL_TOOLS = new Set(["scope", "amend", "defer", "pin"]);
 
 function parseArgs(call) {
 	const raw = call?.arguments;

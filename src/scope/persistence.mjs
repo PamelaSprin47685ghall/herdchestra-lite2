@@ -163,7 +163,7 @@ export function serializeState(state) {
       ...measuredFields(scope),
     })),
     charges: copyCharges(state.charges),
-    regrets: Array.isArray(state.regrets) ? state.regrets.slice() : [],
+    amends: Array.isArray(state.amends) ? state.amends.slice() : [],
     collapses: Array.isArray(state.collapses)
       ? state.collapses.map(copyCollapse)
       : [],
@@ -461,10 +461,10 @@ export function deserializeState(input) {
       return createState();
     }
     if (!validCharges(data.charges)) return createState();
-    if (
-      !Array.isArray(data.regrets) ||
-      !data.regrets.every((key) => typeof key === "string")
-    ) {
+    // `regrets` was this field's name before the tool became `amend`. Read it
+    // once for saved state written by an older build, then carry it forward.
+    const amends = Array.isArray(data.amends) ? data.amends : data.regrets;
+    if (!Array.isArray(amends) || !amends.every((key) => typeof key === "string")) {
       return createState();
     }
     if (!validCollapses(data.collapses)) return createState();
@@ -509,7 +509,7 @@ export function deserializeState(input) {
         ...measuredFields(scope),
       })),
       charges: copyCharges(data.charges),
-      regrets: data.regrets.slice(),
+      amends: amends.slice(),
       collapses: data.collapses.map(copyCollapse),
       herdMode: data.herdMode === true,
       pins: copyPins(data.pins),

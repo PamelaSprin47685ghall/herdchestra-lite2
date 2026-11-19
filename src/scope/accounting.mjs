@@ -1,4 +1,4 @@
-// Scope accounting: open, close, charge, defer, regret, and host boundaries.
+// Scope accounting: open, close, charge, defer, amend, and host boundaries.
 // Every function mutates the state object it receives. No I/O.
 
 import {
@@ -188,19 +188,19 @@ export function deferIntent(state, params) {
   return { ok: true };
 }
 
-export function applyRegret(state, params) {
+export function applyAmend(state, params) {
   const { scopeId, beat, toolCalls } = params || {};
   const scope = currentScope(state);
   if (!scope) {
-    return failure("NOT_IN_SCOPE", "Regret requires an active scope.");
+    return failure("NOT_IN_SCOPE", "Amend requires an active scope.");
   }
   if (scope.id !== scopeId) {
-    return failure("SCOPE_MISMATCH", "The regret target does not match the current scope.");
+    return failure("SCOPE_MISMATCH", "The amend target does not match the current scope.");
   }
   if (!beat || !isNonEmptyString(beat.key)) {
     return failure("INVALID_BEAT", "beat.key must be a non-empty string.");
   }
-  state.regrets.push(beat.key);
+  state.amends.push(beat.key);
   let refunded = 0;
   for (const call of toolCalls ?? []) {
     const charge = state.charges[call.id];

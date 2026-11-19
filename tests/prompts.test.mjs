@@ -61,8 +61,8 @@ describe("tool contracts map to their documents", () => {
 		expect(scopeTools.PERMISSION_DESCRIPTION).toBe(doc["begin.permission"]);
 		expect(scopeTools.END_DESCRIPTION).toBe(doc.end);
 		expect(scopeTools.ELDER_REPORT_DESCRIPTION).toBe(doc["begin.elder_report"]);
-		expect(scopeTools.REGRET_DESCRIPTION).toBe(doc["regret.tool"]);
-		expect(scopeTools.REFLECTION_DESCRIPTION).toBe(doc["regret.reflection"]);
+		expect(scopeTools.AMEND_DESCRIPTION).toBe(doc["amend.tool"]);
+		expect(scopeTools.REFLECTION_DESCRIPTION).toBe(doc["amend.reflection"]);
 		expect(scopeTools.DEFER_DESCRIPTION).toBe(doc["defer.tool"]);
 		expect(scopeTools.DEFER_INTENT_DESCRIPTION).toBe(doc["defer.intent"]);
 		expect(scopeTools.PIN_DESCRIPTION).toBe(doc["pin.tool"]);
@@ -93,8 +93,8 @@ describe("tool contracts map to their documents", () => {
 		expect(scopeTools.scopeParameters.properties.begin.properties.model.description).toBe(
 			scope["begin.model"],
 		);
-		expect(scopeTools.regretParameters.properties.reflection.description).toBe(
-			scope["regret.reflection"],
+		expect(scopeTools.amendParameters.properties.reflection.description).toBe(
+			scope["amend.reflection"],
 		);
 		expect(scopeTools.deferParameters.properties.intent.description).toBe(
 			scope["defer.intent"],

@@ -532,7 +532,7 @@ describe("relay integration", () => {
 			sessionInit: {
 				agent: "scout",
 				readOnly: true,
-				tools: ["read", "grep", "glob", "scope", "pin", "defer", "regret"],
+				tools: ["read", "grep", "glob", "scope", "pin", "defer", "amend"],
 			},
 		});
 		host.activeTools.splice(0, host.activeTools.length, "read", "grep");
@@ -942,12 +942,12 @@ describe("relay integration", () => {
 			}
 		}
 		installVibeTools(Session);
-		const session = new Session(["read", "scope", "regret", "defer", "pin", "todo"]);
+		const session = new Session(["read", "scope", "amend", "defer", "pin", "todo"]);
 		await session.activateVibeTools(["read"]);
 		expect(session.active).toEqual([
 			"read",
 			"scope",
-			"regret",
+			"amend",
 			"defer",
 			"pin",
 			"todo",

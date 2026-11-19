@@ -337,11 +337,11 @@ export async function scopeTicket(station, toolCallId, params, ctx) {
 	return result;
 }
 
-export async function regretTicket(station, toolCallId, params) {
+export async function amendTicket(station, toolCallId, params) {
 	try {
-		return station.executeRegret(toolCallId, params);
+		return station.executeAmend(toolCallId, params);
 	} catch (error) {
-		return errorResult("REGRET_INTERNAL_ERROR", String(error?.message ?? error));
+		return errorResult("AMEND_INTERNAL_ERROR", String(error?.message ?? error));
 	}
 }
 

@@ -25,7 +25,7 @@ import { captureDiagnosis, installRunnerCapture } from "../src/host/capture.mjs"
 
 const HOST = process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi";
 const AGENT_SESSION = join(HOST, "packages/coding-agent/src/session/agent-session.ts");
-const REQUIRED_TOOLS = ["scope", "regret", "defer", "pin", "todo"];
+const REQUIRED_TOOLS = ["scope", "amend", "defer", "pin", "todo"];
 const STRICT = process.env.OMP_SMOKE_STRICT === "1";
 
 const results = [];

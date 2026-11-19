@@ -23,7 +23,7 @@ export {
   closeScope,
   chargeTool,
   deferIntent,
-  applyRegret,
+  applyAmend,
   findElderSibling,
   sealClosedParentChildren,
   findPendingReportElder,

@@ -293,7 +293,7 @@ describe("state version migration", () => {
 			seq: 3,
 			scopes: [],
 			charges: {},
-			regrets: [],
+			amends: [],
 			collapses: [],
 		};
 		const migrated = deserializeState(legacy);

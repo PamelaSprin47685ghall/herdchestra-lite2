@@ -8,7 +8,7 @@ export {
 	findToolCallIndex,
 	findBegin,
 } from "./messages.mjs";
-export { findRegretTarget, filterRegrets } from "./regret.mjs";
+export { findAmendTarget, filterAmends } from "./amend.mjs";
 export {
 	collectPinnedMessages,
 	applyCollapses,

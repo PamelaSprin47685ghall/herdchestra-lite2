@@ -82,22 +82,26 @@ function endText(
 	return lines.join("\n");
 }
 
-function regretText(applied) {
+function amendText(applied, reflection = "") {
 	const refunded = Number.isInteger(applied.refunded) ? applied.refunded : 0;
 	const residual = Array.isArray(applied.residualDefers)
 		? applied.residualDefers.length
 		: 0;
-	const lines = [
-		T["regret.undone"],
+	const lines = [];
+	if (reflection !== "") {
+		lines.push(render(T["amend.replaced"], { text: reflection }));
+	}
+	lines.push(
+		T["amend.undone"],
 		refunded > 0
-			? render(T["regret.refunded"], { count: refunded })
-			: T["regret.no-refund"],
-		render(T["regret.remaining"], {
+			? render(T["amend.refunded"], { count: refunded })
+			: T["amend.no-refund"],
+		render(T["amend.remaining"], {
 			budget: budgetText(applied.scope) || "none",
 		}),
-	];
+	);
 	if (residual > 0) {
-		lines.push(render(T["regret.residual"], { count: residual }));
+		lines.push(render(T["amend.residual"], { count: residual }));
 	}
 	return lines.join("\n");
 }
@@ -171,7 +175,7 @@ function insideScopeText(state) {
 export {
 	beginText,
 	endText,
-	regretText,
+	amendText,
 	insideScopeNudge,
 	insideScopeText,
 };

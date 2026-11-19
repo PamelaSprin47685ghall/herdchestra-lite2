@@ -34,8 +34,8 @@ import {
 import {
 	applyCollapses,
 	beatKey,
-	filterRegrets,
-	findRegretTarget,
+	filterAmends,
+	findAmendTarget,
 	findToolCallIndex,
 	rewriteVibeMessage,
 	toolCalls,
@@ -54,15 +54,15 @@ import {
 } from "../host/pricing.mjs";
 import {
 	handleDeferCall,
-	handleRegretCall,
+	handleAmendCall,
 } from "./controls.mjs";
 import {
 	directDefer,
-	directRegret,
+	directAmend,
 	directScope,
 	executeDefer,
 	executePin,
-	executeRegret,
+	executeAmend,
 	executeScope,
 } from "./execute.mjs";
 import {
@@ -486,8 +486,8 @@ export class SessionStation {
 		return this.usage.accrue(original, pricing, contextTokens, key);
 	}
 
-	findRegretTarget(base, currentIndex, scope) {
-		return findRegretTarget(this.state, base, currentIndex, scope);
+	findAmendTarget(base, currentIndex, scope) {
+		return findAmendTarget(this.state, base, currentIndex, scope);
 	}
 
 	deferIntent(toolCallId, intent) {
@@ -528,14 +528,14 @@ export class SessionStation {
 			calls.slice(0, barrier).filter((call) => CONTROL_TOOLS.has(call.name));
 		let changed = false;
 		for (const call of earlyControls) {
-			if (call.name !== "regret") continue;
+			if (call.name !== "amend") continue;
 			if (this.processedCalls.has(call.id)) continue;
-			this.setHandled(call.id, handleRegretCall(this, call, base, currentIndex));
+			this.setHandled(call.id, handleAmendCall(this, call, base, currentIndex));
 			changed = true;
 		}
 
 		for (const call of earlyControls) {
-			if (call.name === "regret") continue;
+			if (call.name === "amend") continue;
 			if (this.processedCalls.has(call.id)) continue;
 			if (call.name === "defer") {
 				this.setHandled(call.id, handleDeferCall(this, call));
@@ -546,7 +546,7 @@ export class SessionStation {
 		}
 
 		for (const call of earlyControls) {
-			if (call.name === "regret") this.processedCalls.add(call.id);
+			if (call.name === "amend") this.processedCalls.add(call.id);
 		}
 		if (changed) this.persist();
 	}
@@ -563,8 +563,8 @@ export class SessionStation {
 		return executeScope(this, toolCallId, params, ctx);
 	}
 
-	executeRegret(toolCallId, params) {
-		return executeRegret(this, toolCallId, params);
+	executeAmend(toolCallId, params) {
+		return executeAmend(this, toolCallId, params);
 	}
 
 	executeDefer(toolCallId, params) {
@@ -591,8 +591,8 @@ export class SessionStation {
 		return reconcileActualModel(this, ctx, req, outcome);
 	}
 
-	directRegret(toolCallId, params) {
-		return directRegret(this, toolCallId, params);
+	directAmend(toolCallId, params) {
+		return directAmend(this, toolCallId, params);
 	}
 
 	directDefer(toolCallId, params) {
@@ -638,7 +638,7 @@ export class SessionStation {
 			const contextTokens = this.currentContextTokens(original, key);
 			const contextWindow = model?.contextWindow ?? pricing.contextWindow;
 			this.accrueRentAndFlood(original, { ...pricing, contextWindow }, contextTokens, key);
-			let messages = filterRegrets(original, this.state.regrets);
+			let messages = filterAmends(original, this.state.amends);
 			messages = applyCollapses(
 				messages,
 				this.state.collapses,

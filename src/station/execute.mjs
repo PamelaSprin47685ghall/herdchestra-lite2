@@ -6,7 +6,7 @@ import { errorResult } from "../tools/results.mjs";
 import {
 	handleDeferCall,
 	handlePinCall,
-	handleRegretCall,
+	handleAmendCall,
 	handleScopeCall,
 } from "./controls.mjs";
 import { controlsIn, parseArgs } from "./messages.mjs";
@@ -20,13 +20,13 @@ function executeScope(station, toolCallId, params, ctx) {
 	return directScope(station, toolCallId, params, ctx);
 }
 
-function executeRegret(station, toolCallId, params) {
+function executeAmend(station, toolCallId, params) {
 	const cached = station.handled.get(toolCallId);
 	if (cached) return cached;
 	station.processControlsForTool(toolCallId);
 	const processed = station.handled.get(toolCallId);
 	if (processed) return processed;
-	return directRegret(station, toolCallId, params);
+	return directAmend(station, toolCallId, params);
 }
 
 function executeDefer(station, toolCallId, params) {
@@ -79,7 +79,7 @@ function directScope(station, toolCallId, params, ctx) {
 	return result;
 }
 
-function directRegret(station, toolCallId, params) {
+function directAmend(station, toolCallId, params) {
 	const found = station.assistantForToolCall(toolCallId);
 	if (found) {
 		station.processAssistantMessage(found.message, { persisted: true });
@@ -89,11 +89,11 @@ function directRegret(station, toolCallId, params) {
 	const base = found?.messages ?? station.contextMessages();
 	const index = found ? found.index : base.length;
 	if (index <= 0 && !found) {
-		return errorResult("NOT_IN_SCOPE", "regret is only allowed inside a scope with a visible beat history.");
+		return errorResult("NOT_IN_SCOPE", "amend is only allowed inside a scope with a visible beat history.");
 	}
-	const result = handleRegretCall(
+	const result = handleAmendCall(
 		station,
-		{ id: toolCallId, name: "regret", arguments: params },
+		{ id: toolCallId, name: "amend", arguments: params },
 		base,
 		index,
 	);
@@ -119,10 +119,10 @@ function directDefer(station, toolCallId, params) {
 
 export {
 	executeScope,
-	executeRegret,
+	executeAmend,
 	executeDefer,
 	executePin,
 	directScope,
-	directRegret,
+	directAmend,
 	directDefer,
 };

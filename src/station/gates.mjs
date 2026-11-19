@@ -113,8 +113,8 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 				arguments: event.input ?? event.arguments ?? {},
 			});
 			if (!station.handled.has(toolCallId)) {
-				if (toolName === "regret") {
-					station.directRegret(toolCallId, args);
+				if (toolName === "amend") {
+					station.directAmend(toolCallId, args);
 				} else if (toolName === "defer") {
 					station.directDefer(toolCallId, args);
 				}
@@ -132,7 +132,7 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 			return {
 				block: true,
 				reason:
-					"Not in a scope. Outside all scopes only todo and the free control tools (scope, regret, defer, pin) may be called. Open a scope with scope({ begin: { intent, stage, budget, elder_report, permission } }) before using any other tool.",
+					"Not in a scope. Outside all scopes only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { intent, stage, budget, elder_report, permission } }) before using any other tool.",
 			};
 		}
 		if (toolName === "wait") return undefined;

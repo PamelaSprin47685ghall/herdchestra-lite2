@@ -10,6 +10,13 @@ All notable changes to this extension. The format follows
 
 ### Changed
 
+- `regret` is now `amend`. The mechanics are unchanged — remove the last
+  completed beat, refund its budget, require a reflection — but the name and
+  the prose no longer frame an ordinary correction as a confession.
+  `reflection` is documented as the replacement text that stands where the beat
+  was, the tool result echoes it, and the description states that side effects
+  already performed stay in place. The state field `regrets` became `amends`;
+  saved state that still carries `regrets` is read once and carried forward.
 - Every model-facing string now lives in `resources/prompts/` as Markdown
   documents with `## section` blocks: tool contracts, parameter descriptions,
   stage prompts, system rules, scope and relay receipts, and error text. Code

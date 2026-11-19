@@ -1,14 +1,14 @@
-## regret-reflection
+## amend-reflection
 
-regret.reflection must be a non-empty string.
+amend.reflection must be a non-empty string.
 
-## regret-scope
+## amend-scope
 
-regret is only allowed inside a scope.
+amend is only allowed inside a scope.
 
-## regret-history
+## amend-history
 
-regret is only allowed inside a scope with a visible beat history.
+amend is only allowed inside a scope with a visible beat history.
 
 ## defer-intent
 

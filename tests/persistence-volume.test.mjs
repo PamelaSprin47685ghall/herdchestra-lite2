@@ -4,7 +4,7 @@
  * The append-only state log exists for one reason: a full snapshot per turn
  * grows the session file by the whole state each time. This test drives the
  * station's real `persist()` for 400 turns with the shapes a real session
- * accumulates (growing `pins` and `charges`, bounded `regrets`, scope churn
+ * accumulates (growing `pins` and `charges`, bounded `amends`, scope churn
  * with collapses, model caches), then compares the bytes written against the
  * bytes a per-turn full snapshot would have written. It also folds the
  * resulting chain back and demands the exact final state.
@@ -100,10 +100,10 @@ describe("long-session write volume", () => {
 			state.seq += 1;
 			state.pins.push(`pin-${turn}`);
 
-			// Regrets stay bounded in a real session: they are consumed and
+			// Amends stay bounded in a real session: they are consumed and
 			// removed, which exercises the array truncation path.
-			state.regrets.push(`call-${turn}`);
-			if (state.regrets.length > 8) state.regrets.shift();
+			state.amends.push(`call-${turn}`);
+			if (state.amends.length > 8) state.amends.shift();
 
 			// One charge per tool call, keyed by call id: monotonically growing.
 			state.charges[`call-${turn}`] = {

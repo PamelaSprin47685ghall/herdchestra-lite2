@@ -14,8 +14,8 @@ export const BUDGET_DESCRIPTION = scope["begin.budget"];
 export const PERMISSION_DESCRIPTION = scope["begin.permission"];
 export const END_DESCRIPTION = scope.end;
 export const ELDER_REPORT_DESCRIPTION = scope["begin.elder_report"];
-export const REGRET_DESCRIPTION = scope["regret.tool"];
-export const REFLECTION_DESCRIPTION = scope["regret.reflection"];
+export const AMEND_DESCRIPTION = scope["amend.tool"];
+export const REFLECTION_DESCRIPTION = scope["amend.reflection"];
 export const DEFER_DESCRIPTION = scope["defer.tool"];
 export const DEFER_INTENT_DESCRIPTION = scope["defer.intent"];
 export const PIN_DESCRIPTION = scope["pin.tool"];
@@ -69,7 +69,7 @@ export const scopeParameters = {
 	},
 };
 
-export const regretParameters = {
+export const amendParameters = {
 	type: "object",
 	additionalProperties: false,
 	required: ["reflection"],

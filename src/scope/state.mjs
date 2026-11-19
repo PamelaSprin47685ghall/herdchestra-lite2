@@ -6,7 +6,7 @@ import { createStageFlags } from "./stage-flags.mjs";
 
 const VERSION = 2;
 
-const CONTROL_TOOLS = new Set(["scope", "regret", "defer", "pin"]);
+const CONTROL_TOOLS = new Set(["scope", "amend", "defer", "pin"]);
 
 /** Provider prompt-cache entries live for five minutes. */
 export const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -98,7 +98,7 @@ export function createState() {
     epoch: 0,
     scopes: [],
     charges: {},
-    regrets: [],
+    amends: [],
     collapses: [],
     herdMode: false,
     pins: [],

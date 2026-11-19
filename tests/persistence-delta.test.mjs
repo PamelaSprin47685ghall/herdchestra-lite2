@@ -44,7 +44,7 @@ function randomState(random) {
 	state.epoch = Math.floor(random() * 5);
 	state.herdMode = random() > 0.5;
 	state.pins = Array.from({ length: Math.floor(random() * 4) }, (_, index) => `pin-${index}`);
-	state.regrets = Array.from({ length: Math.floor(random() * 3) }, (_, index) => `call-${index}`);
+	state.amends = Array.from({ length: Math.floor(random() * 3) }, (_, index) => `call-${index}`);
 	state.collapses = Array.from({ length: Math.floor(random() * 3) }, (_, index) => ({
 		beginToolCallId: `begin-${index}`,
 		endToolCallId: `end-${index}`,

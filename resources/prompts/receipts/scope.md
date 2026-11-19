@@ -12,7 +12,7 @@ You are now inside this scope.
 Intent: {{intent}}
 {{stage_line}}
 Budget (innermost scope only): {{budget}}.
-Only the innermost scope's budget is used. An unlisted budgeted tool has zero budget calls. scope, regret, defer, pin, ask, and wait are free where allowed; the write that resolves a staged ast_edit preview (xd://resolve or xd://reject) is free.
+Only the innermost scope's budget is used. An unlisted budgeted tool has zero budget calls. scope, amend, defer, pin, ask, and wait are free where allowed; the write that resolves a staged ast_edit preview (xd://resolve or xd://reject) is free.
 todo is free but forbidden inside any active scope. Close every scope before updating the ledger.
 Calls in one assistant message spend at most one unit in total, split across budgeted tools by call count and rounded to two decimals. A tool whose balance runs out is blocked while the rest of the message still runs.
 {{closing_line}}
@@ -86,23 +86,27 @@ You are outside all scopes. Only a promoted empty-ledger successor evaluation al
 
 You are outside all scopes. Finishing is not a tool call.
 
-## regret.undone
+## amend.replaced
 
-Undid the previous beat. It will not appear in the next LLM request.
+Replacement text now standing in the record: {{text}}
 
-## regret.refunded
+## amend.undone
+
+Amended the previous beat away. It will not appear in the next LLM request.
+
+## amend.refunded
 
 Refunded {{count}} tool call(s).
 
-## regret.no-refund
+## amend.no-refund
 
 No tool budget was refunded by that beat.
 
-## regret.remaining
+## amend.remaining
 
 Remaining: {{budget}}.
 
-## regret.residual
+## amend.residual
 
 {{count}} defer finding(s) from that beat were withdrawn but remain valid; they will still be delivered when this scope ends.
 

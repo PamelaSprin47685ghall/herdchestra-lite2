@@ -1,9 +1,9 @@
-// Station control handlers: scope, regret, defer, and pin arguments.
+// Station control handlers: scope, amend, defer, and pin arguments.
 // Plain synchronous functions. The station owns the state; this module owns
 // the argument validation and the resulting text.
 
 import {
-  applyRegret,
+  applyAmend,
   beginScope,
   closeScope,
   createState,
@@ -19,7 +19,7 @@ import { applyCollapses, findBegin, findToolCallIndex } from "../transcript/inde
 import { invalidatePromotion } from "../relay/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
-import { beginText, endText, regretText } from "./texts.mjs";
+import { amendText, beginText, endText } from "./texts.mjs";
 import {
   charsToTokens,
   resolveModelPolicy,
@@ -37,29 +37,29 @@ import { applyStageBegin, missingStages } from "../scope/stage-flags.mjs";
 const E = loadDoc("errors");
 const L = loadDoc("labels");
 
-function handleRegretCall(station, call, base, currentIndex) {
+function handleAmendCall(station, call, base, currentIndex) {
   const state = station.state;
   const args = parseArgs(call);
   const reflection = trimText(args.reflection);
   if (!reflection) {
-    return errorResult("INVALID_ARGUMENT", E["regret-reflection"], {
+    return errorResult("INVALID_ARGUMENT", E["amend-reflection"], {
       field: "reflection",
     });
   }
   const scope = currentScope(state);
   if (!scope) {
-    return errorResult("NOT_IN_SCOPE", E["regret-scope"]);
+    return errorResult("NOT_IN_SCOPE", E["amend-scope"]);
   }
-  const target = station.findRegretTarget(base, currentIndex, scope);
+  const target = station.findAmendTarget(base, currentIndex, scope);
   if (!target.ok) return errorResult(target.code, target.reason);
-  const applied = applyRegret(state, {
+  const applied = applyAmend(state, {
     scopeId: scope.id,
     beat: target.beat,
     toolCalls: target.toolCalls,
   });
   if (!applied.ok) return errorResult(applied.code, applied.reason);
   applied.scope = currentScope(state);
-  return textResult(regretText(applied), { refunded: applied.refunded });
+  return textResult(amendText(applied, reflection), { refunded: applied.refunded });
 }
 
 function handleDeferCall(station, call) {
@@ -306,7 +306,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     base,
     scope.beginToolCallId,
     call.id,
-    state.regrets,
+    state.amends,
     station.tokensPerCharFor(station.lastUsageModelKey ?? from.key),
   );
   const baseTokens = Number.isFinite(scope.baseInputTokens) ? scope.baseInputTokens : null;
@@ -506,4 +506,4 @@ function foldEligiblePool(station, { state, parentId, boundary, epoch, args, bas
   return folded;
 }
 
-export { handleRegretCall, handleDeferCall, handlePinCall, handleScopeCall };
+export { handleAmendCall, handleDeferCall, handlePinCall, handleScopeCall };

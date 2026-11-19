@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  applyRegret,
+  applyAmend,
   beginScope,
   beatShares,
   budgetText,
@@ -158,7 +158,7 @@ describe("createState", () => {
       epoch: 0,
       scopes: [],
       charges: {},
-      regrets: [],
+      amends: [],
       collapses: [],
       relay: {
         generation: 0,
@@ -177,9 +177,9 @@ describe("createState", () => {
     const first = createState();
     const second = createState();
     first.scopes.push({ id: "scope-9" });
-    first.regrets.push("beat");
+    first.amends.push("beat");
     expect(second.scopes).toEqual([]);
-    expect(second.regrets).toEqual([]);
+    expect(second.amends).toEqual([]);
   });
 });
 
@@ -435,7 +435,7 @@ describe("chargeTool", () => {
 
   test("never charges control tools", () => {
     const { state, scope } = openScope("work", { bash: 1 });
-    for (const [index, toolName] of ["scope", "regret", "defer", "pin"].entries()) {
+    for (const [index, toolName] of ["scope", "amend", "defer", "pin"].entries()) {
       const result = chargeTool(state, {
         toolCallId: `call_free_${index}`,
         toolName,
@@ -588,12 +588,12 @@ describe("deferIntent", () => {
   });
 });
 
-describe("applyRegret", () => {
+describe("applyAmend", () => {
   test("refunds the matching charges and records the beat", () => {
     const { state, scope } = openScope("repair", { bash: 3, read: 1 });
     chargeTool(state, { toolCallId: "call_a", toolName: "bash" });
     chargeTool(state, { toolCallId: "call_b", toolName: "read" });
-    const result = applyRegret(state, {
+    const result = applyAmend(state, {
       scopeId: scope.id,
       beat: { key: "tc:call_a,call_b", toolCallIds: ["call_a", "call_b"] },
       toolCalls: [
@@ -609,13 +609,13 @@ describe("applyRegret", () => {
     });
     expect(scope.spent).toEqual({ bash: 0, read: 0 });
     expect(state.charges).toEqual({});
-    expect(state.regrets).toEqual(["tc:call_a,call_b"]);
+    expect(state.amends).toEqual(["tc:call_a,call_b"]);
   });
 
   test("counts only the calls that had a charge", () => {
     const { state, scope } = openScope("repair", { bash: 2 });
     chargeTool(state, { toolCallId: "call_a", toolName: "bash" });
-    const result = applyRegret(state, {
+    const result = applyAmend(state, {
       scopeId: scope.id,
       beat: { key: "tc:call_a,call_missing", toolCallIds: ["call_a", "call_missing"] },
       toolCalls: [
@@ -638,7 +638,7 @@ describe("applyRegret", () => {
       budget: { bash: 2 },
     }).scope;
     chargeTool(state, { toolCallId: "call_inner_charge", toolName: "bash" });
-    const result = applyRegret(state, {
+    const result = applyAmend(state, {
       scopeId: inner.id,
       beat: {
         key: "tc:call_outer_charge,call_inner_charge",
@@ -661,7 +661,7 @@ describe("applyRegret", () => {
     const { state, scope } = openScope("triage", { bash: 1 });
     deferIntent(state, { toolCallId: "call_d1", intent: "Check A" });
     deferIntent(state, { toolCallId: "call_d2", intent: "Check B" });
-    const result = applyRegret(state, {
+    const result = applyAmend(state, {
       scopeId: scope.id,
       beat: { key: "tc:call_d1", toolCallIds: ["call_d1"] },
       toolCalls: [
@@ -679,7 +679,7 @@ describe("applyRegret", () => {
     ]);
     expect(result.refunded).toBe(0);
     expect(result.remaining).toEqual({ bash: 1 });
-    applyRegret(state, {
+    applyAmend(state, {
       scopeId: scope.id,
       beat: { key: "tc:call_d1_again", toolCallIds: ["call_d1"] },
       toolCalls: [{ id: "call_d1", name: "defer", arguments: {} }],
@@ -689,7 +689,7 @@ describe("applyRegret", () => {
 
   test("records a beat even without charges", () => {
     const { state, scope } = openScope("think", {});
-    const result = applyRegret(state, {
+    const result = applyAmend(state, {
       scopeId: scope.id,
       beat: { key: "msg:1700000000000:abc123", toolCallIds: [] },
       toolCalls: [],
@@ -700,24 +700,24 @@ describe("applyRegret", () => {
       residualDefers: [],
       remaining: {},
     });
-    expect(state.regrets).toEqual(["msg:1700000000000:abc123"]);
+    expect(state.amends).toEqual(["msg:1700000000000:abc123"]);
   });
 
   test("rejects a closed scope", () => {
     const { state, scope } = openScope("work", {});
     closeScope(state, { toolCallId: "call_end", report: "done" });
-    const result = applyRegret(state, {
+    const result = applyAmend(state, {
       scopeId: scope.id,
       beat: { key: "tc:x", toolCallIds: [] },
       toolCalls: [],
     });
     expect(result).toMatchObject({ ok: false, code: "NOT_IN_SCOPE" });
-    expect(state.regrets).toEqual([]);
+    expect(state.amends).toEqual([]);
   });
 
   test("rejects a missing beat key", () => {
     const { state, scope } = openScope("work", {});
-    const result = applyRegret(state, {
+    const result = applyAmend(state, {
       scopeId: scope.id,
       beat: {},
       toolCalls: [],
@@ -784,7 +784,7 @@ describe("closeScope", () => {
     deferIntent(state, { toolCallId: "call_d1", intent: "Check A" });
     deferIntent(state, { toolCallId: "call_d2", intent: "Check B" });
     deferIntent(state, { toolCallId: "call_d3", intent: "  Check B  " });
-    applyRegret(state, {
+    applyAmend(state, {
       scopeId: scope.id,
       beat: { key: "tc:call_d1", toolCallIds: ["call_d1"] },
       toolCalls: [{ id: "call_d1", name: "defer", arguments: {} }],
@@ -870,7 +870,7 @@ describe("serializeState and deserializeState", () => {
       toolCallId: "call_outer_defer",
       intent: "Check logs",
     });
-    applyRegret(state, {
+    applyAmend(state, {
       scopeId: outer.id,
       beat: {
         key: "tc:call_outer_charge",
@@ -921,13 +921,13 @@ describe("serializeState and deserializeState", () => {
     payload.scopes[0].remaining.bash = 0;
     payload.scopes[0].defers.push({ toolCallId: "x", intent: "y" });
     payload.charges.extra = { scopeId: "x", tool: "bash", amount: 1 };
-    payload.regrets.push("beat");
+    payload.amends.push("beat");
     expect(scope.remaining).toEqual({ bash: 1 });
     expect(scope.defers).toEqual([
       { toolCallId: "call_defer", intent: "Check A" },
     ]);
     expect(state.charges).toEqual({});
-    expect(state.regrets).toEqual([]);
+    expect(state.amends).toEqual([]);
   });
 
   test("round-trips a state without call ids", () => {
@@ -975,7 +975,7 @@ describe("serializeState and deserializeState", () => {
       { ...payload, version: 1, scopes: "nope" },
       { ...payload, version: 1, scopes: [{}] },
       { ...payload, version: 1, charges: null },
-      { ...payload, version: 1, regrets: [42] },
+      { ...payload, version: 1, amends: [42] },
       { ...payload, version: 1, collapses: [{}] },
     ];
     for (const input of corrupt) {

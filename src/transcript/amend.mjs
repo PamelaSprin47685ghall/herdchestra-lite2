@@ -1,4 +1,4 @@
-// Transcript regret: find and remove the beats a regret undoes. Pure.
+// Transcript amend: find and remove the beats an amend retires. Pure.
 
 import {
 	beatKey,
@@ -11,12 +11,12 @@ import {
 const SCOPE_TOOL_NAME = "scope";
 
 /**
- * Find the nearest earlier beat that regret may remove.
+ * Find the nearest earlier beat that an amend may remove.
  *
  * The current assistant message is in flight and is never a target.
  */
-export function findRegretTarget(state, messages, currentAssistantIndex, scope) {
-	if (!scope) return reject("OUTSIDE_SCOPE", "Regret requires an active scope.");
+export function findAmendTarget(state, messages, currentAssistantIndex, scope) {
+	if (!scope) return reject("OUTSIDE_SCOPE", "Amend requires an active scope.");
 	if (!Array.isArray(messages) || messages.length === 0) {
 		return reject("NO_BEAT", "The transcript has no assistant beat.");
 	}
@@ -26,14 +26,14 @@ export function findRegretTarget(state, messages, currentAssistantIndex, scope) 
 		return reject("SCOPE_BOUNDARY", "The scope begin message is not in the transcript.");
 	}
 
-	const regrets = new Set(Array.isArray(state?.regrets) ? state.regrets : []);
+	const amends = new Set(Array.isArray(state?.amends) ? state.amends : []);
 	const charges = state?.charges ?? {};
 	const lastIndex = Math.min(currentAssistantIndex - 1, messages.length - 1);
 
 	for (let index = lastIndex; index >= 0; index -= 1) {
 		const message = messages[index];
 		if (message?.role !== "assistant") continue;
-		if (regrets.has(beatKey(message))) continue;
+		if (amends.has(beatKey(message))) continue;
 
 		if (index <= beginAssistantIndex) {
 			return reject("SCOPE_BOUNDARY", "The candidate is at or before the scope begin.");
@@ -41,7 +41,7 @@ export function findRegretTarget(state, messages, currentAssistantIndex, scope) 
 
 		const calls = toolCalls(message);
 		if (calls.some((call) => call.name === SCOPE_TOOL_NAME)) {
-			return reject("SCOPE_BOUNDARY", "A scope call is not a regret target.");
+			return reject("SCOPE_BOUNDARY", "A scope call is not an amend target.");
 		}
 
 		const foreign = calls.find((call) => {
@@ -58,16 +58,16 @@ export function findRegretTarget(state, messages, currentAssistantIndex, scope) 
 	return reject("NO_BEAT", "No earlier assistant beat remains in this scope.");
 }
 
-/** Remove the messages of every regretted beat. */
-export function filterRegrets(messages, regrets) {
+/** Remove the messages of every amended beat. */
+export function filterAmends(messages, amends) {
 	const source = Array.isArray(messages) ? messages : [];
-	const regretSet = new Set(Array.isArray(regrets) ? regrets : []);
-	if (regretSet.size === 0) return source.slice();
+	const amendSet = new Set(Array.isArray(amends) ? amends : []);
+	if (amendSet.size === 0) return source.slice();
 
 	const droppedMessages = new Set();
 	const droppedToolCallIds = new Set();
 	for (const message of source) {
-		if (message?.role !== "assistant" || !regretSet.has(beatKey(message))) continue;
+		if (message?.role !== "assistant" || !amendSet.has(beatKey(message))) continue;
 		droppedMessages.add(message);
 		for (const call of toolCalls(message)) droppedToolCallIds.add(call.id);
 	}

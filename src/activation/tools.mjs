@@ -6,15 +6,15 @@ import {
 	deferParameters,
 	PIN_DESCRIPTION,
 	pinParameters,
-	REGRET_DESCRIPTION,
-	regretParameters,
+	AMEND_DESCRIPTION,
+	amendParameters,
 	SCOPE_DESCRIPTION,
 	scopeParameters,
 } from "../tools/descriptions.mjs";
 import {
+	amendTicket,
 	deferTicket,
 	pinTicket,
-	regretTicket,
 	scopeTicket,
 } from "../tools/tickets.mjs";
 import {
@@ -35,13 +35,13 @@ export function wireTools(pi, registry) {
 			scopeTicket(registry.stationFor(ctx), toolCallId, params, ctx),
 	});
 	pi.registerTool({
-		name: "regret",
-		label: "Regret",
-		description: REGRET_DESCRIPTION,
-		parameters: regretParameters,
+		name: "amend",
+		label: "Amend",
+		description: AMEND_DESCRIPTION,
+		parameters: amendParameters,
 		executionMode: "sequential",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-			regretTicket(registry.stationFor(ctx), toolCallId, params),
+			amendTicket(registry.stationFor(ctx), toolCallId, params),
 	});
 	pi.registerTool({
 		name: "defer",

@@ -12,7 +12,7 @@ import { createHeadlessTuiContext } from "./headless-tui.mjs";
 const STATE_KEY = Symbol.for("herdchestra-lite2.session-capture.v2");
 const VIBE_PATCH = Symbol.for("herdchestra-lite2.vibe-tools.v2");
 const RUNNER_GETTER_PATCH = Symbol.for("herdchestra-lite2.runner-getter.v2");
-const SCOPE_TOOLS = ["scope", "regret", "defer", "pin", "todo"];
+const SCOPE_TOOLS = ["scope", "amend", "defer", "pin", "todo"];
 
 function patchMethod(prototype, name, marker, createWrapper) {
 	if (!prototype || Object.hasOwn(prototype, marker)) return false;

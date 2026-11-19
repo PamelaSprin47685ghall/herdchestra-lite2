@@ -32,7 +32,14 @@ In default mode the four non-framing stages may be opened in any order, repeated
 false. Opening one turns its flag true. `direct-execution` may open only when
 all three are true; it never clears them, so execution may run again. Opening
 `decision-framing` clears all three, because a new decision starts a new line of
-work. The flags persist with the session and survive compaction and handoff.
+work. A relay handoff also clears all three, in the same transaction that
+advances the generation: a successor must run the stages itself, because the
+predecessor's runs prove nothing about its intent. The flags persist with the
+session and survive compaction, but never a handoff.
+
+The flags describe the main session's own work line. Subagent sessions, read-only
+and read-write alike, are exempt from the ordering gate: they may open any stage
+in any order, repeat it, or move backward, and they never write the flags.
 
 Model-facing text lives in `resources/prompts/` as Markdown documents with
 `## section` blocks. Code loads them through `src/prompts/index.mjs`; no prompt,

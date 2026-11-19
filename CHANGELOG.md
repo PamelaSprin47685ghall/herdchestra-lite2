@@ -25,8 +25,14 @@ All notable changes to this extension. The format follows
 - Stage flags replace the free jump into `direct-execution`:
   `acceptance-cases`, `architecture-design`, and `orchestration-plan` start
   false and turn true when their scope opens; `direct-execution` requires all
-  three and does not clear them; opening `decision-framing` clears them. Flags
-  persist across snapshots, compaction, and handoff.
+  three and does not clear them; opening `decision-framing` clears them. A relay
+  handoff also clears all three in the same transaction as the generation
+  advance: a successor must run the stages itself, because the predecessor's
+  runs prove nothing about its intent. Flags persist across snapshots and
+  compaction, but never across a generation. Subagent sessions are exempt from
+  the ordering gate — a read-only or read-write subagent may open any stage in
+  any order and never writes the flags, which describe the main holder's work
+  line only.
 - Prompt tests now assert that each export equals its document section and that
   templates render strictly, instead of pinning prose by substring.
 - The model name fallback in the context-window error moved into

@@ -15,6 +15,7 @@ import {
   scopeOrder,
 } from "../scope/index.mjs";
 import { DECISION_FRAMING, NORMAL_STAGES } from "../scope/stages.mjs";
+import { MAIN_AGENT } from "../host/policy.mjs";
 import { applyCollapses, findBegin, findToolCallIndex } from "../transcript/index.mjs";
 import { invalidatePromotion } from "../relay/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
@@ -164,6 +165,11 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   }
 
   const stage = args.begin?.stage;
+  // Stage flags describe the main holder's own work line. A subagent session
+  // is spawned for one sliced piece of work and may open any stage in any
+  // order, so the verdict is taken once here: the gate below and both flag
+  // writes later reuse it, never recomputing mid-call.
+  const mainAgent = station.policy(ctx) === MAIN_AGENT;
   // Pre-validate an opening scope without touching live state so a failed
   // begin cannot damage the scope being closed in a combined call.
   if (hasBegin) {
@@ -179,7 +185,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
         render(E["normal-stage"], { stages: NORMAL_STAGES.join(" | ") }),
       );
     }
-    if (stage === "direct-execution") {
+    if (mainAgent && stage === "direct-execution") {
       const missing = missingStages(state.stageFlags);
       if (missing.length > 0) {
         return errorResult(
@@ -259,7 +265,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       budget: args.begin?.budget,
     });
     if (!out.ok) return errorResult(out.code, out.reason);
-    state.stageFlags = applyStageBegin(state.stageFlags, stage);
+    if (mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
     if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
     attachModel(station, out.scope, target, outer, from);
     out.scope.preBeginInputTokens =
@@ -396,7 +402,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     });
     text += `\n\n${beginText(opened.scope)}`;
     if (opened.ok) {
-      state.stageFlags = applyStageBegin(state.stageFlags, stage);
+      if (mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
       if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
       attachModel(station, opened.scope, target, outer, from);
       opened.scope.preBeginInputTokens =

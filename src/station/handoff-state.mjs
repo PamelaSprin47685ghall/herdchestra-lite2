@@ -4,7 +4,7 @@ import { appendHandoffCompaction } from "../handoff/session.mjs";
 import { setAgentMessages } from "../host/capture.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
 import { record } from "../host/diagnostics.mjs";
-import { truncateForHostBoundary } from "../scope/index.mjs";
+import { createStageFlags, truncateForHostBoundary } from "../scope/index.mjs";
 import {
 	applyLedgerEvaluation,
 	beginGenerationAfterHandoff,
@@ -33,6 +33,11 @@ function advanceRelayForHandoff(station, options = {}) {
 		at: Number.isFinite(options.at) ? options.at : Date.now(),
 		fromGeneration: relay.generation,
 	});
+	// A new generation starts a new line of work. The predecessor's S2/S3/S4
+	// runs prove nothing about what the successor intends, so every gated stage
+	// flag returns to false in the same transaction: `direct-execution` is
+	// gated again until this holder opens all three stages itself.
+	station.state.stageFlags = createStageFlags();
 	station.persist();
 	return true;
 }

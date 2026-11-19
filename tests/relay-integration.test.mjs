@@ -19,6 +19,7 @@ import { createStationRegistry, stateFor } from "../src/station/index.mjs";
 import { scopeParameters } from "../src/tools/descriptions.mjs";
 import { beginGenerationAfterHandoff } from "../src/relay/index.mjs";
 import { allStagesRan } from "./helpers/stage-flags.mjs";
+import { createStageFlags } from "../src/scope/index.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -1388,10 +1389,12 @@ describe("handoff transaction recovery", () => {
 		expect(session.agent.state.messages).toHaveLength(1);
 
 		// Successor opens an audit scope with elder_report: null — must NOT require predecessor's elder report.
+		// The handoff reset every gated stage flag, so execution is gated again;
+		// the first stage is the stage a successor can always open.
 		const auditBegin = await runAssistant(
 			host,
 			ctx,
-			assistant([call("b_audit", "scope", { begin: { intent: "audit", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
+			assistant([call("b_audit", "scope", { begin: { intent: "audit", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
 		);
 		expect(auditBegin[0].blocked).toBe(false);
 		expect(auditBegin[0].result.isError).toBe(false);
@@ -1560,5 +1563,166 @@ describe("free resolution write", () => {
 		]));
 		expect(real.blocked).toBe(true);
 		expect(real.result.content[0].text).toContain("no budget left");
+	});
+});
+
+describe("stage gates by session identity", () => {
+	const subagentInit = {
+		agent: "task",
+		readOnly: false,
+		tools: ["read", "write", "bash", "edit"],
+	};
+
+	test("a read-write subagent opens direct-execution without the three stages", async () => {
+		const { host, ctx } = await start({ sessionInit: subagentInit });
+		stateFor(ctx).state.stageFlags = createStageFlags();
+		const [opened] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", {
+					begin: {
+						intent: "slice",
+						stage: "direct-execution",
+						budget: { read: 1 },
+						elder_report: null,
+						permission: "ro",
+					},
+				}),
+			]),
+		);
+		expect(opened.result.isError).toBeFalsy();
+		expect(opened.result.content[0].text).toContain("Stage: direct-execution");
+		// The exemption must not hand the subagent a ledger it never earned:
+		// stage flags stay untouched for a non-main session.
+		expect(stateFor(ctx).state.stageFlags).toEqual(createStageFlags());
+	});
+
+	test("a read-only subagent opens direct-execution without the three stages", async () => {
+		// The read-only policy short-circuits the tool-call gate, so the scope
+		// tool runs without station interception. It still reaches
+		// handleScopeCall, where the same session-identity exemption applies.
+		const { host, ctx } = await start({
+			sessionInit: { agent: "scout", readOnly: true, tools: ["read", "grep", "glob"] },
+		});
+		stateFor(ctx).state.stageFlags = createStageFlags();
+		const [opened] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", {
+					begin: {
+						intent: "audit",
+						stage: "direct-execution",
+						budget: { read: 1 },
+						elder_report: null,
+						permission: "ro",
+					},
+				}),
+			]),
+		);
+		expect(opened.result.isError).toBeFalsy();
+		expect(opened.result.content[0].text).toContain("Stage: direct-execution");
+		expect(stateFor(ctx).state.stageFlags).toEqual(createStageFlags());
+	});
+
+	test("a read-write subagent may move backward between stages and repeat execution", async () => {
+		const { host, ctx } = await start({ sessionInit: subagentInit });
+		stateFor(ctx).state.stageFlags = createStageFlags();
+		const [run] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", {
+					begin: {
+						intent: "run",
+						stage: "direct-execution",
+						budget: { read: 1 },
+						elder_report: null,
+						permission: "ro",
+					},
+				}),
+			]),
+		);
+		expect(run.result.isError).toBeFalsy();
+		const [back] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b2", "scope", {
+					end: true,
+					begin: {
+						intent: "replan",
+						stage: "orchestration-plan",
+						budget: { read: 1 },
+						elder_report: "run done",
+						permission: "ro",
+					},
+				}),
+			]),
+		);
+		expect(back.result.isError).toBeFalsy();
+		expect(back.result.content[0].text).toContain("Stage: orchestration-plan");
+		const [again] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b3", "scope", {
+					end: true,
+					begin: {
+						intent: "run again",
+						stage: "direct-execution",
+						budget: { read: 1 },
+						elder_report: "plan done",
+						permission: "ro",
+					},
+				}),
+			]),
+		);
+		expect(again.result.isError).toBeFalsy();
+		expect(again.result.content[0].text).toContain("Stage: direct-execution");
+		expect(stateFor(ctx).state.stageFlags).toEqual(createStageFlags());
+	});
+
+	test("the main session still needs all three stages before execution", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.stageFlags = createStageFlags();
+		const [refused] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", {
+					begin: {
+						intent: "early",
+						stage: "direct-execution",
+						budget: { read: 1 },
+						elder_report: null,
+						permission: "ro",
+					},
+				}),
+			]),
+		);
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("STAGE_FLAGS_UNMET");
+		expect(refused.result.content[0].text).toContain("acceptance-cases");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+		// A refused begin damages no state: the first gated stage still opens.
+		const [stage] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b2", "scope", {
+					begin: {
+						intent: "cases",
+						stage: "acceptance-cases",
+						budget: { read: 1 },
+						elder_report: null,
+						permission: "ro",
+					},
+				}),
+			]),
+		);
+		expect(stage.result.isError).toBeFalsy();
+		expect(stateFor(ctx).state.stageFlags["acceptance-cases"]).toBe(true);
 	});
 });

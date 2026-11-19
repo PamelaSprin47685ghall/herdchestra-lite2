@@ -11,6 +11,8 @@ import {
 	truncateForHostBoundary,
 } from "../src/scope/index.mjs";
 import { loadDoc, render } from "../src/prompts/index.mjs";
+import { advanceRelayForHandoff } from "../src/station/handoff-state.mjs";
+import { createRelay } from "../src/relay/index.mjs";
 
 describe("stage flags", () => {
 	test("start with every gated stage false", () => {
@@ -109,5 +111,62 @@ describe("stage flag persistence", () => {
 		state.stageFlags = applyStageBegin(state.stageFlags, "acceptance-cases");
 		truncateForHostBoundary(state);
 		expect(state.stageFlags["acceptance-cases"]).toBe(true);
+	});
+});
+
+describe("handoff clears the stage flags", () => {
+	function allRan() {
+		let flags = createStageFlags();
+		for (const stage of [
+			"acceptance-cases",
+			"architecture-design",
+			"orchestration-plan",
+		]) {
+			flags = applyStageBegin(flags, stage);
+		}
+		return flags;
+	}
+
+	function stationWith(stageFlags, relay) {
+		return {
+			persisted: 0,
+			state: { stageFlags, relay },
+			persist() {
+				this.persisted += 1;
+			},
+		};
+	}
+
+	test("the generation advance resets all three and persists once", () => {
+		const station = stationWith(allRan(), {
+			...createRelay(),
+			handoffPending: true,
+	});
+		expect(advanceRelayForHandoff(station, { at: 1 })).toBe(true);
+		expect(station.state.relay.generation).toBe(1);
+		expect(station.state.stageFlags).toEqual(createStageFlags());
+		expect(station.persisted).toBe(1);
+	});
+
+	test("a refused advance leaves generation and flags untouched", () => {
+		const station = stationWith(allRan(), {
+			...createRelay(),
+			handoffPending: false,
+});
+		expect(advanceRelayForHandoff(station, {})).toBe(false);
+		expect(station.state.relay.generation).toBe(0);
+		expect(station.state.stageFlags).toEqual(allRan());
+		expect(station.persisted).toBe(0);
+	});
+
+	test("a stale expected generation refuses the advance", () => {
+		const station = stationWith(allRan(), {
+			...createRelay(),
+			handoffPending: true,
+		});
+		expect(advanceRelayForHandoff(station, { expectedGeneration: 7 })).toBe(
+			false,
+		);
+		expect(station.state.stageFlags).toEqual(allRan());
 	});
 });

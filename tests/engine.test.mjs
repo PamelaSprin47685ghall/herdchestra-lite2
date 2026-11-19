@@ -27,7 +27,12 @@ const STEER_HEADER =
 
 function openScope(intent, budget, toolCallId = "call_begin") {
   const state = createState();
-  const result = beginScope(state, { toolCallId, intent, budget });
+  const result = beginScope(state, {
+    toolCallId,
+    intent,
+    stage: "direct-execution",
+    budget,
+  });
   expect(result.ok).toBe(true);
   return { state, scope: result.scope };
 }
@@ -39,6 +44,7 @@ describe("handoff boundaries", () => {
     const result = beginScope(state, {
       toolCallId: "call_begin",
       intent: "work",
+      stage: "direct-execution",
       budget: { read: 1 },
     });
     expect(result.ok).toBe(true);
@@ -79,6 +85,7 @@ describe("handoff boundaries", () => {
     const outer = beginScope(state, {
       toolCallId: "call_outer",
       intent: "outer",
+      stage: "direct-execution",
       budget: { read: 2 },
     });
     expect(outer.ok).toBe(true);
@@ -90,6 +97,7 @@ describe("handoff boundaries", () => {
     const inner = beginScope(state, {
       toolCallId: "call_inner",
       intent: "inner",
+      stage: "direct-execution",
       budget: { read: 2 },
     });
     expect(inner.ok).toBe(true);
@@ -138,6 +146,8 @@ describe("createState", () => {
       baseModelKey: null,
       modelRecovery: null,
       modelCaches: {},
+      herdMode: false,
+      pins: [],
       version: 2,
       seq: 0,
       epoch: 0,
@@ -174,6 +184,7 @@ describe("beginScope", () => {
     const result = beginScope(state, {
       toolCallId: "call_begin",
       intent: "  Inspect the repo  ",
+      stage: "direct-execution",
       budget: { read: 7, bash: 6 },
     });
     expect(result.ok).toBe(true);
@@ -187,6 +198,7 @@ describe("beginScope", () => {
       boundary: 0,
       epoch: 0,
       intent: "Inspect the repo",
+      stage: "direct-execution",
       beginToolCallId: "call_begin",
       budget: { read: 7, bash: 6 },
       remaining: { read: 7, bash: 6 },
@@ -209,6 +221,7 @@ describe("beginScope", () => {
     const result = beginScope(state, {
       toolCallId: "call_begin",
       intent: "work",
+      stage: "direct-execution",
       budget,
     });
     budget.bash = 0;
@@ -221,11 +234,13 @@ describe("beginScope", () => {
     const first = beginScope(state, {
       toolCallId: "call_1",
       intent: "first",
+      stage: "direct-execution",
       budget: {},
     });
     const second = beginScope(state, {
       toolCallId: "call_2",
       intent: "second",
+      stage: "acceptance-cases",
       budget: {},
     });
     expect(first.scope.id).toBe("scope-1");
@@ -239,6 +254,7 @@ describe("beginScope", () => {
       const result = beginScope(state, {
         toolCallId: "call_begin",
         intent,
+        stage: "direct-execution",
         budget: {},
       });
       expect(result.ok).toBe(false);
@@ -266,6 +282,7 @@ describe("beginScope", () => {
       const result = beginScope(state, {
         toolCallId: "call_begin",
         intent: "work",
+        stage: "direct-execution",
         budget,
       });
       expect(result.ok).toBe(false);
@@ -273,6 +290,34 @@ describe("beginScope", () => {
       expect(state.scopes).toEqual([]);
       expect(state.seq).toBe(0);
     }
+  });
+
+  test("rejects a missing or unknown stage", () => {
+    for (const stage of [undefined, "", null, "S1", "planning"]) {
+      const state = createState();
+      const result = beginScope(state, {
+        toolCallId: "call_begin",
+        intent: "work",
+        stage,
+        budget: {},
+      });
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe("INVALID_STAGE");
+      expect(result.reason).toContain("decision-framing");
+      expect(state.scopes).toEqual([]);
+    }
+  });
+
+  test("records the requested stage on the scope", () => {
+    const state = createState();
+    const opened = beginScope(state, {
+      toolCallId: "call_begin",
+      intent: "frame it",
+      stage: "decision-framing",
+      budget: {},
+    });
+    expect(opened.ok).toBe(true);
+    expect(currentScope(state).stage).toBe("decision-framing");
   });
 });
 
@@ -292,6 +337,7 @@ describe("chargeTool", () => {
     const inner = beginScope(state, {
       toolCallId: "call_inner_begin",
       intent: "inner",
+      stage: "direct-execution",
       budget: { bash: 1 },
     }).scope;
     const charged = chargeTool(state, {
@@ -460,7 +506,7 @@ describe("beatShares", () => {
 
   test("ignores free tools and normalizes apply_patch", () => {
     expect(
-      beatShares(["scope", "defer", "pin", "todo", "apply_patch"]),
+      beatShares(["scope", "defer", "pin", "todo", "ask", "wait", "apply_patch"]),
     ).toEqual({ edit: 1 });
     expect(beatShares([])).toEqual({});
   });
@@ -550,6 +596,7 @@ describe("applyRegret", () => {
     const inner = beginScope(state, {
       toolCallId: "call_inner_begin",
       intent: "inner",
+      stage: "direct-execution",
       budget: { bash: 2 },
     }).scope;
     chargeTool(state, { toolCallId: "call_inner_charge", toolName: "bash" });
@@ -668,6 +715,7 @@ describe("closeScope", () => {
     const inner = beginScope(state, {
       toolCallId: "call_inner_begin",
       intent: "inner",
+      stage: "direct-execution",
       budget: { read: 1 },
     }).scope;
     chargeTool(state, {
@@ -721,6 +769,7 @@ describe("closeScope", () => {
     beginScope(state, {
       toolCallId: "call_inner_begin",
       intent: "inner",
+      stage: "direct-execution",
       budget: {},
     });
     closeScope(state, { toolCallId: "call_inner_end", report: "inner done" });
@@ -772,6 +821,7 @@ describe("serializeState and deserializeState", () => {
     const outer = beginScope(state, {
       toolCallId: "call_outer_begin",
       intent: "outer",
+      stage: "direct-execution",
       budget: { bash: 2 },
     }).scope;
     chargeTool(state, {
@@ -795,6 +845,7 @@ describe("serializeState and deserializeState", () => {
     beginScope(state, {
       toolCallId: "call_inner_begin",
       intent: "inner",
+      stage: "direct-execution",
       budget: { read: 1 },
     });
     chargeTool(state, {
@@ -843,7 +894,11 @@ describe("serializeState and deserializeState", () => {
 
   test("round-trips a state without call ids", () => {
     const state = createState();
-    beginScope(state, { intent: "work", budget: { bash: 1 } });
+    beginScope(state, {
+      intent: "work",
+      stage: "direct-execution",
+      budget: { bash: 1 },
+    });
     deferIntent(state, { intent: "Check A" });
     const payload = serializeState(state);
     expect(payload.scopes[0].beginToolCallId).toBe("");

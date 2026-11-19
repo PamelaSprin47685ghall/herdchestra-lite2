@@ -74,7 +74,7 @@ export async function todoTicket(station, params, ctx) {
 			"todo is forbidden inside any active scope. Close every scope first, then call todo outside all scopes.",
 		);
 	}
-	if (station.state.relay?.handoffPending) {
+	if (!station.state.herdMode && station.state.relay?.handoffPending) {
 		return errorResult(
 			"RELAY_HANDOFF_PENDING",
 			handoffToolBlockedReason(),
@@ -102,6 +102,9 @@ export async function todoTicket(station, params, ctx) {
 			"The native todo call returned no result object.",
 		);
 	}
+	// Keep the native ledger available, but do not evaluate it for relay while
+	// the user has paused relay with /herd. Check after the native await too.
+	if (station.state.herdMode) return native;
 
 	const isError = native.isError === true;
 	let details = native.details;

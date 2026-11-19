@@ -4,6 +4,37 @@ Herdchestra Lite 2 adds budgeted work scopes to omp. Each scope controls which t
 
 When a scope folds, its user messages move before its opening `scope` call. Their content and order stay intact. The scope summary records outcomes and remaining work without repeating those messages.
 
+## Stages
+
+Every `scope({ begin })` must name a stage. The innermost open scope determines the current stage; outside all scopes there is no stage.
+
+| Stage | Question | Allowed when |
+|---|---|---|
+| `decision-framing` | Why: intent, non-goals, the decision and its bounds | Herd mode only |
+| `acceptance-cases` | Experience: what the user will live through, as cases with a 0-100 rubric | Default mode |
+| `architecture-design` | What: the artifact's structure, boundaries, and contracts | Default mode |
+| `orchestration-plan` | How: the process of completing the work, as literate pseudocode | Default mode |
+| `direct-execution` | Do: implement, run the real checks, accept, deliver | Default mode |
+
+In default mode the four non-framing stages may be opened in any order, repeated, or revisited; no stage gates another. While herd mode is on, only `decision-framing` may open.
+
+The stage sections for `decision-framing`, `acceptance-cases`, `architecture-design`, and `orchestration-plan` live in the system prompt as a stable prefix, so a provider can reuse its prompt cache. A begin receipt only names its stage; it does not repeat the prompt text. `direct-execution` has no section: it follows the `orchestration-plan` artifact.
+
+## Herd mode
+
+Herd mode is toggled only by the user, with `/herd`. No stage or model turn can enter or leave it.
+
+- While it is on, new scopes may open only `decision-framing`, `ask` is allowed inside that scope, and a turn may end naturally to wait for the user. The relay's stop rules stay suspended until the user toggles herd mode off.
+- While it is off, `decision-framing` cannot open, `ask` is always blocked, and the relay's ledger and handoff rules run as usual.
+
+`ask` needs both conditions: herd mode on, and the innermost scope's stage `decision-framing`.
+
+## Pinned context
+
+`pin` records durable notes: assumptions, deductions, inductions, findings, and conclusions. Each call appends one record to the session state and costs no budget. Pins survive scope collapse because they belong to the session, not to a scope.
+
+At a relay handoff, every historical pin is written into the successor's opening text under `## Pinned Context`. The successor is told to read each important document named there with `read`, in full, rather than substituting grep excerpts.
+
 ## Relay handoff
 
 When `todo` empties the ledger, the relay arms a handoff transaction and the next provider request is refused by a synchronous `agent.addBeforeModelCall` gate. The gate never awaits the handoff: it starts one background ticket and returns `{ stop: true }`, so no request is built on the empty ledger and no extra model turn is spent.
@@ -17,7 +48,7 @@ The transaction records the session id, the branch handoff count, and the source
 Set `begin.model` to an omp `/switch` selector to use a different model for a scope:
 
 ```js
-scope({ begin: { intent: "Review the results", budget: { read: 3 }, model: "@smol" } })
+scope({ begin: { intent: "Review the results", stage: "direct-execution", budget: { read: 3 }, model: "@smol" } })
 ```
 
 Omit `model` or use `null` to inherit the enclosing scope’s model, or the session model when there is no enclosing scope. Closing a scope restores the enclosing model. A combined `end: true` and `begin` inherits from the enclosing scope, not from the scope being closed. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.

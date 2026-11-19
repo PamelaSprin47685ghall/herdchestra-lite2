@@ -4,12 +4,15 @@ import {
 	applyLedgerEvaluation,
 	beginGenerationAfterHandoff,
 	createRelay,
+	firstEvaluationNudge,
 	handoffFailureNudge,
 	handoffFocus,
 	invalidatePromotion,
 	ledgerStats,
 	recordHandoffFailure,
 	relayStatusText,
+	successorOpeningText,
+	successorStartNudge,
 } from "../src/relay/index.mjs";
 
 function phases(tasks) {
@@ -265,12 +268,16 @@ describe("relay text", () => {
 		expect(handoffFailureNudge("boom")).toContain("HANDOFF FAILED: boom");
 	});
 
-	test("the handoff argument demands an independent audit", () => {
+	test("the handoff argument demands both the audit and the successor's own contribution", () => {
 		const relay = { ...createRelay(), generation: 2 };
-		const texts = [handoffFocus(relay)];
+		const texts = [handoffFocus(relay), successorOpeningText(relay, "Report body")];
 		for (const text of texts) {
+			expect(text).toContain("Your mandate has two halves. Both are mandatory.");
+			expect(text).toContain("You serve the user, not the previous holder.");
+			expect(text).toContain("they do not define the task");
+			expect(text).toContain("The user's original request is the only authority.");
 			expect(text).toContain(
-				"You must independently verify the previous holder's work. Do not trust its empty ledger or its conclusion.",
+				"Independently verify the previous holder's work. Do not trust its empty ledger or its conclusion.",
 			);
 			expect(text).toContain(
 				"Re-read the user's original request; inspect the repository, the actual diff, and the tests.",
@@ -281,13 +288,34 @@ describe("relay text", () => {
 			expect(text).toContain(
 				"An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
 			);
+			expect(text).toContain("B. Make your own contribution.");
 			expect(text).toContain(
-				"Summarize the user's requirements without omitting or narrowing them.",
+				"Work that the previous holder never planned",
+			);
+			expect(text).toContain(
+				"The ledger is your own judgment, not an inherited checklist.",
+			);
+			expect(text).toContain(
+				"Do not stop merely because the previous holder's items are marked complete.",
+			);
+			expect(text).toContain(
+				"The user's requirements are the authority for both generations.",
 			);
 			expect(text).toContain(
 				"You do not need to quote the original wording in the ledger or handoff summary.",
 			);
 		}
+		expect(successorStartNudge(relay)).toContain(
+			"You serve the user, not the previous holder. Audit the inherited work, then judge for yourself what the user still needs and do that work.",
+		);
+		expect(firstEvaluationNudge()).toContain(
+			"The ledger must state what the user still needs, not merely what is easy to mark complete.",
+		);
+		expect(
+			relayStatusText({ ...createRelay(), generation: 2 }, null, {
+				action: "handoff",
+			}),
+		).toContain("do not write instructions that bind what it may decide");
 	});
 });
 

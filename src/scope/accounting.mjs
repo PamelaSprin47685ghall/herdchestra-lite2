@@ -2,7 +2,6 @@
 // Every function mutates the state object it receives. No I/O.
 
 import {
-  CONTROL_TOOLS,
   failure,
   isNonEmptyString,
   put,
@@ -15,11 +14,13 @@ import {
 import {
   beatShares,
   formatAmount,
+  isFreeTool,
   normalizeBudget,
   normalizeToolName,
   roundAmount,
   validBudget,
 } from "./budget.mjs";
+import { WORKFLOW_STAGES } from "./stages.mjs";
 
 const STEER_HEADER =
   "You deferred the following findings in this scope. Address them now:";
@@ -54,9 +55,12 @@ function withdrawDefer(scope, toolCallId) {
 }
 
 export function beginScope(state, params) {
-  const { toolCallId, intent, budget } = params || {};
+  const { toolCallId, intent, stage, budget } = params || {};
   if (!isNonEmptyString(intent)) {
     return failure("INVALID_INTENT", "intent must be a non-empty string.");
+  }
+  if (!WORKFLOW_STAGES.includes(stage)) {
+    return failure("INVALID_STAGE", `stage must be one of: ${WORKFLOW_STAGES.join(" | ")}.`);
   }
   const normalized = normalizeBudget(budget);
   if (!validBudget(normalized)) {
@@ -65,7 +69,7 @@ export function beginScope(state, params) {
       "Budget must be a plain object of non-negative integer tool budgets.",
     );
   }
-  const scope = makeScope(state, toolCallId, intent, normalized);
+  const scope = makeScope(state, toolCallId, intent, stage, normalized);
   // Optional model identity: { modelSpec, modelKey, previousModelSpec,
   // previousModelKey, baseModelKey }. Strings or null only.
   const model = isPlainObject(params?.model) ? params.model : null;
@@ -121,7 +125,7 @@ export function chargeTool(state, params) {
   if (!scope) {
     return failure("NOT_IN_SCOPE", "Not in a scope. Call scope with begin first.");
   }
-  if (CONTROL_TOOLS.has(toolName)) {
+  if (isFreeTool(toolName)) {
     return { ok: true, remaining: copyCounts(scope.remaining) };
   }
   if (
@@ -365,7 +369,8 @@ export function markSubsumedDescendants(state, foldedRecords) {
  * scope, clear charges owned by dropped inner scopes, and advance the epoch so
  * later scopes (and the surviving outer scope) never match pre-truncation
  * elder siblings. Deferred findings from dropped scopes move to the outermost
- * scope instead of disappearing.
+ * scope instead of disappearing. Herd mode and pins belong to the session and
+ * survive the boundary.
  */
 export function truncateForHostBoundary(state) {
   if (!state || typeof state !== "object") return false;

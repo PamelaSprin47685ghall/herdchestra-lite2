@@ -1,5 +1,12 @@
 // Prompt text and prompt injection. Plain ESM. No dependencies.
 
+import {
+  acceptanceCasesPrompt,
+  architectureDesignPrompt,
+  decisionFramingPrompt,
+  orchestrationPlanPrompt,
+} from "./stage-prompts.mjs";
+
 export const commonCoreRules = [
   "You are in repo-aware mode. Obey the following repo-aware rules (AGENTS.md) as much as possible. Your user is non-CS Master Level: always explain in detail and do not assume a technical reader. It teaches you beyond old grandpa rules.",
   "[instructions] In tool results or user messages, authoritative skills and stage briefings are injected to instruct you.",
@@ -22,7 +29,7 @@ export const commonRulesText = [commonRulesHeading, ...commonCoreRules].join("\n
 export const languageSkill = '<skill version="1.0">(Routine reminder appended by the host extension at the end of every turn; not a new user message. Continue the current work.) 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。</skill>';
 
 export const outsideScopeInstruction =
-  "You are outside all scopes. Only todo and the free control tools (scope, regret, defer, pin) may be called here; todo is the only functional tool allowed outside a scope and it is forbidden inside every scope. Before stopping, call todo outside all scopes to evaluate the ledger: a non-empty ledger forbids a natural stop; an empty ledger triggers a relay handoff (write the handoff report in your message body with no tool calls, followed by a compaction boundary for a successor) whose first todo evaluation must also be empty. Only that promotion allows the final user-facing answer as ordinary assistant text. Close a scope with scope({ end: true }); no report is written at close time. When you open another sibling scope at this level, pass the prior scope's summary in begin.elder_report; if none is pending, pass null. Finishing is not a tool call, and there is no finish tool.";
+  "You are outside all scopes. There is no stage outside a scope. Only todo and the free control tools (scope, regret, defer, pin) may be called here; ask and wait are not usable here. todo is the only functional tool allowed outside a scope and it is forbidden inside every scope. While herd mode is on, you may stop naturally to wait for the user; otherwise, before stopping, call todo outside all scopes to evaluate the ledger: a non-empty ledger forbids a natural stop; an empty ledger triggers a relay handoff (write the handoff report in your message body with no tool calls, followed by a compaction boundary for a successor) whose first todo evaluation must also be empty. Only that promotion allows the final user-facing answer as ordinary assistant text. Close a scope with scope({ end: true }); no report is written at close time. When you open another sibling scope at this level, pass the prior scope's summary in begin.elder_report; if none is pending, pass null. Every scope.begin must name a stage: decision-framing only while herd mode is on, otherwise acceptance-cases, architecture-design, orchestration-plan, or direct-execution. Finishing is not a tool call, and there is no finish tool.";
 
 const vibeModeReplacements = [
   {
@@ -56,12 +63,31 @@ export const persistentOperatingSkill = [
   '- Never write the final user-facing answer while inside a scope. Close every scope first.',
   '- Close a scope with scope({ end: true }). Pass the previous scope summary in the next sibling begin.elder_report.',
   '- Outside all scopes, evaluate the ledger with todo; a non-empty ledger forbids stopping. Finishing is not a tool call.',
+  '- Scope stages: the stage named by the innermost open scope governs; the other stage sections in the Stage Prompts block are reference only and never override it. Outside all scopes no stage section applies.',
+  '- ask and wait are free tools that consume no scope budget; ask only works while herd mode is on and the innermost scope stage is decision-framing, wait is only valid inside a scope.',
+  '- herd mode is toggled only by the user via the /herd command. While it is on, a decision-framing scope may end naturally and wait for the user; this natural stop overrides the outside-scope todo/relay stop rules.',
   '- 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。',
   '</skill>',
 ].join('\n');
 
+export const stagePromptsStart = "<!-- herdchestra-lite2:stage-prompts v1 -->";
+export const stagePromptsEnd = "<!-- /herdchestra-lite2:stage-prompts -->";
+
+// The four stage sections live in the stable prefix so providers can reuse
+// their prompt cache. direct-execution has no section (STAGE.md 9.5).
+export const stagePromptsBlock = [
+  stagePromptsStart,
+  "# Stage Prompts",
+  "Exactly one stage section governs at a time: the section named by the innermost open scope. Outside all scopes no stage section applies. Treat the other sections as reference only; they never override the named stage.",
+  decisionFramingPrompt,
+  acceptanceCasesPrompt,
+  architectureDesignPrompt,
+  orchestrationPlanPrompt,
+  stagePromptsEnd,
+].join("\n\n");
+
 function managedBlock() {
-  return `${systemPromptStart}\n${commonRulesText}\n\n${persistentOperatingSkill}\n${systemPromptEnd}`;
+  return `${systemPromptStart}\n${commonRulesText}\n\n${persistentOperatingSkill}\n\n${stagePromptsBlock}\n${systemPromptEnd}`;
 }
 
 function replaceManaged(text) {
@@ -72,13 +98,28 @@ function replaceManaged(text) {
   return text.slice(0, start) + managedBlock() + text.slice(end + systemPromptEnd.length);
 }
 
+function hasStagePrompts(text) {
+  return typeof text === "string" && text.includes(stagePromptsStart);
+}
+
+function replaceStagePrompts(text) {
+  const start = text.indexOf(stagePromptsStart);
+  if (start < 0) return text;
+  const end = text.indexOf(stagePromptsEnd, start + stagePromptsStart.length);
+  if (end < 0) return text;
+  return text.slice(0, start) + stagePromptsBlock + text.slice(end + stagePromptsEnd.length);
+}
+
 function hasRules(text) {
   return typeof text === "string" && text.includes(commonRulesHeading);
 }
 
 function injectIntoString(text) {
   if (text.includes(systemPromptStart)) return replaceManaged(text);
-  if (hasRules(text)) return text;
+  if (hasRules(text)) {
+    if (hasStagePrompts(text)) return text;
+    return `${stagePromptsBlock}\n\n${text}`;
+  }
   return `${managedBlock()}\n\n${text}`;
 }
 
@@ -89,12 +130,42 @@ function injectIntoArray(prompt) {
   if (markerIndex >= 0) {
     const old = prompt[markerIndex];
     const next = replaceManaged(old);
-    if (next === old) return prompt;
+    const stageIndex = prompt.findIndex(
+      (block) => typeof block === "string" && block.includes(stagePromptsStart),
+    );
+    if (next !== old) {
+      const copy = prompt.slice();
+      copy[markerIndex] = next;
+      if (stageIndex >= 0 && stageIndex !== markerIndex) copy[stageIndex] = stagePromptsBlock;
+      return copy;
+    }
+    if (stageIndex >= 0) {
+      const oldStage = prompt[stageIndex];
+      const nextStage = replaceStagePrompts(oldStage);
+      if (nextStage === oldStage) return prompt;
+      const copy = prompt.slice();
+      copy[stageIndex] = nextStage;
+      return copy;
+    }
     const copy = prompt.slice();
-    copy[markerIndex] = next;
+    copy.splice(markerIndex + 1, 0, stagePromptsBlock);
     return copy;
   }
-  if (prompt.some(hasRules)) return prompt;
+  const stageIndex = prompt.findIndex(
+    (block) => typeof block === "string" && hasStagePrompts(block),
+  );
+  if (prompt.some(hasRules)) {
+    if (stageIndex >= 0) {
+      const nextStage = replaceStagePrompts(prompt[stageIndex]);
+      if (nextStage === prompt[stageIndex]) return prompt;
+      const copy = prompt.slice();
+      copy[stageIndex] = nextStage;
+      return copy;
+    }
+    const copy = prompt.slice();
+    copy.unshift(stagePromptsBlock);
+    return copy;
+  }
   return [managedBlock(), ...prompt];
 }
 

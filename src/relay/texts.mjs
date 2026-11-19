@@ -17,12 +17,12 @@ function nextStepText(relay, stats, action) {
 			return [
 				"The ledger is empty. A relay handoff is now required.",
 				"DO NOT call any more tools (including todo, scope, or any other tool). Any further tool call will be rejected.",
-				"Write the handoff report immediately in your message body (use whatever format best fits the content). Include the user's requirements without omitting or narrowing them, completed work and verification evidence, unresolved risks, and anything the next generation needs to know to independently audit and continue.",
+				"Write the handoff report immediately in your message body (use whatever format best fits the content). Include the user's requirements without omitting or narrowing them, completed work and verification evidence, unresolved risks, and anything the next generation needs to know to independently audit and continue. Report facts and evidence the successor can verify; do not write instructions that bind what it may decide.",
 			].join(" ");
 		case "rework":
 			return relay.generation === 0
 				? "Your first todo evaluation found open work (rework). Work through the ledger; a non-empty ledger forbids a natural stop."
-				: "Your first todo evaluation as successor found open work. You are in rework and you are not the last holder: finish the work. When the ledger becomes empty, write a handoff report in your message body for the next successor. The next successor's first evaluation must also be empty for it to stop.";
+				: "Your first todo evaluation as successor found open work. You are in rework and you are not the last holder: finish the work. Write the ledger as your own judgment of what the user still needs, not a copy of the previous holder's list. When the ledger becomes empty, write a handoff report in your message body for the next successor. The next successor's first evaluation must also be empty for it to stop.";
 		case "continue":
 			return "The ledger still has open work. Continue those items and evaluate the ledger again with todo. You may not stop while the ledger is non-empty.";
 		default:
@@ -63,18 +63,29 @@ export function relayStatusText(relay, stats, options = {}) {
 const STOP_RULE =
 	"A natural stop is allowed only in one sequence: an empty ledger triggers a self-handoff (write the handoff report in your message body with no tool calls, followed by a compaction boundary for the successor), and the successor's first todo evaluation is also empty. In every case where stopping is not allowed, keep working; never stop silently.";
 
-// The successor must audit the previous holder instead of trusting an empty
-// ledger. These steps are deliberately concrete and repeat in both prompts.
-const INDEPENDENT_AUDIT_EN = [
-	"Independent verification steps (mandatory):",
-	"1. You must independently verify the previous holder's work. Do not trust its empty ledger or its conclusion.",
+// The successor serves the user, not the previous holder. Auditing the
+// inherited ledger is only half of that duty; the other half is the successor's
+// own judgment of what the user still needs. Both halves repeat in every
+// successor prompt so neither one can be read as the whole mandate.
+const SUCCESSOR_MANDATE_EN = [
+	"Your mandate has two halves. Both are mandatory.",
+	"You serve the user, not the previous holder. The previous holder's ledger, report, and plan are claims to audit; they do not define the task. The user's original request is the only authority.",
+	"A. Verify the inheritance.",
+	"1. Independently verify the previous holder's work. Do not trust its empty ledger or its conclusion.",
 	"2. Re-read the user's original request; inspect the repository, the actual diff, and the tests.",
 	"3. Run the relevant tests yourself; look for omitted, stubbed, falsely marked-complete, or silently narrowed work.",
 	"4. An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
+	"B. Make your own contribution.",
+	"5. After the audit, judge for yourself what the user still needs. Work that the previous holder never planned, a better approach, and anything its narrow reading missed are all yours to do.",
+	"6. The ledger is your own judgment, not an inherited checklist. Restructure, add, or drop items so it states what the user actually needs.",
+	"7. Do not stop merely because the previous holder's items are marked complete. Add what the user's request still needs, and verify that it is genuinely satisfied.",
 ].join("\n");
 
 const REQUIREMENTS_REMINDER =
-	"Summarize the user's requirements without omitting or narrowing them. You do not need to quote the original wording in the ledger or handoff summary.";
+	"The user's requirements are the authority for both generations. Summarize them without omitting or narrowing them. You do not need to quote the original wording in the ledger or handoff summary.";
+
+const PINNED_READING_RULE =
+	"Before starting work, use read to read each important document on disk listed in Pinned Context in full. Do not substitute grep excerpts for reading the whole document.";
 
 const SUCCESSOR_RULE =
 	"An empty ledger triggers a relay handoff: the predecessor writes the handoff report directly in its message body, a compaction boundary is placed, and the successor takes over from that report. The successor may first open any number of scopes to investigate, then make its first todo evaluation; todo does not have to be its first tool call. Only a successor whose first todo evaluation is an empty ledger may stop naturally. If successor A's first evaluation is a non-empty ledger, A enters rework; after that, even if A changes the ledger to empty, A is not the last holder and must hand off again to B; only when B's first todo evaluation is empty is stopping allowed.";
@@ -83,13 +94,14 @@ export function handoffFocus(relay) {
 	const current = copyRelay(relay);
 	return [
 		"Relay: empty-ledger handoff.",
-		`Include these relay instructions in the handoff document for generation ${current.generation + 1}: the predecessor submitted an empty ledger; the successor must independently audit it before its first write to todo.`,
+		`Include these relay instructions in the handoff document for generation ${current.generation + 1}: the predecessor submitted an empty ledger; the successor serves the user, so it must independently audit that ledger and then judge for itself what the user still needs before its first write to todo.`,
 		SUCCESSOR_RULE,
 		STOP_RULE,
-		INDEPENDENT_AUDIT_EN,
+		SUCCESSOR_MANDATE_EN,
 		REQUIREMENTS_REMINDER,
+		PINNED_READING_RULE,
 		`Previous generation: ${current.generation}. Its ledger was empty when it called the built-in /handoff.`,
-		"Your first real task is an independent audit of that empty ledger. Do not trust the previous holder blindly: check whether unfinished user-requested work was marked completed or abandoned.",
+		"Audit that empty ledger without trusting it: check whether unfinished user-requested work was marked completed or abandoned. Then judge for yourself what the user still needs, and do that work.",
 		"You may open any number of scopes to investigate before your first todo evaluation; todo need not be your first tool call. todo itself is forbidden inside every scope. Close every scope before calling todo.",
 		"Write every ledger item so the next agent can understand the work: the user requirement, acceptance evidence, unresolved risks, and the next concrete action.",
 		"Only your first todo evaluation being an empty ledger promotes you and allows a natural stop. If it is non-empty, you enter rework and must hand off again later; you are not the last holder.",
@@ -108,7 +120,7 @@ export function handoffEmptyReportNudge() {
 	].join("\n");
 }
 
-export function successorOpeningText(relay, report) {
+export function successorOpeningText(relay, report, pins = []) {
 	const current = copyRelay(relay);
 	const nextGeneration = current.generation + 1;
 	const trimmed = typeof report === "string" ? report.trim() : "";
@@ -120,23 +132,29 @@ export function successorOpeningText(relay, report) {
 		`Previous generation: ${current.generation}. Its ledger was empty when it wrote the handoff report above.`,
 		SUCCESSOR_RULE,
 		STOP_RULE,
-		INDEPENDENT_AUDIT_EN,
+		SUCCESSOR_MANDATE_EN,
 		REQUIREMENTS_REMINDER,
+		PINNED_READING_RULE,
 		"You may open any number of scopes to investigate before your first todo evaluation; todo need not be your first tool call. todo itself is forbidden inside every scope. Close every scope before calling todo.",
 		"Only your first todo evaluation being an empty ledger promotes you and allows a natural stop. If it is non-empty, you enter rework and must hand off again later; you are not the last holder.",
 		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",
+		"",
+		"## Pinned Context",
+		"",
+		pins.length > 0 ? pins.join("\n\n---\n\n") : "No pinned records.",
 	].join("\n");
 }
 
 export function successorStartNudge(relay) {
 	const current = copyRelay(relay);
-	return `Generation ${current.generation} takeover: read the handoff report at the top of the compacted context and begin your independent audit now. Open scopes to verify the work if needed, then close all scopes and call todo to evaluate the ledger.`;
+	return `Generation ${current.generation} takeover: read the handoff report at the top of the compacted context. You serve the user, not the previous holder. Audit the inherited work, then judge for yourself what the user still needs and do that work. Open scopes to verify the work if needed, then close all scopes and call todo to evaluate the ledger you write.`;
 }
 
 export function firstEvaluationNudge() {
 	return [
 		"You are outside all scopes, so todo is available and is the only functional tool you may call. Before stopping, evaluate the ledger with todo. You may open scopes first to investigate, but todo must be called after every scope closes.",
 		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",
+		"The ledger must state what the user still needs, not merely what is easy to mark complete.",
 		STOP_RULE,
 		"Do not write the final user-facing answer until the relay reaches a promoted empty-ledger successor evaluation.",
 	].join("\n");

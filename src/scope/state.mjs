@@ -52,7 +52,7 @@ function copyDefers(list) {
   }));
 }
 
-function makeScope(state, toolCallId, intent, budget) {
+function makeScope(state, toolCallId, intent, stage, budget) {
   const spent = {};
   for (const tool of Reflect.ownKeys(budget)) {
     if (typeof tool === "string") put(spent, tool, 0);
@@ -66,6 +66,7 @@ function makeScope(state, toolCallId, intent, budget) {
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
     intent: intent.trim(),
+    stage,
     beginToolCallId: typeof toolCallId === "string" ? toolCallId : "",
     budget: copyCounts(budget),
     remaining: copyCounts(budget),
@@ -98,6 +99,8 @@ export function createState() {
     charges: {},
     regrets: [],
     collapses: [],
+    herdMode: false,
+    pins: [],
     relay: createRelay(),
     // Persisted base model identity. The base model lives outside all
     // scopes; the host integration fills these from preparseModelSpec.

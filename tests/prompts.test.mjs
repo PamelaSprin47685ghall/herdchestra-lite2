@@ -7,13 +7,14 @@ import {
   outsideScopeInstruction,
   persistentOperatingSkill,
   rewriteVibeModeContext,
+  stagePromptsBlock,
 } from "../src/host/index.mjs";
 import { BUDGET_DESCRIPTION } from "../src/tools/index.mjs";
 
 const HEADING = "# Repo-aware Rules";
 const START = "<!-- herdchestra-lite2:system-prompt v1 -->";
 const END = "<!-- /herdchestra-lite2:system-prompt -->";
-const BLOCK = `${START}\n${commonRulesText}\n\n${persistentOperatingSkill}\n${END}`;
+const BLOCK = `${START}\n${commonRulesText}\n\n${persistentOperatingSkill}\n\n${stagePromptsBlock}\n${END}`;
 
 describe("languageSkill", () => {
   test("holds the exact Chinese instruction now carried by the system prompt", () => {
@@ -47,10 +48,30 @@ describe("BUDGET_DESCRIPTION", () => {
 });
 
 describe("outsideScopeInstruction", () => {
-  test("is the exact instruction for work outside every scope", () => {
-    expect(outsideScopeInstruction).toBe(
-      "You are outside all scopes. Only todo and the free control tools (scope, regret, defer, pin) may be called here; todo is the only functional tool allowed outside a scope and it is forbidden inside every scope. Before stopping, call todo outside all scopes to evaluate the ledger: a non-empty ledger forbids a natural stop; an empty ledger triggers a relay handoff (write the handoff report in your message body with no tool calls, followed by a compaction boundary for a successor) whose first todo evaluation must also be empty. Only that promotion allows the final user-facing answer as ordinary assistant text. Close a scope with scope({ end: true }); no report is written at close time. When you open another sibling scope at this level, pass the prior scope's summary in begin.elder_report; if none is pending, pass null. Finishing is not a tool call, and there is no finish tool.",
-    );
+  test("states the outside-scope rule, free tools, and the stage requirement", () => {
+    expect(outsideScopeInstruction).toContain("You are outside all scopes.");
+    expect(outsideScopeInstruction).toContain("scope, regret, defer, pin");
+    expect(outsideScopeInstruction).toContain("ask and wait are not usable here");
+    expect(outsideScopeInstruction).toContain("Every scope.begin must name a stage");
+    expect(outsideScopeInstruction).toContain("Finishing is not a tool call");
+  });
+});
+
+describe("stage prompts", () => {
+  test("embeds the four stage sections and omits direct-execution", () => {
+    expect(stagePromptsBlock).toContain("[Stage: decision-framing]");
+    expect(stagePromptsBlock).toContain("[Stage: acceptance-cases]");
+    expect(stagePromptsBlock).toContain("[Stage: architecture-design]");
+    expect(stagePromptsBlock).toContain("[Stage: orchestration-plan]");
+    expect(stagePromptsBlock).not.toContain("[Stage: direct-execution]");
+    expect(stagePromptsBlock).not.toMatch(/\bS[1-5]\b/);
+  });
+
+  test("keeps runtime state out of the stable prefix", () => {
+    expect(stagePromptsBlock).not.toContain("Budget");
+    expect(stagePromptsBlock).not.toContain("herdMode");
+    expect(stagePromptsBlock).not.toContain("elder_report");
+    expect(stagePromptsBlock).not.toContain("Generation");
   });
 });
 
@@ -179,12 +200,14 @@ describe("injectSystemPrompt with a string", () => {
     expect(twice).toBe(once);
   });
 
-  test("leaves a host prompt that already carries the rules but not our markers", () => {
+  test("adds only the stage prompts to a host prompt that already carries the rules", () => {
     const hostPrompt = `${HEADING}\n\nSomebody else's rules.`;
     const output = injectSystemPrompt(hostPrompt);
 
-    expect(output).toBe(hostPrompt);
+    expect(output).toContain(stagePromptsBlock);
+    expect(output.endsWith(hostPrompt)).toBe(true);
     expect(output).not.toContain(START);
+    expect(injectSystemPrompt(output)).toBe(output);
   });
 
   test("replaces a stale managed block in place", () => {
@@ -233,10 +256,13 @@ describe("injectSystemPrompt with an array", () => {
     expect(twice).toBe(once);
   });
 
-  test("leaves an array that already carries the rules but not our markers", () => {
+  test("adds only the stage prompts to an array that already carries the rules", () => {
     const host = ["First block.", `${HEADING}\nbody`];
-    expect(injectSystemPrompt(host)).toBe(host);
-    expect(injectSystemPrompt(host).join("\n")).not.toContain(START);
+    const output = injectSystemPrompt(host);
+    expect(output[0]).toBe(stagePromptsBlock);
+    expect(output.slice(1)).toEqual(host);
+    expect(output.join("\n")).not.toContain(START);
+    expect(injectSystemPrompt(output)).toEqual(output);
   });
 
   test("replaces a stale managed block in the middle of the array", () => {

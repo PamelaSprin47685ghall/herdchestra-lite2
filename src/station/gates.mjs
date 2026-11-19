@@ -7,6 +7,7 @@ import {
 	currentScope,
 	truncateForHostBoundary,
 } from "../scope/index.mjs";
+import { DECISION_FRAMING } from "../scope/stages.mjs";
 import { beatKey, toolCalls } from "../transcript/index.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../host/policy.mjs";
 import { injectSystemPrompt } from "../host/prompts.mjs";
@@ -24,7 +25,7 @@ import {
 	hostBoundaryKey,
 	parseArgs,
 } from "./messages.mjs";
-import { insideScopeText } from "./texts.mjs";
+import { herdModeSteer, insideScopeText } from "./texts.mjs";
 
 function onAssistantMessage(station, message, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
@@ -33,7 +34,8 @@ function onAssistantMessage(station, message, ctx) {
 		station.preparingMessage = message;
 		station.rememberCallGroups(message);
 		station.processAssistantMessage(message, { persisted: false });
-		if (station.state.relay?.handoffPending && toolCalls(message).length === 0) {
+		if (!station.state.herdMode && !currentScope(station.state) &&
+			station.state.relay?.handoffPending && toolCalls(message).length === 0) {
 			const text = message?.content
 				?.filter((block) => block?.type === "text")
 				.map((block) => block.text)
@@ -59,7 +61,8 @@ function onMessageEnd(station, event, ctx) {
 			const found = station.assistantForToolCall(controls[0].id);
 			station.processAssistantMessage(message, { persisted: Boolean(found) });
 		}
-		if (station.state.relay?.handoffPending && toolCalls(message).length === 0) {
+		if (!station.state.herdMode && !currentScope(station.state) &&
+			station.state.relay?.handoffPending && toolCalls(message).length === 0) {
 			const text = message?.content
 				?.filter((block) => block?.type === "text")
 				.map((block) => block.text)
@@ -74,22 +77,27 @@ function onMessageEnd(station, event, ctx) {
 }
 
 function onToolCall(station, event, ctx, atDispatch = false) {
-	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
+	const { toolName, toolCallId } = event;
+	if (station.policy(ctx) === READ_ONLY_SUBAGENT && toolName !== "ask" && toolName !== "wait") {
+		return undefined;
+	}
 	try {
-		// During a pending handoff, block ALL tool calls immediately before any
-		// dispatch deferral, and demand the handoff report in the message body.
-		if (station.state.relay?.handoffPending) {
+		const state = station.state;
+		const scope = currentScope(state);
+		// A resumed handoff can have a scope left open from herd mode. Let it
+		// close before blocking all tools; handleScopeCall still refuses begin.
+		if (!state.herdMode && state.relay?.handoffPending && !(scope && toolName === "scope")) {
 			return {
 				block: true,
 				reason: handoffToolBlockedReason(),
 			};
 		}
-		if (!atDispatch && station.deferScopePreflight(event.toolCallId, event.toolName)) {
+		if (!atDispatch && station.deferScopePreflight(toolCallId, toolName)) {
 			return undefined;
 		}
-		station.processControlsForTool(event.toolCallId);
-		if (event.toolName === "todo") {
-			if (currentScope(station.state)) {
+		station.processControlsForTool(toolCallId);
+		if (toolName === "todo") {
+			if (scope) {
 				return {
 					block: true,
 					reason:
@@ -99,38 +107,44 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 			station.persist();
 			return undefined;
 		}
-		if (CONTROL_TOOLS.has(event.toolName)) {
+		if (CONTROL_TOOLS.has(toolName)) {
 			const args = parseArgs({
 				arguments: event.input ?? event.arguments ?? {},
 			});
-			if (!station.handled.has(event.toolCallId)) {
-				if (event.toolName === "regret") {
-					station.directRegret(event.toolCallId, args);
-				} else if (event.toolName === "defer") {
-					station.directDefer(event.toolCallId, args);
-				} else if (event.toolName === "pin") {
-					station.directPin(event.toolCallId, args);
+			if (!station.handled.has(toolCallId)) {
+				if (toolName === "regret") {
+					station.directRegret(toolCallId, args);
+				} else if (toolName === "defer") {
+					station.directDefer(toolCallId, args);
 				}
 			}
 			return undefined;
 		}
-		if (!currentScope(station.state)) {
+		if (toolName === "ask") {
+			if (state.herdMode && scope?.stage === DECISION_FRAMING) return undefined;
+			return {
+				block: true,
+				reason: 'ask is allowed only when the user has enabled /herd and the current scope has stage: "decision-framing".',
+			};
+		}
+		if (!scope) {
 			return {
 				block: true,
 				reason:
-					"Not in a scope. Outside all scopes only todo and the free control tools (scope, regret, defer, pin) may be called. Open a scope with scope({ begin: { intent, budget } }) before using any other tool.",
+					"Not in a scope. Outside all scopes only todo and the free control tools (scope, regret, defer, pin) may be called. Open a scope with scope({ begin: { intent, stage, budget, elder_report } }) before using any other tool.",
 			};
 		}
-		const found = station.assistantForToolCall(event.toolCallId);
+		if (toolName === "wait") return undefined;
+		const found = station.assistantForToolCall(toolCallId);
 		if (found) station.rememberCallGroups(found.message);
 		const groupKey =
-			station.callGroups.get(event.toolCallId) ??
+			station.callGroups.get(toolCallId) ??
 			(found ? beatKey(found.message) : undefined);
-		const beatTools = toolCalls(found?.message ?? station.messageForToolCall(event.toolCallId))
+		const beatTools = toolCalls(found?.message ?? station.messageForToolCall(toolCallId))
 			.map((call) => call.name);
-		const charged = chargeTool(station.state, {
-			toolCallId: event.toolCallId,
-			toolName: event.toolName,
+		const charged = chargeTool(state, {
+			toolCallId,
+			toolName,
 			groupKey,
 			beatTools,
 		});
@@ -167,6 +181,7 @@ function onContext(station, messages, ctx) {
 }
 
 function onSessionStop(station, ctx) {
+	if (station.state.herdMode) return undefined;
 	if (!station.relayOn(ctx)) return undefined;
 	const scope = currentScope(station.state);
 	if (scope) return continueFeedback(insideScopeText(station.state));
@@ -234,10 +249,17 @@ function onBeforeAgentStart(station, event, ctx) {
 	return result;
 }
 
+function onHerdCommand(station) {
+	station.state.herdMode = !station.state.herdMode;
+	station.persist();
+	station.deliverSteer(herdModeSteer(station.state.herdMode));
+}
+
 export {
 	onAssistantMessage,
 	onMessageEnd,
 	onToolCall,
+	onHerdCommand,
 	onContext,
 	onSessionStop,
 	onSessionSwitch,

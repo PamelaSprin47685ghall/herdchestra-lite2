@@ -61,12 +61,10 @@ import {
 } from "../relay/index.mjs";
 import {
 	handleDeferCall,
-	handlePinCall,
 	handleRegretCall,
 } from "./controls.mjs";
 import {
 	directDefer,
-	directPin,
 	directRegret,
 	directScope,
 	executeDefer,
@@ -92,6 +90,7 @@ import {
 	onAssistantMessage,
 	onBeforeAgentStart,
 	onContext,
+	onHerdCommand,
 	onMessageEnd,
 	onSessionCompact,
 	onSessionStop,
@@ -614,11 +613,6 @@ export class SessionStation {
 		for (const call of earlyControls) {
 			if (call.name === "regret") continue;
 			if (this.processedCalls.has(call.id)) continue;
-			if (call.name === "pin") {
-				this.setHandled(call.id, handlePinCall());
-				this.processedCalls.add(call.id);
-				continue;
-			}
 			if (call.name === "defer") {
 				this.setHandled(call.id, handleDeferCall(this, call));
 				this.processedCalls.add(call.id);
@@ -681,13 +675,10 @@ export class SessionStation {
 		return directDefer(this, toolCallId, params);
 	}
 
-	directPin(toolCallId, params) {
-		return directPin(this, toolCallId, params);
-	}
-
 	// -- Nudge -----------------------------------------------------------------
 
 	maybeNudge(message, ctx) {
+		if (this.state.herdMode) return;
 		if (!message || message.role !== "assistant") return;
 		if (!this.relayOn(ctx)) return;
 		if (toolCalls(message).length > 0) return;
@@ -796,6 +787,10 @@ export class SessionStation {
 	}
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------
+
+	onHerdCommand() {
+		return onHerdCommand(this);
+	}
 
 	onAssistantMessage(message, ctx) {
 		return onAssistantMessage(this, message, ctx);

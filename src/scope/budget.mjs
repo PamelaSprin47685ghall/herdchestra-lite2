@@ -13,6 +13,10 @@ import {
 // unit however its tools divide it.
 const CHARGE_SCALE = 100;
 
+export function isFreeTool(name) {
+  return CONTROL_TOOLS.has(name) || name === "todo" || name === "ask" || name === "wait";
+}
+
 function validBudget(budget) {
   if (!isPlainObject(budget)) return false;
   for (const tool of Reflect.ownKeys(budget)) {
@@ -54,14 +58,14 @@ export function formatAmount(value) {
 /**
  * Split one budget unit across the tools called in a single assistant
  * message, in proportion to their call counts. The shares sum to exactly one
- * unit. Control tools and `todo` spend nothing and take no share.
+ * unit. Free tools take no share.
  */
 export function beatShares(toolNames) {
   const counts = new Map();
   let total = 0;
   for (const name of Array.isArray(toolNames) ? toolNames : []) {
     if (typeof name !== "string" || name === "") continue;
-    if (CONTROL_TOOLS.has(name) || name === "todo") continue;
+    if (isFreeTool(name)) continue;
     const tool = normalizeToolName(name);
     counts.set(tool, (counts.get(tool) ?? 0) + 1);
     total += 1;

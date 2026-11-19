@@ -1,17 +1,29 @@
 // Station texts: every model-facing scope string. Pure. No I/O.
 
 import { budgetText, currentScope } from "../scope/index.mjs";
+import { DECISION_FRAMING, NORMAL_STAGES } from "../scope/stages.mjs";
 import { handoffToolBlockedReason } from "../relay/index.mjs";
 
+function stageLine(scope) {
+	if (scope.stage === "direct-execution") {
+		return "Stage: direct-execution. This stage has no stage prompt; follow the orchestration-plan artifact.";
+	}
+	return `Stage: ${scope.stage}. Follow the [Stage: ${scope.stage}] section in your system prompt; the other stage sections do not apply inside this scope.`;
+}
+
 function beginText(scope) {
+	const framing = scope.stage === DECISION_FRAMING;
 	return [
 		"You are now inside this scope.",
 		`Intent: ${scope.intent}`,
+		stageLine(scope),
 		`Budget (innermost scope only): ${budgetText(scope) || "none"}.`,
-		"Only the innermost scope's budget is used. A tool not listed in the budget has zero budget calls. scope, regret, defer, and pin are free.",
-		"todo is free but forbidden inside any active scope. Close every scope before updating the ledger; a natural stop requires a successful todo evaluation outside all scopes.",
-		"Calls in one assistant message spend at most one unit in total, split across the tools used in proportion to their call counts and rounded to two decimals. A tool whose balance runs out is blocked while the rest of the message still runs. Budget and spend by assistant turns.",
-		"Do not write the final user-facing answer while inside a scope. Close every scope first; only after every scope closes may you answer the user.",
+		"Only the innermost scope's budget is used. An unlisted budgeted tool has zero budget calls. scope, regret, defer, pin, ask, and wait are free where allowed.",
+		"todo is free but forbidden inside any active scope. Close every scope before updating the ledger.",
+		"Calls in one assistant message spend at most one unit in total, split across budgeted tools by call count and rounded to two decimals. A tool whose balance runs out is blocked while the rest of the message still runs.",
+		framing
+			? "While herd mode is on, you may stop here to wait for the user's input."
+			: "Do not write the final user-facing answer while inside a scope. Close every scope first.",
 		"Close with scope({ end: true }). This scope stays visible as the hot workbench. When opening its next sibling, pass its summary in begin.elder_report.",
 	].join("\n");
 }
@@ -25,6 +37,7 @@ function endText(
 	transitioning = false,
 	remainingScope = null,
 	relayOn = true,
+	herdMode = false,
 ) {
 	const lines = [];
 	if (transitioning) {
@@ -33,6 +46,7 @@ function endText(
 		lines.push(
 			`Scope closed. You are back inside the enclosing scope: ${remainingScope.intent} (remaining budget: ${budgetText(remainingScope) || "none"}).`,
 		);
+		if (remainingScope.stage) lines.push(stageLine(remainingScope));
 	} else {
 		lines.push("Scope closed. You are outside all scopes.");
 	}
@@ -68,7 +82,9 @@ function endText(
 		}
 	}
 	if (!transitioning) {
-		if (remainingScope) {
+		if (herdMode) {
+			lines.push("Herd mode is on. You may stop and wait for the user's input.");
+		} else if (remainingScope) {
 			lines.push(
 				"Do not write the final user-facing answer yet. Continue inside the enclosing scope, or close it when the whole task is complete. Finishing is not a tool call.",
 			);
@@ -99,10 +115,23 @@ function regretText(applied) {
 	return lines.join("\n");
 }
 
+function herdModeSteer(enabled) {
+	if (enabled) {
+		return 'Herd mode is on. Finish the current work unit promptly and open a scope with stage: "decision-framing". With that scope innermost, ask is allowed. You may stop naturally while herd mode is on.';
+	}
+	return `Herd mode is off. Close any decision-framing scopes promptly. New scopes may use only ${NORMAL_STAGES.join(" | ")}. ask is disabled and the relay resumes its normal stop rules.`;
+}
+
+function leaveFramingText(scope) {
+	return scope.stage === DECISION_FRAMING
+		? " Herd mode is off. Leave decision-framing by closing this scope."
+		: "";
+}
+
 function insideScopeNudge(state) {
 	const scope = currentScope(state);
 	if (!scope) return "";
-	return `You are still inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Do not write the final user-facing conclusion. Continue the task or close it with scope({ end: true }). Close all scopes before using todo. Only after the relay allows stopping may you write the final user-facing answer.`;
+	return `You are still inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}.${leaveFramingText(scope)} Do not write the final user-facing conclusion. Continue the task or close it with scope({ end: true }). Close all scopes before using todo. Only after the relay allows stopping may you write the final user-facing answer.`;
 }
 
 /** Dynamic, persistent receipt. Appended to history only when text changes. */
@@ -113,9 +142,14 @@ export function skillReceiptText(state, relayOn = true) {
 			`You are inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Remaining budget (innermost scope only): ${budgetText(scope) || "none"}.`,
 		]
 		: ["You are outside all scopes."];
-	if (relayOn) {
+	lines.push(`Herd mode: ${state.herdMode ? "on" : "off"}.`);
+	if (scope?.stage) lines.push(`Stage: ${scope.stage}.`);
+	if (state.herdMode) {
+		lines.push('New scopes must use stage: "decision-framing". ask is allowed only when that stage is innermost. You may stop naturally to wait for the user.');
+	} else if (relayOn) {
+		if (scope?.stage === DECISION_FRAMING) lines.push("Close the decision-framing scope; herd mode is off.");
 		if (state.relay?.handoffPending) {
-			lines.push(handoffToolBlockedReason());
+			lines.push(scope ? "Close all scopes before writing the pending relay handoff report." : handoffToolBlockedReason());
 		} else if (!scope && state.relay?.canStop) {
 			lines.push("The relay allows you to stop. Write the final answer in your message body.");
 		} else {
@@ -130,13 +164,14 @@ export function skillReceiptText(state, relayOn = true) {
 function insideScopeText(state) {
 	const scope = currentScope(state);
 	if (!scope) return "";
-	return `You are still inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}. Do not write the final user-facing conclusion. Continue the task or close the scope. todo is forbidden inside every scope; close every scope before evaluating the ledger.`;
+	return `You are still inside scope level ${state.scopes.length}: ${JSON.stringify(scope.intent)}.${leaveFramingText(scope)} Do not write the final user-facing conclusion. Continue the task or close the scope. todo is forbidden inside every scope; close every scope before evaluating the ledger.`;
 }
 
 export {
 	beginText,
 	endText,
 	regretText,
+	herdModeSteer,
 	insideScopeNudge,
 	insideScopeText,
 };

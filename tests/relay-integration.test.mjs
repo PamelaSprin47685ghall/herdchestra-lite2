@@ -562,7 +562,7 @@ describe("relay integration", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
 		);
 		const blocked = await runAssistant(
 			host,
@@ -600,7 +600,7 @@ describe("relay integration", () => {
 	test("scope barriers preserve todo order when the host prepares the entire batch first", async () => {
 		const { host, ctx } = await start();
 		const open = call("b1", "scope", {
-			begin: { intent: "work", budget: { read: 1 }, elder_report: null },
+			begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null },
 		});
 		const [before, outsideRead, opened, insideRead, inside] = await runAssistant(host, ctx, assistant([
 			call("t1", "todo", {
@@ -633,7 +633,7 @@ describe("relay integration", () => {
 		const [todo, scope, read] = await runAssistant(host, ctx, assistant([
 			call("t1", "todo", { op: "init", list: [] }),
 			call("b1", "scope", {
-				begin: { intent: "later", budget: { read: 1 }, elder_report: null },
+				begin: { intent: "later", stage: "architecture-design", budget: { read: 1 }, elder_report: null },
 			}),
 			call("r1", "read", { path: "must-not-run" }),
 		]), { prepareAll: true });
@@ -710,7 +710,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([
 				call("t_view", "todo", { op: "view" }),
-				call("s_begin", "scope", { begin: { intent: "sneak", budget: { read: 1 }, elder_report: null } }),
+				call("s_begin", "scope", { begin: { intent: "sneak", stage: "direct-execution", budget: { read: 1 }, elder_report: null } }),
 				call("r_read", "read", { path: "a" }),
 			]),
 		);
@@ -735,7 +735,10 @@ describe("relay integration", () => {
 		expect(stateFor(ctx).state.relay.handoffPending).toBe(false);
 		expect(countHandoffCompactions(manager)).toBe(1);
 		expect(session.agent.state.messages[0].content[0].text).toContain(reportBody);
-		expect(session.agent.state.messages[0].content[0].text).toContain("Independent verification steps");
+		expect(session.agent.state.messages[0].content[0].text).toContain("Your mandate has two halves");
+		expect(session.agent.state.messages[0].content[0].text).toContain(
+			"You serve the user, not the previous holder.",
+		);
 
 		const view = await runAssistant(
 			host,
@@ -889,7 +892,7 @@ describe("relay integration", () => {
 		await runAssistant(
 			inScope.host,
 			inScope.ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
 		);
 		const scoped = await emitStop(inScope.host, inScope.ctx);
 		expect(scoped.continue).toBe(true);
@@ -903,7 +906,7 @@ describe("relay integration", () => {
 		const blocked = await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "early", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b1", "scope", { begin: { intent: "early", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
 		);
 		expect(blocked[0].blocked).toBe(true);
 		expect(blocked[0].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
@@ -921,7 +924,7 @@ describe("relay integration", () => {
 		const allowed = await runAssistant(
 			fresh.host,
 			fresh.ctx,
-			assistant([call("b2", "scope", { begin: { intent: "audit", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b2", "scope", { begin: { intent: "audit", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null } })]),
 		);
 		expect(allowed[0].blocked).toBe(false);
 	});
@@ -1033,7 +1036,7 @@ describe("scope model switching", () => {
 			const [entry] = await runAssistant(host, ctx, assistant([call(id, "scope", args)]));
 			return entry.result;
 		};
-		const begin = (model, elder_report = null) => ({ intent: "model check", budget: { read: 1 }, model, elder_report });
+		const begin = (model, elder_report = null) => ({ intent: "model check", stage: "direct-execution", budget: { read: 1 }, model, elder_report });
 		return { host, ctx, session, switches, scope, begin };
 	}
 
@@ -1181,7 +1184,7 @@ describe("host truncation", () => {
 			started.ctx,
 			assistant([
 				call("b1", "scope", {
-					begin: { intent: "outer", budget: { read: 2 }, elder_report: null },
+					begin: { intent: "outer", stage: "direct-execution", budget: { read: 2 }, elder_report: null },
 				}),
 			]),
 		);
@@ -1190,7 +1193,7 @@ describe("host truncation", () => {
 			started.ctx,
 			assistant([
 				call("b2", "scope", {
-					begin: { intent: "inner", budget: { read: 2 }, elder_report: null },
+					begin: { intent: "inner", stage: "orchestration-plan", budget: { read: 2 }, elder_report: null },
 				}),
 			]),
 		);
@@ -1357,7 +1360,7 @@ describe("handoff transaction recovery", () => {
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("b_pre", "scope", { begin: { intent: "predecessor work", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b_pre", "scope", { begin: { intent: "predecessor work", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
 		);
 		await runAssistant(
 			host,
@@ -1392,7 +1395,7 @@ describe("handoff transaction recovery", () => {
 		const auditBegin = await runAssistant(
 			host,
 			ctx,
-			assistant([call("b_audit", "scope", { begin: { intent: "audit", budget: { read: 1 }, elder_report: null } })]),
+			assistant([call("b_audit", "scope", { begin: { intent: "audit", stage: "direct-execution", budget: { read: 1 }, elder_report: null } })]),
 		);
 		expect(auditBegin[0].blocked).toBe(false);
 		expect(auditBegin[0].result.isError).toBe(false);

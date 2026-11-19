@@ -57,7 +57,7 @@ function captureHandoffReport(station, text) {
 function commitSelfHandoff(station, ctx, report) {
 	const relay = station.state.relay;
 	if (!relay || !relay.handoffPending || relay.canStop) return { ok: false };
-	const opening = successorOpeningText(relay, report);
+	const opening = successorOpeningText(relay, report, station.state.pins);
 	const manager = station.manager ?? ctx?.sessionManager ?? null;
 	const compacted = appendHandoffCompaction(
 		manager,

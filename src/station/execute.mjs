@@ -1,6 +1,7 @@
 // Station execute cores. Scope changes happen only at the execution barrier.
 
 import { findToolCallIndex } from "../transcript/index.mjs";
+import { handoffToolBlockedReason } from "../relay/index.mjs";
 import { errorResult } from "../tools/results.mjs";
 import {
 	handleDeferCall,
@@ -40,10 +41,12 @@ function executeDefer(station, toolCallId, params) {
 function executePin(station, toolCallId, params) {
 	const cached = station.handled.get(toolCallId);
 	if (cached) return cached;
-	station.processControlsForTool(toolCallId);
-	const processed = station.handled.get(toolCallId);
-	if (processed) return processed;
-	return directPin(station, toolCallId, params);
+	if (!station.state.herdMode && station.state.relay?.handoffPending) {
+		return errorResult("RELAY_HANDOFF_PENDING", handoffToolBlockedReason());
+	}
+	const result = handlePinCall(station, { id: toolCallId, arguments: params });
+	station.setHandled(toolCallId, result);
+	return result;
 }
 
 function directScope(station, toolCallId, params, ctx) {
@@ -114,19 +117,6 @@ function directDefer(station, toolCallId, params) {
 	return result;
 }
 
-function directPin(station, toolCallId, params) {
-	const found = station.assistantForToolCall(toolCallId);
-	if (found) {
-		station.processAssistantMessage(found.message, { persisted: true });
-		const cached = station.handled.get(toolCallId);
-		if (cached) return cached;
-	}
-	const result = handlePinCall();
-	station.setHandled(toolCallId, result);
-	station.processedCalls.add(toolCallId);
-	return result;
-}
-
 export {
 	executeScope,
 	executeRegret,
@@ -135,5 +125,4 @@ export {
 	directScope,
 	directRegret,
 	directDefer,
-	directPin,
 };

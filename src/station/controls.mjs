@@ -14,6 +14,7 @@ import {
   sealClosedParentChildren,
   scopeOrder,
 } from "../scope/index.mjs";
+import { DECISION_FRAMING, NORMAL_STAGES } from "../scope/stages.mjs";
 import { applyCollapses, findBegin, findToolCallIndex } from "../transcript/index.mjs";
 import { invalidatePromotion } from "../relay/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
@@ -66,7 +67,17 @@ function handleDeferCall(station, call) {
   return textResult("OK");
 }
 
-function handlePinCall() {
+function handlePinCall(station, call) {
+  const args = parseArgs(call);
+  const lines = [];
+  for (const label of ["Assumption", "Deduction", "Induction", "Finding", "Conclusion"]) {
+    const text = trimText(args[label.toLowerCase()]);
+    if (text) lines.push(`**${label}:** ${text}`);
+  }
+  if (lines.length > 0) {
+    station.state.pins.push(lines.join("\n\n"));
+    station.persist();
+  }
   return textResult("OK");
 }
 
@@ -105,19 +116,27 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     );
   }
   // A preceding todo can request handoff after batch preflight.
-  if (hasBegin && state.relay?.handoffPending) {
+  if (hasBegin && !state.herdMode && state.relay?.handoffPending) {
     return errorResult(
       "RELAY_HANDOFF_PENDING",
       "A relay handoff is pending. Do not open a new scope; wait for the successor.",
     );
   }
 
+  const stage = args.begin?.stage;
   // Pre-validate an opening scope without touching live state so a failed
   // begin cannot damage the scope being closed in a combined call.
   if (hasBegin) {
+    if (state.herdMode && stage !== DECISION_FRAMING) {
+      return errorResult("INVALID_STAGE", `Herd mode is on. Only stage: "${DECISION_FRAMING}" can open.`);
+    }
+    if (!state.herdMode && !NORMAL_STAGES.includes(stage)) {
+      return errorResult("INVALID_STAGE", `Herd mode is off. Choose a stage: ${NORMAL_STAGES.join(" | ")}.`);
+    }
     const validation = beginScope(createState(), {
       toolCallId: call.id,
       intent: args.begin?.intent,
+      stage,
       budget: args.begin?.budget,
     });
     if (!validation.ok) return errorResult(validation.code, validation.reason);
@@ -181,10 +200,11 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     const out = beginScope(state, {
       toolCallId: call.id,
       intent: args.begin?.intent,
+      stage,
       budget: args.begin?.budget,
     });
     if (!out.ok) return errorResult(out.code, out.reason);
-    state.relay = invalidatePromotion(state.relay);
+    if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
     attachModel(station, out.scope, target, outer, from);
     out.scope.preBeginInputTokens =
       Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
@@ -308,17 +328,19 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     steerSent,
     hasBegin,
     remainingScope,
-    station.relayReady(),
+    station.relayReady() && !state.herdMode,
+    state.herdMode,
   );
   if (hasBegin) {
     const opened = beginScope(state, {
       toolCallId: call.id,
       intent: args.begin.intent,
+      stage,
       budget: args.begin.budget,
     });
     text += `\n\n${beginText(opened.scope)}`;
     if (opened.ok) {
-      state.relay = invalidatePromotion(state.relay);
+      if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
       attachModel(station, opened.scope, target, outer, from);
       opened.scope.preBeginInputTokens =
         Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;

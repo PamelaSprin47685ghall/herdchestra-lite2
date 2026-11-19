@@ -4,6 +4,7 @@
  */
 
 import { createStationRegistry, setActiveRegistry } from "../station/index.mjs";
+import { wireCommands } from "./commands.mjs";
 import { buildTickets } from "./tickets.mjs";
 import { installCapture } from "./capture.mjs";
 import { wireHooks } from "./hooks.mjs";
@@ -11,10 +12,11 @@ import { wireTools } from "./tools.mjs";
 
 export { installCapture };
 
-/** Assemble the extension: registry, hooks, tools. Mechanical only. */
+/** Assemble the extension: registry, hooks, tools, and commands. */
 export function wireExtension(pi, pricingCatalog) {
 	const registry = createStationRegistry(pi, buildTickets(pi), pricingCatalog);
 	setActiveRegistry(registry);
 	wireHooks(pi, registry);
 	wireTools(pi, registry);
+	wireCommands(pi, registry);
 }

@@ -11,6 +11,11 @@ import {
   createState,
 } from "./state.mjs";
 import { copyRelay, createRelay, isValidRelay } from "../relay/state.mjs";
+import { WORKFLOW_STAGES } from "./stages.mjs";
+
+function copyPins(pins) {
+  return Array.isArray(pins) ? pins.filter(isNonEmptyString) : [];
+}
 
 function copyCharges(source) {
   const out = {};
@@ -147,6 +152,7 @@ export function serializeState(state) {
       epoch:
         Number.isInteger(scope.epoch) && scope.epoch >= 0 ? scope.epoch : 0,
       intent: scope.intent,
+      stage: WORKFLOW_STAGES.includes(scope.stage) ? scope.stage : null,
       beginToolCallId: scope.beginToolCallId,
       budget: copyCounts(scope.budget),
       remaining: copyCounts(scope.remaining),
@@ -162,6 +168,8 @@ export function serializeState(state) {
       : [],
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
+    herdMode: state.herdMode === true,
+    pins: copyPins(state.pins),
     relay: copyRelay(state.relay),
     baseModelSpec:
       typeof state.baseModelSpec === "string" ? state.baseModelSpec : null,
@@ -489,6 +497,7 @@ export function deserializeState(input) {
         epoch:
           Number.isInteger(scope.epoch) && scope.epoch >= 0 ? scope.epoch : 0,
         intent: scope.intent,
+        stage: WORKFLOW_STAGES.includes(scope.stage) ? scope.stage : null,
         beginToolCallId: scope.beginToolCallId,
         budget: copyCounts(scope.budget),
         remaining: copyCounts(scope.remaining),
@@ -500,6 +509,8 @@ export function deserializeState(input) {
       charges: copyCharges(data.charges),
       regrets: data.regrets.slice(),
       collapses: data.collapses.map(copyCollapse),
+      herdMode: data.herdMode === true,
+      pins: copyPins(data.pins),
       relay: data.version === VERSION ? copyRelay(data.relay) : createRelay(),
       baseModelSpec:
         typeof data.baseModelSpec === "string" ? data.baseModelSpec : null,

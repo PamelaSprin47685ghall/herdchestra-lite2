@@ -78,8 +78,11 @@ export function createStatusRuntime(options = {}) {
 				const usage = entryUsage(entry);
 				if (usage) accumulateUsage(session.totals, usageSnapshot(usage));
 			}
-		} catch {
-			// A branch that cannot be read starts from zero usage.
+		} catch (error) {
+			// A branch that cannot be read starts from zero usage. Record it:
+			// every later number on this line is then measured from zero, and
+			// nothing on screen would say why.
+			record("status", error, { stage: "branch-usage" });
 		}
 	}
 

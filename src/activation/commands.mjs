@@ -2,6 +2,16 @@
 
 import { snapshot } from "../host/diagnostics.mjs";
 
+/** Render evidence on one line: compact JSON, or the value itself. */
+function compactDetail(detail) {
+	if (detail === undefined) return "";
+	try {
+		return ` ${JSON.stringify(detail)}`;
+	} catch {
+		return ` ${String(detail)}`;
+	}
+}
+
 export function wireCommands(pi, registry) {
 	pi.registerCommand?.("herd", {
 		description: "Toggle interactive decision framing; optional text is sent as one user message",
@@ -18,7 +28,7 @@ export function wireCommands(pi, registry) {
 			const lines = entries.map(
 				(entry) => {
 					const repeat = entry.count > 1 ? ` ×${entry.count}` : "";
-					return `${new Date(entry.t).toISOString()} [${entry.domain}] ${entry.message}${repeat}`;
+					return `${new Date(entry.t).toISOString()} [${entry.domain}] ${entry.message}${repeat}${compactDetail(entry.detail)}`;
 				},
 			);
 			const text = lines.join("\n");

@@ -50,8 +50,14 @@ export function wireHooks(pi, registry) {
 			pi.on("message_end", (event, ctx) =>
 				registry.stationFor(ctx).onUsageMessage(event?.message, ctx),
 			);
-		} catch {
-			// Usage at message_end is optional.
+		} catch (error) {
+			// Usage at message_end is optional only for providers that attach
+			// usage earlier. When this binding is refused, that late usage is
+			// simply gone, so the refusal is recorded rather than commented away.
+			record("hooks", error, {
+				missing: ["message_end"],
+				optional: true,
+			});
 		}
 	}
 	if (!transitionsBound) {

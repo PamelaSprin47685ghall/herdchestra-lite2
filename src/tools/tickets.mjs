@@ -9,6 +9,7 @@
 
 import { errorResult, textResult } from "./results.mjs";
 import { sendSlashPrompt, sessionFor } from "../host/capture.mjs";
+import { record } from "../host/diagnostics.mjs";
 
 function safeSession(ctx) {
 	try {
@@ -23,8 +24,11 @@ export async function sendSteerTicket(pi, text) {
 	if (!text) return;
 	try {
 		await pi?.sendUserMessage?.(text, { deliverAs: "steer" });
-	} catch {
-		// Steer delivery is best-effort; never let it escape as unhandled.
+	} catch (error) {
+		// Steer delivery stays best-effort: it never escapes as an unhandled
+		// rejection. But a nudge the model never receives looks exactly like an
+		// idle model, so the failure must leave a trace.
+		record("tickets", error, { kind: "steer", chars: text.length });
 	}
 }
 
@@ -36,8 +40,11 @@ export async function sendUserMessageTicket(pi, text) {
 	if (!text) return;
 	try {
 		await pi?.sendUserMessage?.(text);
-	} catch {
-		// A host that rejects the message must not leak an unhandled rejection.
+	} catch (error) {
+		// A host that rejects the message must not leak an unhandled rejection,
+		// but `/herd <text>` promises the user one turn: losing that message in
+		// silence is the worst outcome, so it is recorded instead.
+		record("tickets", error, { kind: "prompt", chars: text.length });
 	}
 }
 
@@ -51,8 +58,11 @@ export async function activateToolsTicket(pi, activeTools, prompt, promptChanged
 		if (!next.includes("todo")) next.push("todo");
 		try {
 			await pi.setActiveTools(next);
-		} catch {
-			// A host without tool activation keeps its own tool set.
+		} catch (error) {
+			// A host without tool activation keeps its own tool set, and
+			// `todoReady()` turns the relay off. Record why the grant failed so
+			// the reason is not guessed from the symptom.
+			record("tools", error, { requested: next.length });
 		}
 	}
 	return promptChanged ? { systemPrompt: prompt } : undefined;

@@ -3,6 +3,7 @@
 import { appendHandoffCompaction } from "../handoff/session.mjs";
 import { setAgentMessages } from "../host/capture.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
+import { record } from "../host/diagnostics.mjs";
 import { truncateForHostBoundary } from "../scope/index.mjs";
 import {
 	applyLedgerEvaluation,
@@ -88,8 +89,11 @@ function commitSelfHandoff(station, ctx, report) {
 		try {
 			const rebuilt = manager.buildSessionContext()?.messages;
 			if (Array.isArray(rebuilt)) setAgentMessages(ctx, rebuilt);
-		} catch {
-			// Keep existing agent messages if context rebuild fails.
+		} catch (error) {
+			// Keep existing agent messages if the rebuild fails, but record it:
+			// a silent miss leaves the successor reading the pre-handoff
+			// transcript while the branch already holds the compacted one.
+			record("handoff", error, { stage: "rebuild-context" });
 		}
 	}
 	return {

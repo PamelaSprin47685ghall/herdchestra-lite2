@@ -4,6 +4,44 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.6] — 2026-11-19
+
+### Fixed
+
+- `sendSteerTicket()` and `sendUserMessageTicket()` swallowed every delivery
+  failure. A refused steer meant the relay's nudge never reached the model; a
+  refused prompt meant `/herd <text>` lost the user's message. Both looked like
+  an idle system, because nothing recorded them. Both stay best-effort and never
+  reject, but each now records a `tickets` diagnostic with its kind and message
+  length.
+- `commitSelfHandoff()` kept the pre-handoff agent messages when rebuilding the
+  context threw, and said nothing. The branch already held the compacted
+  transcript, so the successor could read the wrong one. The failure is now a
+  `handoff` diagnostic; the fallback behaviour is unchanged.
+- `createStatusRuntime().readBranchUsage()` started the status line at zero
+  usage when the branch could not be read, silently, so every later number was
+  measured from zero with nothing on screen saying why. It now records a
+  `status` diagnostic with `{ stage: "branch-usage" }`.
+- `wireHooks()` reported a refused `assistant_message`/`message_end` pair but
+  treated a refused `message_end` usage listener as "optional" in a comment. A
+  provider that attaches usage only at message end then lost it invisibly. The
+  refusal is now a `hooks` diagnostic with `{ missing: ["message_end"],
+  optional: true }`.
+- `activateToolsTicket()` swallowed a refused `setActiveTools()`. The relay
+  already turns off when `todo` is absent, but the reason was invisible; it is
+  now a `tools` diagnostic.
+
+### Changed
+
+- `herd-diag` prints each record's stored `detail` as compact JSON on the same
+  line. The ring has kept evidence such as `missing` since 2.1.0, and the one
+  command that shows it dropped that field.
+
+### Added
+
+- `tests/silent-sites.test.mjs`: one case per site above, each asserting the
+  diagnostic the previous implementation never wrote.
+
 ## [2.1.5] — 2026-11-19
 
 ### Fixed

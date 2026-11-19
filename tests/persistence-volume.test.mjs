@@ -176,7 +176,6 @@ describe("long-session write volume", () => {
 		const ratio = manager.appendedBytes / baselineBytes;
 		// Stay quiet while the policy holds; a failure carries its own numbers.
 		if (ratio >= 0.2) {
-			// eslint-disable-next-line no-console
 			console.log(
 				`turns=${TURNS} writes=${manager.writes} appended=${manager.appendedBytes}B baseline=${baselineBytes}B ratio=${(ratio * 100).toFixed(1)}% final=${len(JSON.stringify(serializeState(state)))}B`,
 			);

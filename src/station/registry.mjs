@@ -5,7 +5,6 @@ import { SessionStation } from "./station.mjs";
 const nullTickets = {
 	steer: () => {},
 	canSteer: false,
-	contextHandoff: (station, ctx, messages) => station.transformContext(messages, ctx),
 	sessionStop: (station, ctx) => undefined,
 	activateTools: (activeTools, prompt, changed) =>
 		changed ? { systemPrompt: prompt } : undefined,

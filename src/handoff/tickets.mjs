@@ -1,8 +1,7 @@
 // Handoff tickets: the only async entry points into the handoff flow.
 
-import {
-	successorPrompt,
-} from "../relay/index.mjs";
+import { appendHistoryMessage } from "../host/hack-context.mjs";
+import { successorPrompt } from "../relay/index.mjs";
 import { debugLog } from "./debug.mjs";
 import { performHandoff } from "./perform.mjs";
 import { errorText, managerOf, safeSession } from "./session.mjs";
@@ -35,19 +34,34 @@ function awaitWithAbort(promise, signal) {
 /**
  * Model-call gate ticket: installed on `session.agent.addBeforeModelCallHook`.
  * Runs outside the host's 30s extension event-handler timeout budget so an
- * outbound LLM request waits until an in-flight background handoff finishes
- * instead of advancing the old conversation.
+ * outbound LLM request starts or joins the handoff before context preparation.
  */
-export async function modelCallGateTicket(station, session, signal, context) {
+async function modelCallGateTicket(station, session, signal, context, ctx) {
+	if (signal?.aborted) return;
+	const relay = station.state.relay;
+	const retry = relay?.handoffError && relay.lastLedger?.empty &&
+		!relay.canStop && relay.firstEvaluation !== null;
+	if (!station.handoffPromise && (relay?.handoffPending || retry)) {
+		if (!relay.handoffPending) station.armHandoff();
+		scheduleBackgroundHandoff(station, ctx, station.pi);
+	}
 	const barrier = station.handoffPromise;
-	if (!barrier) return;
+	if (!barrier) {
+		if (relay?.handoffPending || retry) {
+			throw new Error("Relay handoff is pending without a completion barrier");
+		}
+		return;
+	}
 	station.handoffWaiters += 1;
 	debugLog("model_call_gate.wait", {
 		waiters: station.handoffWaiters,
 		generation: station.state.relay?.generation ?? null,
 	});
 	try {
-		await awaitWithAbort(barrier, signal);
+		const outcome = await awaitWithAbort(barrier, signal);
+		if (!outcome?.ok || outcome.inProgress) {
+			throw new Error(`Relay handoff did not complete: ${outcome?.error ?? "handoff already in progress"}`);
+		}
 	} finally {
 		station.handoffWaiters = Math.max(0, station.handoffWaiters - 1);
 	}
@@ -55,28 +69,28 @@ export async function modelCallGateTicket(station, session, signal, context) {
 
 	const liveSession = session ?? station.handoffSession ?? null;
 	const latestMessages = liveSession?.agent?.state?.messages;
-	if (Array.isArray(context?.messages) && Array.isArray(latestMessages)) {
+	if (Array.isArray(context?.messages) && Array.isArray(latestMessages) && context.messages !== latestMessages) {
 		context.messages.splice(0, context.messages.length, ...latestMessages);
 	}
 
 	const target = station.relayPromptPendingFor;
-	const relay = station.state.relay;
+	const successor = station.state.relay;
 	if (
 		Number.isInteger(target) &&
 		station.relayPromptSentFor !== target &&
-		relay &&
-		relay.generation === target &&
+		successor?.generation === target &&
 		Array.isArray(context?.messages)
 	) {
-		const prompt = successorPrompt(relay, relay.lastLedger ?? null);
+		const message = {
+			role: "user",
+			content: [{ type: "text", text: successorPrompt(successor, successor.lastLedger) }],
+			timestamp: Date.now(),
+		};
+		appendHistoryMessage(managerOf(liveSession, ctx), message, liveSession);
+		if (!context.messages.includes(message)) context.messages.push(message);
 		station.relayPromptSentFor = target;
 		station.relayPromptPendingFor = null;
 		station.persist();
-		context.messages.push({
-			role: "user",
-			content: [{ type: "text", text: prompt }],
-			timestamp: Date.now(),
-		});
 		debugLog("model_call_gate.successor_injected", { generation: target });
 	}
 }
@@ -132,13 +146,13 @@ async function dispatchSuccessorToHost(station, ctx, pi) {
 }
 
 async function runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier) {
-	let shouldDispatch = false;
+	let outcome;
 	try {
-		const outcome = await performHandoff(station, ctx, pi);
-		shouldDispatch = Boolean(
-			outcome?.ok && !outcome.inProgress && station.handoffWaiters === 0,
-		);
+		const session = safeSession(ctx) ?? station.handoffSession;
+		await session?.settleInFlightMessagePersistence?.();
+		outcome = await performHandoff(station, ctx, pi);
 	} catch (error) {
+		outcome = { ok: false, error: errorText(error) };
 		debugLog("handoff.background_error", { error: errorText(error) });
 		try {
 			station.recordHandoffFailureAt(error, Date.now());
@@ -150,76 +164,39 @@ async function runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier) {
 			station.handoffPromise = null;
 		}
 		station.handoffScheduled = false;
-		resolveBarrier();
+		resolveBarrier(outcome);
 	}
-	if (shouldDispatch) {
+	if (outcome?.ok && !outcome.inProgress && station.handoffWaiters === 0) {
 		await dispatchSuccessorToHost(station, ctx, pi);
 	}
+}
+
+export function installHandoffGate(station, ctx) {
+	return station.ensureModelCallGate(ctx, modelCallGateTicket, safeSession(ctx));
 }
 
 /**
  * Schedule the real handoff completely outside the host's event handler
  * timeout budget via a macrotask timer with a catch-all safety shell.
  */
-export function scheduleBackgroundHandoff(station, ctx, pi) {
+function scheduleBackgroundHandoff(station, ctx, pi) {
 	if (station.handoffExecuting || station.handoffScheduled) {
 		return false;
 	}
-	station.ensureModelCallGate(ctx, modelCallGateTicket, safeSession(ctx));
+	installHandoffGate(station, ctx);
 	let resolveBarrier;
 	const barrier = new Promise((resolve) => {
 		resolveBarrier = resolve;
 	});
 	station.handoffPromise = barrier;
 	station.handoffScheduled = true;
-	const timer = setTimeout(() => {
+	setTimeout(() => {
 		void runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier);
 	}, 0);
-	if (typeof timer?.unref === "function") {
-		timer.unref();
-	}
 	debugLog("handoff.scheduled", {
 		generation: station.state.relay?.generation ?? null,
 	});
 	return true;
-}
-
-/**
- * Run the real handoff from the context hook, after the caller interrupts the
- * turn that would otherwise ask the model for a useless "ready to hand off"
- * reply. The context hook returns the post-handoff messages so the provider
- * request is already the successor's first turn. The TUI command path is
- * skipped because its command rebuilds the transcript and may re-enter the
- * active turn; the direct AgentSession.handoff() path still renders afterwards.
- */
-export async function runHandoffInContext(station, ctx, pi) {
-	const liveSession = safeSession(ctx) ?? station.handoffSession ?? null;
-	const liveManager = managerOf(liveSession, ctx);
-	if (liveManager && typeof liveManager.getBranch === "function") {
-		try {
-			const messageEntries = liveManager
-				.getBranch()
-				.filter((entry) => entry?.type === "message");
-			// The host refuses a handoff before its second message. The tool
-			// result is not on the branch yet, so a fresh session can only fail;
-			// let session_stop retry after the turn appends its messages.
-			if (messageEntries.length < 2) {
-				return {
-					ok: false,
-					error:
-						"too few messages for a context handoff; session_stop will retry",
-				};
-			}
-		} catch {
-			// Fall through to the real call.
-		}
-	}
-	const outcome = await performHandoff(station, ctx, pi);
-	if (outcome?.inProgress) {
-		return { ok: false, pending: true, error: "handoff is already in progress" };
-	}
-	if (outcome?.ok === false) return { ok: false, error: outcome.error };
-	return { ok: true, generation: outcome.generation };
 }
 
 /**
@@ -230,7 +207,6 @@ export async function runHandoffInContext(station, ctx, pi) {
  */
 export function sessionStopTicket(station, ctx, pi) {
 	const before = station.state.relay ?? null;
-	station.ensureModelCallGate(ctx, modelCallGateTicket, safeSession(ctx));
 	debugLog("session_stop.enter", {
 		mode: ctx?.mode ?? null,
 		generation: before?.generation ?? null,

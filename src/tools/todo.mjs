@@ -7,12 +7,12 @@
 // every relay state transition through the SessionStation's synchronous methods.
 
 import { currentScope } from "../scope/index.mjs";
+import { installHandoffGate } from "../handoff/index.mjs";
 import { errorResult } from "./results.mjs";
 import {
 	handoffFocus,
 	isTodoView,
 	relayStatusText,
-	successorPrompt,
 } from "../relay/index.mjs";
 
 function nativeContent(native) {
@@ -148,8 +148,7 @@ export async function todoTicket(station, params, ctx) {
 		if (outcome?.ok === false) {
 			text += `\n\nHANDOFF FAILED: ${outcome.error}`;
 		} else if (outcome?.pending) {
-			text +=
-				"\n\nHandoff is pending. Finish your reply to the user now; do not call another tool. The runtime runs `/handoff` after this turn.";
+			installHandoffGate(station, ctx);
 		}
 	}
 

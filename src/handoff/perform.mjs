@@ -6,10 +6,7 @@ import {
 	sendSlashPrompt,
 	tuiFor,
 } from "../host/capture.mjs";
-import {
-	handoffFocus,
-	successorPrompt,
-} from "../relay/index.mjs";
+import { handoffFocus } from "../relay/index.mjs";
 import { debugLog } from "./debug.mjs";
 import {
 	countHandoffCompactions,
@@ -110,47 +107,10 @@ async function executeHandoff(session, focus, pi, ctx, station) {
 		resultDefined: result !== undefined,
 		generation: station.state.relay?.generation ?? null,
 	});
-	if (result === undefined && !station.handoffAdvanced) {
+	if (result === undefined && !station.handoffSwitched) {
 		throw new Error("AgentSession.handoff() returned undefined (cancelled or failed).");
 	}
 	return { ok: true };
-}
-
-/**
- * Deliver the successor prompt through the mode-appropriate channel.
- * A print-mode continuation becomes the hidden next turn, so the process does
- * not exit before the successor evaluates the ledger.
- */
-function deliverSuccessor(station, ctx) {
-	const target = station.relayPromptPendingFor;
-	if (!Number.isInteger(target)) {
-		debugLog("successor.skipped", {
-			reason: "no-pending-target",
-			generation: station.state.relay?.generation ?? null,
-		});
-		return undefined;
-	}
-	if (station.relayPromptSentFor === target) {
-		debugLog("successor.skipped", { reason: "already-sent", target });
-		return undefined;
-	}
-	const relay = station.state.relay;
-	if (!relay || relay.generation !== target) {
-		debugLog("successor.skipped", {
-			reason: "generation-mismatch",
-			target,
-			generation: relay?.generation ?? null,
-		});
-		return undefined;
-	}
-	const prompt = successorPrompt(relay, relay.lastLedger ?? null);
-	station.relayPromptSentFor = target;
-	station.relayPromptPendingFor = null;
-	debugLog("successor.delivered", {
-		generation: target,
-		promptChars: prompt.length,
-	});
-	return { continue: true, additionalContext: prompt };
 }
 
 async function performHandoff(station, ctx, pi) {
@@ -246,4 +206,4 @@ async function performHandoff(station, ctx, pi) {
 	return { ok: true, advanced, generation: station.state.relay?.generation ?? 0 };
 }
 
-export { executeHandoff, deliverSuccessor, performHandoff };
+export { executeHandoff, performHandoff };

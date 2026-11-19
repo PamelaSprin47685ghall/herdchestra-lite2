@@ -29,7 +29,6 @@ export {
 	regretTicket,
 	deferTicket,
 	pinTicket,
-	contextHandoffTicket,
 } from "./tickets.mjs";
 export {
 	TODO_DESCRIPTION,

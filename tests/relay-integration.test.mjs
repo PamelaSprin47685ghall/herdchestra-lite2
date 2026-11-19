@@ -1,16 +1,11 @@
 /**
  * Relay integration: real hooks, real todo wrapper, fake native todo, and a
- * fake AgentSession.handoff(). An empty ledger only marks the relay pending;
- * the next context hook runs the real handoff and returns the post-handoff
- * transcript, so the next LLM request is the successor's first turn.
- * session_stop remains the retry path when the context hook fails.
+ * fake AgentSession.handoff(). The host's model gate runs before the context
+ * hook and turns the next request into the successor's first request.
  */
 
 import { describe, expect, test } from "bun:test";
-import {
-	countHandoffCompactions,
-	runHandoffInContext,
-} from "../src/handoff/index.mjs";
+import { countHandoffCompactions } from "../src/handoff/index.mjs";
 import { activate } from "../src/main.mjs";
 import {
 	installInteractiveCapture,
@@ -333,14 +328,6 @@ async function runAssistant(host, ctx, message, { prepareAll = false } = {}) {
 		ctx.sessionManager.appendMessage(result);
 		ctx.agentMessages.push(result);
 		results.push({ result, blocked: false, output });
-		if (block.name === "todo" && output.details?.relay?.handoffPending === true) {
-			results[results.length - 1].context = await emit(
-				host.handlers,
-				"context",
-				{ messages: ctx.agentMessages },
-				ctx,
-			);
-		}
 	}
 	return results;
 }
@@ -363,17 +350,6 @@ function successorMessages(host) {
 }
 
 describe("relay integration", () => {
-	test("a context handoff with fewer than two messages waits for session_stop", async () => {
-		const { host, ctx, session } = await start({ mode: "print" });
-		ctx.sessionManager.entries.length = 0;
-		ctx.sessionManager.resetLeaf();
-		const rec = stateFor(ctx);
-		const outcome = await runHandoffInContext(rec, ctx, host.pi);
-		expect(outcome.ok).toBe(false);
-		expect(outcome.error).toContain("too few messages");
-		expect(session.calls.length).toBe(0);
-	});
-
 	test("a host that filters todo out keeps a read-write subagent relay-off", async () => {
 		const { host, ctx } = await start({
 			sessionInit: {
@@ -675,7 +651,7 @@ describe("relay integration", () => {
 		expect(host.steers[0].text).toContain("natural stop is forbidden");
 	});
 
-	test("todo empty lets generation 0 speak, then session_stop runs the real handoff", async () => {
+	test("session_stop can start a pending handoff if there is no next model call", async () => {
 		const { host, ctx, session, aborts } = await start({ mode: "print" });
 		const result = await runAssistant(
 			host,
@@ -685,12 +661,7 @@ describe("relay integration", () => {
 		const text = result[0].output.content.map((part) => part.text).join("\n");
 		expect(session.calls.length).toBe(0);
 		expect(aborts.length).toBe(0);
-		expect(result[0].context).toBeDefined();
-		expect(JSON.stringify(result[0].context.messages)).toContain(
-			"Finish your reply to the user now",
-		);
-		expect(text).toContain("Handoff is pending");
-		expect(text).toContain("Finish your reply to the user now");
+		expect(text).toContain("before the next model request");
 		expect(text).not.toContain("You are the relay successor");
 		expect(stateFor(ctx).state.relay.generation).toBe(0);
 
@@ -750,7 +721,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
-		expect(result[0].output.content.at(-1).text).toContain("Handoff is pending");
+		expect(result[0].output.content.at(-1).text).toContain("Handoff pending");
 		expect(result[0].output.details.relay.generation).toBe(0);
 		expect(session.calls.length).toBe(0);
 
@@ -887,7 +858,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
-		expect(result[0].output.content.at(-1).text).toContain("Handoff is pending");
+		expect(result[0].output.content.at(-1).text).toContain("Handoff pending");
 		expect(session.calls.length).toBe(0);
 		const first = await emitStop(host, ctx);
 		expect(first).toBeUndefined();
@@ -939,7 +910,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([call("t2", "todo", { op: "view" })]),
 		);
-		await sleep(10);
+		await emitStop(host, ctx);
 		expect(view[0].blocked).toBe(false);
 		expect(view[0].output.content.at(-1).text).toContain("RELAY STATE");
 		expect(rec.state.relay.generation).toBe(1);
@@ -1229,7 +1200,7 @@ describe("tui handoff integration", () => {
 		expect(countHandoffCompactions(manager)).toBe(2);
 	});
 
-	test("the empty-ledger handoff runs before the tool result and rebuilds the TUI", async () => {
+	test("the empty-ledger handoff rebuilds the TUI", async () => {
 		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
 		const tui = makeTui(started.session);
 		rememberTui(tui);
@@ -1240,8 +1211,7 @@ describe("tui handoff integration", () => {
 				assistant([call("t1", "todo", { op: "init", list: [] })]),
 			);
 			const text = result[0].output.content.map((part) => part.text).join("\n");
-			expect(text).toContain("Handoff is pending");
-			expect(text).toContain("Finish your reply to the user now");
+			expect(text).toContain("before the next model request");
 			expect(text).not.toContain("You are the relay successor");
 			expect(tui.handoffCalls.length).toBe(0);
 			expect(started.session.calls.length).toBe(0);
@@ -1279,7 +1249,7 @@ describe("tui handoff integration", () => {
 				started.ctx,
 				assistant([call("t1", "todo", { op: "init", list: [] })]),
 			);
-			expect(result[0].output.content.at(-1).text).toContain("Handoff is pending");
+			expect(result[0].output.content.at(-1).text).toContain("Handoff pending");
 			expect(started.session.calls.length).toBe(0);
 
 			const firstStop = await emitStop(started.host, started.ctx);
@@ -1315,7 +1285,7 @@ describe("tui handoff integration", () => {
 				started.ctx,
 				assistant([call("t1", "todo", { op: "init", list: [] })]),
 			);
-			expect(result[0].output.content.at(-1).text).toContain("Finish your reply to the user now");
+			expect(result[0].output.content.at(-1).text).toContain("before the next model request");
 			const stop = await emitStop(started.host, started.ctx);
 			expect(stop).toBeUndefined();
 			expect(started.session.calls.length).toBe(1);
@@ -1335,7 +1305,7 @@ describe("tui handoff integration", () => {
 			started.ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
-		expect(result[0].output.content.at(-1).text).toContain("Finish your reply to the user now");
+		expect(result[0].output.content.at(-1).text).toContain("before the next model request");
 		const stop = await emitStop(started.host, started.ctx);
 		expect(stop).toBeUndefined();
 		const signal = handoffSignal(started.manager);
@@ -1735,15 +1705,25 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(host.messages[0].text).toContain("You are the relay successor (generation 1)");
 	});
 
-	test("beforeModelCall gate blocks outbound LLM requests until background handoff completes, then injects compacted context and successor prompt", async () => {
+	test.each([0, 1])("the first provider request after an empty ledger in generation %i belongs to its successor", async (generation) => {
 		let resolveHandoff;
+		let handoffStarted;
 		const handoffGate = new Promise((resolve) => {
 			resolveHandoff = resolve;
 		});
+		const started = new Promise((resolve) => {
+			handoffStarted = resolve;
+		});
+		const persistenceStarted = Promise.withResolvers();
+		const persistenceDone = Promise.withResolvers();
 		const beforeModelCallHooks = [];
 		const { host, ctx, manager, session } = await start({
 			mode: "rpc",
 			handoff: async () => {
+				expect(manager.getBranch().some((entry) =>
+					entry.message?.toolCallId === "empty",
+				)).toBe(true);
+				handoffStarted();
 				await handoffGate;
 				manager.appendCompaction("handoff", { focus: "slow" });
 				session.agent.state.messages = [
@@ -1759,43 +1739,79 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 				return () => {};
 			},
 		};
+		session.settleInFlightMessagePersistence = () => {
+			persistenceStarted.resolve();
+			return persistenceDone.promise;
+		};
 
+		if (generation === 1) {
+			const rec = stateFor(ctx);
+			rec.state.relay = { ...rec.state.relay, generation };
+			await runAssistant(host, ctx, assistant([
+				call("open", "todo", { op: "init", list: [{ phase: "work", items: ["a"] }] }),
+			]));
+		}
 		await runAssistant(
 			host,
 			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
+			assistant([call("empty", "todo", { op: "init", list: [] })]),
 		);
-		// Trigger fire-and-forget handoff via session_stop (returns immediately).
-		const stopResult = await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx);
-		expect(stopResult).toBeUndefined();
 		expect(beforeModelCallHooks.length).toBe(1);
 
-		// Simulate an outbound LLM request starting while handoff is still running.
+		// omp runs the model gate before transformContext, not after it.
 		const outboundContext = {
 			messages: [{ role: "user", content: [{ type: "text", text: "stale history" }] }],
 		};
-		let modelCallReleased = false;
-		const gatePromise = Promise.all(
-			beforeModelCallHooks.map((hook) => hook(undefined, outboundContext)),
-		).then(() => {
-			modelCallReleased = true;
-		});
+		const providerRequests = [];
+		const request = (async () => {
+			for (const hook of beforeModelCallHooks) await hook(undefined, outboundContext);
+			providerRequests.push(await emit(host.handlers, "context", outboundContext, ctx));
+		})();
+		await persistenceStarted.promise;
+		expect(session.calls).toHaveLength(0);
+		expect(providerRequests).toHaveLength(0);
+		persistenceDone.resolve();
+		await started;
+		expect(providerRequests).toHaveLength(0);
+		await emit(host.handlers, "session_switch", { reason: "handoff" }, ctx);
+		expect(stateFor(ctx).state.relay.generation).toBe(generation);
+		expect(await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx))
+			.toBeUndefined();
 
-		await sleep(10);
-		expect(modelCallReleased).toBe(false);
-
-		// Complete handoff: the blocked LLM call should now release with updated context.
 		resolveHandoff();
-		await gatePromise;
-		await sleep(10);
-		expect(modelCallReleased).toBe(true);
+		await request;
+		expect(providerRequests).toHaveLength(1);
+		expect(session.calls).toHaveLength(1);
+		expect(stateFor(ctx).state.relay.generation).toBe(generation + 1);
+		const messages = providerRequests[0].messages;
+		expect(messages[0].content[0].text).toBe("compacted summary");
+		expect(JSON.stringify(messages)).not.toContain("stale history");
+		const prompt = `You are the relay successor (generation ${generation + 1})`;
+		expect(messages.filter((message) => message.content?.[0]?.text?.includes(prompt))).toHaveLength(1);
+		expect(manager.getBranch().some((entry) => entry.message?.content?.[0]?.text?.includes(prompt))).toBe(true);
+		expect(host.messages).toHaveLength(0);
+	});
+
+	test("a failed handoff blocks the old request and the next attempt serves the successor", async () => {
+		const { host, ctx, session } = await start({
+			handoff: ({ call: attempt }) => {
+				if (attempt === 1) throw new Error("handoff unavailable");
+				return { ok: true };
+			},
+		});
+		let gate;
+		session.agent.addBeforeModelCallHook = (hook) => { gate = hook; };
+		await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
+		const outbound = { messages: [] };
+		await expect(gate(undefined, outbound)).rejects.toThrow("handoff unavailable");
+		expect(stateFor(ctx).state.relay.generation).toBe(0);
+		expect(outbound.messages).toHaveLength(0);
+		expect(host.messages).toHaveLength(0);
+
+		await gate(undefined, outbound);
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(outboundContext.messages[0].content[0].text).toBe("compacted summary");
-		expect(outboundContext.messages.at(-1).content[0].text).toContain(
-			"You are the relay successor (generation 1)",
-		);
-		// Consumed directly by the gated model call, so no duplicate user message was sent.
-		expect(host.messages.length).toBe(0);
+		expect(outbound.messages.at(-1).content[0].text).toContain("You are the relay successor");
+		expect(host.messages).toHaveLength(0);
 	});
 
 	test("dispatchSuccessorToHost via sendUserMessage does not deadlock on modelCallGateTicket", async () => {

@@ -57,7 +57,6 @@ import {
 import {
 	firstEvaluationNudge,
 	openLedgerNudge,
-	relayStatusText,
 } from "../relay/index.mjs";
 import {
 	handleDeferCall,
@@ -152,7 +151,6 @@ export class SessionStation {
 		this.handoffSession = null;
 		this.handoffFocus = null;
 		this.handoffAdvanced = false;
-		this.sessionStopRunning = false;
 		this.relayState = true;
 		this.todoGrantKey = null;
 		// Measured usage baseline. Populated from live messages and restored
@@ -717,9 +715,7 @@ export class SessionStation {
 		}
 		if (relay.canStop) return;
 		if (relay.handoffPending) {
-			// Do not steer here. A steering nudge keeps the turn alive and prevents
-			// the host from emitting session_stop, which is the only place where the
-			// real handoff runs. The todo result already tells the model to stop.
+			// Leave the next request to the successor. Do not queue a nudge.
 			return;
 		}
 		if (!relay.lastLedger) {
@@ -734,7 +730,6 @@ export class SessionStation {
 			return;
 		}
 		if (relay.lastLedger.empty) {
-			this.deliverSteer(relayStatusText(relay, relay.lastLedger, { action: "handoff" }));
 			this.markHandoffPending(ctx, { reason: "empty-ledger" });
 			return;
 		}
@@ -822,7 +817,7 @@ export class SessionStation {
 		if (this.gatedAgentHooks.has(agent)) return true;
 		this.gatedAgentHooks.add(agent);
 		agent.addBeforeModelCallHook((signal, context) =>
-			gateTicket(this, session, signal, context),
+			gateTicket(this, session, signal, context, ctx),
 		);
 		return true;
 	}

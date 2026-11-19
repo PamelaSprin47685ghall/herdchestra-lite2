@@ -14,13 +14,11 @@ function nextStepText(relay, stats, action) {
 		case "promoted":
 			return "The successor's first todo evaluation is an empty ledger. This promotion is the only state that allows a natural stop. Write the final user-facing answer as ordinary assistant text now.";
 		case "handoff":
-			return relay.generation === 0 && relay.firstEvaluation === "empty"
-				? "The ledger is empty. Finish your reply to the user now; do not call another tool. The runtime runs the real built-in AgentSession.handoff() after this turn."
-				: "The ledger is empty. The next context hook runs the real built-in AgentSession.handoff() and interrupts this turn. Do not call another tool.";
+			return "The ledger is empty. The runtime runs the real built-in AgentSession.handoff() before the next model request. The successor takes the next turn.";
 		case "rework":
 			return relay.generation === 0
 				? "Your first todo evaluation found open work (rework). Work through the ledger; a non-empty ledger forbids a natural stop."
-				: "Your first todo evaluation as successor found open work. You are in rework and you are not the last holder: finish the work, and when the ledger becomes empty, stop so the runtime's session_stop hook can hand off to the next successor. Even then you may not stop; the next successor's first evaluation must also be empty.";
+				: "Your first todo evaluation as successor found open work. You are in rework and you are not the last holder: finish the work. When the ledger becomes empty, the runtime hands off before the next model request. The next successor's first evaluation must also be empty for it to stop.";
 		case "continue":
 			return "The ledger still has open work. Continue those items and evaluate the ledger again with todo. You may not stop while the ledger is non-empty.";
 		default:
@@ -106,7 +104,7 @@ export function successorPrompt(relay, stats) {
 		"You may first open any number of scopes to investigate. todo does not have to be your first tool call. But todo is forbidden inside every scope; close all scopes before you call todo.",
 		"Your first todo evaluation decides everything: empty -> you are promoted and may write the final user-facing answer; non-empty -> rework, you are not the last holder, and after finishing the work an empty ledger must trigger another real /handoff to the next successor.",
 		"A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.",
-		"You have no /handoff tool to call. When the ledger is empty, stop; the runtime's session_stop hook performs the real AgentSession.handoff().",
+		"You have no /handoff tool to call. If the ledger becomes empty in rework, the runtime performs the real AgentSession.handoff() before the next model request.",
 		"Write the ledger so the next agent can understand the whole task: user requirements, acceptance evidence, unresolved risks, and the next concrete action.",
 		relayStatusText(current, ledger),
 	].join("\n\n");

@@ -8,8 +8,7 @@
  */
 
 import { errorResult, textResult } from "./results.mjs";
-import { modelCallGateTicket, scheduleBackgroundHandoff } from "../handoff/index.mjs";
-import { managerOf, safeSession } from "../handoff/session.mjs";
+import { safeSession } from "../handoff/session.mjs";
 import { sendSlashPrompt } from "../host/capture.mjs";
 
 /** Fire-and-forget steer delivery. The scope result already reports the send. */
@@ -342,27 +341,3 @@ export async function pinTicket(station, toolCallId, params) {
 	}
 }
 
-/**
- * Context ticket for the relay handoff path. Schedules the real handoff in the
- * background (fire-and-forget) when the branch already has >= 2 messages, then
- * immediately returns the station's synchronous context transform so the host's
- * `context` hook never hits its handler timeout.
- */
-export function contextHandoffTicket(station, ctx, original) {
-	const liveSession = safeSession(ctx) ?? station.handoffSession ?? null;
-	station.ensureModelCallGate(ctx, modelCallGateTicket, liveSession);
-	const liveManager = managerOf(liveSession, ctx);
-	let canSchedule = true;
-	if (liveManager && typeof liveManager.getBranch === "function") {
-		try {
-			const messageEntries = liveManager
-				.getBranch()
-				.filter((entry) => entry?.type === "message");
-			if (messageEntries.length < 2) canSchedule = false;
-		} catch {
-			canSchedule = true;
-		}
-	}
-	if (canSchedule) scheduleBackgroundHandoff(station, ctx, station.pi);
-	return station.transformContext(original, ctx);
-}

@@ -4,6 +4,10 @@ Herdchestra Lite 2 adds budgeted work scopes to omp. Each scope controls which t
 
 When a scope folds, its user messages move before its opening `scope` call. Their content and order stay intact. The scope summary records outcomes and remaining work without repeating those messages.
 
+## Relay handoff
+
+When `todo` requests a handoff, it returns the ledger without waiting for the summary. On omp builds with the model-call gate, the next model request waits for the built-in `/handoff` to finish. It then starts with the compacted history and the successor instructions, not an extra reply from the previous holder. A failed handoff blocks that request instead of sending it with stale history. The `session_stop` hook remains a background fallback when no request is about to start.
+
 ## Model selection
 
 Set `begin.model` to an omp `/switch` selector to use a different model for a scope:

@@ -14,7 +14,6 @@ import {
 	firstEvaluationNudge,
 	isTodoView,
 	openLedgerNudge,
-	relayStatusText,
 } from "../relay/index.mjs";
 import { continueFeedback, isHandoffCompaction } from "../tools/results.mjs";
 import {
@@ -159,17 +158,8 @@ function onContext(station, messages, ctx) {
 	const original = Array.isArray(messages) ? messages : [];
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return { messages: original };
 	station.ensureTools(ctx);
-	const relayOn = station.relayOn(ctx);
 	observeHostBoundary(station, original);
 	station.observeActualModel(ctx);
-	const relay = station.state.relay;
-	const gen0FirstEmpty =
-		relay?.generation === 0 &&
-		relay?.firstEvaluation === "empty" &&
-		relay?.lastLedger?.empty === true;
-	if (relayOn && relay?.handoffPending && relay.lastLedger?.empty && !gen0FirstEmpty) {
-		return station.tickets.contextHandoff(station, ctx, original);
-	}
 	const restore = station.tickets.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
 	if (req) return restore(station, ctx, req, original, (messages) => station.withSkillReceipt(original, station.transformContext(messages, ctx), ctx));
@@ -178,9 +168,7 @@ function onContext(station, messages, ctx) {
 
 function onSessionStop(station, ctx) {
 	if (!station.relayOn(ctx)) return undefined;
-	if (station.sessionStopRunning) {
-		return continueFeedback("A session_stop pass is already running; wait.");
-	}
+	if (station.handoffPromise) return undefined;
 	const scope = currentScope(station.state);
 	if (scope) return continueFeedback(insideScopeText(station.state));
 	const relay = station.state.relay;
@@ -211,7 +199,7 @@ function onSessionSwitch(station, event, ctx) {
 	if (reason !== "handoff" && event?.handoff !== true) return;
 	truncateForHostBoundary(station.state);
 	station.resetUsageWatermark();
-	if (station.handoffExecuting) station.advanceRelayForHandoff();
+	if (station.handoffExecuting) station.handoffSwitched = true;
 	station.persist();
 }
 
@@ -229,8 +217,7 @@ function onSessionCompact(station, ctx) {
 function onAutoCompactionEnd(station, event, ctx) {
 	if (!isHandoffCompaction(event)) return;
 	if (!station.handoffExecuting) return;
-	station.advanceRelayForHandoff();
-	station.persist();
+	station.handoffSwitched = true;
 }
 
 function onBeforeAgentStart(station, event, ctx) {

@@ -2,7 +2,6 @@
 
 import {
 	activateToolsTicket,
-	contextHandoffTicket,
 	sendSteerTicket,
 	switchModelTicket,
 } from "../tools/tickets.mjs";
@@ -21,7 +20,6 @@ export function buildTickets(pi) {
 			void sendSteerTicket(pi, text);
 		},
 		canSteer: typeof pi?.sendUserMessage === "function",
-		contextHandoff: contextHandoffTicket,
 		restoreScopedModel,
 		sessionStop: (station, ctx) => sessionStopTicket(station, ctx, pi),
 		activateTools: (activeTools, prompt, changed) =>

@@ -58,11 +58,11 @@ function endText(
 	if (relayOn) {
 		if (remainingScope) {
 			lines.push(
-				"todo cannot be called inside any scope. Before finishing, close every enclosing scope, then call todo to update the ledger. A non-empty ledger forbids stopping; an empty ledger must trigger the real /handoff protocol.",
+				"todo cannot be called inside any scope. Before finishing, close every enclosing scope, then call todo to update the ledger. A non-empty ledger forbids stopping; an empty ledger triggers the relay handoff protocol.",
 			);
 		} else {
 			lines.push(
-				"Call todo now to evaluate the ledger before writing the final user-facing answer. A non-empty ledger forbids stopping; an empty ledger must trigger the real /handoff protocol.",
+				"Call todo now to evaluate the ledger before writing the final user-facing answer. A non-empty ledger forbids stopping; an empty ledger triggers the relay handoff protocol.",
 			);
 		}
 	}

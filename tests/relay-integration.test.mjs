@@ -84,8 +84,28 @@ function makeManager() {
 			return entry.id;
 		},
 		buildSessionContext: () => {
+			const branch = manager.getBranch();
+			let lastCompactionIdx = -1;
+			for (let i = branch.length - 1; i >= 0; i -= 1) {
+				if (branch[i].type === "compaction") {
+					lastCompactionIdx = i;
+					break;
+				}
+			}
 			const messages = [];
-			for (const entry of manager.getBranch()) {
+			if (lastCompactionIdx >= 0) {
+				const c = branch[lastCompactionIdx];
+				const summary = c.details?.summary ?? c.details?.focus ?? "";
+				if (summary) {
+					messages.push({
+						role: "compactionSummary",
+						content: [{ type: "text", text: summary }],
+						timestamp: Date.now(),
+					});
+				}
+			}
+			for (let i = lastCompactionIdx + 1; i < branch.length; i += 1) {
+				const entry = branch[i];
 				if (entry.type === "message") messages.push(entry.message);
 			}
 			return { messages };
@@ -649,7 +669,7 @@ describe("relay integration", () => {
 
 		const definition = host.tools.get("todo");
 		expect(definition.description).toContain("forbidden inside any active scope");
-		expect(definition.description).toContain("real built-in /handoff");
+		expect(definition.description).toContain("write the handoff report in your message body");
 		expect(Object.hasOwn(definition, "alwaysAvailable")).toBe(false);
 	});
 
@@ -672,29 +692,50 @@ describe("relay integration", () => {
 		expect(host.steers[0].text).toContain("natural stop is forbidden");
 	});
 
-	test("session_stop can start a pending handoff if there is no next model call", async () => {
-		const { host, ctx, session, aborts } = await start({ mode: "print" });
+	test("empty ledger demands body handoff report, blocks all tools, places compaction boundary, and hands off to successor", async () => {
+		const { host, ctx, manager, session } = await start({ mode: "print" });
 		const result = await runAssistant(
 			host,
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
 		const text = result[0].output.content.map((part) => part.text).join("\n");
-		expect(session.calls.length).toBe(0);
-		expect(aborts.length).toBe(0);
-		expect(text).toContain("before the next model request");
-		expect(text).not.toContain("You are the relay successor");
+		expect(text).toContain("DO NOT call any more tools");
+		expect(text).toContain("Write the handoff report immediately in your message body");
 		expect(stateFor(ctx).state.relay.generation).toBe(0);
+		expect(stateFor(ctx).state.relay.handoffPending).toBe(true);
+
+		const blockedCalls = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("t_view", "todo", { op: "view" }),
+				call("s_begin", "scope", { begin: { intent: "sneak", budget: { read: 1 }, elder_report: null } }),
+				call("r_read", "read", { path: "a" }),
+			]),
+		);
+		expect(blockedCalls.every((entry) => entry.blocked)).toBe(true);
+		expect(blockedCalls[0].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
+		expect(blockedCalls[1].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
+		expect(blockedCalls[2].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
+
+		const missingReportStop = await emitStop(host, ctx);
+		expect(missingReportStop.continue).toBe(true);
+		expect(missingReportStop.additionalContext).toContain("have not written the handoff report yet");
+
+		const reportBody = "## Handoff Report\n- Implemented feature X\n- Verified with tests";
+		host.steers.length = 0;
+		await runAssistant(host, ctx, assistant([{ type: "text", text: reportBody }]));
+		expect(host.steers).toHaveLength(0);
 
 		const stop = await emitStop(host, ctx);
-		expect(stop).toBeUndefined();
-		expect(session.calls.length).toBe(1);
-		expect(session.calls[0]).toContain("An empty ledger triggers a relay handoff");
-		expect(session.calls[0]).toContain(
-			"An empty ledger is a claim to audit, not evidence. If you find any gap, write it into todo and rework.",
-		);
+		expect(stop.continue).toBe(true);
+		expect(stop.additionalContext).toContain("Generation 1 takeover");
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages).toHaveLength(0);
+		expect(stateFor(ctx).state.relay.handoffPending).toBe(false);
+		expect(countHandoffCompactions(manager)).toBe(1);
+		expect(session.agent.state.messages[0].content[0].text).toContain(reportBody);
+		expect(session.agent.state.messages[0].content[0].text).toContain("Independent verification steps");
 
 		const view = await runAssistant(
 			host,
@@ -703,9 +744,6 @@ describe("relay integration", () => {
 		);
 		expect(view[0].output.details.relay.generation).toBe(1);
 
-		// The successor's first empty evaluation promotes it. A second empty
-		// evaluation must keep that promotion and must not force another handoff;
-		// the promoted holder is the one that writes the final answer.
 		const promoted = await runAssistant(
 			host,
 			ctx,
@@ -713,7 +751,6 @@ describe("relay integration", () => {
 		);
 		expect(promoted[0].output.details.relay.canStop).toBe(true);
 		expect(promoted[0].output.details.relay.handoffPending).toBe(false);
-		expect(session.calls.length).toBe(1);
 
 		const repeated = await runAssistant(
 			host,
@@ -722,74 +759,25 @@ describe("relay integration", () => {
 		);
 		expect(repeated[0].output.details.relay.canStop).toBe(true);
 		expect(repeated[0].output.details.relay.handoffPending).toBe(false);
-		expect(session.calls.length).toBe(1);
-	});
-
-	test("a failed stop handoff leaves the empty ledger for the next stop to retry", async () => {
-		let attempts = 0;
-		const { host, ctx, session } = await start({
-			mode: "print",
-			handoff: async () => {
-				attempts += 1;
-				if (attempts === 1) throw new Error("compaction already in progress");
-				return { ok: true };
-			},
-		});
-		const result = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		expect(result[0].output.content.at(-1).text).toContain("Handoff pending");
-		expect(result[0].output.details.relay.generation).toBe(0);
-		expect(session.calls.length).toBe(0);
-
-		const first = await emitStop(host, ctx);
-		expect(first).toBeUndefined();
-		expect(session.calls.length).toBe(1);
-		expect(stateFor(ctx).state.relay.handoffError).toContain("compaction already in progress");
-		expect(host.messages.length).toBe(0);
-
-		const second = await emitStop(host, ctx);
-		expect(second).toBeUndefined();
-		expect(session.calls.length).toBe(2);
-		expect(host.messages).toHaveLength(0);
-	});
-
-	test("session_stop after a handoff asks the successor to evaluate", async () => {
-		const { host, ctx, session } = await start({ mode: "rpc" });
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		const stop = await emitStop(host, ctx);
-		expect(stop).toBeUndefined();
-		expect(session.calls.length).toBe(1);
-		expect(host.messages).toHaveLength(0);
-		const second = await emitStop(host, ctx);
-		expect(second.continue).toBe(true);
-		expect(second.additionalContext).toContain("evaluate the ledger with todo");
-		expect(session.calls.length).toBe(1);
-		expect(host.messages.some((entry) => entry.text.trim() === "/handoff")).toBe(false);
 	});
 
 	test("after handoff, a stop before the successor evaluates nudges instead of handing off again", async () => {
-		const { host, ctx, session } = await start({ mode: "print" });
+		const { host, ctx, manager } = await start({ mode: "print" });
 		await runAssistant(
 			host,
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "Report 0" }]));
 		const first = await emitStop(host, ctx);
-		expect(first).toBeUndefined();
-		expect(session.calls.length).toBe(1);
+		expect(first.continue).toBe(true);
+		expect(countHandoffCompactions(manager)).toBe(1);
 		expect(host.messages).toHaveLength(0);
 
 		const second = await emitStop(host, ctx);
 		expect(second.continue).toBe(true);
 		expect(second.additionalContext).toContain("evaluate the ledger with todo");
-		expect(session.calls.length).toBe(1);
+		expect(countHandoffCompactions(manager)).toBe(1);
 	});
 
 	test("generation 1 first empty ledger promotes and does not nudge", async () => {
@@ -799,6 +787,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "Report 0" }]));
 		await emitStop(host, ctx);
 		const checked = await runAssistant(
 			host,
@@ -822,14 +811,15 @@ describe("relay integration", () => {
 	});
 
 	test("generation 1 first non-empty ledger is rework, then empty hands off again", async () => {
-		const { host, ctx, session, aborts } = await start({ mode: "rpc" });
+		const { host, ctx, manager, aborts } = await start({ mode: "rpc" });
 		await runAssistant(
 			host,
 			ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "Report 0" }]));
 		await emitStop(host, ctx);
-		expect(session.calls.length).toBe(1);
+		expect(countHandoffCompactions(manager)).toBe(1);
 
 		const rework = await runAssistant(
 			host,
@@ -843,7 +833,7 @@ describe("relay integration", () => {
 		);
 		expect(rework[0].output.details.relay.firstEvaluation).toBe("nonempty");
 		expect(rework[0].output.content.at(-1).text).toContain("rework");
-		expect(session.calls.length).toBe(1);
+		expect(countHandoffCompactions(manager)).toBe(1);
 
 		const laterEmpty = await runAssistant(
 			host,
@@ -851,8 +841,9 @@ describe("relay integration", () => {
 			assistant([call("t3", "todo", { op: "init", list: [] })]),
 		);
 		expect(laterEmpty[0].output.details.relay.canStop).toBe(false);
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "Report 1" }]));
 		await emitStop(host, ctx);
-		expect(session.calls.length).toBe(2);
+		expect(countHandoffCompactions(manager)).toBe(2);
 		const view = await runAssistant(
 			host,
 			ctx,
@@ -860,147 +851,6 @@ describe("relay integration", () => {
 		);
 		expect(view[0].output.details.relay.generation).toBe(2);
 		expect(aborts.length).toBe(0);
-	});
-
-	test("a failed inline handoff surfaces the error and the stop hook retries", async () => {
-		const { host, ctx, session } = await start({
-			mode: "print",
-			handoff: () => {
-				throw new Error("no model");
-			},
-		});
-		const result = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		expect(result[0].output.content.at(-1).text).toContain("Handoff pending");
-		expect(session.calls.length).toBe(0);
-		const first = await emitStop(host, ctx);
-		expect(first).toBeUndefined();
-		expect(session.calls.length).toBe(1);
-		const view = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t2", "todo", { op: "view" })]),
-		);
-		expect(view[0].output.details.relay.generation).toBe(0);
-		expect(view[0].output.content.at(-1).text).toContain("Last handoff error: no model");
-	});
-
-	test("an already-compacted handoff failure does not promote a successor", async () => {
-		const { host, ctx } = await start({
-			mode: "print",
-			handoff: () => {
-				throw new Error("Nothing to hand off (already compacted)");
-			},
-		});
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		const rec = stateFor(ctx);
-		expect(rec.state.relay.handoffPending).toBe(true);
-
-		const first = await emitStop(host, ctx);
-		expect(first).toBeUndefined();
-		expect(rec.state.relay.generation).toBe(0);
-		expect(rec.state.relay.canStop).toBe(false);
-		expect(rec.state.relay.handoffError).toContain("already compacted");
-		expect(host.messages).toHaveLength(0);
-	});
-
-	test("a handoff that returns success without advancing never allows a stop", async () => {
-		const { host, ctx } = await start({ mode: "print", appendHandoff: false, handoff: () => {
-			// Simulate a host that reports success but clears the pending flag
-			// before the runtime can advance the generation.
-			const rec = stateFor(ctx);
-			rec.state.relay = { ...rec.state.relay, handoffPending: false };
-			return { ok: true };
-		} });
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		const stop = await emitStop(host, ctx);
-		expect(stop).toBeUndefined();
-		const rec = stateFor(ctx);
-		expect(rec.state.relay.generation).toBe(0);
-		expect(rec.state.relay.canStop).toBe(false);
-		expect(rec.state.relay.handoffPending).toBe(false);
-		expect(rec.state.relay.handoffError).toBe(
-			"handoff completed without a new handoff compaction entry",
-		);
-		expect(rec.state.relay.lastHandoff.ok).toBe(false);
-	});
-
-	test("short-session recovery retries with identical instructions and no checkpoint", async () => {
-		let started = null;
-		let checkpointAtRetry = false;
-		let checkpointInAgent = false;
-		started = await start({
-			mode: "print",
-			handoff: ({ call: callNumber }) => {
-				if (callNumber === 1) {
-					throw new Error("Nothing to hand off (already compacted)");
-				}
-				checkpointAtRetry = started.manager.entries.some(
-					(entry) =>
-						entry.type === "message" &&
-						entry.message?.role === "user" &&
-						String(entry.message.content?.[0]?.text ?? "").includes(
-							"Relay handoff audit checkpoint",
-						),
-				);
-				checkpointInAgent = started.session.agent.state.messages.some(
-					(message) =>
-						JSON.stringify(message).includes("Relay handoff audit checkpoint"),
-				);
-				return { ok: true };
-			},
-		});
-		await runAssistant(
-			started.host,
-			started.ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		expect(started.session.calls.length).toBe(0);
-		const stop = await emitStop(started.host, started.ctx);
-		expect(stop).toBeUndefined();
-		expect(started.session.calls.length).toBe(2);
-		expect(checkpointAtRetry).toBe(false);
-		expect(checkpointInAgent).toBe(false);
-		expect(started.session.calls[1]).toBe(started.session.calls[0]);
-		expect(stateFor(started.ctx).state.relay.generation).toBe(1);
-		expect(started.host.messages).toHaveLength(0);
-	});
-
-	test("the smaller retained tail is temporary", async () => {
-		const { host, ctx, session } = await start({
-			mode: "print",
-			handoff: ({ call: callNumber }) => {
-				if (callNumber === 1) {
-					throw new Error("Nothing to hand off (already compacted)");
-				}
-				return { ok: true };
-			},
-		});
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		expect(session.calls.length).toBe(0);
-		const stop = await emitStop(host, ctx);
-		expect(stop).toBeUndefined();
-		expect(session.calls.length).toBe(2);
-		expect(session.settings.sets).toEqual([
-			["compaction.keepRecentTokens", 1],
-			["compaction.keepRecentTokens", 20000],
-		]);
-		expect(host.messages).toHaveLength(0);
 	});
 
 	test("print session_stop continues on scope, missing evaluation, and non-empty ledger", async () => {
@@ -1064,9 +914,10 @@ describe("relay integration", () => {
 			fresh.ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
+		await runAssistant(fresh.host, fresh.ctx, assistant([{ type: "text", text: "Handoff summary" }]));
 		const stop = await emitStop(fresh.host, fresh.ctx);
-		expect(stop).toBeUndefined();
-		expect(fresh.session.calls.length).toBe(1);
+		expect(stop.continue).toBe(true);
+		expect(countHandoffCompactions(fresh.manager)).toBe(1);
 		const allowed = await runAssistant(
 			fresh.host,
 			fresh.ctx,
@@ -1103,11 +954,6 @@ describe("relay integration", () => {
 });
 
 describe("handoff integration", () => {
-	function writesHandoffCompaction({ session }) {
-		session.sessionManager.appendCompaction("handoff");
-		return { ok: true };
-	}
-
 	function handoffSignal(manager) {
 		return manager.entries.find(
 			(entry) =>
@@ -1126,16 +972,17 @@ describe("handoff integration", () => {
 		expect(countHandoffCompactions(manager)).toBe(2);
 	});
 
-	test("without a TUI, the handoff adds no separate transcript message", async () => {
-		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
+	test("self-handoff writes compaction boundary without sending extra user messages", async () => {
+		const started = await start({ mode: "print" });
 		const result = await runAssistant(
 			started.host,
 			started.ctx,
 			assistant([call("t1", "todo", { op: "init", list: [] })]),
 		);
-		expect(result[0].output.content.at(-1).text).toContain("before the next model request");
+		expect(result[0].output.content.at(-1).text).toContain("DO NOT call any more tools");
+		await runAssistant(started.host, started.ctx, assistant([{ type: "text", text: "My handoff report" }]));
 		const stop = await emitStop(started.host, started.ctx);
-		expect(stop).toBeUndefined();
+		expect(stop.continue).toBe(true);
 		expect(countHandoffCompactions(started.manager)).toBe(1);
 		expect(handoffSignal(started.manager)).toBeUndefined();
 		expect(started.host.messages).toHaveLength(0);
@@ -1402,208 +1249,6 @@ describe("host truncation", () => {
 });
 
 describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across TUI, RPC, and Print modes", () => {
-	test("the gate refuses the request and hands the focus to session.compact only", async () => {
-		const focused = [];
-		const committed = Promise.withResolvers();
-		const { host, ctx, beforeModelCallHooks } = await start({
-			mode: "rpc",
-			handoff: async ({ focus }) => {
-				focused.push(focus);
-				committed.resolve();
-				return { ok: true };
-			},
-		});
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("empty", "todo", { op: "init", list: [] })]),
-		);
-		expect(beforeModelCallHooks).toHaveLength(1);
-		const outbound = {
-			messages: [{ role: "user", content: [{ type: "text", text: "stale" }] }],
-		};
-		const gateResult = beforeModelCallHooks[0](outbound, undefined);
-		expect(gateResult).toMatchObject({ stop: true });
-		await committed.promise;
-		await sleep(10);
-		expect(focused).toHaveLength(1);
-		expect(focused[0]).toContain("Include these relay instructions");
-		// The gate never rewrites the outbound request; the host discards it.
-		expect(outbound.messages[0].content[0].text).toBe("stale");
-		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages).toHaveLength(0);
-	});
-
-	test("session_stop triggers '/handoff ...' across rpc and print modes without TUI", async () => {
-		for (const mode of ["rpc", "print"]) {
-			const focusSeen = [];
-			const { host, ctx, manager } = await start({
-				mode,
-				handoff: async (focus) => {
-					focusSeen.push(focus);
-					manager.appendCompaction("handoff", { focus });
-					return { ok: true };
-				},
-			});
-			const rec = stateFor(ctx);
-			await runAssistant(
-				host,
-				ctx,
-				assistant([call("t1", "todo", { op: "init", list: [{ phase: "p1", items: ["a"] }] })]),
-			);
-			// Mark empty ledger pending directly for stop-path verification.
-			rec.state.relay = {
-				...rec.state.relay,
-				handoffPending: true,
-				lastLedger: { empty: true, phases: [] },
-			};
-			const stop = await emitStop(host, ctx);
-			expect(stop).toBeUndefined();
-			expect(focusSeen.length).toBe(1);
-			expect(countHandoffCompactions(manager)).toBe(1);
-			expect(host.messages).toHaveLength(0);
-		}
-	});
-
-	test("fire-and-forget handoff returns immediately from session_stop and context even while handoff hangs", async () => {
-		let resolveHandoff;
-		const handoffGate = new Promise((resolve) => {
-			resolveHandoff = resolve;
-		});
-		const { host, ctx, manager } = await start({
-			mode: "rpc",
-			handoff: async () => {
-				await handoffGate;
-				manager.appendCompaction("handoff", { focus: "slow" });
-				return { ok: true };
-			},
-		});
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		const stopResult = await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx);
-		expect(stopResult).toBeUndefined();
-		const contextResult = await emit(host.handlers, "context", { messages: [] }, ctx);
-		expect(contextResult).toBeDefined();
-		expect(host.messages.length).toBe(0);
-
-		resolveHandoff();
-		await sleep(15);
-		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages).toHaveLength(0);
-	});
-
-	test.each([0, 1])("the gate stops the generation %i request until the handoff commits", async (generation) => {
-		const handoffGate = Promise.withResolvers();
-		const started = Promise.withResolvers();
-		const { host, ctx, manager, session, beforeModelCallHooks } = await start({
-			mode: "rpc",
-			appendHandoff: false,
-			handoff: async () => {
-				expect(manager.getBranch().some((entry) =>
-					entry.message?.toolCallId === "empty",
-				)).toBe(true);
-				started.resolve();
-				await handoffGate.promise;
-				manager.appendCompaction("handoff", { focus: "slow" });
-				session.agent.state.messages = [
-					{ role: "user", content: [{ type: "text", text: "compacted summary" }] },
-				];
-				return { ok: true };
-			},
-		});
-
-		if (generation === 1) {
-			const rec = stateFor(ctx);
-			rec.state.relay = { ...rec.state.relay, generation };
-			await runAssistant(host, ctx, assistant([
-				call("open", "todo", { op: "init", list: [{ phase: "work", items: ["a"] }] }),
-			]));
-		}
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("empty", "todo", { op: "init", list: [] })]),
-		);
-		expect(beforeModelCallHooks.length).toBe(1);
-
-		const outboundContext = {
-			messages: [{ role: "user", content: [{ type: "text", text: "stale history" }] }],
-		};
-		const gateResult = beforeModelCallHooks[0](outboundContext, undefined);
-		expect(gateResult).toMatchObject({ stop: true });
-		await started.promise;
-		expect(session.calls).toHaveLength(1);
-		expect(stateFor(ctx).state.relay.generation).toBe(generation);
-
-		handoffGate.resolve();
-		await sleep(10);
-		expect(stateFor(ctx).state.relay.generation).toBe(generation + 1);
-		expect(outboundContext.messages[0].content[0].text).toBe("stale history");
-		const instruction = `Include these relay instructions in the handoff document for generation ${generation + 1}`;
-		expect(session.calls[0]).toContain(instruction);
-		expect(JSON.stringify(outboundContext.messages)).not.toContain(instruction);
-		expect(JSON.stringify(manager.getBranch().filter((entry) => entry.type === "message"))).not.toContain(instruction);
-		expect(host.messages).toHaveLength(0);
-	});
-
-	test("a failed handoff leaves the request stopped and the next gate retries", async () => {
-		const { host, ctx, session, beforeModelCallHooks } = await start({
-			handoff: ({ call: attempt }) => {
-				if (attempt === 1) throw new Error("handoff unavailable");
-				return { ok: true };
-			},
-		});
-		await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
-		const gate = beforeModelCallHooks[0];
-		const outbound = { messages: [] };
-		expect(gate(outbound, undefined)).toMatchObject({ stop: true });
-		await sleep(10);
-		expect(stateFor(ctx).state.relay.generation).toBe(0);
-		expect(stateFor(ctx).state.relay.handoffError).toContain("handoff unavailable");
-
-		expect(gate(outbound, undefined)).toMatchObject({ stop: true });
-		await sleep(10);
-		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages).toHaveLength(0);
-	});
-
-	test("a stop-start handoff continues only after the system /handoff commits", async () => {
-		const gate = Promise.withResolvers();
-		const started = Promise.withResolvers();
-		const continued = [];
-		const { host, ctx, session } = await start({
-			mode: "rpc",
-			handoff: async () => {
-				started.resolve();
-				await gate.promise;
-				return { ok: true };
-			},
-		});
-		session.agent.state.isStreaming = false;
-		session.agent.continue = async () => {
-			continued.push(true);
-		};
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("empty", "todo", { op: "init", list: [] })]),
-		);
-		expect(
-			await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx),
-		).toBeUndefined();
-		await started.promise;
-		expect(continued).toHaveLength(0);
-		expect(stateFor(ctx).state.relay.generation).toBe(0);
-		gate.resolve();
-		await sleep(25);
-		expect(continued).toHaveLength(1);
-		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages).toHaveLength(0);
-	});
-
 	test("a refused system slash command never falls through to a conversation prompt", async () => {
 		const { sendSlashPrompt } = await import("../src/host/index.mjs");
 		const session = { prompt() { throw new Error("unexpected conversation prompt"); } };
@@ -1616,64 +1261,19 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(result.residual).toBe(command);
 	});
 
-	test("the relay handoff calls session.compact directly, not the slash dispatcher", async () => {
-		const { host, ctx, session } = await start({ mode: "rpc" });
+	test("the relay handoff does not call the slash dispatcher", async () => {
+		const { host, ctx, manager } = await start({ mode: "rpc" });
 		let slashCalls = 0;
 		installBuiltinSlashExecutor(async () => {
 			slashCalls += 1;
 			return false;
 		});
 		await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "Handoff report body" }]));
 		await emitStop(host, ctx);
-		await sleep(10);
-		expect(session.calls).toHaveLength(1);
-		expect(session.calls[0]).toContain("Include these relay instructions");
+		expect(countHandoffCompactions(manager)).toBe(1);
 		expect(slashCalls).toBe(0);
 		expect(host.messages).toHaveLength(0);
-	});
-
-	test("idle fallback handoff does not send a user message or start a model call", async () => {
-		const beforeModelCallHooks = [];
-		let modelCalls = 0;
-		const { host, ctx, manager, session } = await start({
-			mode: "rpc",
-			handoff: async () => {
-				manager.appendCompaction("handoff", { focus: "successor" });
-				session.agent.state.messages = [
-					{ role: "user", content: [{ type: "text", text: "compacted" }] },
-				];
-				return { ok: true };
-			},
-		});
-		session.agent = {
-			state: { messages: [] },
-			addBeforeModelCall: (gate) => {
-				beforeModelCallHooks.push(gate);
-				return () => {};
-			},
-		};
-		const originalSend = host.pi.sendUserMessage;
-		host.pi.sendUserMessage = async (text, options) => {
-			originalSend(text, options);
-			const outboundContext = {
-				messages: [{ role: "user", content: [{ type: "text", text }] }],
-			};
-			await Promise.all(
-				beforeModelCallHooks.map((gate) => gate(outboundContext, undefined)),
-			);
-			modelCalls += 1;
-		};
-
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-		const stopResult = await emitStop(host, ctx);
-		expect(stopResult).toBeUndefined();
-		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(host.messages).toHaveLength(0);
-		expect(modelCalls).toBe(0);
 	});
 
 	test("the headless adapter has no compaction path", async () => {
@@ -1688,31 +1288,6 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 });
 
 describe("handoff transaction recovery", () => {
-	test("a committed handoff advances on the next gate without compacting twice", async () => {
-		const { host, ctx, manager, session, beforeModelCallHooks } = await start({
-			mode: "rpc",
-			appendHandoff: false,
-		});
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("empty", "todo", { op: "init", list: [] })]),
-		);
-		const station = stateFor(ctx);
-		expect(station.state.relay.handoffTarget.baseline).toBe(0);
-		expect(beforeModelCallHooks).toHaveLength(1);
-
-		// Simulate a crash after the compaction commit but before the relay
-		// advance. The next gate must recognize the commit, not compact again.
-		manager.appendCompaction("handoff", { focus: "committed" });
-		const result = beforeModelCallHooks[0]({ messages: [] }, undefined);
-		expect(result).toMatchObject({ stop: true });
-		await sleep(10);
-		expect(station.state.relay.generation).toBe(1);
-		expect(session.calls).toHaveLength(0);
-		expect(host.messages).toHaveLength(0);
-	});
-
 	test("a pending station is not reused by a different session", async () => {
 		const registry = createStationRegistry(null);
 		const managerA = { getSessionId: () => "session-a" };
@@ -1727,19 +1302,18 @@ describe("handoff transaction recovery", () => {
 	});
 
 	test("a successor can arm a second handoff at the generation it continued from", async () => {
-		const { host, ctx, session, beforeModelCallHooks } = await start({ mode: "rpc" });
-		session.agent.state.isStreaming = false;
-		session.agent.continue = async () => {};
+		const { host, ctx, manager } = await start({ mode: "rpc" });
 
 		await runAssistant(
 			host,
 			ctx,
 			assistant([call("empty-1", "todo", { op: "init", list: [] })]),
 		);
-		expect(await emitStop(host, ctx)).toBeUndefined();
-		await sleep(10);
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "Report gen 0" }]));
+		const firstStop = await emitStop(host, ctx);
+		expect(firstStop.continue).toBe(true);
 		expect(stateFor(ctx).state.relay.generation).toBe(1);
-		expect(session.calls).toHaveLength(1);
+		expect(countHandoffCompactions(manager)).toBe(1);
 
 		// The successor promotes on its first empty evaluation.
 		await runAssistant(
@@ -1769,10 +1343,10 @@ describe("handoff transaction recovery", () => {
 			assistant([call("empty-2", "todo", { op: "init", list: [] })]),
 		);
 		expect(stateFor(ctx).state.relay.handoffPending).toBe(true);
-		const gate = beforeModelCallHooks[0];
-		expect(gate({ messages: [] }, undefined)).toMatchObject({ stop: true });
-		await sleep(10);
-		expect(session.calls).toHaveLength(2);
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "Report gen 1" }]));
+		const secondStop = await emitStop(host, ctx);
+		expect(secondStop.continue).toBe(true);
+		expect(countHandoffCompactions(manager)).toBe(2);
 		expect(stateFor(ctx).state.relay.generation).toBe(2);
 		expect(host.messages).toHaveLength(0);
 	});

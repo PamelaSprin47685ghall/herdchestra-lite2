@@ -1,86 +1,25 @@
-// Station handoff state transitions. The ticket owns the async flow; these
-// synchronous functions own the relay state it leaves behind.
-//
-// The handoff transaction is recorded before the compaction starts: session id,
-// branch handoff count, and source generation. A later count above that
-// baseline proves the compact committed even if the relay advance was
-// interrupted, so recovery advances the generation instead of compacting a
-// second time.
+// Station handoff state transitions. Pure synchronous functions.
 
-import { countHandoffCompactions } from "../handoff/session.mjs";
-import { debugLog } from "../handoff/debug.mjs";
-import { sessionFor } from "../host/capture.mjs";
+import { appendHandoffCompaction } from "../handoff/session.mjs";
+import { setAgentMessages } from "../host/capture.mjs";
+import { appendHistoryMessage } from "../host/hack-context.mjs";
+import { truncateForHostBoundary } from "../scope/index.mjs";
 import {
 	applyLedgerEvaluation,
 	beginGenerationAfterHandoff,
-	recordHandoffFailure,
+	successorOpeningText,
 } from "../relay/index.mjs";
 
-function safeSessionFor(ctx) {
-	try {
-		return sessionFor(ctx);
-	} catch {
-		return null;
-	}
-}
-
-function sessionIdOf(session) {
-	try {
-		return session?.sessionManager?.getSessionId?.() ?? null;
-	} catch {
-		return null;
-	}
-}
-
-function handoffCountOf(session) {
-	return countHandoffCompactions(session?.sessionManager ?? null);
-}
-
-/**
- * Arm one handoff and record its transaction target in the same synchronous
- * state transition that flips `handoffPending`.
- */
-function armHandoff(station, ctx) {
+function armHandoff(station, _ctx) {
 	const relay = station.state.relay;
 	if (!relay || relay.canStop) return false;
-	const session = safeSessionFor(ctx) ?? station.handoffSession ?? null;
-	if (session) station.handoffSession = session;
-	const sessionId = sessionIdOf(session) ?? station.handoffSessionId ?? null;
-	station.handoffSessionId = sessionId;
-	const existing = relay.handoffTarget;
-	const baseline = existing?.baseline ?? handoffCountOf(session);
+	station.handoffReport = null;
 	station.state.relay = {
 		...relay,
 		handoffPending: true,
-		handoffTarget: {
-			sessionId,
-			baseline,
-			fromGeneration: existing?.fromGeneration ?? relay.generation,
-			at: existing?.at ?? Date.now(),
-		},
 	};
 	station.persist();
 	station.registry?.markPending?.(station);
-	return true;
-}
-
-/** Fill a transaction target restored without one before the compaction starts. */
-function ensureHandoffTarget(station, session) {
-	const relay = station.state.relay;
-	if (!relay?.handoffPending) return false;
-	if (relay.handoffTarget) return true;
-	const sessionId = sessionIdOf(session) ?? station.handoffSessionId ?? null;
-	station.handoffSessionId = sessionId;
-	station.state.relay = {
-		...relay,
-		handoffTarget: {
-			sessionId,
-			baseline: handoffCountOf(session),
-			fromGeneration: relay.generation,
-			at: Date.now(),
-		},
-	};
-	station.persist();
 	return true;
 }
 
@@ -97,33 +36,6 @@ function advanceRelayForHandoff(station, options = {}) {
 	return true;
 }
 
-/**
- * Recognize a handoff that already committed but whose relay advance was
- * interrupted. The caller must then start a fresh successor request instead of
- * compacting again.
- */
-function recoverHandoffCommit(station, session) {
-	const relay = station.state.relay;
-	const target = relay?.handoffTarget;
-	if (!relay?.handoffPending || !target || target.baseline === null) return false;
-	const liveId = sessionIdOf(session);
-	if (target.sessionId && liveId && target.sessionId !== liveId) return false;
-	const after = handoffCountOf(session);
-	if (after === null || after <= target.baseline) return false;
-	const advanced = advanceRelayForHandoff(station, {
-		expectedGeneration: target.fromGeneration,
-		at: Date.now(),
-	});
-	if (advanced) {
-		debugLog("handoff.recover", {
-			generation: station.state.relay.generation,
-			fromGeneration: target.fromGeneration,
-			after,
-		});
-	}
-	return advanced;
-}
-
 function recordLedgerEvaluation(station, phases, op, options = {}) {
 	const applied = applyLedgerEvaluation(station.state.relay, phases, {
 		op,
@@ -134,19 +46,63 @@ function recordLedgerEvaluation(station, phases, op, options = {}) {
 	return applied;
 }
 
-/** Record a failed handoff. The ticket owns the flow, the station owns state. */
-function recordHandoffFailureAt(station, error, at) {
-	station.state.relay = recordHandoffFailure(station.state.relay, error, { at });
-	station.persist();
+function captureHandoffReport(station, text) {
+	if (!station.state.relay?.handoffPending) return false;
+	const trimmed = typeof text === "string" ? text.trim() : "";
+	if (!trimmed) return false;
+	station.handoffReport = trimmed;
+	return true;
+}
+
+function commitSelfHandoff(station, ctx, report) {
+	const relay = station.state.relay;
+	if (!relay || !relay.handoffPending || relay.canStop) return { ok: false };
+	const opening = successorOpeningText(relay, report);
+	const manager = station.manager ?? ctx?.sessionManager ?? null;
+	const compacted = appendHandoffCompaction(
+		manager,
+		opening,
+		station.lastTotalInput ?? 0,
+	);
+	if (!compacted && manager) {
+		appendHistoryMessage(
+			manager,
+			{
+				role: "custom",
+				customType: "herd-relay-handoff",
+				content: [{ type: "text", text: opening }],
+				timestamp: Date.now(),
+			},
+			ctx,
+		);
+	}
+	truncateForHostBoundary(station.state);
+	station.resetUsageWatermark();
+	station.handoffReport = null;
+	const advanced = advanceRelayForHandoff(station, {
+		expectedGeneration: relay.generation,
+		at: Date.now(),
+	});
+	station.registry?.clearPending?.(station);
+	if (manager && typeof manager.buildSessionContext === "function") {
+		try {
+			const rebuilt = manager.buildSessionContext()?.messages;
+			if (Array.isArray(rebuilt)) setAgentMessages(ctx, rebuilt);
+		} catch {
+			// Keep existing agent messages if context rebuild fails.
+		}
+	}
+	return {
+		ok: advanced,
+		opening,
+		relay: station.state.relay,
+	};
 }
 
 export {
 	armHandoff,
-	ensureHandoffTarget,
+	captureHandoffReport,
+	commitSelfHandoff,
 	advanceRelayForHandoff,
-	recoverHandoffCommit,
 	recordLedgerEvaluation,
-	recordHandoffFailureAt,
-	sessionIdOf,
-	safeSessionFor,
 };

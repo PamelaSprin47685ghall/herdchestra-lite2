@@ -3,7 +3,6 @@
 import { sessionFor } from "../host/capture.mjs";
 import { hackContext } from "../host/hack-context.mjs";
 import { installScopeDispatch } from "../host/scope-dispatch.mjs";
-import { installRelayGate } from "../handoff/index.mjs";
 
 export function wireHooks(pi, registry) {
 	const bindDispatch = (ctx) => {
@@ -52,7 +51,6 @@ export function wireHooks(pi, registry) {
 	);
 	pi.on("before_agent_start", (event, ctx) => {
 		const station = registry.stationFor(ctx);
-		installRelayGate(station, ctx);
 		return station.onBeforeAgentStart(event, ctx);
 	});
 	pi.on("session_stop", (_event, ctx) =>

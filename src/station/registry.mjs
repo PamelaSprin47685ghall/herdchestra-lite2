@@ -5,7 +5,6 @@ import { SessionStation } from "./station.mjs";
 const nullTickets = {
 	steer: () => {},
 	canSteer: false,
-	sessionStop: (station, ctx) => undefined,
 	activateTools: (activeTools, prompt, changed) =>
 		changed ? { systemPrompt: prompt } : undefined,
 };

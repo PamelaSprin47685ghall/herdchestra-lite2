@@ -7,10 +7,9 @@
 // every relay state transition through the SessionStation's synchronous methods.
 
 import { currentScope } from "../scope/index.mjs";
-import { installRelayGate } from "../handoff/index.mjs";
 import { errorResult } from "./results.mjs";
 import {
-	isTodoView,
+	handoffToolBlockedReason,
 	relayStatusText,
 } from "../relay/index.mjs";
 
@@ -75,13 +74,10 @@ export async function todoTicket(station, params, ctx) {
 			"todo is forbidden inside any active scope. Close every scope first, then call todo outside all scopes.",
 		);
 	}
-	if (
-		station.state.relay?.handoffPending &&
-		!isTodoView(params)
-	) {
+	if (station.state.relay?.handoffPending) {
 		return errorResult(
 			"RELAY_HANDOFF_PENDING",
-			"A relay handoff is pending. A todo view is allowed for diagnosis; do not change the ledger. The runtime runs the system /handoff.",
+			handoffToolBlockedReason(),
 		);
 	}
 	if (typeof ctx?.invokeTool !== "function") {
@@ -141,7 +137,6 @@ export async function todoTicket(station, params, ctx) {
 	});
 	if (applied.action === "handoff") {
 		station.armHandoff(ctx);
-		installRelayGate(station, ctx);
 	}
 
 	const nextDetails =

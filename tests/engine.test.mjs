@@ -150,7 +150,6 @@ describe("createState", () => {
         firstEvaluation: null,
         canStop: false,
         handoffPending: false,
-        handoffTarget: null,
         promotionInvalidated: false,
         handoffError: null,
         lastLedger: null,

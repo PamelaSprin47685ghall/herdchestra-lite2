@@ -8,8 +8,8 @@ import {
 	installBuiltinSlashExecutor,
 } from "../host/capture.mjs";
 
-export async function installCapture(pi, builtinExecutor, retainedTail) {
-	installBuiltinSlashExecutor(builtinExecutor, retainedTail);
+export async function installCapture(pi, builtinExecutor) {
+	installBuiltinSlashExecutor(builtinExecutor);
 	let injected = null;
 	try {
 		injected = pi?.pi ?? null;

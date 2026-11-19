@@ -5,7 +5,6 @@ import {
 	sendSteerTicket,
 	switchModelTicket,
 } from "../tools/tickets.mjs";
-import { sessionStopTicket } from "../handoff/index.mjs";
 
 async function restoreScopedModel(station, ctx, req, result, finish) {
 	const outcome = await switchModelTicket(station.pi, ctx, req);
@@ -21,7 +20,6 @@ export function buildTickets(pi) {
 		},
 		canSteer: typeof pi?.sendUserMessage === "function",
 		restoreScopedModel,
-		sessionStop: sessionStopTicket,
 		activateTools: (activeTools, prompt, changed) =>
 			activateToolsTicket(pi, activeTools, prompt, changed),
 	};

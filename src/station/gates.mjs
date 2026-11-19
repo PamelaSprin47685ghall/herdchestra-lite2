@@ -12,8 +12,10 @@ import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../host/policy.mjs";
 import { injectSystemPrompt } from "../host/prompts.mjs";
 import {
 	firstEvaluationNudge,
-	isTodoView,
+	handoffEmptyReportNudge,
+	handoffToolBlockedReason,
 	openLedgerNudge,
+	successorStartNudge,
 } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import {
@@ -31,6 +33,13 @@ function onAssistantMessage(station, message, ctx) {
 		station.preparingMessage = message;
 		station.rememberCallGroups(message);
 		station.processAssistantMessage(message, { persisted: false });
+		if (station.state.relay?.handoffPending && toolCalls(message).length === 0) {
+			const text = message?.content
+				?.filter((block) => block?.type === "text")
+				.map((block) => block.text)
+				.join("\n") ?? "";
+			station.captureHandoffReport(text);
+		}
 		station.maybeNudge(message, ctx);
 	} catch (error) {
 		station.lastError = String(error?.message ?? error);
@@ -50,6 +59,13 @@ function onMessageEnd(station, event, ctx) {
 			const found = station.assistantForToolCall(controls[0].id);
 			station.processAssistantMessage(message, { persisted: Boolean(found) });
 		}
+		if (station.state.relay?.handoffPending && toolCalls(message).length === 0) {
+			const text = message?.content
+				?.filter((block) => block?.type === "text")
+				.map((block) => block.text)
+				.join("\n") ?? "";
+			station.captureHandoffReport(text);
+		}
 		station.maybeNudge(message, ctx);
 	} catch (error) {
 		station.lastError = String(error?.message ?? error);
@@ -60,19 +76,13 @@ function onMessageEnd(station, event, ctx) {
 function onToolCall(station, event, ctx, atDispatch = false) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
-		// Reject a known pending handoff before asking for tool approval.
-		// Scope also checks again at execution, after earlier calls finish.
-		if (event.toolName === "scope" && station.state.relay?.handoffPending) {
-			const args = parseArgs({
-				arguments: event.input ?? event.arguments ?? {},
-			});
-			if (args.begin !== undefined && args.begin !== null) {
-				return {
-					block: true,
-					reason:
-						"RELAY_HANDOFF_PENDING: a relay handoff is pending. Do not open a new scope; wait for the successor.",
-				};
-			}
+		// During a pending handoff, block ALL tool calls immediately before any
+		// dispatch deferral, and demand the handoff report in the message body.
+		if (station.state.relay?.handoffPending) {
+			return {
+				block: true,
+				reason: handoffToolBlockedReason(),
+			};
 		}
 		if (!atDispatch && station.deferScopePreflight(event.toolCallId, event.toolName)) {
 			return undefined;
@@ -84,16 +94,6 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 					block: true,
 					reason:
 						"TODO_OUTSIDE_SCOPE_ONLY: todo is forbidden inside any active scope. Close every scope first; todo only works outside all scopes.",
-				};
-			}
-			if (
-				station.state.relay?.handoffPending &&
-				!isTodoView(event.input ?? event.arguments ?? {})
-			) {
-				return {
-					block: true,
-					reason:
-						"RELAY_HANDOFF_PENDING: a relay handoff is pending. A todo view is allowed for diagnosis; do not change the ledger.",
 				};
 			}
 			station.persist();
@@ -168,14 +168,17 @@ function onContext(station, messages, ctx) {
 
 function onSessionStop(station, ctx) {
 	if (!station.relayOn(ctx)) return undefined;
-	if (station.handoffPromise) return undefined;
 	const scope = currentScope(station.state);
 	if (scope) return continueFeedback(insideScopeText(station.state));
 	const relay = station.state.relay;
 	if (!relay) return continueFeedback(firstEvaluationNudge());
 	if (relay.canStop) return undefined;
 	if (relay.handoffPending) {
-		return station.tickets.sessionStop(station, ctx);
+		if (station.handoffReport) {
+			const committed = station.commitSelfHandoff(ctx, station.handoffReport);
+			if (committed.ok) return continueFeedback(successorStartNudge(committed.relay));
+		}
+		return continueFeedback(handoffEmptyReportNudge());
 	}
 	if (!relay.lastLedger) {
 		return continueFeedback(firstEvaluationNudge());
@@ -188,7 +191,7 @@ function onSessionStop(station, ctx) {
 	}
 	if (relay.lastLedger.empty) {
 		station.armHandoff(ctx);
-		return station.tickets.sessionStop(station, ctx);
+		return continueFeedback(handoffEmptyReportNudge());
 	}
 	return continueFeedback(openLedgerNudge(relay, relay.lastLedger));
 }

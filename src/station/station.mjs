@@ -56,6 +56,7 @@ import {
 } from "../host/pricing.mjs";
 import {
 	firstEvaluationNudge,
+	handoffEmptyReportNudge,
 	openLedgerNudge,
 } from "../relay/index.mjs";
 import {
@@ -83,9 +84,8 @@ import {
 import {
 	advanceRelayForHandoff,
 	armHandoff,
-	ensureHandoffTarget,
-	recoverHandoffCommit,
-	recordHandoffFailureAt,
+	captureHandoffReport,
+	commitSelfHandoff,
 	recordLedgerEvaluation,
 } from "./handoff-state.mjs";
 import {
@@ -139,11 +139,7 @@ export class SessionStation {
 		this.lastError = null;
 		this.hostBoundaryKey = null;
 		this.agentPolicy = null;
-		this.handoffPromise = null;
-		this.gatedAgentHooks = new WeakSet();
-		this.handoffSession = null;
-		this.handoffSessionId = null;
-		this.successorStartedGeneration = null;
+		this.handoffReport = null;
 		this.relayState = true;
 		this.todoGrantKey = null;
 		// Measured usage baseline. Populated from live messages and restored
@@ -708,7 +704,9 @@ export class SessionStation {
 		}
 		if (relay.canStop) return;
 		if (relay.handoffPending) {
-			// Leave the next request to the successor. Do not queue a nudge.
+			if (!this.handoffReport) {
+				this.deliverSteer(handoffEmptyReportNudge());
+			}
 			return;
 		}
 		if (!relay.lastLedger) {
@@ -724,6 +722,7 @@ export class SessionStation {
 		}
 		if (relay.lastLedger.empty) {
 			this.armHandoff(ctx);
+			this.deliverSteer(handoffEmptyReportNudge());
 			return;
 		}
 		this.deliverSteer(openLedgerNudge(relay, relay.lastLedger));
@@ -780,37 +779,20 @@ export class SessionStation {
 		return armHandoff(this, ctx);
 	}
 
+	captureHandoffReport(text) {
+		return captureHandoffReport(this, text);
+	}
+
+	commitSelfHandoff(ctx, report) {
+		return commitSelfHandoff(this, ctx, report);
+	}
+
 	advanceRelayForHandoff(options = {}) {
 		return advanceRelayForHandoff(this, options);
 	}
 
-	ensureHandoffTarget(session) {
-		return ensureHandoffTarget(this, session);
-	}
-
-	recoverHandoffCommit(session) {
-		return recoverHandoffCommit(this, session);
-	}
-
 	recordLedgerEvaluation(phases, op, options = {}) {
 		return recordLedgerEvaluation(this, phases, op, options);
-	}
-
-	recordHandoffFailureAt(error, at) {
-		return recordHandoffFailureAt(this, error, at);
-	}
-
-	ensureModelCallGate(ctx, gateTicket, resolvedSession = null) {
-		if (typeof gateTicket !== "function") return false;
-		const session = resolvedSession ?? this.handoffSession ?? null;
-		const agent = session?.agent ?? null;
-		if (!agent || typeof agent.addBeforeModelCall !== "function") return false;
-		if (this.gatedAgentHooks.has(agent)) return true;
-		this.gatedAgentHooks.add(agent);
-		agent.addBeforeModelCall((context, signal) =>
-			gateTicket(this, session, context, signal, ctx),
-		);
-		return true;
 	}
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------

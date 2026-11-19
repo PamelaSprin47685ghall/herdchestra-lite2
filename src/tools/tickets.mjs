@@ -8,8 +8,15 @@
  */
 
 import { errorResult, textResult } from "./results.mjs";
-import { safeSession } from "../handoff/session.mjs";
-import { sendSlashPrompt } from "../host/capture.mjs";
+import { sendSlashPrompt, sessionFor } from "../host/capture.mjs";
+
+function safeSession(ctx) {
+	try {
+		return sessionFor(ctx);
+	} catch {
+		return null;
+	}
+}
 
 /** Fire-and-forget steer delivery. The scope result already reports the send. */
 export async function sendSteerTicket(pi, text) {

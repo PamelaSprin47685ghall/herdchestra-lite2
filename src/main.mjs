@@ -13,20 +13,13 @@ export async function activate(pi) {
 	// Resolve the builtin at the extension entry so compiled omp can bind its
 	// embedded module rather than resolving from a transitive helper.
 	let builtinExecutor;
-	let retainedTail;
 	try {
 		const registry = await import("@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry");
 		builtinExecutor = registry.executeBuiltinSlashCommand;
 	} catch {
 		// The standalone test environment has no omp module registry.
 	}
-	try {
-		const settings = await import("@oh-my-pi/pi-coding-agent/session/context-settings");
-		retainedTail = settings.cfgCompactionKeepRecentTokens;
-	} catch {
-		// Older hosts may expose get/set directly on Settings.
-	}
-	await installCapture(pi, builtinExecutor, retainedTail);
+	await installCapture(pi, builtinExecutor);
 	const pricingCatalog = await loadPricingCatalog();
 	wireExtension(pi, pricingCatalog);
 	installStatus(pi);

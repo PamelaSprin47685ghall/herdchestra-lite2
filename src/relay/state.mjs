@@ -26,7 +26,6 @@ export function createRelay() {
 		firstEvaluation: null,
 		canStop: false,
 		handoffPending: false,
-		handoffTarget: null,
 		promotionInvalidated: false,
 		handoffError: null,
 		lastLedger: null,
@@ -67,18 +66,6 @@ function copyLastHandoff(lastHandoff) {
  * compaction count at arm time; a later count above it proves the commit
  * landed even when the process stopped before the relay state advanced.
  */
-function copyHandoffTarget(target) {
-	if (!isPlainObject(target)) return null;
-	return {
-		sessionId: typeof target.sessionId === "string" ? target.sessionId : null,
-		baseline: nonNegativeInteger(target.baseline) ? target.baseline : null,
-		fromGeneration: nonNegativeInteger(target.fromGeneration)
-			? target.fromGeneration
-			: 0,
-		at: finiteNumber(target.at) ? target.at : 0,
-	};
-}
-
 export function copyRelay(relay) {
 	const source = isPlainObject(relay) ? relay : createRelay();
 	return {
@@ -88,7 +75,6 @@ export function copyRelay(relay) {
 			: null,
 		canStop: source.canStop === true,
 		handoffPending: source.handoffPending === true,
-		handoffTarget: copyHandoffTarget(source.handoffTarget),
 		promotionInvalidated: source.promotionInvalidated === true,
 		handoffError:
 			typeof source.handoffError === "string" ? source.handoffError : null,
@@ -109,16 +95,6 @@ export function isValidRelay(value) {
 	if (typeof value.canStop !== "boolean") return false;
 	if (typeof value.handoffPending !== "boolean") return false;
 	if (typeof value.promotionInvalidated !== "boolean") return false;
-	if (value.handoffTarget !== undefined && value.handoffTarget !== null) {
-		const target = value.handoffTarget;
-		if (!isPlainObject(target)) return false;
-		if (target.sessionId !== undefined && target.sessionId !== null &&
-			typeof target.sessionId !== "string") return false;
-		if (target.baseline !== undefined && target.baseline !== null &&
-			!nonNegativeInteger(target.baseline)) return false;
-		if (!nonNegativeInteger(target.fromGeneration)) return false;
-		if (!finiteNumber(target.at)) return false;
-	}
 	if (
 		value.handoffError !== null &&
 		typeof value.handoffError !== "string"

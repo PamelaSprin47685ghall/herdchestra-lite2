@@ -50,7 +50,6 @@ function state() {
 		descriptor: null,
 		sessions: new WeakMap(),
 		builtinSlashExecutor: null,
-		retainedTail: null,
 	};
 	Object.defineProperty(globalThis, STATE_KEY, {
 		value: created,
@@ -126,18 +125,13 @@ export function parseSlashCommand(text) {
 	};
 }
 
-export function installBuiltinSlashExecutor(executor, retainedTail) {
+export function installBuiltinSlashExecutor(executor) {
 	const captured = state();
 	const previous = captured.builtinSlashExecutor;
 	if (typeof executor === "function") captured.builtinSlashExecutor = executor;
-	if (retainedTail) captured.retainedTail = retainedTail;
 	return () => {
 		captured.builtinSlashExecutor = previous;
 	};
-}
-
-export function retainedTailSetting() {
-	return state().retainedTail;
 }
 
 /**

@@ -67,6 +67,34 @@ describe("stage prompts", () => {
     expect(stagePromptsBlock).not.toMatch(/\bS[1-5]\b/);
   });
 
+  test("carries the cross-stage order discipline and the parallelism mandate", () => {
+    expect(stagePromptsBlock).toContain(
+      "The four working stages may open in any order, and no stage gates another",
+    );
+    expect(stagePromptsBlock).toContain("it is not a license to skip");
+    expect(stagePromptsBlock).toContain(
+      "In principle the work runs acceptance-cases, then architecture-design, then orchestration-plan, and only then direct-execution",
+    );
+    expect(stagePromptsBlock).toContain(
+      "Each stage leaves its artifact on disk and pins its path before the next begins",
+    );
+    expect(stagePromptsBlock).toContain(
+      "when execution exposes a gap, reopen the stage that owns it and update its artifact",
+    );
+    expect(stagePromptsBlock).toContain("Maximize parallelism");
+    expect(stagePromptsBlock).toContain(
+      "A slice that could have started earlier is a defect in the plan",
+    );
+  });
+
+  test("states the stage order before the stage sections it governs", () => {
+    const discipline = stagePromptsBlock.indexOf("may open in any order");
+    expect(discipline).toBeGreaterThan(-1);
+    expect(discipline).toBeLessThan(
+      stagePromptsBlock.indexOf("[Stage: decision-framing]"),
+    );
+  });
+
   test("keeps runtime state out of the stable prefix", () => {
     expect(stagePromptsBlock).not.toContain("Budget");
     expect(stagePromptsBlock).not.toContain("herdMode");

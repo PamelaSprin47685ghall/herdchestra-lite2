@@ -29,6 +29,10 @@ section records what this release itself changes.
 - `README.md` and `docs/design/stages.md` mirror both changes. The stage enum,
   the gates, and every runtime behaviour are unchanged: this release changes
   prompt text and documentation only.
+- `tests/prompts.test.mjs` pins both paragraphs by exact substring and pins the
+  discipline to a position before the stage sections it governs, so a later
+  edit that drops the order rule or the parallelism mandate turns the suite
+  red.
 - `docs/design/stages.md` §9.1 regained the sentence about a free
   `ast_edit` preview write, which the source has carried since before 2.1.0.
 

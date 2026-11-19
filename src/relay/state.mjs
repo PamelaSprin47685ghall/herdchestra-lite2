@@ -1,7 +1,7 @@
 // Relay state: creation, copying, and validation. Pure data. No I/O.
 //
 // The invariant: a natural stop is legal only after an empty ledger triggers a
-// real /handoff and the successor's FIRST todo evaluation is also empty. Every
+// self-handoff and the successor's FIRST todo evaluation is also empty. Every
 // other outside-scope stop must produce a nudge.
 
 const FIRST_EVALUATIONS = new Set(["empty", "nonempty"]);
@@ -59,13 +59,6 @@ function copyLastHandoff(lastHandoff) {
 	return copied;
 }
 
-/**
- * The handoff transaction record. It is written when the relay arms a
- * handoff, before the compaction starts, and cleared only when the generation
- * advances (or the handoff fails). `baseline` is the branch's handoff
- * compaction count at arm time; a later count above it proves the commit
- * landed even when the process stopped before the relay state advanced.
- */
 export function copyRelay(relay) {
 	const source = isPlainObject(relay) ? relay : createRelay();
 	return {

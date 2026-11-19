@@ -1350,4 +1350,66 @@ describe("handoff transaction recovery", () => {
 		expect(stateFor(ctx).state.relay.generation).toBe(2);
 		expect(host.messages).toHaveLength(0);
 	});
+
+	test("successor opening audit scopes before first todo still promotes and never sees predecessor elders or messages", async () => {
+		const { host, ctx, manager, session } = await start({ mode: "print" });
+		// Predecessor opens and closes an unarchived scope in generation 0.
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("b_pre", "scope", { begin: { intent: "predecessor work", budget: { read: 1 }, elder_report: null } })]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("r_pre", "read", { path: "predecessor-secret.txt" })]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("e_pre", "scope", { end: true })]),
+		);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("t1", "todo", { op: "init", list: [] })]),
+		);
+		await runAssistant(host, ctx, assistant([{ type: "text", text: "Predecessor handoff report" }]));
+		const handoffStop = await emitStop(host, ctx);
+		expect(handoffStop.continue).toBe(true);
+		expect(stateFor(ctx).state.relay.generation).toBe(1);
+		expect(stateFor(ctx).state.epoch).toBe(1);
+		expect(countHandoffCompactions(manager)).toBe(1);
+
+		// Compaction boundary cuts off all predecessor messages from rebuilt context.
+		const rebuilt = manager.buildSessionContext().messages;
+		expect(rebuilt).toHaveLength(1);
+		expect(rebuilt[0].role).toBe("compactionSummary");
+		expect(rebuilt[0].content[0].text).toContain("Predecessor handoff report");
+		expect(session.agent.state.messages).toHaveLength(1);
+
+		// Successor opens an audit scope with elder_report: null — must NOT require predecessor's elder report.
+		const auditBegin = await runAssistant(
+			host,
+			ctx,
+			assistant([call("b_audit", "scope", { begin: { intent: "audit", budget: { read: 1 }, elder_report: null } })]),
+		);
+		expect(auditBegin[0].blocked).toBe(false);
+		expect(auditBegin[0].result.isError).toBe(false);
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("e_audit", "scope", { end: true })]),
+		);
+
+		// Successor's first todo evaluation is empty -> promotes and allows stopping cleanly.
+		const promoted = await runAssistant(
+			host,
+			ctx,
+			assistant([call("t2", "todo", { op: "init", list: [] })]),
+		);
+		expect(promoted[0].output.details.relay.canStop).toBe(true);
+		expect(promoted[0].output.details.relay.promotionInvalidated).toBe(false);
+		expect(await emitStop(host, ctx)).toBeUndefined();
+	});
 });

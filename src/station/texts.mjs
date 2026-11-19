@@ -1,6 +1,7 @@
 // Station texts: every model-facing scope string. Pure. No I/O.
 
 import { budgetText, currentScope } from "../scope/index.mjs";
+import { handoffToolBlockedReason } from "../relay/index.mjs";
 
 function beginText(scope) {
 	return [
@@ -113,7 +114,13 @@ export function skillReceiptText(state, relayOn = true) {
 		]
 		: ["You are outside all scopes."];
 	if (relayOn) {
-		lines.push("Before stopping, call todo to evaluate the ledger; finishing is not a tool call.");
+		if (state.relay?.handoffPending) {
+			lines.push(handoffToolBlockedReason());
+		} else if (!scope && state.relay?.canStop) {
+			lines.push("The relay allows you to stop. Write the final answer in your message body.");
+		} else {
+			lines.push("Before stopping, call todo to evaluate the ledger; finishing is not a tool call.");
+		}
 	} else if (!scope) {
 		lines.push("Finishing is not a tool call.");
 	}

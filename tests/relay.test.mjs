@@ -205,6 +205,15 @@ describe("handoff transitions", () => {
 		expect(relay.promotionInvalidated).toBe(true);
 	});
 
+	test("invalidatePromotion is a no-op before promotion so successor audit scopes never block promotion", () => {
+		const relay = beginGenerationAfterHandoff(createRelay(), { at: 42, fromGeneration: 0 });
+		const afterAuditScope = invalidatePromotion(relay);
+		expect(afterAuditScope.promotionInvalidated).toBe(false);
+		const evaluated = applyLedgerEvaluation(afterAuditScope, [], { op: "init", at: 43 });
+		expect(evaluated.action).toBe("promoted");
+		expect(evaluated.relay.canStop).toBe(true);
+	});
+
 	test("recordHandoffFailure clears pending, keeps the error, and stays retryable", () => {
 		const relay = recordHandoffFailure(
 			{ ...createRelay(), handoffPending: true },

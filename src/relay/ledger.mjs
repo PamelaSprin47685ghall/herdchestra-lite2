@@ -167,6 +167,7 @@ export function beginGenerationAfterHandoff(relay, options = {}) {
 }
 
 export function invalidatePromotion(relay) {
+	if (relay?.canStop !== true) return relay;
 	return {
 		...copyRelay(relay),
 		canStop: false,

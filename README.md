@@ -26,6 +26,8 @@ The contract lives here. The reasoning behind it lives in three places:
 
 In default mode the four non-framing stages may be opened in any order, repeated, or revisited; no stage gates another. While herd mode is on, only `decision-framing` may open.
 
+Open order is nevertheless a principle, not a prohibition: the work runs `acceptance-cases`, then `architecture-design`, then `orchestration-plan`, and only then `direct-execution`. Each stage leaves its artifact on disk and pins its path, the plan maximizes genuine parallelism, and execution follows the plan rather than deciding the design a second time. The freedom to jump serves exploration, rework, and repair; it is not a license to skip.
+
 The stage sections for `decision-framing`, `acceptance-cases`, `architecture-design`, and `orchestration-plan` live in the system prompt as a stable prefix, so a provider can reuse its prompt cache. A begin receipt only names its stage; it does not repeat the prompt text. `direct-execution` has no section: it follows the `orchestration-plan` artifact.
 
 ## Scope permission

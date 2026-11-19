@@ -81,5 +81,7 @@ export const orchestrationPlanPrompt = [
   "",
   "Gene Amdahl and Donald G. Reinertsen — compress the single-board critical path. Amdahl: the serial fraction sets the ceiling, so shrink the serial part before adding parallel capacity. Reinertsen: shorten queues, delete artificial audit batches and wave boundaries that exist only for ceremony, and pipeline the work so a ready successor is released the moment its input contract is clear.",
   "",
+  "Maximize parallelism. Open every slice that shares no mutable state with another in one batch, delete a wave that exists only for ceremony, and let a slice wait only on a true dependency. A slice that could have started earlier is a defect in the plan, not a scheduling preference.",
+  "",
   "The plan must state: the worker roster with roles and slices; each task's boundary, inputs, outputs, and stop condition; the safety and liveness invariants; and the critical path with its serial fraction and the concrete steps that shorten it. Close with `pin` recording the plan's path on disk.",
 ].join("\n");

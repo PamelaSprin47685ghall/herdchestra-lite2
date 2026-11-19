@@ -4,6 +4,34 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-11-19
+
+This release numbers the workflow work accumulated since 2.1.0 as a minor
+release rather than a patch: the diagnostics ring, delta state persistence, the
+host seam self-check, the silent-failure fixes, and now the cross-stage
+discipline in the Stage Prompts block arrive together. The 2.1.1–2.1.6 entries
+below record the individual steps that led here and stay as history; this
+section records what this release itself changes.
+
+### Changed
+
+- The Stage Prompts block now carries the cross-stage discipline: the four
+  working stages may open in any order and none gates another, but in principle
+  the work runs `acceptance-cases`, then `architecture-design`, then
+  `orchestration-plan`, and only then `direct-execution`. Each stage leaves its
+  artifact on disk and pins its path, and execution follows the plan instead of
+  deciding the design a second time. Jumping stays legal for exploration,
+  rework, and repair; it is not a license to skip.
+- The `orchestration-plan` section adds a "Maximize parallelism" paragraph:
+  open every slice that shares no mutable state with another in one batch, drop
+  waves that exist only for ceremony, wait only on a true dependency, and treat
+  a slice that could have started earlier as a defect in the plan.
+- `README.md` and `docs/design/stages.md` mirror both changes. The stage enum,
+  the gates, and every runtime behaviour are unchanged: this release changes
+  prompt text and documentation only.
+- `docs/design/stages.md` §9.1 regained the sentence about a free
+  `ast_edit` preview write, which the source has carried since before 2.1.0.
+
 ## [2.1.6] — 2026-11-19
 
 ### Fixed

@@ -80,6 +80,7 @@ export const stagePromptsBlock = [
   stagePromptsStart,
   "# Stage Prompts",
   "Exactly one stage section governs at a time: the section named by the innermost open scope. Outside all scopes no stage section applies. Treat the other sections as reference only; they never override the named stage.",
+  "The four working stages may open in any order, and no stage gates another. That freedom serves exploration, rework, and repair; it is not a license to skip. In principle the work runs acceptance-cases, then architecture-design, then orchestration-plan, and only then direct-execution, because sharpening comes before cutting. Each stage leaves its artifact on disk and pins its path before the next begins. Execution follows the plan instead of deciding the design a second time: when execution exposes a gap, reopen the stage that owns it and update its artifact rather than improvising past it.",
   decisionFramingPrompt,
   acceptanceCasesPrompt,
   architectureDesignPrompt,

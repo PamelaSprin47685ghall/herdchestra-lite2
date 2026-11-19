@@ -20,6 +20,7 @@
 [ADR 0001](../adr/0001-stage-names.md)，只在查阅旧对话时才需要。
 
 - 在 `herdMode === false`（默认模式）下，模型可在 `acceptance-cases`、`architecture-design`、`orchestration-plan`、`direct-execution` 之间**任意跳转、回退或重复开启**，不设前置阶段门禁。
+- 不设门禁不等于可以跳过。原则上工作按 `acceptance-cases` → `architecture-design` → `orchestration-plan` → `direct-execution` 推进：每个阶段先把产物落盘并 `pin` 路径，执行阶段按计划施工而不是重新设计，执行中发现缺口就回到拥有该缺口的阶段补正。自由跳转的正当用途是探索、返工与补漏；把前序阶段做成事后补写的摆设，是这条纪律唯一禁止的事。
 - 一旦进入 `herdMode === true`，模型开启新 `scope` 时**只能**指定 `stage: "decision-framing"`。
 - 离开所有 `scope` 后，当前天然处于无阶段状态，不在 `state` 中维护全局 `stage`。
 - 运行时枚举、`scope.begin.stage` 的 schema、提示词与工具契约中**一律不得出现 `S1`–`S5`**。
@@ -181,6 +182,7 @@ const STAGE_PROMPTS_BLOCK = [
   "<!-- herdchestra-lite2:stage-prompts v1 -->",
   "# Stage Prompts",
   "Exactly one stage section governs at a time: the section named by the innermost open scope. Outside all scopes no stage section applies. Treat the other sections as reference only; they never override the named stage.",
+  "The four working stages may open in any order, and no stage gates another. That freedom serves exploration, rework, and repair; it is not a license to skip. In principle the work runs acceptance-cases, then architecture-design, then orchestration-plan, and only then direct-execution, because sharpening comes before cutting. Each stage leaves its artifact on disk and pins its path before the next begins. Execution follows the plan instead of deciding the design a second time: when execution exposes a gap, reopen the stage that owns it and update its artifact rather than improvising past it.",
   DECISION_FRAMING_PROMPT,        // 9.1
   ACCEPTANCE_CASES_PROMPT,        // 9.2
   ARCHITECTURE_DESIGN_PROMPT,     // 9.3
@@ -225,7 +227,7 @@ Protocol:
 - Open-ended loop; keep going until every claim and choice passes at 95% confidence or better.
 - Below 95% confidence on the user's intent, call `ask` with the single highest-value-of-information question, the full context, and a recommended default. Never ask an empty "may I proceed" question.
 - Draft the artifact first and ask the user to correct it, not to imagine it.
-- `ask`, `wait`, `pin`, and the control tools are free; they consume no scope budget.
+- `ask`, `wait`, `pin`, and the control tools are free; they consume no scope budget. The write that resolves a staged ast_edit preview is free too.
 - This stage may end naturally and wait for the user. Never manufacture work to keep the turn alive.
 - Before closing, record the framed decision with `pin`: objectives, chosen alternative, rejected alternatives, fatal assumptions, Non-Goals.
 ```
@@ -289,6 +291,8 @@ Frederick P. Brooks Jr. — defeat the Mythical Man-Month at the single-board le
 Leslie Lamport and Edsger W. Dijkstra — write Safety invariants (mutual exclusion, stamp integrity, dead-actor rejection, idempotent retries) and Liveness guarantees (progress, quiescence, wake-all completeness) as guarded transitions. Every await point names the guard that protects it; every retry is idempotent; a dead worker's work is reclaimable without duplicating effects.
 
 Gene Amdahl and Donald G. Reinertsen — compress the single-board critical path. Amdahl: the serial fraction sets the ceiling, so shrink the serial part before adding parallel capacity. Reinertsen: shorten queues, delete artificial audit batches and wave boundaries that exist only for ceremony, and pipeline the work so a ready successor is released the moment its input contract is clear.
+
+Maximize parallelism. Open every slice that shares no mutable state with another in one batch, delete a wave that exists only for ceremony, and let a slice wait only on a true dependency. A slice that could have started earlier is a defect in the plan, not a scheduling preference.
 
 The plan must state: the worker roster with roles and slices; each task's boundary, inputs, outputs, and stop condition; the safety and liveness invariants; and the critical path with its serial fraction and the concrete steps that shorten it. Close with `pin` recording the plan's path on disk.
 ```

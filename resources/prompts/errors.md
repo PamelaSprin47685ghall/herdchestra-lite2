@@ -48,7 +48,7 @@ stage "decision-framing" answers why, not what, so it cannot carry a write scope
 
 ## rw-before-ledger
 
-This generation has not submitted its first todo ledger yet, so permission "rw" is refused. Close all scopes and call todo with a write operation to submit the ledger (a todo view does not count), or declare permission: "ro" for a read-only scope. permission "ro" is trusted and never enforced.
+This generation has not submitted its first todo ledger yet, so permission "rw" is refused. Close all scopes and call todo with a write operation to submit the ledger (a todo view does not count), or declare permission: "ro" for a read-only scope. permission "ro" is trusted and never enforced. Submit the remaining work, or `todo({ op: "init", list: [] })` when no user-requested work remains: an empty ledger is a lawful submission.
 
 ## herd-only-framing
 

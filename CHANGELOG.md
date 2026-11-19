@@ -10,6 +10,18 @@ All notable changes to this extension. The format follows
 
 ### Changed
 
+- The no-ledger nudge names both lawful ledger shapes. A model that had nothing
+  to do saw only `todo({op:"init", list:[{phase,items}]})` and "The ledger must
+  state what the user still needs", and invented work to satisfy it. The
+  `first-evaluation` receipt now also names `todo({op:"init", list: []})`, says
+  that an empty ledger is the lawful answer when nothing remains, and forbids
+  inventing work; the `rw` refusal and the status next-line name the same two
+  shapes. A regression test pins the symmetry. Judgment is untouched: the
+  successor's first evaluation is still empty-only for a promotion, and
+  `stop-verdict` keeps its order.
+  Verified live against `mistral/deepseek-v4-1-flash-1017`: one `你好` reached
+  generation 1 with an empty first evaluation and stopped in 22.9 s; no work
+  was invented.
 - `regret` is now `amend`. The mechanics are unchanged — remove the last
   completed beat, refund its budget, require a reflection — but the name and
   the prose no longer frame an ordinary correction as a confession.

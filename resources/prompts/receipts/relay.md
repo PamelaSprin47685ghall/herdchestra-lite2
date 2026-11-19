@@ -24,7 +24,7 @@ This result did not advance the relay evaluation. A todo view is read-only and d
 
 ## next.none
 
-No successful todo evaluation is recorded. Call todo outside all scopes before stopping.
+No successful todo evaluation is recorded. Before stopping, call todo outside all scopes: submit the remaining work, or list: [] when nothing remains.
 
 ## status.title
 
@@ -138,7 +138,10 @@ Generation {{generation}} takeover: read the handoff report at the top of the co
 
 You are outside all scopes, so todo is available and is the only functional tool you may call. Before stopping, evaluate the ledger with todo. You may open scopes first to investigate, but todo must be called after every scope closes.
 A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.
-The ledger must state what the user still needs, not merely what is easy to mark complete.
+The ledger must state what the user still needs, not merely what is easy to mark complete. Submit it in one of two shapes, whichever is true:
+- Work remains: todo({ op: "init", list: [{ phase: "<name>", items: ["<task>"] }] }), then work through the items.
+- No user-requested work remains: todo({ op: "init", list: [] }). An empty ledger is a lawful submission, not a failure: at generation 0 it arms the handoff, and a successor's first empty evaluation is the promotion that allows a natural stop.
+Never invent work to fill the ledger. An empty list is the correct answer when nothing is left.
 {{stop_rule}}
 Do not write the final user-facing answer until the relay reaches a promoted empty-ledger successor evaluation.
 

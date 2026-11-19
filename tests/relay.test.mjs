@@ -284,6 +284,20 @@ describe("relay text", () => {
 			}),
 		).toContain(doc["next.handoff"]);
 	});
+
+	test("the no-ledger nudge names both lawful ledger shapes", () => {
+		// A model with nothing to do receives this nudge four times in the stop
+		// path. When it named only the non-empty shape, the model invented work
+		// and burned the turn instead of submitting an empty ledger.
+		const text = firstEvaluationNudge();
+		expect(text).toContain('todo({ op: "init", list: [] })');
+		expect(text).toContain('todo({ op: "init", list: [{ phase:');
+		expect(text).toContain("Never invent work");
+		expect(text).toContain(doc["stop-rule"]);
+
+		const idle = relayStatusText(createRelay(), null, { action: null });
+		expect(idle).toContain("list: []");
+	});
 });
 
 describe("state version migration", () => {

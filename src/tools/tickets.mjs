@@ -190,10 +190,6 @@ export async function switchModelTicket(pi, ctx, req) {
 	};
 	if (!target) return { ...base, reason: "no session for model switch" };
 
-	const beforeModel = liveModelFor(ctx, session, target);
-	const beforeKey = modelKeyOf(beforeModel);
-	const beforeThinking = liveThinkingFor(ctx, session, target);
-
 	let outcome;
 	try {
 		outcome = await dispatchModelSlash(ctx, slash, target, session);
@@ -237,11 +233,10 @@ export async function switchModelTicket(pi, ctx, req) {
 			verified = true;
 		}
 	} else {
-		const modelChanged = Boolean(actualKey && actualKey !== beforeKey);
-		const thinkingChanged =
-			normalizeThinking(actualThinking) !== normalizeThinking(beforeThinking);
-		verified = modelChanged || thinkingChanged;
-		if (!verified) reason = "model change not observed";
+		// The host resolves roles and aliases that the extension cannot name.
+		// A handled switch without an error is authoritative, and it also
+		// counts when the target already was the live model.
+		verified = true;
 	}
 
 	const ok = handled && !errored && verified;

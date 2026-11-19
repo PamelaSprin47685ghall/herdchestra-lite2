@@ -1262,6 +1262,28 @@ describe("scope model switching", () => {
 		expect(prompts).toBe(0);
 	});
 
+	test("a host-resolved role is not compared with a fuzzy model match", async () => {
+		const { ctx, session, scope, begin } = await fixture();
+		installBuiltinSlashExecutor(async (text, runtime) => {
+			const match = /^\/switch\s+(.+)$/.exec(String(text).trim());
+			if (!match) return false;
+			const spec = match[1].trim();
+			await runtime.ctx.onSwitchModel(spec === "task" ? "fixture/small" : spec);
+			return true;
+		});
+		session.modelRegistry.getAll = () => [
+			large,
+			small,
+			tiny,
+			{ provider: "gateway", id: "lazy/task", contextWindow: 1_000_000 },
+		];
+		const result = await scope("role", { begin: begin("task") });
+		const text = result.content.map((part) => part.text).join(" ");
+		expect(text).not.toContain("WARNING:");
+		expect(session.model).toBe(small);
+		expect(stateFor(ctx).state.scopes.at(-1).modelKey).toBe("fixture/small");
+	});
+
 	test("a scope closed under another tokenizer uses its interior characters", async () => {
 		const { host, ctx, session, scope, begin } = await fixture();
 		await scope("measured", { begin: begin(null) });

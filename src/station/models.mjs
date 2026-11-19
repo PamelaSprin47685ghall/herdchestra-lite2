@@ -23,7 +23,11 @@ export function modelChoice(station, ctx, spec, key) {
 		? preparseModelSpec(station.pricingCatalog, ctx, spec)
 		: null;
 	const live = actualModel(ctx) ?? station.lastCtxModel;
-	const resolvedKey = key ?? (parsed?.recognized ? parsed.canonicalKey : null);
+	// Only an exact resolution may name the model a later check expects. A
+	// fuzzy match only estimates size and price. The host resolves roles and
+	// aliases that the extension never sees.
+	const resolvedKey =
+		key ?? (parsed?.recognized && parsed?.exact ? parsed.canonicalKey : null);
 	return {
 		spec: spec ?? null,
 		key: resolvedKey,

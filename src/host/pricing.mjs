@@ -613,11 +613,17 @@ export function preparseModelSpec(catalog, ctx, rawSpec) {
 		pricing: null,
 		contextWindow: null,
 		recognized: false,
+		exact: false,
 	};
 	const resolved = resolveConfiguredSpec(ctx, catalog, raw.trim());
 	const modelText = resolved.model.trim();
 	if (!modelText) return unresolved;
-	const entry = resolved.entry ?? resolveModelEntry(ctx, catalog, modelText);
+	// A configured role or alias names one concrete model. A guessed
+	// substring match only estimates size and price; it never becomes the
+	// model that a later verification expects.
+	const exactEntry =
+		resolved.entry ?? resolveModelEntry(ctx, catalog, modelText, true);
+	const entry = exactEntry ?? resolveModelEntry(ctx, catalog, modelText);
 	if (!entry) {
 		return { ...unresolved, canonicalKey: modelText };
 	}
@@ -630,6 +636,7 @@ export function preparseModelSpec(catalog, ctx, rawSpec) {
 		pricing: Object.keys(cost).length ? policyFromCatalogEntry({ ...entry, cost, contextWindow }) : null,
 		contextWindow,
 		recognized: true,
+		exact: Boolean(exactEntry),
 		thinkingLevel: resolved.thinking,
 	};
 }
@@ -652,6 +659,20 @@ function freezeCatalog(byFullId, byId, defaultModelKey, modelRoles = new Map(), 
 
 export function createEmptyCatalog() {
 	return freezeCatalog(new Map(), new Map(), null);
+}
+
+/**
+ * Read one YAML config file when the runtime offers a parser. Bun ships
+ * `Bun.YAML`; other runtimes fall back to the JSON sources.
+ */
+async function readYamlConfig(path) {
+	try {
+		const text = await readFile(path, "utf8");
+		const parse = globalThis.Bun?.YAML?.parse;
+		return typeof parse === "function" ? parse(text) : null;
+	} catch {
+		return null;
+	}
 }
 
 /** Async asset loading. Runs once during activation, never on a hot path. */
@@ -689,9 +710,22 @@ export async function loadPricingCatalog() {
 		const models = await readJson(join(root, "models.json"));
 		if (models) ingestModels(target, models);
 		const settings = await readJson(join(root, "settings.json"));
-		addConfiguredEntries(modelRoles, settings?.modelRoles);
-		addConfiguredEntries(modelAliases, settings?.modelAliases ?? settings?.aliases);
-		const key = asNonEmptyString(settings?.defaultModel ?? settings?.model);
+		const config =
+			(await readYamlConfig(join(root, "config.yml"))) ??
+			(await readYamlConfig(join(root, "config.yaml")));
+		// Roles take priority over every model match: `task`, `default`, and
+		// the other role names belong to the host configuration.
+		addConfiguredEntries(modelRoles, config?.modelRoles ?? settings?.modelRoles);
+		addConfiguredEntries(
+			modelAliases,
+			config?.modelAliases ??
+				config?.aliases ??
+				settings?.modelAliases ??
+				settings?.aliases,
+		);
+		const key = asNonEmptyString(
+			settings?.defaultModel ?? config?.defaultModel ?? settings?.model,
+		);
 		if (key) defaultModelKey = key;
 	}
 	if (!defaultModelKey) defaultModelKey = asNonEmptyString(process.env?.OMP_DEFAULT_MODEL);

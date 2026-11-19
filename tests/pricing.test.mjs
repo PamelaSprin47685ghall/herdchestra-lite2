@@ -187,6 +187,25 @@ describe("loadPricingCatalog", () => {
 		expect(catalog.defaultModelKey).toBeNull();
 		expect(catalog.byFullId.size).toBeGreaterThanOrEqual(0);
 	});
+
+	test.skipIf(typeof globalThis.Bun?.YAML?.parse !== "function")(
+		"reads model roles from the host config.yml",
+		async () => {
+			const dir = mkdtempSync(join(tmpdir(), "pricing-"));
+			writeFileSync(
+				join(dir, "config.yml"),
+				"modelRoles:\n  task: fixture/qwen:medium\n",
+			);
+			process.env.OMP_CODING_AGENT_DIR = dir;
+			process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "pricing-empty-"));
+			try {
+				const catalog = await loadPricingCatalog();
+				expect(catalog.modelRoles.get("task")).toBe("fixture/qwen:medium");
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	);
 });
 test("scope preparse keeps exact colon IDs and resolves role thinking suffixes", async () => {
 	const { createEmptyCatalog, preparseModelSpec } = await import("../src/host/pricing.mjs");
@@ -204,4 +223,27 @@ test("scope preparse keeps exact colon IDs and resolves role thinking suffixes",
 	const role = preparseModelSpec(catalog, ctx, "@fast:low");
 	expect(role.canonicalKey).toBe("fixture/qwen");
 	expect(role.contextWindow).toBe(50_000);
+});
+
+test("scope preparse prefers roles over fuzzy model matches", async () => {
+	const { createEmptyCatalog, preparseModelSpec } = await import("../src/host/pricing.mjs");
+	const target = { provider: "fixture", id: "qwen", contextWindow: 50_000, cost: { input: 3 } };
+	const competitor = { provider: "gateway", id: "lazy/task", contextWindow: 1_000_000 };
+	const models = [target, competitor];
+	const modelRegistry = {
+		getAll: () => models,
+		find: (provider, id) => models.find((model) => model.provider === provider && model.id === id),
+	};
+	const catalog = createEmptyCatalog();
+	const role = preparseModelSpec(
+		catalog,
+		{ settings: { modelRoles: { task: "fixture/qwen:medium" } }, modelRegistry },
+		"task",
+	);
+	expect(role.canonicalKey).toBe("fixture/qwen");
+	expect(role.thinkingLevel).toBe("medium");
+	expect(role.exact).toBe(true);
+	const fuzzy = preparseModelSpec(catalog, { modelRegistry }, "task");
+	expect(fuzzy.canonicalKey).toBe("lazy/task");
+	expect(fuzzy.exact).toBe(false);
 });

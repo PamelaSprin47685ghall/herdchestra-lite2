@@ -4,21 +4,13 @@ export {
 	installVibeTools,
 	rememberSession,
 	sessionFor,
-	rememberTui,
-	tuiFor,
-	interactiveCaptureState,
-	installInteractiveCapture,
 	setAgentMessages,
 	installRunnerCapture,
 	parseSlashCommand,
 	sendSlashPrompt,
-	installSlashPrompt,
+	installBuiltinSlashExecutor,
 } from "./capture.mjs";
-export {
-	HeadlessTuiStation,
-	headlessStationFor,
-	createHeadlessTuiContext,
-} from "./headless-tui.mjs";
+export { createHeadlessTuiContext } from "./headless-tui.mjs";
 export {
 	MAIN_AGENT,
 	READ_ONLY_SUBAGENT,

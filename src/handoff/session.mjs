@@ -23,6 +23,40 @@ function isAlreadyCompacted(error) {
 	return /nothing to compact \(session too small\)/i.test(message);
 }
 
+function isCompactionBusy(error) {
+	return /compaction already in progress/i.test(errorText(error));
+}
+
+/**
+ * Wait for a background compaction that owns the session to settle. Handoff
+ * compaction is itself background: another pass already rewriting history means
+ * this barrier must wait, not fail and let a request through.
+ */
+async function waitForCompaction(session, timeoutMs = 120000) {
+	const started = Date.now();
+	try {
+		while (session?.isCompacting) {
+			if (Date.now() - started > timeoutMs) return false;
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Run once; when a compaction pass already owns the session, wait and retry once. */
+async function runWhenIdle(session, run) {
+	try {
+		return await run();
+	} catch (error) {
+		if (!isCompactionBusy(error)) throw error;
+		if (!session?.isCompacting) throw error;
+		if (!(await waitForCompaction(session))) throw error;
+		return await run();
+	}
+}
+
 /**
  * Count handoff compactions on the live branch. The host writes
  * `{ type: "compaction", method: "handoff" }`; older builds carry the method in
@@ -52,9 +86,10 @@ export function countHandoffCompactions(manager) {
  * retained tail. Never add messages to make the branch compressible.
  */
 async function callHandoffWithRecovery(session, run) {
+	const attempt = () => runWhenIdle(session, run);
 	let firstError;
 	try {
-		return await run();
+		return await attempt();
 	} catch (error) {
 		if (!isAlreadyCompacted(error)) throw error;
 		firstError = error;
@@ -67,7 +102,7 @@ async function callHandoffWithRecovery(session, run) {
 		const hadOverride = settings.hasRuntimeOverride(setting);
 		setting.override(settings, 1);
 		try {
-			return await run();
+			return await attempt();
 		} finally {
 			if (hadOverride) setting.override(settings, previous);
 			else setting.clearOverride(settings);
@@ -89,7 +124,7 @@ async function callHandoffWithRecovery(session, run) {
 	}
 	if (!adjusted) throw firstError;
 	try {
-		return await run();
+		return await attempt();
 	} finally {
 		try {
 			settings.set(KEEP_RECENT_KEY, previous);
@@ -104,5 +139,7 @@ export {
 	safeSession,
 	errorText,
 	isAlreadyCompacted,
+	isCompactionBusy,
+	waitForCompaction,
 	callHandoffWithRecovery,
 };

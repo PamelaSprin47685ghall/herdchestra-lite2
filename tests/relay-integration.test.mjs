@@ -1,19 +1,19 @@
 /**
  * Relay integration: real hooks, real todo wrapper, fake native todo, and a
- * fake AgentSession.handoff(). The host's model gate runs before the context
- * hook and turns the next request into the successor's first request.
+ * fake AgentSession.compact(). The awaited before-model-call hook runs the
+ * system /handoff and lets the same request continue on the compacted
+ * transcript.
  */
 
 import { describe, expect, test } from "bun:test";
 import { countHandoffCompactions } from "../src/handoff/index.mjs";
 import { activate } from "../src/main.mjs";
 import {
-	installInteractiveCapture,
+	installBuiltinSlashExecutor,
 	installVibeTools,
+	parseSlashCommand,
 	rememberSession,
-	rememberTui,
 	sessionFor,
-	tuiFor,
 } from "../src/host/index.mjs";
 import { stateFor } from "../src/station/index.mjs";
 
@@ -220,6 +220,7 @@ async function start(options = {}) {
 		name: "todo",
 		execute: async () => ({ content: [{ type: "text", text: "host builtin" }] }),
 	});
+	const beforeModelCallHooks = [];
 	const session = {
 		sessionManager: manager,
 		isGeneratingHandoff: false,
@@ -231,6 +232,10 @@ async function start(options = {}) {
 					type: "tool_call", toolCallId: toolCall.id,
 					toolName: toolCall.name, input: args,
 				}, ctx);
+			},
+			addBeforeModelCallHook(hook) {
+				beforeModelCallHooks.push(hook);
+				return () => {};
 			},
 		},
 		settings: {
@@ -244,8 +249,11 @@ async function start(options = {}) {
 				this.values.set(key, value);
 			},
 		},
-		async handoff(focus) {
+		async compact(focus, compactOptions = {}) {
 			session.calls.push(focus);
+			if (compactOptions.mode !== "handoff") {
+				throw new Error(`unexpected compaction mode: ${compactOptions.mode}`);
+			}
 			if (typeof options.handoff === "function") {
 				return await options.handoff({ focus, session, call: session.calls.length });
 			}
@@ -254,6 +262,19 @@ async function start(options = {}) {
 	};
 	rememberSession(session);
 	await activate(host.pi);
+	installBuiltinSlashExecutor(async (text, runtime) => {
+		const parsed = parseSlashCommand(text);
+		if (!parsed) return false;
+		if (parsed.name === "handoff") {
+			await runtime.ctx.handleCompactCommand(parsed.args, "handoff");
+			return true;
+		}
+		if (parsed.name === "switch" || parsed.name === "model") {
+			const outcome = await runtime.ctx.onSwitchModel(parsed.args);
+			return outcome?.handled === true;
+		}
+		return false;
+	});
 	const aborts = [];
 	const ctx = {
 		sessionManager: manager,
@@ -268,7 +289,7 @@ async function start(options = {}) {
 	const user = { role: "user", content: "do the task", timestamp: Date.now() };
 	manager.appendMessage(user);
 	ctx.agentMessages.push(user);
-	return { host, ctx, manager, native, session, aborts };
+	return { host, ctx, manager, native, session, aborts, beforeModelCallHooks };
 }
 
 async function runAssistant(host, ctx, message, { prepareAll = false } = {}) {
@@ -1075,29 +1096,10 @@ describe("relay integration", () => {
 	});
 });
 
-describe("tui handoff integration", () => {
+describe("handoff integration", () => {
 	function writesHandoffCompaction({ session }) {
 		session.sessionManager.appendCompaction("handoff");
 		return { ok: true };
-	}
-
-	function makeTui(session, options = {}) {
-		const tui = {
-			renders: 0,
-			handoffCalls: [],
-			async renderInitialMessages() {
-				tui.renders += 1;
-			},
-			async handleHandoffCommand(focus) {
-				tui.handoffCalls.push(focus);
-				if (options.command) {
-					return await options.command({ focus, tui, session });
-				}
-				await session.handoff(focus);
-				await tui.renderInitialMessages();
-			},
-		};
-		return tui;
 	}
 
 	function handoffSignal(manager) {
@@ -1107,31 +1109,6 @@ describe("tui handoff integration", () => {
 				entry.message?.customType === "herd-relay-handoff",
 		);
 	}
-
-	test("installInteractiveCapture remembers the live TUI instance", async () => {
-		rememberTui(null);
-		class FakeInteractiveMode {
-			renders = 0;
-			handoffs = [];
-			async renderInitialMessages() {
-				this.renders += 1;
-			}
-			async handleHandoffCommand(focus) {
-				this.handoffs.push(focus);
-			}
-		}
-		installInteractiveCapture(FakeInteractiveMode);
-		const tui = new FakeInteractiveMode();
-		expect(tuiFor()).toBeNull();
-		await tui.handleHandoffCommand("x");
-		expect(tuiFor()).toBe(tui);
-		await tui.renderInitialMessages();
-		installInteractiveCapture(FakeInteractiveMode);
-		await tui.renderInitialMessages();
-		expect(tui.renders).toBe(2);
-		expect(tui.handoffs).toEqual(["x"]);
-		rememberTui(null);
-	});
 
 	test("countHandoffCompactions counts only handoff methods", () => {
 		const manager = makeManager();
@@ -1143,102 +1120,7 @@ describe("tui handoff integration", () => {
 		expect(countHandoffCompactions(manager)).toBe(2);
 	});
 
-	test("the empty-ledger handoff rebuilds the TUI", async () => {
-		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
-		const tui = makeTui(started.session);
-		rememberTui(tui);
-		try {
-			const result = await runAssistant(
-				started.host,
-				started.ctx,
-				assistant([call("t1", "todo", { op: "init", list: [] })]),
-			);
-			const text = result[0].output.content.map((part) => part.text).join("\n");
-			expect(text).toContain("before the next model request");
-			expect(text).not.toContain("You are the relay successor");
-			expect(tui.handoffCalls.length).toBe(0);
-			expect(started.session.calls.length).toBe(0);
-			const stop = await emitStop(started.host, started.ctx);
-			expect(stop).toBeUndefined();
-			expect(tui.handoffCalls.length).toBe(0);
-			expect(started.session.calls.length).toBe(1);
-			expect(countHandoffCompactions(started.manager)).toBe(1);
-			expect(tui.renders).toBe(1);
-			expect(handoffSignal(started.manager)).toBeUndefined();
-			expect(stateFor(started.ctx).state.relay.generation).toBe(1);
-			expect(started.host.messages).toHaveLength(0);
-		} finally {
-			rememberTui(null);
-		}
-	});
-
-	test("a failed handoff records failure and succeeds on retry via session.handoff + TUI render", async () => {
-		const started = await start({
-			mode: "print",
-			handoff: ({ call: callNumber, session }) => {
-				if (callNumber === 1) throw new Error("no model");
-				session.sessionManager.appendCompaction("handoff");
-				return { ok: true };
-			},
-		});
-		const tui = makeTui(started.session);
-		rememberTui(tui);
-		try {
-			const result = await runAssistant(
-				started.host,
-				started.ctx,
-				assistant([call("t1", "todo", { op: "init", list: [] })]),
-			);
-			expect(result[0].output.content.at(-1).text).toContain("Handoff pending");
-			expect(started.session.calls.length).toBe(0);
-
-			const firstStop = await emitStop(started.host, started.ctx);
-			expect(firstStop).toBeUndefined();
-			expect(tui.handoffCalls.length).toBe(0);
-			expect(started.session.calls.length).toBe(1);
-
-			const secondStop = await emitStop(started.host, started.ctx);
-			expect(secondStop).toBeUndefined();
-			expect(started.session.calls.length).toBe(2);
-			expect(tui.renders).toBe(1);
-			expect(countHandoffCompactions(started.manager)).toBe(1);
-			expect(stateFor(started.ctx).state.relay.generation).toBe(1);
-			expect(started.host.messages).toHaveLength(0);
-		} finally {
-			rememberTui(null);
-		}
-	});
-
-
-	test("a direct handoff with a captured TUI rebuilds the transcript", async () => {
-		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
-		const tui = {
-			renders: 0,
-			async renderInitialMessages() {
-				this.renders += 1;
-			},
-		};
-		rememberTui(tui);
-		try {
-			const result = await runAssistant(
-				started.host,
-				started.ctx,
-				assistant([call("t1", "todo", { op: "init", list: [] })]),
-			);
-			expect(result[0].output.content.at(-1).text).toContain("before the next model request");
-			const stop = await emitStop(started.host, started.ctx);
-			expect(stop).toBeUndefined();
-			expect(started.session.calls.length).toBe(1);
-			expect(tui.renders).toBe(1);
-			expect(handoffSignal(started.manager)).toBeUndefined();
-			expect(started.host.messages).toHaveLength(0);
-		} finally {
-			rememberTui(null);
-		}
-	});
-
 	test("without a TUI, the handoff adds no separate transcript message", async () => {
-		rememberTui(null);
 		const started = await start({ mode: "print", handoff: writesHandoffCompaction });
 		const result = await runAssistant(
 			started.host,
@@ -1492,91 +1374,35 @@ describe("host truncation", () => {
 });
 
 describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across TUI, RPC, and Print modes", () => {
-	test("original sendPrompt remains untouched while AgentSession.prototype.sendSlashPrompt dispatches '/handoff ...' uniformly to session.handoff across TUI, RPC, and Print", async () => {
-		const handoffCalls = [];
-		const { AgentSession, InteractiveMode } = await import(
-			"../src/host/index.mjs"
-		).then(async () => {
-			class FakeAgentSession {
-				constructor(sessionManager) {
-					this.sessionManager = sessionManager;
-					this.agent = { state: { isStreaming: false, messages: [] } };
-					this._promptInFlight = 1;
-				}
-				get extensionRunner() {
-					return null;
-				}
-				get isStreaming() {
-					return this.agent.state.isStreaming || this._promptInFlight > 0;
-				}
-				async sendPrompt(text, options) {
-					return { originalSendPrompt: text, options };
-				}
-				async prompt(text, options) {
-					return { prompted: text, options };
-				}
-				async handoff(focus) {
-					handoffCalls.push({ via: "session.handoff", focus });
-					this.sessionManager.appendCompaction("handoff", { focus });
-					return { ok: true };
-				}
-			}
-			class FakeInteractiveMode {
-				constructor(session) {
-					this.session = session;
-				}
-				async renderInitialMessages() {}
-				async handleHandoffCommand(focus) {
-					if (this.session.isStreaming) {
-						throw new Error("blocked by isStreaming");
-					}
-					handoffCalls.push({ via: "tui.handleHandoffCommand", focus });
-					this.session.sessionManager.appendCompaction("handoff", { focus });
-				}
-			}
-			return {
-				AgentSession: FakeAgentSession,
-				InteractiveMode: FakeInteractiveMode,
-			};
+	test("a provider request waits for the system /handoff commit and carries no extra message", async () => {
+		const focused = [];
+		const { host, ctx, session, beforeModelCallHooks } = await start({
+			mode: "rpc",
+			handoff: async ({ focus }) => {
+				focused.push(focus);
+				session.agent.state.messages = [
+					{ role: "user", content: [{ type: "text", text: "compacted" }] },
+				];
+				return { ok: true };
+			},
 		});
-
-		const {
-			installRunnerCapture,
-			installInteractiveCapture,
-			rememberTui,
-		} = await import("../src/host/index.mjs");
-		installRunnerCapture(AgentSession);
-		installInteractiveCapture(InteractiveMode);
-
-		const manager = makeManager();
-		const session = new AgentSession(manager);
-		const tui = new InteractiveMode(session);
-		rememberTui(tui);
-
-		// Original sendPrompt must remain completely unchanged (even for '/handoff ...').
-		const untouched = await session.sendPrompt("/handoff should not trigger");
-		expect(untouched).toEqual({
-			originalSendPrompt: "/handoff should not trigger",
-			options: undefined,
-		});
-		expect(handoffCalls).toEqual([]);
-
-		// During session_stop: session.isStreaming is true because _promptInFlight > 0,
-		// while agent.state.isStreaming is false. sendSlashPrompt('/handoff ...') routes
-		// uniformly through session.handoff without touching tui.handleHandoffCommand or
-		// mutating isStreaming.
-		expect(session.isStreaming).toBe(true);
-		const res = await session.sendSlashPrompt("/handoff verify tui focus");
-		expect(res.handled).toBe(true);
-		expect(res.mode).toBe("session");
-		expect(handoffCalls).toEqual([
-			{ via: "session.handoff", focus: "verify tui focus" },
-		]);
-		expect(session.isStreaming).toBe(true);
-
-		// Non-handoff prompts/slash commands delegate natively to session.prompt().
-		const plain = await session.sendSlashPrompt("/custom-cmd arg1");
-		expect(plain.prompted).toBe("/custom-cmd arg1");
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("empty", "todo", { op: "init", list: [] })]),
+		);
+		expect(beforeModelCallHooks).toHaveLength(1);
+		const outbound = {
+			messages: [{ role: "user", content: [{ type: "text", text: "stale" }] }],
+		};
+		await beforeModelCallHooks[0](undefined, outbound);
+		expect(focused).toHaveLength(1);
+		expect(focused[0]).toContain("Include these relay instructions");
+		expect(outbound.messages[0].content[0].text).toBe("compacted");
+		expect(JSON.stringify(outbound.messages)).not.toContain(
+			"Include these relay instructions",
+		);
+		expect(host.messages).toHaveLength(0);
 	});
 
 	test("session_stop triggers '/handoff ...' across rpc and print modes without TUI", async () => {
@@ -1649,10 +1475,7 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		const started = new Promise((resolve) => {
 			handoffStarted = resolve;
 		});
-		const persistenceStarted = Promise.withResolvers();
-		const persistenceDone = Promise.withResolvers();
-		const beforeModelCallHooks = [];
-		const { host, ctx, manager, session } = await start({
+		const { host, ctx, manager, session, beforeModelCallHooks } = await start({
 			mode: "rpc",
 			handoff: async () => {
 				expect(manager.getBranch().some((entry) =>
@@ -1667,17 +1490,6 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 				return { ok: true };
 			},
 		});
-		session.agent = {
-			state: { messages: [] },
-			addBeforeModelCallHook: (hook) => {
-				beforeModelCallHooks.push(hook);
-				return () => {};
-			},
-		};
-		session.settleInFlightMessagePersistence = () => {
-			persistenceStarted.resolve();
-			return persistenceDone.promise;
-		};
 
 		if (generation === 1) {
 			const rec = stateFor(ctx);
@@ -1693,32 +1505,18 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		);
 		expect(beforeModelCallHooks.length).toBe(1);
 
-		// omp runs the model gate before transformContext, not after it.
 		const outboundContext = {
 			messages: [{ role: "user", content: [{ type: "text", text: "stale history" }] }],
 		};
-		const providerRequests = [];
-		const request = (async () => {
-			for (const hook of beforeModelCallHooks) await hook(undefined, outboundContext);
-			providerRequests.push(await emit(host.handlers, "context", outboundContext, ctx));
-		})();
-		await persistenceStarted.promise;
-		expect(session.calls).toHaveLength(0);
-		expect(providerRequests).toHaveLength(0);
-		persistenceDone.resolve();
+		const request = beforeModelCallHooks[0](undefined, outboundContext);
 		await started;
-		expect(providerRequests).toHaveLength(0);
-		await emit(host.handlers, "session_switch", { reason: "handoff" }, ctx);
+		expect(session.calls).toHaveLength(1);
 		expect(stateFor(ctx).state.relay.generation).toBe(generation);
-		expect(await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx))
-			.toBeUndefined();
 
 		resolveHandoff();
 		await request;
-		expect(providerRequests).toHaveLength(1);
-		expect(session.calls).toHaveLength(1);
 		expect(stateFor(ctx).state.relay.generation).toBe(generation + 1);
-		const messages = providerRequests[0].messages;
+		const messages = outboundContext.messages;
 		expect(messages[0].content[0].text).toBe("compacted summary");
 		expect(JSON.stringify(messages)).not.toContain("stale history");
 		const instruction = `Include these relay instructions in the handoff document for generation ${generation + 1}`;
@@ -1750,54 +1548,38 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(host.messages).toHaveLength(0);
 	});
 
-	test("an idle-only handoff yields the old loop without a request and continues from its commit", async () => {
-		const { host, ctx, session, manager } = await start();
-		const idle = Promise.withResolvers();
-		const compacting = Promise.withResolvers();
-		const summary = { role: "compactionSummary", summary: "successor audit" };
-		const requests = [];
-		let gate;
-		session.agent.addBeforeModelCall = (hook) => { gate = hook; };
-		session.agent.continue = async () => {
-			if (!gate({}, undefined)) requests.push([...session.agent.state.messages]);
-		};
-		session.agent.state.isStreaming = true;
-		const nativeHandoff = session.handoff.bind(session);
-		session.handoff = undefined;
-		session.compact = async (focus, { mode }) => {
-			expect(mode).toBe("handoff");
-			expect(manager.getBranch().some(({ message }) => message?.toolCallId === "empty")).toBe(true);
-			compacting.resolve();
-			await idle.promise;
-			await nativeHandoff(focus);
-			manager.appendCompaction("handoff", { summary: summary.summary });
-			session.agent.state.messages = [summary];
-			return { summary: summary.summary };
-		};
-		const { installBuiltinSlashExecutor } = await import("../src/host/capture.mjs");
-		const restore = installBuiltinSlashExecutor(async (text, { ctx }) => {
-			void ctx.handleCompactCommand(text.slice("/handoff ".length), "handoff");
-			return true;
+	test("a stop-start handoff continues only after the system /handoff commits", async () => {
+		const gate = Promise.withResolvers();
+		const started = Promise.withResolvers();
+		const continued = [];
+		const { host, ctx, session } = await start({
+			mode: "rpc",
+			handoff: async () => {
+				started.resolve();
+				await gate.promise;
+				return { ok: true };
+			},
 		});
-		try {
-			await emit(host.handlers, "before_agent_start", {}, ctx);
-			await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
-			expect(gate({}, undefined)).toMatchObject({ stop: true });
-			await compacting.promise;
-			const barrier = stateFor(ctx).handoffPromise;
-			expect(await emit(host.handlers, "session_stop", {}, ctx)).toBeUndefined();
-			expect(requests).toHaveLength(0);
-			session.agent.state.isStreaming = false;
-			idle.resolve();
-			await barrier;
-			expect(requests).toEqual([[summary]]);
-			expect(session.calls).toHaveLength(1);
-			expect(session.calls[0]).toContain("\n1. You must independently verify");
-			expect(stateFor(ctx).state.relay.generation).toBe(1);
-			expect(host.messages).toHaveLength(0);
-		} finally {
-			restore();
-		}
+		session.agent.state.isStreaming = false;
+		session.agent.continue = async () => {
+			continued.push(true);
+		};
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("empty", "todo", { op: "init", list: [] })]),
+		);
+		expect(
+			await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx),
+		).toBeUndefined();
+		await started.promise;
+		expect(continued).toHaveLength(0);
+		expect(stateFor(ctx).state.relay.generation).toBe(0);
+		gate.resolve();
+		await sleep(25);
+		expect(continued).toHaveLength(1);
+		expect(stateFor(ctx).state.relay.generation).toBe(1);
+		expect(host.messages).toHaveLength(0);
 	});
 
 	test("a refused system slash command never falls through to a conversation prompt", async () => {
@@ -1894,107 +1676,23 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(modelCalls).toBe(0);
 	});
 
-	test("Headless TUI Adapter supports /vibe, /vibe <prompt>, /new, /fresh, and arbitrary slash commands uniformly", async () => {
-		const events = [];
-		const modeChanges = [];
+	test("the headless handoff adapter is explicit and has no background dispatcher", async () => {
+		const { createHeadlessTuiContext } = await import("../src/host/index.mjs");
+		const calls = [];
 		const session = {
-			isStreaming: false,
-			sessionManager: {
-				appendModeChange: (mode, meta) => modeChanges.push({ mode, meta }),
-			},
-			getEnabledToolNames: () => ["read", "bash", "edit"],
-			hasBuiltInTool: (name) => name === "todo",
-			activateVibeTools: async (base) => {
-				events.push({ op: "activateVibeTools", base });
-			},
-			deactivateVibeTools: async (prev) => {
-				events.push({ op: "deactivateVibeTools", prev });
-			},
-			setVibeModeState: (state) => {
-				events.push({ op: "setVibeModeState", state });
-			},
-			runModeExitTeardown: async (fn) => {
-				events.push({ op: "runModeExitTeardown" });
-				await fn();
-			},
-			newSession: async () => {
-				events.push({ op: "newSession" });
-				return true;
-			},
-			freshSession: () => {
-				events.push({ op: "freshSession" });
-				return { refreshed: true };
-			},
-			prompt: async (text) => {
-				events.push({ op: "prompt", text });
-				return { prompted: text };
+			compact: async (focus, options) => {
+				calls.push([focus, options]);
+				return { ok: true };
 			},
 		};
-
-		const { sendSlashPrompt } = await import("../src/host/index.mjs");
-
-		// 1. Toggle /vibe on
-		const vibeOn = await sendSlashPrompt(session, "/vibe");
-		expect(vibeOn.handled).toBe(true);
-		expect(vibeOn.command).toBe("vibe");
-		expect(modeChanges).toEqual([
-			{ mode: "vibe", meta: { previousTools: ["read", "bash", "edit"] } },
-		]);
-		expect(events).toContainEqual({
-			op: "activateVibeTools",
-			base: ["read", "todo"],
-		});
-		expect(events).toContainEqual({
-			op: "setVibeModeState",
-			state: { enabled: true },
-		});
-
-		// 2. Toggle /vibe off
-		const vibeOff = await sendSlashPrompt(session, "/vibe");
-		expect(vibeOff.handled).toBe(true);
-		expect(events).toContainEqual({ op: "runModeExitTeardown" });
-		expect(events).toContainEqual({
-			op: "deactivateVibeTools",
-			prev: ["read", "bash", "edit"],
-		});
-		expect(events).toContainEqual({
-			op: "setVibeModeState",
-			state: undefined,
-		});
-
-		// 3. /vibe <prompt> enters vibe mode and delivers the prompt
-		const vibePrompt = await sendSlashPrompt(session, "/vibe inspect src/main.mjs");
-		expect(vibePrompt.handled).toBe(true);
-		expect(events).toContainEqual({
-			op: "prompt",
-			text: "inspect src/main.mjs",
-		});
-
-		// 4. /new and /fresh work through the same Headless TUI Adapter
-		const newRes = await sendSlashPrompt(session, "/new");
-		expect(newRes.handled).toBe(true);
-		expect(newRes.result).toEqual({ newSession: true });
-
-		const freshRes = await sendSlashPrompt(session, "/fresh");
-		expect(freshRes.handled).toBe(true);
-		expect(freshRes.result).toEqual({ refreshed: true });
-
-		// 5. Arbitrary slash command handled by host executor (consumed vs residual prompt)
-		const consumed = await sendSlashPrompt(session, "/model sonnet", {
-			builtinExecutor: async (raw, runtime) => {
-				expect(raw).toBe("/model sonnet");
-				runtime.ctx.showStatus("Model switched to sonnet");
-				return true;
-			},
-		});
-		expect(consumed.handled).toBe(true);
-		expect(consumed.outputs).toEqual([
-			{ kind: "status", text: "Model switched to sonnet" },
-		]);
-
-		const residual = await sendSlashPrompt(session, "/think:high solve it", {
-			builtinExecutor: async () => "solve it",
-		});
-		expect(residual).toEqual({ prompted: "solve it" });
+		const headless = createHeadlessTuiContext(session, {}, "handoff");
+		expect("runCommandInBackground" in headless.ctx).toBe(false);
+		expect(() => headless.ctx.handleCompactCommand("x", "soft")).toThrow(
+			"Unsupported headless compaction",
+		);
+		await headless.ctx.handleCompactCommand("focus", "handoff");
+		await headless.completion;
+		expect(calls).toEqual([["focus", { mode: "handoff" }]]);
+		expect(headless.result).toEqual({ ok: true });
 	});
 });

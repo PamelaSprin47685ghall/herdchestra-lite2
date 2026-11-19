@@ -139,7 +139,6 @@ export class SessionStation {
 		this.hostBoundaryKey = null;
 		this.agentPolicy = null;
 		this.handoffPromise = null;
-		this.yieldedHandoff = null;
 		this.gatedAgentHooks = new WeakSet();
 		this.handoffSession = null;
 		this.relayState = true;
@@ -795,22 +794,16 @@ export class SessionStation {
 		rememberHandoffSession(this, ctx);
 	}
 
-	ensureModelCallGate(ctx, gateTicket, yieldTicket, resolvedSession = null) {
+	ensureModelCallGate(ctx, gateTicket, resolvedSession = null) {
 		if (typeof gateTicket !== "function") return false;
-		const session = resolvedSession ?? ctx?.session ?? this.handoffSession ?? null;
+		const session = resolvedSession ?? this.handoffSession ?? null;
 		const agent = session?.agent ?? null;
-		if (!agent) return false;
-		const background = typeof session.handoff !== "function" && typeof session.compact === "function";
-		if (background ? typeof agent.addBeforeModelCall !== "function" : typeof agent.addBeforeModelCallHook !== "function") {
-			return false;
-		}
+		if (!agent || typeof agent.addBeforeModelCallHook !== "function") return false;
 		if (this.gatedAgentHooks.has(agent)) return true;
 		this.gatedAgentHooks.add(agent);
-		if (background) {
-			agent.addBeforeModelCall((_context, signal) => yieldTicket(this, session, signal, ctx));
-		} else {
-			agent.addBeforeModelCallHook((signal, context) => gateTicket(this, session, signal, context, ctx));
-		}
+		agent.addBeforeModelCallHook((signal, context) =>
+			gateTicket(this, session, signal, context, ctx),
+		);
 		return true;
 	}
 

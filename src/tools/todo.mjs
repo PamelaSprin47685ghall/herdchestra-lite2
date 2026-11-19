@@ -7,7 +7,7 @@
 // every relay state transition through the SessionStation's synchronous methods.
 
 import { currentScope } from "../scope/index.mjs";
-import { installHandoffGate } from "../handoff/index.mjs";
+import { installRelayGate } from "../handoff/index.mjs";
 import { errorResult } from "./results.mjs";
 import {
 	isTodoView,
@@ -141,7 +141,7 @@ export async function todoTicket(station, params, ctx) {
 	});
 	if (applied.action === "handoff") {
 		station.rememberHandoffSession(ctx);
-		installHandoffGate(station, ctx);
+		installRelayGate(station, ctx);
 	}
 
 	const nextDetails =

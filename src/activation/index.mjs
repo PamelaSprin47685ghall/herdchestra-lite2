@@ -17,8 +17,8 @@ export { installCapture };
 export function wireExtension(pi, pricingCatalog, diagnosis = null) {
 	const registry = createStationRegistry(pi, buildTickets(pi), pricingCatalog);
 	setActiveRegistry(registry);
-	wireHooks(pi, registry);
+	const hooks = wireHooks(pi, registry);
 	wireTools(pi, registry);
 	wireCommands(pi, registry);
-	wireHostDiagnosis(pi, diagnosis);
+	wireHostDiagnosis(pi, diagnosis, hooks);
 }

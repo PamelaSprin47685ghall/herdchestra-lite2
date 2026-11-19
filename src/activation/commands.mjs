@@ -16,8 +16,10 @@ export function wireCommands(pi, registry) {
 				return "Herdchestra: no diagnostics recorded.";
 			}
 			const lines = entries.map(
-				(entry) =>
-					`${new Date(entry.t).toISOString()} [${entry.domain}] ${entry.message}`,
+				(entry) => {
+					const repeat = entry.count > 1 ? ` ×${entry.count}` : "";
+					return `${new Date(entry.t).toISOString()} [${entry.domain}] ${entry.message}${repeat}`;
+				},
 			);
 			const text = lines.join("\n");
 			ctx?.ui?.notify?.(text, "info");

@@ -172,9 +172,11 @@ export class SessionStation {
 
 	// -- Usage ledger ---------------------------------------------------------
 
-	// The measured usage facts live in ../scope/usage-ledger.mjs. These
-	// accessors keep the station's public surface stable for the modules that
-	// read the watermark directly.
+	// The measured usage facts live in ../scope/usage-ledger.mjs, and the
+	// station keeps this surface on purpose: controls.mjs, models.mjs, and
+	// handoff-state.mjs read the watermark through the station, so the ledger
+	// stays the station's own secret. Do not move these readers onto
+	// `station.usage`; that would hand the ledger's internals to its siblings.
 
 	get lastTotalInput() {
 		return this.usage.lastTotalInput;
@@ -507,10 +509,6 @@ export class SessionStation {
 	}
 
 	/** Observed token density, clamped to a safe band. */
-	tokensPerChar(messages) {
-		return this.usage.tokensPerChar(messages);
-	}
-
 	tokensPerCharFor(key) {
 		return this.usage.tokensPerCharFor(key);
 	}

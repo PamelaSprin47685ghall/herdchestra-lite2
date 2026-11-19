@@ -19,6 +19,7 @@ import {
 	usageSnapshot,
 	zeroUsage,
 } from "./usage.mjs";
+import { record } from "./diagnostics.mjs";
 
 function freshSession() {
 	return {
@@ -214,7 +215,10 @@ export function createStatusRuntime(options = {}) {
 		return (...args) => {
 			try {
 				return handler(...args);
-			} catch {
+			} catch (error) {
+				// A throwing handler must not take the other displays down, but
+				// swallowing it outright hides every rendering bug.
+				record("status", error);
 				return undefined;
 			}
 		};

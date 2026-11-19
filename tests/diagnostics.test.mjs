@@ -69,4 +69,30 @@ describe("diagnostics ring", () => {
 		]);
 		expect(ring.limit).toBe(3);
 	});
+
+	test("coalesces an immediately repeated failure instead of spending a slot", () => {
+		const ring = createDiagnostics(2);
+		ring.record("status", new Error("render failed"));
+		ring.record("status", new Error("render failed"));
+		ring.record("status", new Error("render failed"));
+		expect(ring.total()).toBe(1);
+		expect(ring.snapshot()).toHaveLength(1);
+		expect(ring.snapshot()[0].count).toBe(3);
+		// The earlier distinct failure keeps its place after the repeat.
+		ring.record("usage", new Error("baseline lost"));
+		expect(ring.snapshot().map((entry) => entry.domain)).toEqual([
+			"status",
+			"usage",
+		]);
+	});
+
+	test("counts a repeat that follows another record as a new entry", () => {
+		const ring = createDiagnostics();
+		const first = ring.record("a", "boom");
+		ring.record("b", "other");
+		const third = ring.record("a", "boom");
+		expect(ring.total()).toBe(3);
+		expect(first.count).toBe(1);
+		expect(third.count).toBe(1);
+	});
 });

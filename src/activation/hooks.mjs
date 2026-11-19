@@ -1,9 +1,19 @@
 // Activation hooks: bind each host event to its station gatekeeper.
 
 import { sessionFor } from "../host/capture.mjs";
+import { record } from "../host/diagnostics.mjs";
 import { hackContext } from "../host/hack-context.mjs";
 import { installScopeDispatch } from "../host/scope-dispatch.mjs";
 
+/**
+ * Bind every host event to its gatekeeper and report the one failure a host
+ * cannot recover from on its own: no message event at all.
+ *
+ * `assistant_message` drives scope transitions; `message_end` is the
+ * fallback. When both registrations throw, every scope, pin, and relay
+ * decision stops arriving, yet the extension still loads and the status line
+ * looks healthy. That silence is the bug this return value closes.
+ */
 export function wireHooks(pi, registry) {
 	const bindDispatch = (ctx) => {
 		const station = registry.stationFor(ctx);
@@ -14,22 +24,23 @@ export function wireHooks(pi, registry) {
 		);
 		return station;
 	};
-	let assistantMessageRegistered = false;
+	let transitionsBound = false;
 	try {
 		pi.on("assistant_message", (event, ctx) =>
 			bindDispatch(ctx).onAssistantMessage(event?.message, ctx),
 		);
-		assistantMessageRegistered = true;
+		transitionsBound = true;
 	} catch {
-		assistantMessageRegistered = false;
+		transitionsBound = false;
 	}
-	if (!assistantMessageRegistered) {
+	if (!transitionsBound) {
 		try {
 			pi.on("message_end", (event, ctx) =>
 				registry.stationFor(ctx).onMessageEnd(event, ctx),
 			);
+			transitionsBound = true;
 		} catch {
-			// Neither assistant_message nor message_end is available.
+			transitionsBound = false;
 		}
 	} else {
 		// Some providers attach usage only at message_end. Record it with a
@@ -42,6 +53,15 @@ export function wireHooks(pi, registry) {
 		} catch {
 			// Usage at message_end is optional.
 		}
+	}
+	if (!transitionsBound) {
+		record(
+			"hooks",
+			new Error(
+				"neither assistant_message nor message_end could be registered",
+			),
+			{ missing: ["assistant_message", "message_end"] },
+		);
 	}
 	pi.on("tool_call", (event, ctx) =>
 		registry.stationFor(ctx).onToolCall(event, ctx),
@@ -62,4 +82,11 @@ export function wireHooks(pi, registry) {
 	pi.on("session_compact", (_event, ctx) =>
 		registry.stationFor(ctx).onSessionCompact(ctx),
 	);
+	return {
+		ok: transitionsBound,
+		missing: transitionsBound ? [] : ["assistant_message", "message_end"],
+		error: transitionsBound
+			? null
+			: "neither assistant_message nor message_end could be registered",
+	};
 }

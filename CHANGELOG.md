@@ -4,6 +4,43 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.5] — 2026-11-19
+
+### Fixed
+
+- `wireHooks()` treated a registration that never happened as success. When
+  the host refused `assistant_message`, the fallback was `message_end`, and
+  when that was refused too the extension still loaded with every tool in
+  place while no message ever reached a station: scopes stopped advancing,
+  pins stopped landing, and the status line looked healthy. The function now
+  reports `{ ok, missing, error }`, records a `hooks` diagnostic, and the
+  session-start notice names the dead event next to the existing seam notice.
+- `src/host/status.mjs` wrapped every handler in a `catch` that returned
+  `undefined`, so one rendering bug erased itself on every event. The failure
+  is now recorded as `status`; the other displays still keep running.
+- `restoreFromBranch()` kept a null usage baseline in silence when the branch
+  could not be read, which then made every scope baseline start from the
+  wrong number. The loss is recorded as `usage`.
+
+### Changed
+
+- The diagnostics ring coalesces an immediately repeated
+  `(domain, message)` pair into one record with a `count`, so one failure
+  repeating on every render can no longer push the earlier, rarer failures
+  out of the 64 slots. `herd-diag` renders the repeat as `×N`.
+- Removed the station's `tokensPerChar()` delegate, which had no caller. The
+  watermark accessors next to it stay: `controls.mjs`, `models.mjs`, and
+  `handoff-state.mjs` read the ledger through the station on purpose, and the
+  comment there now says so.
+
+### Added
+
+- `tests/hooks.test.mjs`: both message events refused, the remaining hooks
+  still bind, a `hooks` diagnostic lands, and the session-start notice names
+  the dead event once per session.
+- `tests/silent-failure.test.mjs`: a throwing status handler and an
+  unreadable usage branch each leave a diagnostic instead of vanishing.
+
 ## [2.1.4] — 2026-11-19
 
 ### Fixed

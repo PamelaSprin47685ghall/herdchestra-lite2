@@ -5,6 +5,11 @@
 // records, oldest first, so a user can see what broke and in which order.
 //
 // The buffer is synchronous and allocation-light. A record costs one object.
+//
+// A status line can fail on every render. An immediately repeated
+// (domain, message) pair therefore counts as one record with a repeat count,
+// so a flood of the same failure cannot push the earlier, rarer failures out
+// of the ring.
 
 const DEFAULT_LIMIT = 64;
 
@@ -21,7 +26,8 @@ export function createDiagnostics(limit = DEFAULT_LIMIT) {
 
 	/**
 	 * Append one record. The oldest record is overwritten when the ring is
-	 * full.
+	 * full. A repeat of the newest (domain, message) adds to that record's
+	 * `count` instead of taking a new slot.
 	 *
 	 * @param {string} domain Short source name, such as "usage" or "persist".
 	 * @param {unknown} error Error or value that describes the failure.
@@ -30,7 +36,14 @@ export function createDiagnostics(limit = DEFAULT_LIMIT) {
 	function record(domain, error, detail) {
 		const message =
 			error instanceof Error ? error.message : String(error ?? "");
-		const entry = { t: Date.now(), domain, message };
+		const newest = total > 0 ? slots[(cursor - 1 + size) % size] : undefined;
+		if (newest && newest.domain === domain && newest.message === message) {
+			newest.count += 1;
+			newest.t = Date.now();
+			if (detail !== undefined) newest.detail = detail;
+			return newest;
+		}
+		const entry = { t: Date.now(), domain, message, count: 1 };
 		if (detail !== undefined) entry.detail = detail;
 		slots[cursor] = entry;
 		cursor = (cursor + 1) % size;

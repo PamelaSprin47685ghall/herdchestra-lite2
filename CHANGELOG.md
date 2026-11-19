@@ -4,6 +4,25 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.4] — 2026-11-19
+
+### Fixed
+
+- `anchorOnBranch()` answered "the base is fine" when it could not check:
+  a host that returns no id from `appendCustomEntry()`, a manager without
+  `getBranch()`, or a branch that is not an array all returned `true`. Since
+  `persist()` only asks when it holds a base, such a session kept appending
+  deltas with nothing to anchor them; the first branch rewrite would leave
+  them on a truncated chain and a restart would silently come back empty.
+  Every unverifiable case now forces a checkpoint, which matches what the
+  method's own contract already promised.
+
+### Added
+
+- `tests/persistence-rebase.test.mjs`: a host that hides entry ids still
+  restores every pin after a rewrite, because no delta is written without a
+  named anchor.
+
 ## [2.1.3] — 2026-11-19
 
 ### Fixed

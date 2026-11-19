@@ -197,4 +197,49 @@ describe("persistence across a branch-rewriting fold", () => {
 		expect(reopened.state.pins).toEqual(["a", "b"]);
 		expect(serializeState(reopened.state)).toEqual(serializeState(station.state));
 	});
+
+	/**
+	 * The anchor is only usable when the host can name the entry that carries
+	 * it. A host that accepts `appendCustomEntry()` but returns no id leaves
+	 * every later write with nothing to verify: a delta would be appended on
+	 * faith, and the first branch rewrite would strand it on a truncated chain.
+	 * The station must fall back to whole snapshots instead.
+	 */
+	test("a host that cannot name state entries forces checkpoints", () => {
+		const manager = makeManager();
+		manager.appendMessage({ role: "user", content: "start" });
+		const append = manager.appendCustomEntry;
+		manager.appendCustomEntry = (customType, data) => {
+			append(customType, data);
+			return undefined;
+		};
+
+		const station = makeStation(manager);
+		station.state.seq = 1;
+		station.state.pins.push("a");
+		station.persist();
+		station.state.seq = 2;
+		station.state.pins.push("b");
+		station.persist();
+
+		const chain = stateEntries(manager);
+		expect(chain.length).toBe(2);
+		expect(chain.every(isStateCheckpoint)).toBe(true);
+		expect(foldStateChain(chain)).toEqual(serializeState(station.state));
+
+		// A rewrite moves the leaf onto the first snapshot. Nothing tells the
+		// station, and it cannot recognize its own entry, so the next write
+		// must again be a whole snapshot.
+		const firstId = manager.entries.find(
+			(entry) => entry.type === "custom" && entry.customType === SESSION_STATE_TYPE,
+		).id;
+		manager.branch(firstId);
+		station.state.seq = 3;
+		station.persist();
+		expect(isStateCheckpoint(stateEntries(manager).at(-1))).toBe(true);
+
+		const reopened = makeStation(manager);
+		expect(reopened.state.seq).toBe(3);
+		expect(reopened.state.pins).toEqual(["a", "b"]);
+	});
 });

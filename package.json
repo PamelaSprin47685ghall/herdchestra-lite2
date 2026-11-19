@@ -1,6 +1,6 @@
 {
 	"name": "herdchestra-lite2",
-	"version": "2.1.3",
+	"version": "2.1.4",
 	"description": "Budgeted work scopes, a five-stage workflow, herd mode, and a handoff relay for omp",
 	"type": "module",
 	"license": "MIT",

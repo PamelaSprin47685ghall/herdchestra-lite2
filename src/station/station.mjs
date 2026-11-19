@@ -260,14 +260,19 @@ export class SessionStation {
 	 * True when the entry carrying `lastPersisted` is still reachable from the
 	 * leaf. An unknowable answer forces a checkpoint: one extra full write
 	 * costs a state serialization, a lost base costs the whole session state.
+	 *
+	 * Every "cannot tell" below returns false on purpose. A host that returns
+	 * no id from `appendCustomEntry()`, cannot walk its branch, or answers
+	 * with something other than an array leaves the base unverifiable; a
+	 * delta written on faith is how a rewritten branch loses the session.
 	 */
 	anchorOnBranch() {
-		if (this.lastStateEntryId === null) return true;
+		if (this.lastStateEntryId === null) return false;
 		const manager = this.manager;
-		if (typeof manager?.getBranch !== "function") return true;
+		if (typeof manager?.getBranch !== "function") return false;
 		try {
 			const branch = manager.getBranch();
-			if (!Array.isArray(branch)) return true;
+			if (!Array.isArray(branch)) return false;
 			for (let index = branch.length - 1; index >= 0; index -= 1) {
 				if (branch[index]?.id === this.lastStateEntryId) return true;
 			}

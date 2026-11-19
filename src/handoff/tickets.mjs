@@ -85,8 +85,10 @@ function startHandoff(station, session) {
  * join the same handoff.
  */
 function continueAfterStopHandoff(station, session) {
-	const generation = station.state.relay?.generation ?? 0;
-	if (station.successorStartedGeneration === generation) return undefined;
+	// Do not compare against the current generation here: a successor that
+	// already continued is exactly the holder that can arm the NEXT handoff at
+	// that same generation. The post-commit check below is the one that makes
+	// the continuation single-flight.
 	const flow = (async () => {
 		const outcome = await startHandoff(station, session);
 		if (!outcome.ok) return;

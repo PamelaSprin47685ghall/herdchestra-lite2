@@ -1725,4 +1725,55 @@ describe("handoff transaction recovery", () => {
 		expect(registry.stationForStop({ sessionManager: managerB })).toBe(stationB);
 		expect(registry.stationForStop({ sessionManager: managerA })).toBe(stationA);
 	});
+
+	test("a successor can arm a second handoff at the generation it continued from", async () => {
+		const { host, ctx, session, beforeModelCallHooks } = await start({ mode: "rpc" });
+		session.agent.state.isStreaming = false;
+		session.agent.continue = async () => {};
+
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("empty-1", "todo", { op: "init", list: [] })]),
+		);
+		expect(await emitStop(host, ctx)).toBeUndefined();
+		await sleep(10);
+		expect(stateFor(ctx).state.relay.generation).toBe(1);
+		expect(session.calls).toHaveLength(1);
+
+		// The successor promotes on its first empty evaluation.
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("promote", "todo", { op: "init", list: [] })]),
+		);
+		expect(stateFor(ctx).state.relay.canStop).toBe(true);
+
+		// A new user task invalidates the promotion and adds open work.
+		await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("task", "todo", {
+					op: "init",
+					list: [{ phase: "P", items: ["new task"] }],
+				}),
+			]),
+		);
+		expect(stateFor(ctx).state.relay.canStop).toBe(false);
+
+		// Completing that task arms the next handoff at generation 1.
+		await runAssistant(
+			host,
+			ctx,
+			assistant([call("empty-2", "todo", { op: "init", list: [] })]),
+		);
+		expect(stateFor(ctx).state.relay.handoffPending).toBe(true);
+		const gate = beforeModelCallHooks[0];
+		expect(gate({ messages: [] }, undefined)).toMatchObject({ stop: true });
+		await sleep(10);
+		expect(session.calls).toHaveLength(2);
+		expect(stateFor(ctx).state.relay.generation).toBe(2);
+		expect(host.messages).toHaveLength(0);
+	});
 });

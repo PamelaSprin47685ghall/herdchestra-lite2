@@ -39,23 +39,6 @@ export class HeadlessTuiStation {
 		this.planModePaused = false;
 		this.goalModeEnabled = false;
 		this.goalModePaused = false;
-		this.outputs = [];
-		this.lastResult = undefined;
-		this.lastError = undefined;
-	}
-
-	recordOutput(kind, message) {
-		const text = typeof message === "string" ? message : String(message ?? "");
-		if (text) {
-			this.outputs.push({ kind, text });
-		}
-		if (kind === "error") {
-			this.lastError = text;
-		}
-	}
-
-	setResult(result) {
-		this.lastResult = result;
 	}
 
 	beginVibeEntry(promise) {
@@ -81,10 +64,6 @@ export class HeadlessTuiStation {
 		this.vibeModePreviousTools = undefined;
 		this.vibeModeOwnerScope = undefined;
 		return { previousTools, ownerScope };
-	}
-
-	takeOutputs() {
-		return this.outputs.slice();
 	}
 }
 
@@ -113,23 +92,18 @@ async function resolveVibeRegistry() {
 	return null;
 }
 
-async function handleHandoffTicket(session, focus, options, station) {
-	if (typeof options?.onSessionHandoff === "function") {
-		const result = await options.onSessionHandoff(session, focus);
-		station.setResult(result);
-		station.recordOutput("status", "Context handed off and compacted in place.");
-		return result;
+async function handleHandoffTicket(run, focus, options, invocation) {
+	const result = typeof options.onSessionHandoff === "function"
+		? await options.onSessionHandoff(run, focus)
+		: await run();
+	invocation.setResult(result);
+	if (result && result.ok !== false && !result.inProgress) {
+		invocation.recordOutput("status", "Context handed off and compacted in place.");
 	}
-	if (session && typeof session.handoff === "function") {
-		const result = await session.handoff(focus);
-		station.setResult(result);
-		station.recordOutput("status", "Context handed off and compacted in place.");
-		return result;
-	}
-	throw new Error("sendSlashPrompt('/handoff'): AgentSession.handoff is unavailable.");
+	return result;
 }
 
-async function enterVibeModeTicket(session, station, persistModeChange = true) {
+async function enterVibeModeTicket(session, station, invocation) {
 	if (station.vibeModeEnabled) return;
 	if (station.vibeModeEntry) {
 		await station.vibeModeEntry;
@@ -168,13 +142,10 @@ async function enterVibeModeTicket(session, station, persistModeChange = true) {
 		if (session?.isStreaming && typeof session?.sendVibeModeContext === "function") {
 			await session.sendVibeModeContext({ deliverAs: "steer" });
 		}
-		if (
-			persistModeChange !== false &&
-			typeof session?.sessionManager?.appendModeChange === "function"
-		) {
+		if (typeof session?.sessionManager?.appendModeChange === "function") {
 			session.sessionManager.appendModeChange("vibe", { previousTools });
 		}
-		station.recordOutput(
+		invocation.recordOutput(
 			"status",
 			"Vibe mode enabled. You direct fast/good worker sessions; toolset is read + optional parent Todo + vibe tools.",
 		);
@@ -188,7 +159,7 @@ async function enterVibeModeTicket(session, station, persistModeChange = true) {
 	}
 }
 
-async function exitVibeModeTicket(session, station) {
+async function exitVibeModeTicket(session, station, invocation) {
 	if (!station.vibeModeEnabled) return;
 	const { previousTools, ownerScope } = station.exitVibeState();
 	let killed = 0;
@@ -212,7 +183,7 @@ async function exitVibeModeTicket(session, station) {
 	} else {
 		await runTeardown();
 	}
-	station.recordOutput(
+	invocation.recordOutput(
 		"status",
 		killed > 0
 			? `Vibe mode disabled. Killed ${killed} worker session${killed === 1 ? "" : "s"}.`
@@ -220,21 +191,21 @@ async function exitVibeModeTicket(session, station) {
 	);
 }
 
-async function handleVibeModeTicket(session, prompt, options, station) {
+async function handleVibeModeTicket(session, prompt, options, station, invocation) {
 	const trimmed = typeof prompt === "string" ? prompt.trim() : "";
 	if (trimmed) {
-		await enterVibeModeTicket(session, station);
+		await enterVibeModeTicket(session, station, invocation);
 		if (station.vibeModeEnabled && typeof session?.prompt === "function") {
 			const res = await session.prompt(trimmed, options);
-			station.setResult(res);
+			invocation.setResult(res);
 			return res;
 		}
 		return;
 	}
 	if (station.vibeModeEnabled) {
-		await exitVibeModeTicket(session, station);
+		await exitVibeModeTicket(session, station, invocation);
 	} else {
-		await enterVibeModeTicket(session, station);
+		await enterVibeModeTicket(session, station, invocation);
 	}
 }
 
@@ -367,18 +338,34 @@ async function handleSwitchSessionModel(
 /**
  * Build a headless `InteractiveModeContext`-compatible adapter for a session.
  */
-export function createHeadlessTuiContext(session, options = {}) {
+export function createHeadlessTuiContext(session, options = {}, command) {
 	const station = headlessStationFor(session);
-	// Clear per-invocation transient output buffer while preserving mode state.
-	station.outputs.length = 0;
-	station.lastResult = undefined;
-	station.lastError = undefined;
+	const outputs = [];
+	let result;
+	let completion;
+	const invocation = {
+		recordOutput(kind, message) {
+			const text = typeof message === "string" ? message : String(message ?? "");
+			if (text) outputs.push({ kind, text });
+		},
+		setResult(value) {
+			result = value;
+		},
+	};
+	const handoff = (run, focus) => {
+		if (!completion) {
+			completion = handleHandoffTicket(run, focus, options, invocation);
+			// The native background dispatcher may not await its UI handler.
+			void completion.catch(() => {});
+		}
+		return completion;
+	};
 
 	const editor = createEditorStub();
 	const uiStub = new Proxy(
 		{
 			requestRender: () => {},
-			notify: (msg, type = "info") => station.recordOutput(type, msg),
+			notify: (msg, type = "info") => invocation.recordOutput(type, msg),
 		},
 		{
 			get(target, prop) {
@@ -426,15 +413,15 @@ export function createHeadlessTuiContext(session, options = {}) {
 			return station.goalModePaused;
 		},
 		showStatus: (message) => {
-			station.recordOutput("status", message);
+			invocation.recordOutput("status", message);
 			options?.onOutput?.("status", message);
 		},
 		showWarning: (message) => {
-			station.recordOutput("warning", message);
+			invocation.recordOutput("warning", message);
 			options?.onOutput?.("warning", message);
 		},
 		showError: (message) => {
-			station.recordOutput("error", message);
+			invocation.recordOutput("error", message);
 			options?.onOutput?.("error", message);
 		},
 		renderInitialMessages: async () => {},
@@ -442,21 +429,32 @@ export function createHeadlessTuiContext(session, options = {}) {
 		applySessionPin: () => {},
 		updatePendingMessagesDisplay: () => {},
 		stopLoading: () => {},
-		handleHandoffCommand: (customInstructions) =>
-			handleHandoffTicket(session, customInstructions, options, station),
+		handleHandoffCommand: (focus) => handoff(() => {
+			if (typeof session?.handoff !== "function") {
+				throw new Error("Cannot dispatch system /handoff: native slash registry is unavailable");
+			}
+			return session.handoff(focus);
+		}, focus),
+		// Omp also registers /handoff as a /compact alias. At the model boundary
+		// run its in-place handoff, not the interactive abort/continue pipeline.
+		handleCompactCommand: (focus, mode) => {
+			if (command === "handoff" && mode === "handoff") {
+				return handoff(() => session.compact(focus, { mode }), focus);
+			}
+		},
 		handleVibeModeCommand: (prompt) =>
-			handleVibeModeTicket(session, prompt, options, station),
-		handleNewCommand: () => handleNewTicket(session, station),
-		handleFreshCommand: () => handleFreshTicket(session, station),
+			handleVibeModeTicket(session, prompt, options, station, invocation),
+		handleNewCommand: () => handleNewTicket(session, invocation),
+		handleFreshCommand: () => handleFreshTicket(session, invocation),
 		onSwitchModel: (spec, switchOptions) =>
 			handleModelSwitch(
 				session,
 				spec,
 				{ ...options, ...switchOptions },
-				station,
+				invocation,
 			),
 		switchSessionModel: (model, thinkingLevel) =>
-			handleSwitchSessionModel(session, model, thinkingLevel, options, station),
+			handleSwitchSessionModel(session, model, thinkingLevel, options, invocation),
 	};
 
 	const ctx = new Proxy(explicit, {
@@ -468,7 +466,7 @@ export function createHeadlessTuiContext(session, options = {}) {
 			// Any unimplemented interactive-only handler/selector returns a safe stub.
 			return (..._args) => {
 				if (typeof prop === "string" && prop.startsWith("show")) {
-					station.recordOutput("warning", `Interactive UI required for ${prop}.`);
+					invocation.recordOutput("warning", `Interactive UI required for ${prop}.`);
 				}
 				return undefined;
 			};
@@ -480,9 +478,12 @@ export function createHeadlessTuiContext(session, options = {}) {
 
 	return {
 		ctx,
-		station,
-		get outputs() {
-			return station.takeOutputs();
+		outputs,
+		get completion() {
+			return completion;
+		},
+		get result() {
+			return result;
 		},
 	};
 }

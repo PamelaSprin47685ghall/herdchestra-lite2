@@ -3,6 +3,7 @@
 import { debugLog } from "./debug.mjs";
 import { performHandoff } from "./perform.mjs";
 import { errorText, safeSession } from "./session.mjs";
+import { trackRelayContinuation } from "../host/capture.mjs";
 
 function awaitWithAbort(promise, signal) {
 	if (!signal) return promise;
@@ -29,49 +30,67 @@ function awaitWithAbort(promise, signal) {
 	});
 }
 
-/**
- * Model-call gate ticket: installed on `session.agent.addBeforeModelCallHook`.
- * Runs outside the host's 30s extension event-handler timeout budget so an
- * outbound LLM request starts or joins the handoff before context preparation.
- */
-async function modelCallGateTicket(station, session, signal, context, ctx) {
-	if (signal?.aborted) return;
+function handoffAtBoundary(station, ctx) {
+	if (!station.relayOn(ctx)) return null;
 	const relay = station.state.relay;
 	const retry = relay?.handoffError && relay.lastLedger?.empty &&
 		!relay.canStop && relay.firstEvaluation !== null;
 	if (!station.handoffPromise && (relay?.handoffPending || retry)) {
 		if (!relay.handoffPending) station.armHandoff();
-		scheduleBackgroundHandoff(station, ctx, station.pi);
+		scheduleBackgroundHandoff(station, ctx);
 	}
-	const barrier = station.handoffPromise;
-	if (!barrier) {
-		if (relay?.handoffPending || retry) {
-			throw new Error("Relay handoff is pending without a completion barrier");
-		}
-		return;
-	}
+	return station.handoffPromise;
+}
+
+// Older hosts can commit handoff in place while the model boundary waits.
+async function modelCallGateTicket(station, session, signal, context, ctx) {
+	if (signal?.aborted) return;
+	const barrier = handoffAtBoundary(station, ctx);
+	if (!barrier) return;
 	debugLog("model_call_gate.wait", {
 		generation: station.state.relay?.generation ?? null,
 	});
 	const outcome = await awaitWithAbort(barrier, signal);
-	if (!outcome?.ok || outcome.inProgress) {
-		throw new Error(`Relay handoff did not complete: ${outcome?.error ?? "handoff already in progress"}`);
+	if (!outcome.ok) {
+		throw new Error(`Relay handoff did not complete: ${outcome.error}`);
 	}
 	if (signal?.aborted) return;
 
 	const liveSession = session ?? station.handoffSession ?? null;
 	const latestMessages = liveSession?.agent?.state?.messages;
 	if (Array.isArray(context?.messages) && Array.isArray(latestMessages) && context.messages !== latestMessages) {
-		context.messages.splice(0, context.messages.length, ...latestMessages);
+		context.messages = latestMessages.slice();
 	}
 }
 
-async function runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier) {
+async function continueAfterHandoff(session, barrier, signal) {
+	const epoch = session.transcriptEpoch;
+	const outcome = await barrier;
+	if (signal?.aborted || session.isDisposed || session.transcriptEpoch !== epoch) return;
+	if (!outcome.ok) throw new Error(`Relay handoff did not complete: ${outcome.error}`);
+	// The background commit has finished. No prompt or queued message is needed.
+	if (!session.agent.state.isStreaming) await session.agent.continue(signal);
+}
+
+function yieldModelCallTicket(station, session, signal, ctx) {
+	if (signal?.aborted) return;
+	const barrier = handoffAtBoundary(station, ctx);
+	if (!barrier) return;
+	if (station.yieldedHandoff !== barrier) {
+		station.yieldedHandoff = barrier;
+		trackRelayContinuation(session, continueAfterHandoff(session, barrier, signal));
+	}
+	// Omp 19 background compaction cannot commit while this loop is parked.
+	// Yield before provider dispatch, then continue without submitting text.
+	return { stop: true, reason: "Relay handoff" };
+}
+
+async function runBackgroundHandoff(station, ctx, resolveBarrier) {
 	let outcome;
 	try {
 		const session = safeSession(ctx) ?? station.handoffSession;
 		await session?.settleInFlightMessagePersistence?.();
-		outcome = await performHandoff(station, ctx, pi);
+		outcome = await performHandoff(station, session);
 	} catch (error) {
 		outcome = { ok: false, error: errorText(error) };
 		debugLog("handoff.background_error", { error: errorText(error) });
@@ -81,35 +100,27 @@ async function runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier) {
 			// Best-effort error recording inside fire-and-forget shell.
 		}
 	} finally {
-		if (station.handoffPromise === barrier) {
-			station.handoffPromise = null;
-		}
-		station.handoffScheduled = false;
+		station.handoffPromise = null;
 		resolveBarrier(outcome);
 	}
 }
 
 export function installHandoffGate(station, ctx) {
-	return station.ensureModelCallGate(ctx, modelCallGateTicket, safeSession(ctx));
+	return station.ensureModelCallGate(ctx, modelCallGateTicket, yieldModelCallTicket, safeSession(ctx));
 }
 
 /**
  * Schedule the real handoff completely outside the host's event handler
  * timeout budget via a macrotask timer with a catch-all safety shell.
  */
-function scheduleBackgroundHandoff(station, ctx, pi) {
-	if (station.handoffExecuting || station.handoffScheduled) {
+function scheduleBackgroundHandoff(station, ctx) {
+	if (station.handoffPromise) {
 		return false;
 	}
-	installHandoffGate(station, ctx);
-	let resolveBarrier;
-	const barrier = new Promise((resolve) => {
-		resolveBarrier = resolve;
-	});
-	station.handoffPromise = barrier;
-	station.handoffScheduled = true;
+	const { promise, resolve } = Promise.withResolvers();
+	station.handoffPromise = promise;
 	setTimeout(() => {
-		void runBackgroundHandoff(station, ctx, pi, barrier, resolveBarrier);
+		void runBackgroundHandoff(station, ctx, resolve);
 	}, 0);
 	debugLog("handoff.scheduled", {
 		generation: station.state.relay?.generation ?? null,
@@ -123,7 +134,7 @@ function scheduleBackgroundHandoff(station, ctx, pi) {
  * the real handoff as a fire-and-forget background task so the host's
  * `session_stop` handler returns immediately without hitting the callback timeout.
  */
-export function sessionStopTicket(station, ctx, pi) {
+export function sessionStopTicket(station, ctx) {
 	const before = station.state.relay ?? null;
 	debugLog("session_stop.enter", {
 		mode: ctx?.mode ?? null,
@@ -131,7 +142,7 @@ export function sessionStopTicket(station, ctx, pi) {
 		handoffPending: before?.handoffPending ?? null,
 		canStop: before?.canStop ?? null,
 	});
-	const scheduled = scheduleBackgroundHandoff(station, ctx, pi);
+	const scheduled = scheduleBackgroundHandoff(station, ctx);
 	debugLog("session_stop.exit", {
 		fireAndForget: true,
 		scheduled,

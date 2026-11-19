@@ -4,7 +4,6 @@ export {
 	installVibeTools,
 	rememberSession,
 	sessionFor,
-	handoffFor,
 	rememberTui,
 	tuiFor,
 	interactiveCaptureState,

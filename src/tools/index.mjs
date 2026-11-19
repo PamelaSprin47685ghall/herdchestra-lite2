@@ -1,6 +1,6 @@
 // Tools domain index. This node only lists its children's public keys.
 
-export { textResult, errorResult, continueFeedback, isHandoffCompaction } from "./results.mjs";
+export { textResult, errorResult, continueFeedback } from "./results.mjs";
 export {
 	SCOPE_DESCRIPTION,
 	BEGIN_INTENT_DESCRIPTION,

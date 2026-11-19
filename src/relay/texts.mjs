@@ -14,7 +14,7 @@ function nextStepText(relay, stats, action) {
 		case "promoted":
 			return "The successor's first todo evaluation is an empty ledger. This promotion is the only state that allows a natural stop. Write the final user-facing answer as ordinary assistant text now.";
 		case "handoff":
-			return "The ledger is empty. The runtime runs the real built-in AgentSession.handoff() before the next model request. The successor takes the next turn.";
+			return "The ledger is empty. The runtime runs the system /handoff before the next model request. The successor takes the next turn.";
 		case "rework":
 			return relay.generation === 0
 				? "Your first todo evaluation found open work (rework). Work through the ledger; a non-empty ledger forbids a natural stop."
@@ -114,7 +114,7 @@ export function handoffPendingNudge(relay) {
 	return [
 		"A relay handoff is pending. Do not change the ledger, do not open a scope, and do not write the final answer; wait for the successor.",
 		relayStatusText(relay, relay?.lastLedger ?? null),
-		"If the host did not actually start the handoff, the runtime retries the real AgentSession.handoff() method. Never substitute message text, newSession, or a nudge for it.",
+		"If the host did not actually start the handoff, the runtime retries the system /handoff. Never substitute message text, newSession, or a nudge for it.",
 	].join("\n\n");
 }
 
@@ -122,7 +122,7 @@ export function handoffFailureNudge(error) {
 	const message = String(error?.message ?? error ?? "unknown error");
 	return [
 		`HANDOFF FAILED: ${message}`,
-		"Do not pretend the handoff succeeded, and do not degrade to sendUserMessage, newSession, or a text note. The relay runtime will retry the real AgentSession.handoff() method. Do not stop.",
+		"Do not pretend the handoff succeeded, and do not degrade to sendUserMessage, newSession, or a text note. The relay runtime will retry the system /handoff. Do not stop.",
 		STOP_RULE,
 	].join("\n");
 }

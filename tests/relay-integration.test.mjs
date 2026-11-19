@@ -885,13 +885,13 @@ describe("relay integration", () => {
 	});
 
 	test("a handoff that returns success without advancing never allows a stop", async () => {
-		const { host, ctx } = await start({ mode: "print" });
-		host.pi.handoffImpl = async ({ rec }) => {
+		const { host, ctx } = await start({ mode: "print", handoff: () => {
 			// Simulate a host that reports success but clears the pending flag
 			// before the runtime can advance the generation.
+			const rec = stateFor(ctx);
 			rec.state.relay = { ...rec.state.relay, handoffPending: false };
 			return { ok: true };
-		};
+		} });
 		await runAssistant(
 			host,
 			ctx,
@@ -1750,25 +1750,104 @@ describe("slash-capable sendSlashPrompt (preserving original sendPrompt) across 
 		expect(host.messages).toHaveLength(0);
 	});
 
-	test("a refused system slash command never falls through to a conversation prompt", async () => {
-		const { host, ctx, session } = await start();
-		let command;
-		let options;
+	test("an idle-only handoff yields the old loop without a request and continues from its commit", async () => {
+		const { host, ctx, session, manager } = await start();
+		const idle = Promise.withResolvers();
+		const compacting = Promise.withResolvers();
+		const summary = { role: "compactionSummary", summary: "successor audit" };
+		const requests = [];
 		let gate;
-		session.agent.addBeforeModelCallHook = (hook) => { gate = hook; };
-		session.sendSlashPrompt = async (text, params) => {
-			command = text;
-			options = params;
-			return { handled: false, residual: text };
+		session.agent.addBeforeModelCall = (hook) => { gate = hook; };
+		session.agent.continue = async () => {
+			if (!gate({}, undefined)) requests.push([...session.agent.state.messages]);
 		};
-		session.prompt = () => { throw new Error("unexpected conversation prompt"); };
-		await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
-		await expect(gate(undefined, { messages: [] })).rejects.toThrow("system /handoff command did not complete");
-		expect(command).toStartWith("/handoff Relay: empty-ledger handoff.");
-		expect(command).toContain("You must independently verify the previous holder's work.");
-		expect(options.slashOnly).toBe(true);
-		expect(stateFor(ctx).state.relay.generation).toBe(0);
-		expect(host.messages).toHaveLength(0);
+		session.agent.state.isStreaming = true;
+		const nativeHandoff = session.handoff.bind(session);
+		session.handoff = undefined;
+		session.compact = async (focus, { mode }) => {
+			expect(mode).toBe("handoff");
+			expect(manager.getBranch().some(({ message }) => message?.toolCallId === "empty")).toBe(true);
+			compacting.resolve();
+			await idle.promise;
+			await nativeHandoff(focus);
+			manager.appendCompaction("handoff", { summary: summary.summary });
+			session.agent.state.messages = [summary];
+			return { summary: summary.summary };
+		};
+		const { installBuiltinSlashExecutor } = await import("../src/host/capture.mjs");
+		const restore = installBuiltinSlashExecutor(async (text, { ctx }) => {
+			void ctx.handleCompactCommand(text.slice("/handoff ".length), "handoff");
+			return true;
+		});
+		try {
+			await emit(host.handlers, "before_agent_start", {}, ctx);
+			await runAssistant(host, ctx, assistant([call("empty", "todo", { op: "init", list: [] })]));
+			expect(gate({}, undefined)).toMatchObject({ stop: true });
+			await compacting.promise;
+			const barrier = stateFor(ctx).handoffPromise;
+			expect(await emit(host.handlers, "session_stop", {}, ctx)).toBeUndefined();
+			expect(requests).toHaveLength(0);
+			session.agent.state.isStreaming = false;
+			idle.resolve();
+			await barrier;
+			expect(requests).toEqual([[summary]]);
+			expect(session.calls).toHaveLength(1);
+			expect(session.calls[0]).toContain("\n1. You must independently verify");
+			expect(stateFor(ctx).state.relay.generation).toBe(1);
+			expect(host.messages).toHaveLength(0);
+		} finally {
+			restore();
+		}
+	});
+
+	test("a refused system slash command never falls through to a conversation prompt", async () => {
+		const { sendSlashPrompt } = await import("../src/host/index.mjs");
+		const session = { prompt() { throw new Error("unexpected conversation prompt"); } };
+		const command = "/handoff relay audit\nverify independently";
+		const result = await sendSlashPrompt(session, command, {
+			slashOnly: true,
+			builtinExecutor: async (raw) => raw,
+		});
+		expect(result.handled).toBe(false);
+		expect(result.residual).toBe(command);
+	});
+
+	test("a consumed background /handoff alias waits for its own native compact result", async () => {
+		const { sendSlashPrompt } = await import("../src/host/index.mjs");
+		const committed = Promise.withResolvers();
+		const started = Promise.withResolvers();
+		const calls = [];
+		const session = {
+			isStreaming: true,
+			compact(focus, options) {
+				calls.push([focus, options]);
+				started.resolve();
+				return committed.promise;
+			},
+			prompt() { throw new Error("unexpected conversation prompt"); },
+		};
+		const focus = "relay audit\nverify independently";
+		let finished = false;
+		const pending = sendSlashPrompt(session, `/handoff ${focus}`, {
+			slashOnly: true,
+			builtinExecutor: async (raw, { ctx }) => {
+				void ctx.handleCompactCommand(raw.slice("/handoff ".length), "handoff");
+				return true;
+			},
+		}).then((result) => { finished = true; return result; });
+		await started.promise;
+		await sendSlashPrompt(session, "/model", {
+			builtinExecutor: async (_raw, { ctx }) => {
+				ctx.showStatus("unrelated command");
+				return true;
+			},
+		});
+		expect(finished).toBe(false);
+		expect(calls).toEqual([[focus, { mode: "handoff" }]]);
+		committed.resolve({ summary: "compacted audit" });
+		const result = await pending;
+		expect(result.result).toEqual({ summary: "compacted audit" });
+		expect(result.outputs.map((output) => output.text)).not.toContain("unrelated command");
 	});
 
 	test("idle fallback handoff does not send a user message or start a model call", async () => {

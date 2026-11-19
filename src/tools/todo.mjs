@@ -10,7 +10,6 @@ import { currentScope } from "../scope/index.mjs";
 import { installHandoffGate } from "../handoff/index.mjs";
 import { errorResult } from "./results.mjs";
 import {
-	handoffFocus,
 	isTodoView,
 	relayStatusText,
 } from "../relay/index.mjs";
@@ -82,7 +81,7 @@ export async function todoTicket(station, params, ctx) {
 	) {
 		return errorResult(
 			"RELAY_HANDOFF_PENDING",
-			"A relay handoff is pending. A todo view is allowed for diagnosis; do not change the ledger. The runtime retries the real AgentSession.handoff() if it did not start.",
+			"A relay handoff is pending. A todo view is allowed for diagnosis; do not change the ledger. The runtime runs the system /handoff.",
 		);
 	}
 	if (typeof ctx?.invokeTool !== "function") {
@@ -137,19 +136,12 @@ export async function todoTicket(station, params, ctx) {
 
 	const applied = station.recordLedgerEvaluation(phases, op, { isError: false });
 
-	let text = relayStatusText(applied.relay, applied.stats, {
+	const text = relayStatusText(applied.relay, applied.stats, {
 		action: applied.action,
 	});
 	if (applied.action === "handoff") {
-		const outcome = station.markHandoffPending(ctx, {
-			reason: "empty-ledger",
-			focus: handoffFocus(applied.relay),
-		});
-		if (outcome?.ok === false) {
-			text += `\n\nHANDOFF FAILED: ${outcome.error}`;
-		} else if (outcome?.pending) {
-			installHandoffGate(station, ctx);
-		}
+		station.rememberHandoffSession(ctx);
+		installHandoffGate(station, ctx);
 	}
 
 	const nextDetails =

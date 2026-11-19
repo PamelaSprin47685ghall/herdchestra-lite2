@@ -3,6 +3,7 @@
 import { sessionFor } from "../host/capture.mjs";
 import { hackContext } from "../host/hack-context.mjs";
 import { installScopeDispatch } from "../host/scope-dispatch.mjs";
+import { installHandoffGate } from "../handoff/index.mjs";
 
 export function wireHooks(pi, registry) {
 	const bindDispatch = (ctx) => {
@@ -49,9 +50,11 @@ export function wireHooks(pi, registry) {
 	hackContext(pi, (event, ctx) =>
 		bindDispatch(ctx).onContext(event?.messages, ctx),
 	);
-	pi.on("before_agent_start", (event, ctx) =>
-		registry.stationFor(ctx).onBeforeAgentStart(event, ctx),
-	);
+	pi.on("before_agent_start", (event, ctx) => {
+		const station = registry.stationFor(ctx);
+		installHandoffGate(station, ctx);
+		return station.onBeforeAgentStart(event, ctx);
+	});
 	pi.on("session_stop", (_event, ctx) =>
 		registry.stationForStop(ctx).onSessionStop(ctx),
 	);
@@ -60,8 +63,5 @@ export function wireHooks(pi, registry) {
 	);
 	pi.on("session_compact", (_event, ctx) =>
 		registry.stationFor(ctx).onSessionCompact(ctx),
-	);
-	pi.on("auto_compaction_end", (event, ctx) =>
-		registry.stationForStop(ctx).onAutoCompactionEnd(event, ctx),
 	);
 }

@@ -83,13 +83,12 @@ import {
 import {
 	advanceRelayForHandoff,
 	armHandoff,
-	markHandoffPending,
+	rememberHandoffSession,
 	recordHandoffFailureAt,
 	recordLedgerEvaluation,
 } from "./handoff-state.mjs";
 import {
 	onAssistantMessage,
-	onAutoCompactionEnd,
 	onBeforeAgentStart,
 	onContext,
 	onMessageEnd,
@@ -139,14 +138,10 @@ export class SessionStation {
 		this.lastError = null;
 		this.hostBoundaryKey = null;
 		this.agentPolicy = null;
-		this.handoffExecuting = false;
-		this.handoffScheduled = false;
 		this.handoffPromise = null;
+		this.yieldedHandoff = null;
 		this.gatedAgentHooks = new WeakSet();
-		this.handoffSwitched = false;
 		this.handoffSession = null;
-		this.handoffFocus = null;
-		this.handoffAdvanced = false;
 		this.relayState = true;
 		this.todoGrantKey = null;
 		// Measured usage baseline. Populated from live messages and restored
@@ -726,7 +721,8 @@ export class SessionStation {
 			return;
 		}
 		if (relay.lastLedger.empty) {
-			this.markHandoffPending(ctx, { reason: "empty-ledger" });
+			this.armHandoff();
+			this.rememberHandoffSession(ctx);
 			return;
 		}
 		this.deliverSteer(openLedgerNudge(relay, relay.lastLedger));
@@ -795,22 +791,26 @@ export class SessionStation {
 		return recordHandoffFailureAt(this, error, at);
 	}
 
-	markHandoffPending(ctx, options = {}) {
-		return markHandoffPending(this, ctx, options);
+	rememberHandoffSession(ctx) {
+		rememberHandoffSession(this, ctx);
 	}
 
-	ensureModelCallGate(ctx, gateTicket, resolvedSession = null) {
+	ensureModelCallGate(ctx, gateTicket, yieldTicket, resolvedSession = null) {
 		if (typeof gateTicket !== "function") return false;
 		const session = resolvedSession ?? ctx?.session ?? this.handoffSession ?? null;
 		const agent = session?.agent ?? null;
-		if (!agent || typeof agent.addBeforeModelCallHook !== "function") {
+		if (!agent) return false;
+		const background = typeof session.handoff !== "function" && typeof session.compact === "function";
+		if (background ? typeof agent.addBeforeModelCall !== "function" : typeof agent.addBeforeModelCallHook !== "function") {
 			return false;
 		}
 		if (this.gatedAgentHooks.has(agent)) return true;
 		this.gatedAgentHooks.add(agent);
-		agent.addBeforeModelCallHook((signal, context) =>
-			gateTicket(this, session, signal, context, ctx),
-		);
+		if (background) {
+			agent.addBeforeModelCall((_context, signal) => yieldTicket(this, session, signal, ctx));
+		} else {
+			agent.addBeforeModelCallHook((signal, context) => gateTicket(this, session, signal, context, ctx));
+		}
 		return true;
 	}
 
@@ -867,10 +867,6 @@ export class SessionStation {
 
 	onSessionCompact(ctx) {
 		return onSessionCompact(this, ctx);
-	}
-
-	onAutoCompactionEnd(event, ctx) {
-		return onAutoCompactionEnd(this, event, ctx);
 	}
 
 	onBeforeAgentStart(event, ctx) {

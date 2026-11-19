@@ -3,7 +3,6 @@
  *
  * textResult/errorResult build the tool-result objects the host expects.
  * continueFeedback builds the session_stop continuation the host accepts.
- * isHandoffCompaction recognizes a host compaction event that marks a handoff.
  */
 
 export function textResult(text, details) {
@@ -29,15 +28,3 @@ export function continueFeedback(text) {
 	return { continue: true, additionalContext: text };
 }
 
-/** True when a host compaction event marks a handoff transition. */
-export function isHandoffCompaction(event) {
-	if (!event || typeof event !== "object") return false;
-	if (event.handoff === true || event.isHandoff === true) return true;
-	const action =
-		event.action ??
-		event.compaction?.action ??
-		event.reason ??
-		event.source ??
-		event.kind;
-	return action === "handoff";
-}

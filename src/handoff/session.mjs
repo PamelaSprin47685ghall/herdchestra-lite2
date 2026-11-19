@@ -1,7 +1,7 @@
 // Handoff session: real AgentSession access, compaction counting, and
 // short-branch recovery. No station state lives here.
 
-import { sessionFor } from "../host/capture.mjs";
+import { retainedTailSetting, sessionFor } from "../host/capture.mjs";
 
 const KEEP_RECENT_KEY = "compaction.keepRecentTokens";
 
@@ -20,7 +20,7 @@ function errorText(error) {
 function isAlreadyCompacted(error) {
 	const message = errorText(error);
 	if (/already compacted/i.test(message)) return true;
-	return /nothing to hand off/i.test(message) && !/no messages yet/i.test(message);
+	return /nothing to compact \(session too small\)/i.test(message);
 }
 
 /**
@@ -46,33 +46,33 @@ export function countHandoffCompactions(manager) {
 	}
 }
 
-function managerOf(session, ctx) {
-	try {
-		if (session?.sessionManager) return session.sessionManager;
-	} catch {
-		// Fall through to the extension context.
-	}
-	try {
-		return ctx?.sessionManager ?? null;
-	} catch {
-		return null;
-	}
-}
-
 /**
  * A manual handoff on a very small or already compacted branch fails with
  * "Nothing to hand off (already compacted)". Retry with a temporary smaller
  * retained tail. Never add messages to make the branch compressible.
  */
-async function callHandoffWithRecovery(session, focus) {
+async function callHandoffWithRecovery(session, run) {
 	let firstError;
 	try {
-		return await session.handoff(focus);
+		return await run();
 	} catch (error) {
 		if (!isAlreadyCompacted(error)) throw error;
 		firstError = error;
 	}
 	const settings = session?.settings;
+	const setting = retainedTailSetting();
+	if (settings && setting && typeof settings.hasRuntimeOverride === "function") {
+		const previous = setting.get(settings);
+		if (previous <= 1) throw firstError;
+		const hadOverride = settings.hasRuntimeOverride(setting);
+		setting.override(settings, 1);
+		try {
+			return await run();
+		} finally {
+			if (hadOverride) setting.override(settings, previous);
+			else setting.clearOverride(settings);
+		}
+	}
 	const canAdjust =
 		settings &&
 		typeof settings.get === "function" &&
@@ -89,7 +89,7 @@ async function callHandoffWithRecovery(session, focus) {
 	}
 	if (!adjusted) throw firstError;
 	try {
-		return await session.handoff(focus);
+		return await run();
 	} finally {
 		try {
 			settings.set(KEEP_RECENT_KEY, previous);
@@ -104,6 +104,5 @@ export {
 	safeSession,
 	errorText,
 	isAlreadyCompacted,
-	managerOf,
 	callHandoffWithRecovery,
 };

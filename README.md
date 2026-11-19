@@ -6,7 +6,7 @@ When a scope folds, its user messages move before its opening `scope` call. Thei
 
 ## Relay handoff
 
-When `todo` requests a handoff, it returns the ledger without waiting for the summary. On omp builds with the model-call gate, the next model request waits for the built-in `/handoff` to finish and uses its compacted history. The audit instructions go only in the `/handoff` argument; the extension does not send a separate message. A failed handoff blocks that request. If no request is about to start, `session_stop` schedules the handoff in the background without starting a new turn.
+When `todo` empties the ledger, it returns immediately. On omp 19, the model-call gate ends the old loop before it sends another request, freeing the native `/handoff` background compaction to commit at idle. Once it commits, the extension continues from the compacted transcript without sending a prompt. On hosts with an in-place `/handoff`, the same provider boundary can wait for the commit without ending the loop. Neither path waits in an extension event callback or inserts an extra model turn. Audit instructions are passed only as the `/handoff` argument. A failed handoff blocks the predecessor request and preserves the native error. `session_stop` can schedule a pending handoff without waking an idle model.
 
 ## Model selection
 

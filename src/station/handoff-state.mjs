@@ -5,7 +5,6 @@ import { sessionFor } from "../host/capture.mjs";
 import {
 	applyLedgerEvaluation,
 	beginGenerationAfterHandoff,
-	handoffFocus,
 	recordHandoffFailure,
 } from "../relay/index.mjs";
 
@@ -19,22 +18,17 @@ function safeSessionFor(ctx) {
 
 function armHandoff(station) {
 	const relay = station.state.relay;
-	station.handoffFocus = handoffFocus({ ...relay, handoffPending: true });
-	station.handoffAdvanced = false;
-	station.handoffSwitched = false;
 	station.state.relay = { ...relay, handoffPending: true };
 	station.persist();
 }
 
 function advanceRelayForHandoff(station) {
-	if (station.handoffAdvanced) return false;
 	const relay = station.state.relay;
 	if (!relay || !relay.handoffPending || relay.canStop) return false;
 	station.state.relay = beginGenerationAfterHandoff(relay, {
 		at: Date.now(),
 		fromGeneration: relay.generation,
 	});
-	station.handoffAdvanced = true;
 	station.persist();
 	return true;
 }
@@ -56,41 +50,9 @@ function recordHandoffFailureAt(station, error, at) {
 }
 
 
-function markHandoffPending(station, ctx, options = {}) {
-	const relay = station.state.relay;
-	if (!relay) return { ok: false, error: "relay state is missing" };
-	if (relay.canStop) {
-		return { ok: true, skipped: "promoted", generation: relay.generation };
-	}
-	station.handoffFocus =
-		options.focus ??
-		handoffFocus({ ...relay, handoffPending: true });
+function rememberHandoffSession(station, ctx) {
 	station.handoffSession = safeSessionFor(ctx) ?? station.handoffSession;
 	station.registry.markPending(station);
-	if (relay.handoffPending) {
-		// applyLedgerEvaluation sets handoffPending itself. A new empty-ledger
-		// decision arrives here with pending already true, so clear the previous
-		// generation's completion flag before the stop gatekeeper advances.
-		if (!station.handoffExecuting) {
-			station.handoffAdvanced = false;
-			station.handoffSwitched = false;
-		}
-		return {
-			ok: true,
-			pending: true,
-			inProgress: true,
-			generation: relay.generation,
-		};
-	}
-	station.handoffAdvanced = false;
-	station.handoffSwitched = false;
-	station.state.relay = { ...relay, handoffPending: true, handoffError: null };
-	station.persist();
-	return {
-		ok: true,
-		pending: true,
-		generation: station.state.relay.generation,
-	};
 }
 
 export {
@@ -98,5 +60,5 @@ export {
 	advanceRelayForHandoff,
 	recordLedgerEvaluation,
 	recordHandoffFailureAt,
-	markHandoffPending,
+	rememberHandoffSession,
 };

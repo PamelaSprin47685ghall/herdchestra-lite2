@@ -1,186 +1,24 @@
-// Handoff perform: run the real handoff once and deliver the successor prompt.
+// Dispatch the builtin command without submitting a conversation prompt.
 
-import {
-	handoffFor,
-	interactiveCaptureState,
-	sendSlashPrompt,
-	tuiFor,
-} from "../host/capture.mjs";
+import { sendSlashPrompt, tuiFor } from "../host/capture.mjs";
 import { handoffFocus } from "../relay/index.mjs";
-import { debugLog } from "./debug.mjs";
-import {
-	countHandoffCompactions,
-	callHandoffWithRecovery,
-	errorText,
-	managerOf,
-	safeSession,
-} from "./session.mjs";
+import { callHandoffWithRecovery } from "./session.mjs";
 import { renderTui } from "./tui.mjs";
 
-function buildHandoffSlashCommand(focus) {
-	const trimmed = typeof focus === "string" ? focus.trim() : "";
-	return trimmed ? `/handoff ${trimmed}` : "/handoff";
-}
-
-function dispatchSlashHandoff(session, ctx, slashCommand, options) {
-	if (session && typeof session.sendSlashPrompt === "function") {
-		return session.sendSlashPrompt(slashCommand, options);
-	}
-	return sendSlashPrompt(session ?? ctx, slashCommand, options);
-}
-
-async function executeHandoff(session, focus, pi, ctx, station) {
-	if (session && session.isGeneratingHandoff === true) {
-		return { ok: true, inProgress: true };
-	}
-	debugLog("handoff.execute", {
-		hasSession: Boolean(session),
-		hasCapturedSession: Boolean(station.handoffSession),
-		hasHandoffImpl: typeof pi?.handoffImpl === "function",
-		generation: station.state.relay?.generation ?? null,
+export async function performHandoff(station, session) {
+	if (!session) throw new Error("Cannot resolve the live AgentSession for /handoff");
+	const focus = handoffFocus(station.state.relay);
+	const dispatched = await sendSlashPrompt(session, `/handoff ${focus}`, {
+		slashOnly: true,
+		onSessionHandoff: (run) => callHandoffWithRecovery(session, run),
 	});
-	if (typeof pi?.handoffImpl === "function") {
-		debugLog("handoff.call", {
-			target: "handoffImpl",
-			generation: station.state.relay?.generation ?? null,
-		});
-		const result = await pi.handoffImpl({ session, focus, rec: station, ctx });
-		debugLog("handoff.result", {
-			target: "handoffImpl",
-			resultDefined: result !== undefined,
-			ok: result?.ok ?? null,
-		});
-		if (result && result.ok === false) {
-			throw new Error(String(result.error ?? result.reason ?? "handoff failed"));
-		}
-		return { ok: true };
+	if (!dispatched.handled || !dispatched.result || dispatched.result.ok === false) {
+		throw new Error(dispatched.result?.error ?? dispatched.outputs.at(-1)?.text ??
+			"The system /handoff command did not complete");
 	}
-	const target = session ?? station.handoffSession ?? null;
-	if (!target) {
-		const bound = handoffFor(ctx);
-		if (typeof bound !== "function") {
-			debugLog("handoff.unavailable", {
-				reason: "no-session-or-bound-handoff",
-			});
-			throw new Error(
-				"Cannot capture the live AgentSession; handoff did not start. Fix AgentSession.prototype.prompt/extensionRunner capture; do not degrade to sendUserMessage, newSession, or a nudge.",
-			);
-		}
-		debugLog("handoff.call", {
-			target: "bound",
-			generation: station.state.relay?.generation ?? null,
-		});
-		await bound(focus);
-		debugLog("handoff.result", { target: "bound", resultDefined: true });
-		return { ok: true };
+	if (!station.advanceRelayForHandoff()) {
+		throw new Error("handoff completed but relay did not advance");
 	}
-	if (typeof target.handoff !== "function") {
-		const bound = handoffFor(ctx);
-		if (typeof bound !== "function") {
-			debugLog("handoff.unavailable", {
-				reason: "captured-session-has-no-handoff",
-			});
-			throw new Error(
-				"The captured session has no handoff() method and no bound handoff is available.",
-			);
-		}
-		debugLog("handoff.call", {
-			target: "bound-fallback",
-			generation: station.state.relay?.generation ?? null,
-		});
-		await bound(focus);
-		debugLog("handoff.result", {
-			target: "bound-fallback",
-			resultDefined: true,
-		});
-		return { ok: true };
-	}
-	debugLog("handoff.call", {
-		target: "AgentSession.handoff",
-		generation: station.state.relay?.generation ?? null,
-		focusChars: focus.length,
-	});
-	const result = await callHandoffWithRecovery(target, focus);
-	debugLog("handoff.result", {
-		target: "AgentSession.handoff",
-		resultDefined: result !== undefined,
-		generation: station.state.relay?.generation ?? null,
-	});
-	if (result === undefined && !station.handoffSwitched) {
-		throw new Error("AgentSession.handoff() returned undefined (cancelled or failed).");
-	}
+	await renderTui(tuiFor(session));
 	return { ok: true };
 }
-
-async function performHandoff(station, ctx, pi) {
-	if (station.handoffExecuting) {
-		return { ok: true, inProgress: true };
-	}
-	const focus =
-		typeof station.handoffFocus === "string" && station.handoffFocus
-			? station.handoffFocus
-			: handoffFocus(station.state.relay);
-	let result;
-	let manager = null;
-	station.handoffExecuting = true;
-	try {
-		const session = safeSession(ctx) ?? station.handoffSession ?? null;
-		manager = managerOf(session, ctx);
-		let tui = null;
-		try {
-			tui = tuiFor(session ?? ctx);
-		} catch {
-			tui = null;
-		}
-		const slashCommand = buildHandoffSlashCommand(focus);
-		debugLog("tui_capture", {
-			hasTui: Boolean(tui),
-			canRender: typeof tui?.renderInitialMessages === "function",
-			capture: interactiveCaptureState(),
-			generation: station.state.relay?.generation ?? null,
-			slashCommand,
-		});
-		const before = countHandoffCompactions(manager);
-		const dispatched = await dispatchSlashHandoff(session, ctx, slashCommand, {
-			ctx,
-			slashOnly: true,
-			onSessionHandoff: (_s, f) =>
-				executeHandoff(session, f ?? focus, pi, ctx, station),
-		});
-		if (!dispatched?.handled || !dispatched.result?.ok) {
-			throw new Error("The system /handoff command did not complete");
-		}
-		result = dispatched.result;
-		debugLog("compaction_entry", {
-			path: "slash-prompt:session",
-			before,
-			after: countHandoffCompactions(manager),
-		});
-		await renderTui(tui);
-	} catch (error) {
-		debugLog("handoff.error", {
-			error: errorText(error),
-			generation: station.state.relay?.generation ?? null,
-		});
-		station.recordHandoffFailureAt(error, Date.now());
-		return { ok: false, error: errorText(error) };
-	} finally {
-		station.handoffExecuting = false;
-	}
-	if (result?.inProgress) {
-		debugLog("handoff.in-progress", {
-			generation: station.state.relay?.generation ?? null,
-		});
-		return { ok: true, inProgress: true };
-	}
-	const advanced = station.advanceRelayForHandoff();
-	if (!advanced) {
-		const error = new Error("handoff completed but relay did not advance");
-		station.recordHandoffFailureAt(error, Date.now());
-		return { ok: false, error: error.message };
-	}
-	station.persist();
-	return { ok: true, advanced, generation: station.state.relay?.generation ?? 0 };
-}
-
-export { executeHandoff, performHandoff };

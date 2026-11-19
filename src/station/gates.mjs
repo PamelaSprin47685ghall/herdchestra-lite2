@@ -15,7 +15,7 @@ import {
 	isTodoView,
 	openLedgerNudge,
 } from "../relay/index.mjs";
-import { continueFeedback, isHandoffCompaction } from "../tools/results.mjs";
+import { continueFeedback } from "../tools/results.mjs";
 import {
 	CONTROL_TOOLS,
 	controlsIn,
@@ -199,7 +199,6 @@ function onSessionSwitch(station, event, ctx) {
 	if (reason !== "handoff" && event?.handoff !== true) return;
 	truncateForHostBoundary(station.state);
 	station.resetUsageWatermark();
-	if (station.handoffExecuting) station.handoffSwitched = true;
 	station.persist();
 }
 
@@ -212,12 +211,6 @@ function onSessionCompact(station, ctx) {
 	const restore = station.tickets.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
 	if (req) return restore(station, ctx, req);
-}
-
-function onAutoCompactionEnd(station, event, ctx) {
-	if (!isHandoffCompaction(event)) return;
-	if (!station.handoffExecuting) return;
-	station.handoffSwitched = true;
 }
 
 function onBeforeAgentStart(station, event, ctx) {
@@ -246,6 +239,5 @@ export {
 	onSessionStop,
 	onSessionSwitch,
 	onSessionCompact,
-	onAutoCompactionEnd,
 	onBeforeAgentStart,
 };

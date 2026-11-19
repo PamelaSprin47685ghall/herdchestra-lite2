@@ -21,7 +21,7 @@ export function buildTickets(pi) {
 		},
 		canSteer: typeof pi?.sendUserMessage === "function",
 		restoreScopedModel,
-		sessionStop: (station, ctx) => sessionStopTicket(station, ctx, pi),
+		sessionStop: sessionStopTicket,
 		activateTools: (activeTools, prompt, changed) =>
 			activateToolsTicket(pi, activeTools, prompt, changed),
 	};

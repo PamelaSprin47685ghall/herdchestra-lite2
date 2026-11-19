@@ -53,6 +53,7 @@ function state() {
 		prototype: null,
 		descriptor: null,
 		sessions: new WeakMap(),
+		relayContinuations: new WeakMap(),
 		tuiBySession: new WeakMap(),
 		tui: null,
 		tuiRenders: 0,
@@ -99,19 +100,6 @@ export function sessionFor(context) {
 		// Fall through to the context object itself.
 	}
 	return captured.get(context) ?? null;
-}
-
-/** The captured session's handoff method, or null. */
-export function handoffFor(context) {
-	const session = sessionFor(context);
-	if (!session) return null;
-	try {
-		return typeof session.handoff === "function"
-			? session.handoff.bind(session)
-			: null;
-	} catch {
-		return null;
-	}
 }
 
 /** Test and host seam: bind the live InteractiveMode instance (and its session). */
@@ -186,24 +174,24 @@ export function parseSlashCommand(text) {
 	};
 }
 
-/**
- * Load the host builtin slash-command dispatcher lazily when available.
- */
-let cachedBuiltinExecutor;
-async function resolveBuiltinSlashExecutor() {
-	if (cachedBuiltinExecutor !== undefined) return cachedBuiltinExecutor;
-	try {
-		const mod = await import(
-			"@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry"
-		);
-		cachedBuiltinExecutor =
-			typeof mod?.executeBuiltinSlashCommand === "function"
-				? mod.executeBuiltinSlashCommand
-				: null;
-	} catch {
-		cachedBuiltinExecutor = null;
-	}
-	return cachedBuiltinExecutor;
+export function installBuiltinSlashExecutor(executor, retainedTail) {
+	const captured = state();
+	const previous = captured.builtinSlashExecutor;
+	if (typeof executor === "function") captured.builtinSlashExecutor = executor;
+	if (retainedTail) captured.retainedTail = retainedTail;
+	return () => { captured.builtinSlashExecutor = previous; };
+}
+
+export function retainedTailSetting() {
+	return state().retainedTail;
+}
+
+export function trackRelayContinuation(session, completion) {
+	const continuations = state().relayContinuations;
+	continuations.set(session, completion);
+	void completion.finally(() => {
+		if (continuations.get(session) === completion) continuations.delete(session);
+	}).catch(() => {});
 }
 
 /**
@@ -225,7 +213,7 @@ function slashOnlyResult(handled, command, residual, headless) {
 		mode: "slash-only",
 		command,
 		outputs: headless?.outputs ?? [],
-		result: headless?.station?.lastResult,
+		result: headless?.result,
 	};
 	if (residual !== undefined) result.residual = residual;
 	return result;
@@ -238,11 +226,11 @@ export async function sendSlashPrompt(target, text, options = {}) {
 	let headless = null;
 
 	if (parsed) {
-		headless = createHeadlessTuiContext(session, options);
+		headless = createHeadlessTuiContext(session, options, parsed.name);
 		const executor =
 			typeof options.builtinExecutor === "function"
 				? options.builtinExecutor
-				: await resolveBuiltinSlashExecutor();
+				: state().builtinSlashExecutor;
 		let outcome = false;
 		if (executor) {
 			outcome = await executor(parsed.raw, {
@@ -253,6 +241,7 @@ export async function sendSlashPrompt(target, text, options = {}) {
 		} else {
 			outcome = await executeFallbackBuiltinSlashCommand(parsed, headless.ctx);
 		}
+		if (headless.completion) await headless.completion;
 
 		if (outcome === true) {
 			if (slashOnly) return slashOnlyResult(true, parsed.name, undefined, headless);
@@ -261,7 +250,7 @@ export async function sendSlashPrompt(target, text, options = {}) {
 				mode: "session",
 				command: parsed.name,
 				outputs: headless.outputs,
-				result: headless.station.lastResult,
+				result: headless.result,
 			};
 		}
 		if (typeof outcome === "string") {
@@ -413,9 +402,15 @@ function installPromptCapture(AgentSession) {
 		"prompt",
 		PROMPT_PATCH,
 		(original) =>
-			function prompt(...args) {
+			async function prompt(...args) {
 				remember(this);
-				return Reflect.apply(original, this, args);
+				const result = await Reflect.apply(original, this, args);
+				// Keep the original submission open across zero-request yields,
+				// including successors that find rework and hand off again.
+				const continuations = state().relayContinuations;
+				let continuation;
+				while ((continuation = continuations.get(this))) await continuation;
+				return result;
 			},
 	);
 }

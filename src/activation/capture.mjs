@@ -6,11 +6,13 @@
 import {
 	installInteractiveCapture,
 	installRunnerCapture,
+	installBuiltinSlashExecutor,
 	sendSlashPrompt,
 	sessionFor,
 } from "../host/capture.mjs";
 
-export async function installCapture(pi) {
+export async function installCapture(pi, builtinExecutor, retainedTail) {
+	installBuiltinSlashExecutor(builtinExecutor, retainedTail);
 	let injected = null;
 	try {
 		injected = pi?.pi ?? null;

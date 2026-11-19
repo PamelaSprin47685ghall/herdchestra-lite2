@@ -226,20 +226,27 @@ export function setAgentMessages(context, messages) {
 	}
 }
 
+/**
+ * Install both prototype patches and report the resulting seam diagnosis.
+ *
+ * Callers ask "did it work", so the return value is `captureDiagnosis()`, not
+ * the internal record: an `ok`/`missing`/`error` shape cannot be misread, and
+ * the diagnosis is current after the install.
+ */
 export function installRunnerCapture(AgentSession) {
 	installVibeTools(AgentSession);
 	const captured = state();
-	if (captured.installed) return captured;
+	if (captured.installed) return captureDiagnosis();
 	captured.installed = true;
 	if (typeof AgentSession !== "function" || !AgentSession.prototype) {
 		captured.error = "AgentSession is unavailable from the host package root";
-		return captured;
+		return captureDiagnosis();
 	}
 	const prototype = AgentSession.prototype;
 	const descriptor = Object.getOwnPropertyDescriptor(prototype, "extensionRunner");
 	if (!descriptor || typeof descriptor.get !== "function") {
 		captured.error = "AgentSession.prototype.extensionRunner getter is unavailable";
-		return captured;
+		return captureDiagnosis();
 	}
 	captured.prototype = prototype;
 	captured.descriptor = descriptor;
@@ -256,5 +263,5 @@ export function installRunnerCapture(AgentSession) {
 	);
 	captured.seams.runnerGetter = true;
 	captured.error = null;
-	return captured;
+	return captureDiagnosis();
 }

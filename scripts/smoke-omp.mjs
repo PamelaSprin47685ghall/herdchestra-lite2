@@ -15,7 +15,9 @@
  * Exit codes: 0 when nothing failed, 1 when any check failed.
  */
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { SessionStation } from "../src/station/station.mjs";
 import { restoreState } from "../src/station/restore.mjs";
@@ -118,6 +120,49 @@ await check("host declares the extensionRunner getter", () => {
 	return "agent-session.ts";
 });
 
+/**
+ * A checkout whose `packages/natives/native` addon predates its source cannot
+ * be imported: the older binary is missing exports the source now reads.
+ *
+ * The host loader can use a matching prebuilt addon instead of a rebuild:
+ * `PI_COMPILED` makes it look in the version cache, and `PI_NATIVES_DIR` names
+ * the cache base. A matching addon is one the machine already extracted for
+ * its installed omp, under `~/.omp/natives/<version>/`.
+ */
+function findInstalledAddon() {
+	const nativesPackage = join(HOST, "packages/natives/package.json");
+	if (!existsSync(nativesPackage)) return null;
+	let version;
+	try {
+		version = JSON.parse(readFileSync(nativesPackage, "utf8")).version;
+	} catch {
+		return null;
+	}
+	if (typeof version !== "string" || version === "") return null;
+	const tag = `${process.platform}-${process.arch}`;
+	const filenames =
+		process.arch === "x64"
+			? [
+					`pi_natives.${tag}-modern.node`,
+					`pi_natives.${tag}-baseline.node`,
+					`pi_natives.${tag}.node`,
+				]
+			: [`pi_natives.${tag}.node`];
+	const bases = [];
+	if (process.env.PI_NATIVES_DIR) bases.push(process.env.PI_NATIVES_DIR);
+	if (process.env.XDG_DATA_HOME) {
+		bases.push(join(process.env.XDG_DATA_HOME, "omp", "natives"));
+	}
+	bases.push(join(homedir(), ".omp", "natives"));
+	for (const base of bases) {
+		const dir = join(base, version);
+		for (const filename of filenames) {
+			if (existsSync(join(dir, filename))) return { version, dir, base };
+		}
+	}
+	return null;
+}
+
 let AgentSession = null;
 let loadFailure = null;
 try {
@@ -126,6 +171,31 @@ try {
 	if (!AgentSession) loadFailure = "module loaded but exports no AgentSession";
 } catch (error) {
 	loadFailure = error?.message ?? String(error);
+}
+
+// The failed import is cached in this process, so the retry must be a child.
+// `OMP_SMOKE_BORROWED` marks that child, which keeps the fallback single-shot.
+if (!AgentSession && process.env.OMP_SMOKE_BORROW !== "0" && !process.env.OMP_SMOKE_BORROWED) {
+	const borrowed = findInstalledAddon();
+	if (borrowed) {
+		console.log(
+			`borrowing @oh-my-pi/pi-natives@${borrowed.version} from ${borrowed.dir}`,
+		);
+		const child = spawnSync(process.execPath, [import.meta.path], {
+			stdio: "inherit",
+			env: {
+				...process.env,
+				PI_COMPILED: "1",
+				PI_NATIVES_DIR: borrowed.base,
+				OMP_SMOKE_BORROWED: borrowed.dir,
+			},
+		});
+		process.exit(child.status ?? 1);
+	}
+}
+
+if (process.env.OMP_SMOKE_BORROWED) {
+	console.log(`note: native addon borrowed from ${process.env.OMP_SMOKE_BORROWED}`);
 }
 
 if (AgentSession) {
@@ -149,10 +219,13 @@ if (AgentSession) {
 		const diagnosis = installRunnerCapture(AgentSession);
 		assert(
 			diagnosis?.ok === true,
-			`capture reported missing: ${(diagnosis?.missing ?? []).join(", ")}`,
+			`capture reported: ${diagnosis?.error ?? (diagnosis?.missing?.join(", ") || "no diagnosis")}`,
 		);
 		const after = captureDiagnosis();
-		assert(after.ok === true, `diagnosis after install: ${(after.missing ?? []).join(", ")}`);
+		assert(
+			after.ok === true,
+			`diagnosis after install: ${after.error ?? (after.missing.join(", ") || "no diagnosis")}`,
+		);
 		return "ok";
 	});
 } else {

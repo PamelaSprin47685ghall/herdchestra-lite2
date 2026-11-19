@@ -81,6 +81,20 @@ snapshot under the host's `parentId` tree, with a checkpoint every 64 writes;
 full-snapshot entries. A measured 400-turn session writes 4.5% of what
 per-turn snapshots would write.
 
+## Host smoke
+
+`bun scripts/smoke-omp.mjs` loads the real omp `AgentSession` from a local
+checkout (`OMP_HOST`, default `~/Desktop/vibe/oh-my-pi`) and checks the two
+prototype seams this extension patches, the five registered tools, the host
+events it binds, and the append-only state log.
+
+A checkout whose native addon is older than its source cannot be imported.
+When `~/.omp/natives/<version>` already holds a matching prebuilt addon, the
+script borrows it and re-runs itself in a child process, so the seams are
+verified against the real class instead of skipped. `OMP_SMOKE_BORROW=0`
+disables the borrow and keeps the honest skip; the exit code stays 0 either
+way, and only a genuine seam failure exits 1.
+
 ## Model selection
 
 Set `begin.model` to an omp `/switch` selector to use a different model for a scope:

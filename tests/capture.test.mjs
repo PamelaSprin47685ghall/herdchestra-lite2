@@ -61,6 +61,19 @@ describe("capture diagnosis", () => {
 		expect(diagnosis.missing).toEqual([]);
 	});
 
+	test("returns the diagnosis shape, not the internal record", () => {
+		const diagnosis = installRunnerCapture(agentSessionWith());
+		expect(diagnosis.ok).toBe(true);
+		expect(diagnosis.missing).toEqual([]);
+		expect(diagnosis.error).toBeNull();
+	});
+
+	test("the returned diagnosis names a missing seam", () => {
+		const diagnosis = installRunnerCapture(agentSessionWith({ getter: false }));
+		expect(diagnosis.ok).toBe(false);
+		expect(diagnosis.missing).toContain("extensionRunner");
+	});
+
 	test("stays ok before any message array is written", () => {
 		installRunnerCapture(agentSessionWith());
 		expect(captureDiagnosis().missing).not.toContain("agent.state.messages");

@@ -60,6 +60,26 @@ All notable changes to this extension. The format follows
   envelope and is treated as a checkpoint. The first write after upgrade
   appends a delta against it.
 
+## [2.1.1] — 2026-11-19
+
+### Fixed
+
+- `installRunnerCapture()` returned the internal capture record, which has no
+  `ok` field, so a caller that checked `diagnosis.ok` saw a failure with an
+  empty reason. It now returns the same `{ ok, missing, error }` shape as
+  `captureDiagnosis()`. The host smoke only reached this path once the seam
+  could load, which is how the defect surfaced.
+
+### Changed
+
+- `scripts/smoke-omp.mjs` verifies the two prototype seams against the real
+  `AgentSession` even when the checkout's native addon predates its source: it
+  borrows a matching prebuilt addon from `~/.omp/natives/<version>` (or
+  `PI_NATIVES_DIR`), re-running itself with `PI_COMPILED` and `PI_NATIVES_DIR`
+  set. `OMP_SMOKE_BORROW=0` restores the previous honest skip. On a machine
+  with the 19.0.0 addon, all ten checks pass; the stale addon had blocked the
+  seam check, not the seam itself.
+
 ## [2.0.0] — earlier
 
 The five-stage workflow, relay handoff, herd mode, folding economics, and

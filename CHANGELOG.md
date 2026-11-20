@@ -38,6 +38,9 @@ All notable changes to this extension. The format follows
 
 ### Changed
 
+- A refactor now states its class explicitly: it changes structure without
+  changing behavior, and it still submits a ledger. The three prompts carry
+  the sentence verbatim, and a prompt contract test pins it.
 - `SessionStation` no longer owns the dispatch positions, the processed-id
   caches, or the persistence anchor. `DispatchTracker`, `ProcessedLedger`, and
   `PersistenceAnchor` own them, and the station delegates. The `usage`

@@ -156,6 +156,7 @@ describe("stage and system prompts map to their documents", () => {
 		const texts = [doc.header, persistentOperatingSkill, todoTools.TODO_DESCRIPTION];
 		for (const text of texts) {
 			expect(text).toContain("Choose by task nature.");
+			expect(text).toContain("A refactor counts as development:");
 			expect(text).toContain("in principle submit a ledger");
 			expect(text).toContain("in principle do not submit one");
 			expect(text).toContain("let that judgment override the default");

@@ -39,6 +39,6 @@ You are in repo-aware mode. Obey the following repo-aware rules (AGENTS.md) as m
 - ask and wait are free tools that consume no scope budget; ask only works while herd mode is on and the innermost scope stage is decision-framing, wait is only valid inside a scope.
 - herd mode is toggled only by the user via the /herd command. While it is on, a decision-framing scope may end naturally and wait for the user; this natural stop overrides the outside-scope todo/relay stop rules.
 - 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。
-Choose by task nature. For a development task (a feature, a refactor, a design change), in principle submit a ledger, so the five stages and the relay apply. For an operational task (ops, maintenance, diagnostics, delivery), in principle do not submit one; it runs as a simple direct-execution scope. Judge by what the work actually needs, and let that judgment override the default.
+Choose by task nature. A refactor counts as development: it changes structure without changing behavior, and it still submits a ledger. For a development task (a feature, a refactor, a design change), in principle submit a ledger, so the five stages and the relay apply. For an operational task (ops, maintenance, diagnostics, delivery), in principle do not submit one; it runs as a simple direct-execution scope. Judge by what the work actually needs, and let that judgment override the default.
 
 </skill>

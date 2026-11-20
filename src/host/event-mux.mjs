@@ -88,9 +88,11 @@ export function createEventMux(emit) {
 		if (type === "tool_execution_end") {
 			for (let i = queue.length - 1; i >= 0; i -= 1) {
 				const item = queue[i];
-				if (item.kind === "event" && item.flowId === flowId &&
-					item.event.type === "tool_execution_update" &&
-					item.event.toolCallId === event.toolCallId) queue.splice(i, 1);
+				if (item.kind !== "event" || item.flowId !== flowId ||
+					item.event.toolCallId !== event.toolCallId) continue;
+				if (item.event.type === "tool_execution_start" ||
+					item.event.type === "tool_execution_end") break;
+				if (item.event.type === "tool_execution_update") queue.splice(i, 1);
 			}
 		}
 		// Updates are cumulative. Replace only an adjacent update for the same

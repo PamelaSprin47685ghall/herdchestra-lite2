@@ -15,6 +15,7 @@ export function appendAt(sm, tail, write) {
 	const saved = leafId(sm);
 	let value;
 	let failure;
+	let failed = false;
 	try {
 		selectLeaf(sm, tail);
 		value = write();
@@ -22,20 +23,22 @@ export function appendAt(sm, tail, write) {
 			throw new TypeError("appendAt requires a synchronous write");
 		}
 	} catch (error) {
+		failed = true;
 		failure = error;
 	}
 	try {
 		selectLeaf(sm, saved);
 		if (leafId(sm) !== saved) throw new Error("leaf not restored");
 	} catch (error) {
-		throw new AggregateError([failure, error].filter(Boolean), "leaf restore failed");
+		throw new AggregateError(failed ? [failure, error] : [error], "leaf restore failed");
 	}
-	if (failure) throw failure;
+	if (failed) throw failure;
 	return value;
 }
 
 /** Allocate deterministic hexadecimal IDs without colliding with existing entries. */
 export function mapId(oldId, handoffId, used) {
+	if (!Number.isSafeInteger(handoffId) || handoffId < 0) throw new Error("invalid handoff id");
 	const base = `${oldId}f${handoffId.toString(16)}`;
 	if (!/^[0-9a-f]+$/.test(base)) throw new Error("invalid handoff id");
 	let id = base;
@@ -82,7 +85,7 @@ function shiftMessage(message, shift, levelPattern) {
 
 /** Derive the level anchor from a receipt template containing {{level}}. */
 export function levelPattern(template) {
-	const match = template.match(/([^\n]*?)\{\{level\}\}/);
+	const match = template.match(/(\S+\s+\S+\s+)\{\{level\}\}/);
 	if (!match) throw new Error("receipt template has no level anchor");
 	const prefix = match[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	return new RegExp(`(${prefix})(\\d+)`, "g");
@@ -100,9 +103,17 @@ export function handoffMessages(entries) {
 	return result;
 }
 
-/** Copy a completed source window to the current target branch synchronously. */
-export function copyHandoff(sm, { tail, entries, handoffId, sourceBeginId, shift = 0, levelRegex }) {
+/** The caller must verify durable rollback and exclude vibe for the entire transaction. */
+export async function copyHandoff(sm, { tail, entries, handoffId, sourceBeginId, shift = 0, levelRegex, vibeInactive, durableAtomicWrites }) {
+	if (vibeInactive !== true) throw new Error("handoff requires confirmed inactive vibe runtime");
+	if (durableAtomicWrites !== true || typeof sm.appendEntriesAtomically !== "function" || typeof sm.getSessionFile !== "function" || !sm.getSessionFile()) {
+		throw new Error("handoff requires a persistent session with atomic writes");
+	}
 	const window = handoffWindow(entries);
+	if (!Number.isSafeInteger(handoffId) || handoffId < 0) throw new Error("invalid handoff id");
+	if (new Set(window.entries.map((entry) => entry.id)).size !== window.entries.length) throw new Error("duplicate handoff entry id");
+	for (const entry of window.entries) mapId(entry.id, handoffId, new Set());
+	return sm.appendEntriesAtomically(() => {
 	const used = new Set(sm.getEntries().map((entry) => entry.id));
 	const ids = new Map();
 	for (const entry of window.entries) {
@@ -134,9 +145,10 @@ export function copyHandoff(sm, { tail, entries, handoffId, sourceBeginId, shift
 	current = sm.appendCustomEntry("fission.handoff.end", { handoffId, count: copied.length });
 	if (leafId(sm) !== current) throw new Error("handoff leaf did not advance");
 	return { tail: current, entries: copied, messages: handoffMessages(copied) };
+	});
 }
 
-/** Return incomplete handoffs and their original target leaves for recovery. */
+/** Identify incomplete handoffs; this does not discard or replay them. */
 export function incompleteHandoffs(entries) {
 	const pending = new Map();
 	for (const entry of entries) {

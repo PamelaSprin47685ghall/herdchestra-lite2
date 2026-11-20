@@ -126,7 +126,8 @@ export function splitFissionBudget(state, begin, options = {}) {
       const amount = result.totals[tool];
       if (amount === 0) continue;
       put(parent.remaining, tool, roundAmount(parent.remaining[tool] - amount));
-      put(parent.spent, tool, roundAmount((parent.spent[tool] ?? 0) + amount));
+      const spent = Object.hasOwn(parent.spent, tool) ? parent.spent[tool] : 0;
+      put(parent.spent, tool, roundAmount(spent + amount));
     }
   }
   return result;
@@ -215,9 +216,9 @@ export function chargeTool(state, params) {
   if (groupAlreadyCharged(state, scope.id, normalized, groupKey)) {
     return { ok: true, remaining: copyCounts(scope.remaining) };
   }
-  const spent = scope.spent[normalized] ?? 0;
-  const remaining = scope.remaining[normalized];
-  const budget = scope.budget[normalized] ?? 0;
+  const spent = Object.hasOwn(scope.spent, normalized) ? scope.spent[normalized] : 0;
+  const remaining = Object.hasOwn(scope.remaining, normalized) ? scope.remaining[normalized] : undefined;
+  const budget = Object.hasOwn(scope.budget, normalized) ? scope.budget[normalized] : 0;
   if (remaining === undefined || remaining <= 0) {
     return failure(
       "BUDGET_EXHAUSTED",

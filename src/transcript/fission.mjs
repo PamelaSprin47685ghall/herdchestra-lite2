@@ -123,6 +123,8 @@ function contextCustomMessage(entry) {
 // flow's own state ledger. `scope.state` entries hold scopes, charges, pins,
 // seq/epoch, and JSON-patch deltas against the source flow's array indices.
 // Replaying them into the recipient mixes two budgets and two scope stacks.
+import { beatKey } from "./messages.mjs";
+
 function copyable(entry) {
 	if (entry.type === "message") return !broadcast(entry);
 	if (entry.type === "custom_message") return !broadcast(entry) && contextCustomMessage(entry);
@@ -130,8 +132,16 @@ function copyable(entry) {
 		["model_usage", "label", "thinking_level_change", "mode_change", "branch_summary"].includes(entry.type);
 }
 
-/** Select the post-compaction window and retain its summary as a message. */
-export function handoffWindow(entries) {
+/**
+ * Select the post-compaction window and retain its summary as a message.
+ *
+ * `amends` names beats the source flow retracted. A copied segment must not
+ * revive them: the recipient would otherwise see a beat the source already
+ * removed from its own request, and the next request would differ from the
+ * prefix the provider cached. The filter therefore drops the assistant message
+ * and every tool result answering it.
+ */
+export function handoffWindow(entries, amends = null) {
 	let start = 0;
 	let summary;
 	for (const entry of entries) {
@@ -145,7 +155,28 @@ export function handoffWindow(entries) {
 		start = index < 0 ? 0 : index;
 		summary = entry.summary;
 	}
-	return { entries: entries.slice(start).filter(copyable), summary };
+	const amendSet = new Set(Array.isArray(amends) ? amends : []);
+	const kept = entries.slice(start).filter(copyable);
+	if (amendSet.size === 0) return { entries: kept, summary };
+	const dropped = new Set();
+	const droppedCalls = new Set();
+	for (const entry of kept) {
+		const message = entry?.message;
+		if (message?.role !== "assistant" || !amendSet.has(beatKey(message))) continue;
+		dropped.add(message);
+		for (const block of Array.isArray(message.content) ? message.content : []) {
+			if (block?.type === "toolCall" && typeof block.id === "string") droppedCalls.add(block.id);
+		}
+	}
+	if (dropped.size === 0) return { entries: kept, summary };
+	return {
+		entries: kept.filter((entry) => {
+			const message = entry?.message;
+			if (dropped.has(message)) return false;
+			return !(message?.role === "toolResult" && droppedCalls.has(message.toolCallId));
+		}),
+		summary,
+	};
 }
 
 /** Canonical text used only to compare pins; stored pins keep their wording. */
@@ -226,6 +257,27 @@ function shiftMessage(message, shift, levelPattern) {
 	return copy;
 }
 
+/**
+ * Rewrite the structural depth a copied boundary claims.
+ *
+ * `boundaryText` renders `data.level` and, for a closing boundary, the parent
+ * scope's intent and budget. All three describe where the boundary sat on its
+ * source branch. Once the segment is transplanted, its depth moves by `shift`
+ * and the parent it names is not the parent it lands under, so a copied
+ * boundary that kept them would tell the model the wrong level and the wrong
+ * enclosing scope. The level follows the shift; the parent description is
+ * dropped, because the receiving branch's parent is not knowable here.
+ */
+export function shiftBoundaryData(data, shift) {
+	if (!data || typeof data !== "object") return data;
+	const next = { ...data };
+	if (Number.isInteger(next.level)) next.level = Math.max(0, next.level + (Number.isFinite(shift) ? shift : 0));
+	delete next.parentIntent;
+	delete next.parentBudget;
+	delete next.note;
+	return next;
+}
+
 /** Derive the level anchor from a receipt template containing {{level}}. */
 export function levelPattern(template) {
 	const match = template.match(/(\S+\s+\S+\s+)\{\{level\}\}/);
@@ -253,6 +305,25 @@ function toolCallIds(message) {
 // when a manager hands out fresh entry objects.
 const convertedMessages = new WeakMap();
 
+/**
+ * A journal entry's timestamp, without inventing one.
+ *
+ * Replay happens on every request (and again inside `adopt()`), so a missing
+ * timestamp must not become "now": two replays of the same entry would then
+ * carry different bytes and break the prefix at the oldest boundary. omp writes
+ * JSONL timestamps and a hand-built entry may carry an ISO string, so both a
+ * finite number and a parseable string are accepted; anything else becomes the
+ * fixed constant 0, which is stable but visibly "unknown".
+ */
+function entryTimestamp(value) {
+	if (Number.isFinite(value)) return value;
+	if (typeof value === "string" && value !== "") {
+		const parsed = Date.parse(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return 0;
+}
+
 function customMessage(entry) {
 	if (!contextCustomMessage(entry)) return null;
 	const cached = convertedMessages.get(entry);
@@ -262,23 +333,66 @@ function customMessage(entry) {
 		customType: entry.customType,
 		content: entry.content ?? "",
 		display: entry.display !== false,
-		timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now(),
+		timestamp: entryTimestamp(entry.timestamp),
 	};
 	if (entry.details !== undefined) message.details = entry.details;
 	convertedMessages.set(entry, message);
 	return message;
 }
 
+/**
+ * Render one journal boundary as the line a model actually needs to read.
+ *
+ * A boundary is structure, not a JSON blob: the closing line must say which
+ * level the session returns to and what that scope is doing, because nothing
+ * else in the context says either.
+ */
+export function boundaryText(customType, data) {
+	const level = Number.isInteger(data?.level) && data.level >= 0 ? data.level : null;
+	const intent = typeof data?.intent === "string" && data.intent !== "" ? data.intent : null;
+	const status = typeof data?.status === "string" && data.status !== "" ? data.status : null;
+	const budget = typeof data?.budget === "string" && data.budget !== "" ? data.budget : null;
+	if (customType === "scope.begin") {
+		const parts = [level === null ? "Scope opened." : `Scope level ${level} opened.`];
+		if (intent) parts.push(`Intent: ${intent}.`);
+		if (typeof data?.stage === "string") parts.push(`Stage: ${data.stage}.`);
+		if (budget) parts.push(`Budget: ${budget}.`);
+		return parts.join(" ");
+	}
+	if (customType !== "scope.end") return "";
+	if (level === null) return status ? `Scope closed (${status}).` : "Scope closed.";
+	const closed = status ? `Scope closed (${status}).` : "Scope closed.";
+	if (level === 0) {
+		return [
+			closed,
+			"You are at the top level: no scope is open.",
+			"Only todo and the free control tools (scope, amend, defer, pin) may be called until the next scope opens.",
+		].join(" ");
+	}
+	const back = intent
+		? `You are back inside scope level ${level}: ${intent}.`
+		: `You are back inside scope level ${level}.`;
+	const remaining = budget ? ` Remaining budget: ${budget}.` : "";
+	return `${closed} ${back}${remaining}`;
+}
+
 /** Convert one persisted scope boundary without losing its recorded fields. */
 function boundaryMessage(entry) {
 	const cached = convertedMessages.get(entry);
 	if (cached !== undefined) return cached;
+	const rendered = boundaryText(entry.customType, entry.data);
+	// Keep the boundary parseable: the structure stays JSON, and the sentence the
+	// model must read rides in `note`. A prose prefix would break every reader
+	// that treats a boundary as data.
+	const payload = JSON.stringify(
+		rendered === "" ? (entry.data ?? {}) : { ...(entry.data ?? {}), note: rendered },
+	);
 	const boundary = {
 		role: "custom",
 		customType: entry.customType,
-		content: JSON.stringify(entry.data ?? {}),
+		content: payload,
 		display: false,
-		timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now(),
+		timestamp: entryTimestamp(entry.timestamp),
 	};
 	if (entry.details !== undefined) boundary.details = entry.details;
 	convertedMessages.set(entry, boundary);
@@ -345,7 +459,7 @@ export function handoffMessages(entries) {
  * uses it to close the abandoned half copy with an abort marker, so retirement
  * and rewrite either both commit or neither does.
  */
-export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceBeginId, source, target = null, shift = 0, levelRegex, vibeInactive, durableAtomicWrites, adoptPins, beforeWrite }) {
+export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceBeginId, source, target = null, shift = 0, levelRegex, vibeInactive, durableAtomicWrites, adoptPins, beforeWrite, amends = null }) {
 	if (vibeInactive !== true) throw new Error("handoff requires confirmed inactive vibe runtime");
 	if (durableAtomicWrites !== true || typeof sm.appendEntriesAtomically !== "function" || typeof sm.getSessionFile !== "function" || !sm.getSessionFile()) {
 		throw new Error("handoff requires a persistent session with atomic writes");
@@ -362,7 +476,7 @@ export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceB
 	if (entries[0]?.id !== source.from || entries.at(-1)?.id !== source.to) {
 		throw new Error("handoff source range does not match the copied entries");
 	}
-	const window = handoffWindow(entries);
+	const window = handoffWindow(entries, amends);
 	if (new Set(window.entries.map((entry) => entry.id)).size !== window.entries.length) throw new Error("duplicate handoff entry id");
 	for (const entry of window.entries) mapId(entry.id, handoffId, new Set());
 	// Read the source pins before the transaction. They travel outside the
@@ -392,7 +506,12 @@ export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceB
 			// The summary is a message the model must see, not a `fission.*`
 			// ledger entry. Its custom type stays outside that namespace; the
 			// carry marker lives in `details`, as 5.2 specifies.
-			const message = { role: "custom", customType: "compaction-summary", content: shiftText(window.summary, shift, levelRegex), display: false, details: { fissionCarry: "compaction-summary" }, timestamp: Date.now() };
+			// The carried summary is replayed from the journal, so its bytes
+			// must not change between a request and a later replay. The source
+			// summary entry's own timestamp is the stable clock; a copy that
+			// invented "now" would break the provider prefix at every handoff.
+			const sourceSummary = entries.find((entry) => entry.type === "compaction");
+			const message = { role: "custom", customType: "compaction-summary", content: shiftText(window.summary, shift, levelRegex), display: false, details: { fissionCarry: "compaction-summary" }, timestamp: entryTimestamp(sourceSummary?.timestamp) };
 			current = sm.appendMessage(message);
 			if (typeof current !== "string" || current === "") throw new Error("handoff aborted: the compaction summary was not committed");
 			copied.push({ type: "message", message });
@@ -406,6 +525,12 @@ export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceB
 			if (entry.type === "branch_summary") copy.fromId = ids.get(entry.fromId) ?? entry.fromId;
 			if (entry.type === "custom" && entry.data?.beginToolCallId) {
 				copy.data = { ...entry.data, beginToolCallId: ids.get(entry.data.beginToolCallId) ?? entry.data.beginToolCallId };
+			}
+			// A copied scope boundary keeps the depth of its source branch unless
+			// the shift is applied, and it must not keep naming the source's
+			// parent scope.
+			if (entry.type === "custom" && /^scope\.(begin|end)$/.test(entry.customType)) {
+				copy.data = shiftBoundaryData(copy.data ?? entry.data, shift);
 			}
 			// The usage owner names the entry whose request spent the tokens.
 			// Left unrenamed it would credit the source flow's entry.

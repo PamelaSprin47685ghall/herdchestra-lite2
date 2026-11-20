@@ -81,3 +81,43 @@ WARNING: {{command}} failed: {{reason}}
 ## stage-flags-unmet
 
 The full flow requires one run of each earlier stage before "direct-execution". Missing: {{missing}}. Open each missing stage's scope before execution; simple mode has no such flag gate.
+
+## not-in-scope
+
+Outside all scopes, only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, time, fission: [{ intent, budget, permission }] } }); one flow is a one-item fission array, and every item must declare permission. Time is required in seconds.
+
+## scope-in-fission
+
+Use scope({ end: true }) to finish this flow, or open a nested fission batch. A flow cannot open an ordinary scope.
+
+## invalid-begin-shape
+
+A begin requires stage, elder_report, time, and fission. The single-flow begin shape no longer exists; to open one flow, pass a one-item fission array.
+
+## fission-with-end
+
+A fission begin cannot also close a scope. Close the open scope first with a plain end: true call, then open the batch in a following call.
+
+## fission-unavailable
+
+Fission cannot start: the host exposes no abort() for owner retirement, or no scheduler is attached to the station registry.
+
+## fission-pending
+
+A fission batch from this agent has not retired yet; wait for its receipt before opening another.
+
+## todo-inside-scope
+
+todo is forbidden inside any active scope. Close every scope first; todo only works outside all scopes.
+
+## ask-blocked
+
+ask is allowed only when the user has enabled /herd and the current scope has stage: "decision-framing".
+
+## flow-open
+
+This flow is still open. When the work is complete, call scope({ end: true }).
+
+## overtime-killed
+
+OVERTIME: that tool ran {{elapsed}}ms in the chess-clock phase, past its {{limit}}ms limit, and was killed. Its result is gone. You are out of normal time: shrink the work, close the scope, or hand off now.

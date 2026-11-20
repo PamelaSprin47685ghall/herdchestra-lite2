@@ -526,7 +526,7 @@ describe("relay integration", () => {
 			assistant([call("r1", "read", { path: "a" })]),
 		);
 		expect(read[0].blocked).toBe(true);
-		expect(read[0].result.content[0].text).toContain("Not in a scope");
+		expect(read[0].result.content[0].text).toContain("Outside all scopes");
 		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
 		expect(JSON.stringify(context.messages)).toContain("todo");
 	});
@@ -547,7 +547,7 @@ describe("relay integration", () => {
 			assistant([call("r1", "read", { path: "a" })]),
 		);
 		expect(read[0].blocked).toBe(true);
-		expect(read[0].result.content[0].text).toContain("Not in a scope");
+		expect(read[0].result.content[0].text).toContain("Outside all scopes");
 	});
 
 	test("plugin-owned tools never start the relay for a read-only subagent", async () => {
@@ -616,7 +616,7 @@ describe("relay integration", () => {
 			assistant([call("r1", "read", { path: "a" })]),
 		);
 		expect(outsideRead[0].blocked).toBe(true);
-		expect(outsideRead[0].result.content[0].text).toContain("Not in a scope");
+		expect(outsideRead[0].result.content[0].text).toContain("Outside all scopes");
 		expect(outsideRead[0].result.content[0].text).toContain("only todo");
 	});
 
@@ -645,7 +645,7 @@ describe("relay integration", () => {
 		]), { prepareAll: true });
 		expect(closed.result.content[0].text).toContain("You are outside all scopes.");
 		expect(after.output.details.relay.lastLedger.open).toBe(1);
-		expect(afterRead.result.content[0].text).toContain("Not in a scope");
+		expect(afterRead.result.content[0].text).toContain("Outside all scopes");
 	});
 
 	test("a handoff requested by todo takes precedence over the next scope opening", async () => {

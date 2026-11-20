@@ -286,6 +286,54 @@ await check("hooks bind to host events", () => {
 	return `${harness.handlers.size} events`;
 });
 
+/**
+ * A2: the flow's request head must be byte-equal to the owner's. This runs the
+ * real `deriveFissionConfig` against a host-shaped owner and compares the
+ * three static frames by SHA-256. A one-byte difference is a permanent cache
+ * miss on every begin and every adopted return, so any mismatch is a FAIL,
+ * not a note.
+ */
+await check("flow request head matches the owner", async () => {
+	const { deriveFissionConfig, compareFissionFrames } = await import(
+		"../src/host/fission-session.mjs"
+	);
+	const prompt = ["You are the owner.", "Managed block."];
+	const owner = {
+		agent: { state: { systemPrompt: prompt }, promptCacheKey: "owner-cache-key" },
+		sessionId: "session-1",
+		model: { id: "test/model", provider: "test" },
+		modelRegistry: { authStorage: {} },
+		settings: {},
+		asyncJobManager: {},
+		costGate: {},
+		getEnabledToolNames: () => ["read", "scope", "todo"],
+		getActiveToolNames: () => ["read", "scope"],
+		getMountedXdevToolNames: () => [],
+		preparedExtensions: ["prepared"],
+		extensionPaths: [],
+		getHeader: () => ({}),
+		enableLsp: false,
+	};
+	const manager = {
+		getSessionId: () => "session-1",
+		getCwd: () => "/virtual",
+		getArtifactsDir: () => "/virtual/artifacts",
+		getHeader: () => ({}),
+	};
+	const derived = deriveFissionConfig({
+		session: owner,
+		sessionManager: manager,
+		flowId: "flow-smoke-1",
+	});
+	assert(derived.ok === true, `derive refused: ${derived.reason ?? derived.detail}`);
+	const comparison = compareFissionFrames(owner, derived.config);
+	assert(
+		comparison.mismatches.length === 0,
+		`request-head mismatch: ${comparison.mismatches.join(", ")}`,
+	);
+	return "tools, systemPrompt, promptCacheKey";
+});
+
 function memoryManager() {
 	const entries = [];
 	return {

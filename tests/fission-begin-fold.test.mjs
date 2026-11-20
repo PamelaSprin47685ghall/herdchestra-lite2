@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createState } from "../src/scope/index.mjs";
+import { beginScope, createState } from "../src/scope/index.mjs";
 import { handleScopeCall } from "../src/station/controls.mjs";
 import { createEmptyCatalog } from "../src/host/pricing.mjs";
 
@@ -84,15 +84,37 @@ function workbenchRecord(boundary, epoch) {
 	return record;
 }
 
-function makeStation(base) {
+function windowCatalog() {
+	const entry = (id, contextWindow) => ({
+		id,
+		fullId: id,
+		contextWindow,
+		cost: { input: 1, cacheRead: 0.1, cacheWrite: 1 },
+	});
+	const byFullId = new Map([
+		["test/model", entry("test/model", 1000)],
+	]);
+	return {
+		byFullId,
+		byId: new Map(),
+		modelRoles: new Map(),
+		modelAliases: new Map(),
+		defaultModelKey: null,
+		resolveModel: () => null,
+	};
+}
+
+function makeStation(base, options = {}) {
 	const folds = [];
 	const scheduler = {
 		registerBatch: () => ({ ok: true, batchId: "b1", batch: { id: "b1" }, batchBeginId: "e1" }),
 		cancelBatch: () => {},
 		retireOwner: () => ({ ok: true }),
 	};
+	const catalog = options.catalog ?? createEmptyCatalog();
 	const state = createState();
 	state.baseModelKey = "test/model";
+	state.baseModelSpec = "test/model";
 	// `findFoldablePool` matches on the level's boundary and epoch; take them
 	// from the live state instead of assuming zero.
 	const boundary = state.relay?.generation ?? 0;
@@ -101,7 +123,7 @@ function makeStation(base) {
 	const station = {
 		state,
 		usage: { lastTotalInput: 1000, lastOutputTokens: 10, lastUsageCost: null, lastUsageModelKey: "test/model" },
-		pricingCatalog: createEmptyCatalog(),
+		pricingCatalog: catalog,
 		manager: { getSessionId: () => "session-1" },
 		registry: { fissionScheduler: () => scheduler },
 		policy: () => "main",
@@ -109,7 +131,7 @@ function makeStation(base) {
 		findBeginEntry: () => ({ toolCallId: BEGIN_CALL }),
 		pendingFission: null,
 		observeActualModel: () => {},
-		currentContextTokens: () => 0,
+		currentContextTokens: options.currentContextTokens ?? (() => 0),
 		tokensPerCharFor: () => 0.3,
 		usagePricingHint: () => undefined,
 		foldBatch(args) {
@@ -123,6 +145,40 @@ function makeStation(base) {
 }
 
 describe("fission begin runs the economics decision", () => {
+	test("folds an eligible pool at 82% of the target window", () => {
+		const base = baseWithScope();
+		const { station, folds } = makeStation(base, {
+			catalog: windowCatalog(),
+			currentContextTokens: () => 830,
+		});
+		station.state.collapses[0].paidRentCost = 0;
+		const result = handleScopeCall(station, scopeCall("new-begin", { begin: beginBatch() }), {
+			ctx: { agent: { id: "owner", kind: "main" }, abort: () => {} },
+			base,
+			currentMessage: null,
+			currentPersisted: false,
+		});
+		expect(result.isError).toBeUndefined();
+		expect(folds).toHaveLength(1);
+	});
+
+	test("refuses a target that remains at or above 95% after folding", () => {
+		const base = baseWithScope();
+		const { station, folds } = makeStation(base, {
+			catalog: windowCatalog(),
+			currentContextTokens: () => 960,
+		});
+		const result = handleScopeCall(station, scopeCall("new-begin", { begin: beginBatch() }), {
+			ctx: { agent: { id: "owner", kind: "main" }, abort: () => {} },
+			base,
+			currentMessage: null,
+			currentPersisted: false,
+		});
+		expect(folds).toHaveLength(1);
+		expect(result.isError).toBe(true);
+		expect(station.pendingFission).toBeNull();
+	});
+
 	test("folds an elder that is obviously worth folding", () => {
 		const base = baseWithScope();
 		const { station, folds } = makeStation(base);
@@ -157,5 +213,104 @@ describe("fission begin runs the economics decision", () => {
 		});
 
 		expect(folds).toHaveLength(0);
+	});
+});
+
+describe("returning to a smaller window floods eligible pools", () => {
+	test("closing a large-model scope into a small-model parent folds at 82%", () => {
+		const state = createState();
+		beginScope(state, {
+			toolCallId: "parent-begin",
+			intent: "parent",
+			stage: "direct-execution",
+			budget: { read: 4 },
+			time: 60,
+		});
+		const parent = state.scopes[0];
+		beginScope(state, {
+			toolCallId: "child-begin",
+			intent: "child",
+			stage: "direct-execution",
+			budget: { read: 2 },
+			time: 60,
+		});
+		const child = state.scopes[1];
+		state.baseModelSpec = "test/small";
+		state.baseModelKey = "test/small";
+		parent.modelSpec = "test/small";
+		parent.modelKey = "test/small";
+		child.modelSpec = "test/large";
+		child.modelKey = "test/large";
+		child.previousModelSpec = "test/small";
+		child.previousModelKey = "test/small";
+
+		const boundary = state.relay?.generation ?? 0;
+		const epoch = state.epoch ?? 0;
+		const elder = foldableRecord(boundary, epoch);
+		elder.parentId = parent.id;
+		elder.report = "done";
+		elder.order = 1;
+		const hot = workbenchRecord(boundary, epoch);
+		hot.parentId = parent.id;
+		hot.order = 2;
+		state.collapses.push(elder, hot);
+
+		const base = [
+			{ role: "assistant", content: [{ type: "toolCall", id: "parent-begin", name: "scope" }], timestamp: 1 },
+			{ role: "toolResult", toolCallId: "parent-begin", content: [], timestamp: 2 },
+			{ role: "assistant", content: [{ type: "toolCall", id: "child-begin", name: "scope" }], timestamp: 3 },
+			{ role: "toolResult", toolCallId: "child-begin", content: [], timestamp: 4 },
+			{ role: "assistant", content: [{ type: "text", text: "interior" }], timestamp: 5 },
+			{ role: "assistant", content: [{ type: "toolCall", id: "child-end", name: "scope" }], timestamp: 6 },
+		];
+		const folds = [];
+		const station = {
+			state,
+			usage: {
+				lastTotalInput: 900,
+				lastOutputTokens: 10,
+				lastUsageCost: null,
+				lastUsageModelKey: "test/large",
+			},
+			pricingCatalog: {
+				byFullId: new Map([
+					["test/small", { id: "test/small", fullId: "test/small", contextWindow: 1000, cost: { input: 1, cacheRead: 0.1, cacheWrite: 1 } }],
+					["test/large", { id: "test/large", fullId: "test/large", contextWindow: 4000, cost: { input: 1, cacheRead: 0.1, cacheWrite: 1 } }],
+				]),
+				byId: new Map(),
+				modelRoles: new Map(),
+				modelAliases: new Map(),
+				defaultModelKey: null,
+				resolveModel: () => null,
+			},
+			manager: { getSessionId: () => "session-1" },
+			registry: { fissionScheduler: () => null },
+			policy: () => "main",
+			relayOn: () => false,
+			relayReady: () => false,
+			findBeginEntry: (id) => (id === "child-begin" ? { id } : null),
+			observeActualModel: () => {},
+			currentContextTokens: () => 830,
+			tokensPerCharFor: () => 0.3,
+			usageArrivedFor: () => false,
+			deliverSteer: () => false,
+			foldBatch(args) {
+				folds.push(args);
+				return { foldedCount: args.batch.length, savedTokens: 100, rebased: false, maxOrder: 1 };
+			},
+			rebaseBaselines: () => {},
+			persist: () => {},
+		};
+
+		const result = handleScopeCall(
+			station,
+			scopeCall("child-end", { end: true }),
+			{ ctx: { agent: { id: "owner", kind: "main" } }, base, currentMessage: null, currentPersisted: true },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(folds).toHaveLength(1);
+		expect(folds[0].batch).toContain(elder);
+		expect(state.scopes.map((scope) => scope.id)).toEqual([parent.id]);
 	});
 });

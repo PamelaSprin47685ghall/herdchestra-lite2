@@ -225,7 +225,10 @@ export function chargeTool(state, params) {
   const normalized = normalizeToolName(toolName);
   const scope = currentScope(state);
   if (!scope) {
-    return failure("NOT_IN_SCOPE", "Not in a scope. Call scope with begin first.");
+    return failure(
+      "NOT_IN_SCOPE",
+      "Outside all scopes, only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, time, fission: [{ intent, budget, permission }] } }).",
+    );
   }
   if (isFreeCall(toolName, input)) {
     return { ok: true, remaining: copyCounts(scope.remaining) };

@@ -163,16 +163,20 @@ describe("stage and system prompts map to their documents", () => {
 		);
 	});
 
-	test("task nature chooses the flow by default", () => {
+	test("task nature has one authority and the other surfaces point to it", () => {
 		const doc = loadDoc("stages");
-		const texts = [doc.header, persistentOperatingSkill, todoTools.TODO_DESCRIPTION];
-		for (const text of texts) {
-			expect(text).toContain("Choose by task nature.");
-			expect(text).toContain("A refactor counts as development:");
-			expect(text).toContain("in principle submit a ledger");
-			expect(text).toContain("in principle do not submit one");
-			expect(text).toContain("let that judgment override the default");
-		}
+		const todo = loadDoc("tools/todo");
+		expect(persistentOperatingSkill).toContain("Choose by task nature.");
+		expect(persistentOperatingSkill).toContain("A refactor counts as development:");
+		expect(persistentOperatingSkill).toContain("in principle submit a ledger");
+		expect(persistentOperatingSkill).toContain("in principle do not submit one");
+		expect(persistentOperatingSkill).toContain("let that judgment override the default");
+
+		// DRY: the long rule lives once. The other surfaces only point to it.
+		expect(doc.header).not.toContain("Choose by task nature.");
+		expect(todo.tool).not.toContain("Choose by task nature.");
+		expect(doc.header).toContain("persistent-rules");
+		expect(todo.tool).toContain("persistent-rules");
 	});
 
 	test("system pieces", () => {

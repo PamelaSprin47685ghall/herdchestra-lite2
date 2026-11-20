@@ -532,59 +532,34 @@ async function endHeir(h, second, secondSession) {
 }
 
 describe("fission async model adoption", () => {
-	test("waits for setModel() to settle before moving the owner leaf", async () => {
+	test("keeps the owner's model and still moves its leaf to the heir's tail", async () => {
 		const h = harness({ fission: heirFlows() });
 		const registered = await startBatch(h, "call-adopt-order");
 		await closeFirstFlow(h, registered);
 		const [, second] = h.scheduler.listFlows();
 		const secondSession = h.spawned[1].session;
-
-		const applied = [];
-		let releaseSwitch = null;
-		let switchStarted = false;
-		const branchAfterSwitch = [];
-		const originalBranch = h.manager.branch.bind(h.manager);
-		h.manager.branch = (id) => {
-			if (switchStarted) branchAfterSwitch.push({ resolved: applied.length > 0, id });
-			return originalBranch(id);
+		const switched = [];
+		h.ownerSession.setModel = async (model) => {
+			switched.push(model);
+			h.ownerSession.model = model;
 		};
-		h.ownerSession.setModel = (model) =>
-			new Promise((resolve) => {
-				switchStarted = true;
-				releaseSwitch = () => {
-					applied.push(model);
-					h.ownerSession.model = model;
-					resolve();
-				};
-			});
 
-		// Not awaited: the switch is deliberately pending, so awaiting the
-		// flow's finish promise here would wait forever.
-		const ending = endHeir(h, second, secondSession);
-		await waitFor(() => typeof releaseSwitch === "function");
-
-		// The context splice is synchronous and happens before the await; the
-		// switch has not landed yet, so the session still reports its old model.
-		expect(h.ownerAgent.state.messages).toEqual(secondSession.agent.state.messages);
-		expect(h.ownerSession.model).toEqual({ id: "owner-model" });
-		expect(applied).toHaveLength(0);
-		expect(branchAfterSwitch).toHaveLength(0);
-		expect(h.scheduler.batchStatus(registered.batchId).status).toBe("finalizing");
-
-		releaseSwitch();
-		await ending;
+		await endHeir(h, second, secondSession);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
 
-		expect(applied).toEqual([{ id: "heir-model" }]);
-		expect(h.ownerSession.model).toEqual({ id: "heir-model" });
-		expect(branchAfterSwitch.length).toBeGreaterThan(0);
-		expect(branchAfterSwitch.every((call) => call.resolved)).toBe(true);
+		// The heir's model is a flow detail. Adoption must not move the main
+		// session onto it: a per-model cache namespace never held the owner's
+		// prefix, so that switch costs a full re-read of the conversation.
+		expect(switched).toEqual([]);
+		expect(h.ownerSession.model).toEqual({ id: "owner-model" });
+		expect(h.ownerAgent.state.messages).toEqual(secondSession.agent.state.messages);
 		expect(done.status).toBe("closed");
 		expect(done.outcome).toBe("closed");
 		expect(done.heir).toBe(second.label);
+		expect(done.limits).toEqual([]);
 	});
 
-	test("reports a rejected setModel() as an adoption failure after adopting the context", async () => {
+	test("never reports a model failure when the owner keeps its own model", async () => {
 		const h = harness({ fission: heirFlows() });
 		const registered = await startBatch(h, "call-adopt-reject");
 		await closeFirstFlow(h, registered);
@@ -597,12 +572,11 @@ describe("fission async model adoption", () => {
 		await endHeir(h, second, secondSession);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
 
-		// The context and the leaf still belong to the heir; only the model
-		// identity failed, and the batch says so instead of claiming a clean
-		// succession.
-		expect(done.status).toBe("failed");
-		expect(done.outcome).toBe("closed-with-adoption-failure");
-		expect(done.limits).toContain("OWNER_MODEL_NOT_SWITCHED");
+		// Adoption never calls setModel(), so a host that would refuse it cannot
+		// turn a clean succession into a failure.
+		expect(done.status).toBe("closed");
+		expect(done.outcome).toBe("closed");
+		expect(done.limits).toEqual([]);
 		expect(h.ownerAgent.state.messages).toEqual(secondSession.agent.state.messages);
 		const tip = h.manager.getBranch().at(-1);
 		expect(tip.customType).toBe("scope.end");

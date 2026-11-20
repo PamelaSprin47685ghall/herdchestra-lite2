@@ -22,7 +22,7 @@
 - 不改 omp 源码。所有落地都在扩展层，使用公开 API。
 - 不引入多父树、图结构或专属合并节点。
 - 不做 per-fission 的 `stage`：`stage` 是整批唯一的。
-- `pin` 的既有语义不变，只增加跨流传播；`defer` 不跨流；`amend` 在 fission 内禁用（见第 8 节）。
+- `pin` 的既有语义不变，只增加跨流传播；`defer` 不跨流；`amend` 在每条流内隔离（见第 8 节），只改本流记录，不写共享文件。
 - 不在抄写时做压缩；折叠交给既有经济规则。
 
 ### 1.3 设计不变量：`N = 1` 是机制的自然退化，不是特判
@@ -508,7 +508,7 @@ closed(batch) = 该批次的全部流都已 closed
 - **model**：每条流由自己的 Agent 持有，不走宿主 `/switch`，因此不触发 `pendingModelSwitch` 与关闭时恢复。所有者被停止后，它的模型字段不再影响会话；继承者的模型成为活动模型（见 5.9）。
 - **pin**：`session.pins` 是唯一真相；flow 持 `pinSeen` 指纹。抄写时把源段 `pin` 合并进 `session.pins`，按规范化字符串去重（字段顺序固定、空字段省略）；不复制、不删除。
 - **defer**：只作用于流内。flow 终止（不是 scope 结束）时未投递的 defer 随流丢弃并留一条审计；不抄给接收方。
-- **amend**：fission 内**禁用**。`amend` 会改写已有 entry，而改写在多流共享文件下会覆盖别流的追加；接口返回 `AMEND_UNAVAILABLE_IN_FISSION`，并说明原因。
+- **amend**：fission 内**可用**。`amend` 只写入该流自己的 `flow.state.amends`，出站时由 `filterAmends` 过滤；它从不改写共享磁盘文件，因此没有并发写覆盖。流内 `amend` 的起点边界是本流自己的 `scope.begin`（Flow 的 `beginToolCallId` 是 `batchCallId:index`，并不对应任何 tool call），倒序扫描遇到 `scope.end` 即停；被撤销的拍子不会在兄弟流抄写时复活，`promote` 按 key 合并 owner 与 heir 的 `amends`，`pruneAmends` 负责清理离开分支的旧 key。
 - **costGate 共用。** N 条流共用会话的那一个 `CostGate`，不各自新建。它的口径是「整棵 session 树的支出」——root、子代理与侧请求共用一个闸门，子代理本来就是通过 `costGate: session.costGate` 按引用共享的。接线层把 `owner.costGate` 交给每条流的 `streamFn` 包装：`guardStreamFn(streamFn, () => owner.costGate)`。不这样做，`session.maxCost` 会被放大成 N 倍。
 - **两种账不是一回事。** `begin.fission[].budget` 数的是 assistant turn，`CostGate` 数的是美元。两条轴独立：turn 还有余额不代表美元没到顶，反之亦然。
 - **触顶后的失败语义。** `gate.check()` 命中的那条流拿到 `CostCapError`，该流按取消处理（写 `fission.aborted`），其余在跑的流继续；当没有任何 running 流时，批次以 `cost-capped` 结束，`onSessionStop` 不宣告成功。
@@ -665,7 +665,7 @@ UI 看到的仍是一次正常的「开始 → 更新 → 结束」，只是更�
 7. **额度不串。** 哥哥用超预算时，弟弟的 `remaining` 不受影响；抄写段里的预算文本不产生新的可花费额度。
 8. **停止不被提前宣告。** 一条流结束而其余仍在跑时，`onSessionStop` 不推进 relay。
 9. **互斥成立。** 并行写入前后 `getConversationTip()` 回到入口值；抄写段的叶停在段尾。两类断言各自从未触发。
-10. **amend 被明确拒绝。** fission 内调用 `amend` 返回 `AMEND_UNAVAILABLE_IN_FISSION`，而不是静默重写文件。
+10. **amend 在流内隔离。** 流内 `amend` 只改本流的 `amends` 集合并退回流内预算；它不写共享文件，不跨本流起点或闭合兄弟段，被撤销的拍子也不会被抄写进兄弟流。
 11. **`fission` 只有一个元素时没有专门的代码路径。** 实现里搜不到 `flows.length === 1` 一类的分支；同一操作在当前版本与本设计下各跑一遍，预算余额与 `todo` / `relay` 的行为相同，屏幕输出相同，但树形多一层子 scope（所有者退场、唯一流继承）。
 12. **成本闸门共用。** 两条流同时花钱时，`session.maxCost` 按总额拒绝，不是每条流各得一份 cap；触顶后批次以 `cost-capped` 结束，而不是宣称成功。
 13. **UI 只看见一条流。** 任意时刻的输出事件序列里至多一条 message 处于 open；工具事件不出现在任何 open 窗口内部。

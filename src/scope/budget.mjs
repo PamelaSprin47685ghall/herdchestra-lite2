@@ -59,7 +59,7 @@ function normalizeBudget(budget) {
 }
 
 /** Normalize a single tool name: apply_patch → edit. */
-function normalizeToolName(toolName) {
+export function normalizeToolName(toolName) {
   return toolName === "apply_patch" ? "edit" : toolName;
 }
 
@@ -144,4 +144,4 @@ export function budgetText(scope, now = Date.now()) {
   return tools === "" ? timed : `${tools}, ${timed}`;
 }
 
-export { CHARGE_SCALE, validBudget, normalizeBudget, normalizeToolName };
+export { CHARGE_SCALE, validBudget, normalizeBudget };

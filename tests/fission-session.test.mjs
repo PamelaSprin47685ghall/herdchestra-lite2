@@ -101,7 +101,10 @@ describe("deriveFissionConfig", () => {
 		expect(config.agentDisplayName).toBe("flow-a");
 		expect(config.parentTaskPrefix).toBeUndefined();
 		expect(config.asyncJobManager).toBe(ASYNC_JOBS);
-		expect(config.parentAgentId).toBe("Main");
+		// A flow is a peer session, not a subagent: the host strips `todo` from
+		// every subagent spawn, and one missing tool definition changes the whole
+		// request head the provider cache is keyed on.
+		expect(config.parentAgentId).toBeUndefined();
 		expect(config.agentRegistry).toBe(AGENT_REGISTRY);
 		expect(config.disableExtensionDiscovery).toBe(true);
 		expect(config.preloadedPreparedExtensions).toEqual([PREPARED]);
@@ -165,14 +168,15 @@ describe("deriveFissionConfig", () => {
 		expect(fromSession.taskPromptCacheKey).toBeUndefined();
 	});
 
-	test("names the parent agent from the owner or falls back to Main", () => {
-		expect(deriveFissionConfig(fixture().options).config.parentAgentId).toBe("Main");
+	test("does not declare the flow a subagent of the owner", () => {
+		// The owner id stays out of the config on purpose. `parentAgentId` marks
+		// the session as a subagent, and the host then filters `todo` out of its
+		// tool view; the flow's tool array would differ from the owner's by one
+		// definition, which is enough to miss the provider cache at byte zero.
+		expect(deriveFissionConfig(fixture().options).config.parentAgentId).toBeUndefined();
 		expect(
 			deriveFissionConfig(fixture({ owner: { getAgentId: () => "owner-7" } }).options).config.parentAgentId,
-		).toBe("owner-7");
-		expect(deriveFissionConfig(fixture({ owner: { getAgentId: () => "" } }).options).config.parentAgentId).toBe(
-			"Main",
-		);
+		).toBeUndefined();
 	});
 
 	test("uses the label as a display name without changing identity", () => {

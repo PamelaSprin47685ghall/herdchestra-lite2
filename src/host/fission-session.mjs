@@ -34,6 +34,77 @@ import {
 	createFlowTailResolver,
 	retainFissionManager,
 } from "./fission-manager.mjs";
+import { createHash } from "node:crypto";
+
+function frameDigest(value) {
+	try {
+		return createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
+	} catch {
+		return "unserializable";
+	}
+}
+
+/**
+ * Compare the bytes a flow will send to the provider with the owner's.
+ *
+ * A one-byte difference in `tools`, `systemPrompt`, or `promptCacheKey`
+ * makes the provider treat the flow as a cold namespace: every `scope begin`
+ * and every adopted return would pay the whole prefix again. The comparison
+ * is deliberately a hash, not a text diff, because the requirement is
+ * byte-equality of the request head, not human-readable similarity.
+ *
+ * Returns `{ frames, mismatches }`; an empty `mismatches` is the only
+ * acceptable production state, and a caller that sees one must record it.
+ */
+export function compareFissionFrames(owner, config) {
+	const ownerPrompt =
+		read(read(read(owner, "agent"), "state"), "systemPrompt") ??
+		read(owner, "systemPrompt");
+	const ownerTools = call(owner, "getEnabledToolNames");
+	const ownerMounted = call(owner, "getMountedXdevToolNames");
+	const ownerKey =
+		read(read(owner, "agent"), "promptCacheKey") ??
+		(config?.taskPromptCacheKey ?? null);
+	const frames = {
+		tools: {
+			owner: frameDigest([ownerTools, ownerMounted]),
+			flow: frameDigest([config?.toolNames, config?.mountedToolNames]),
+		},
+		systemPrompt: {
+			owner: frameDigest(ownerPrompt),
+			flow: frameDigest(config?.systemPrompt),
+		},
+		promptCacheKey: {
+			owner: frameDigest(ownerKey),
+			flow: frameDigest(config?.providerPromptCacheKey ?? null),
+		},
+	};
+	const mismatches = Object.keys(frames).filter(
+		(key) => frames[key].owner !== frames[key].flow,
+	);
+	return { frames, mismatches };
+}
+
+/**
+ * The fourth frame: the conversation prefix the flow will actually send.
+ *
+ * `ownerPrefix` is the owner's live list with the bytes no flow may see
+ * removed (its ack, trailing results, a retirement artifact). The flow's
+ * first messages must start with exactly that list; anything else means the
+ * flow's first request is not the request the owner just cached.
+ */
+export function compareMessagePrefix(ownerPrefix, flowMessages) {
+	const owner = Array.isArray(ownerPrefix) ? ownerPrefix : [];
+	const flow = Array.isArray(flowMessages) ? flowMessages : [];
+	const slice = flow.slice(0, owner.length);
+	const sameLength = slice.length === owner.length;
+	const ownerHash = frameDigest(owner);
+	const flowHash = frameDigest(slice);
+	return {
+		frame: { owner: ownerHash, flow: flowHash, length: owner.length },
+		ok: sameLength && ownerHash === flowHash,
+	};
+}
 
 /** Stable reason codes for a refused construction. */
 export const FISSION_SESSION_REASONS = Object.freeze({
@@ -360,7 +431,15 @@ export function deriveFissionConfig(options = {}) {
 	const cwd = options.cwd ?? call(manager, "getCwd");
 	if (!isNonEmptyString(cwd)) return refusal(FISSION_SESSION_REASONS.NO_CWD);
 
-	const prompt = options.systemPrompt ?? read(owner, "systemPrompt");
+	// The owner's live prompt already carries the managed block the extension
+	// injects; the raw session field can predate that injection. Deriving from
+	// the live array keeps the flow's first request byte-equal to the owner's
+	// last one. A host that keeps no live copy falls back to the session field,
+	// and the flow's own before_agent_start injection is idempotent either way.
+	const livePrompt = read(read(read(owner, "agent"), "state"), "systemPrompt");
+	const prompt =
+		options.systemPrompt ??
+		(Array.isArray(livePrompt) ? livePrompt : read(owner, "systemPrompt"));
 	if (!Array.isArray(prompt)) return refusal(FISSION_SESSION_REASONS.NO_SYSTEM_PROMPT);
 
 	const toolNames = options.toolNames ?? call(owner, "getEnabledToolNames");
@@ -410,14 +489,25 @@ export function deriveFissionConfig(options = {}) {
 	// Normalize once, so the limitation list always matches the config it
 	// describes. A truthy non-boolean switch still disables the feature, and a
 	// disabled feature must never go unreported.
-	const enableLsp = options.enableLsp === true;
-	const enableMCP = options.enableMCP === true;
+	//
+	// An absent option follows the owner. The provider cache is keyed on the
+	// whole request head, so a flow that quietly drops the owner's LSP or MCP
+	// tool set starts every batch at 0% hit and pays the entire prefix again.
+	// Reusing the owner's handles also avoids a second server; the flow only
+	// borrows the client.
+	const ownerMcpManager = options.mcpManager ?? read(owner, "mcpManager");
+	const ownerMcpTools = options.mcpTools ?? read(owner, "mcpTools");
+	const ownerMcpScope = options.mcpToolScope ?? read(owner, "mcpToolScope");
+	const enableLsp =
+		options.enableLsp === true || read(owner, "enableLsp") === true;
+	const enableMCP =
+		options.enableMCP === true ||
+		(ownerMcpManager !== undefined && ownerMcpManager !== null);
 	if (!enableLsp) limitations.push(limitation(FISSION_SESSION_LIMITS.LSP_DISABLED));
 	if (!enableMCP) limitations.push(limitation(FISSION_SESSION_LIMITS.MCP_NOT_FOLLOWED));
 	limitations.push(limitation(FISSION_SESSION_LIMITS.SETTINGS_SHARED));
 	limitations.push(limitation(FISSION_SESSION_LIMITS.SHARED_MANAGER_DISPOSE_FORBIDDEN));
 
-	const ownerId = call(owner, "getAgentId");
 	const label = isNonEmptyString(options.label) ? options.label : flowId;
 
 	const config = {
@@ -443,15 +533,14 @@ export function deriveFissionConfig(options = {}) {
 		settings,
 		hasUI: false,
 		enableMCP,
-		mcpManager: options.mcpManager,
-		mcpTools: options.mcpTools,
-		mcpToolScope: options.mcpToolScope,
+		mcpManager: ownerMcpManager,
+		mcpTools: ownerMcpTools,
+		mcpToolScope: ownerMcpScope,
 		enableLsp,
 		bindProcessState: false,
 		agentId: flowId,
 		agentDisplayName: label,
 		asyncJobManager,
-		parentAgentId: isNonEmptyString(ownerId) ? ownerId : "Main",
 		agentRegistry,
 		disableExtensionDiscovery: true,
 		preloadedPreparedExtensions: preparedSeed,
@@ -550,6 +639,7 @@ export async function createFissionSession(options = {}) {
 		config,
 		limitations,
 		toolUI,
+		frames: options.session ? compareFissionFrames(options.session, config) : null,
 		setToolUIContext: typeof created.setToolUIContext === "function" ? created.setToolUIContext : null,
 		eventBus: created.eventBus,
 		extensionsResult: created.extensionsResult,

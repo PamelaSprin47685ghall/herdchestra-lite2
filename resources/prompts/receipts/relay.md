@@ -119,9 +119,9 @@ Include these relay instructions in the handoff document for generation {{next}}
 
 ## handoff-focus.tail
 
-Previous generation: {{prev}}. Its ledger was empty when it called the built-in /handoff.
+Previous generation: {{prev}}. Its ledger was empty when it triggered self-handoff.
 Audit that empty ledger without trusting it: check whether unfinished user-requested work was marked completed or abandoned. Then judge for yourself what the user still needs, and do that work.
-You may open any number of scopes to investigate before your first todo evaluation; todo need not be your first tool call. todo itself is forbidden inside every scope. Close every scope before calling todo.
+You may open any number of scopes to investigate before your first todo evaluation; todo need not be your first tool call. todo itself is forbidden inside every scope. Close every scope before calling todo. All three stage flags were reset on handoff.
 Write every ledger item so the next agent can understand the work: the user requirement, acceptance evidence, unresolved risks, and the next concrete action.
 Only your first todo evaluation being an empty ledger promotes you and allows a natural stop. If it is non-empty, you enter rework and must hand off again later; you are not the last holder.
 A todo view is a read-only check; it is NOT a submitted ledger. Only a successful write operation's full snapshot counts as your first submission.

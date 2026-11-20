@@ -282,7 +282,7 @@ describe("scope lifecycle", () => {
 		);
 		expect(third[0].blocked).toBe(false);
 		expect(third[0].output.content[0].text).toContain("Scope closed");
-		expect(third[0].output.content[0].text).toContain("younger sibling scope");
+		expect(third[0].output.content[0].text).toContain("You are outside all scopes.");
 
 		// The freshest scope keeps its turns: nothing is rewritten yet.
 		const branchAfterFirstEnd = manager.getBranch();
@@ -312,9 +312,7 @@ describe("scope lifecycle", () => {
 			ctx,
 			assistant([call("d3", "scope", { end: true })]),
 		);
-		expect(finalEnd[0].output.content[0].text).toContain(
-			"No elder sibling scope was collapsed.",
-		);
+		expect(finalEnd[0].output.content[0].text).not.toContain("was collapsed");
 
 		const branch = manager.getBranch();
 		const messages = branch.filter((entry) => entry.type === "message").map((entry) => entry.message);
@@ -383,7 +381,7 @@ describe("scope lifecycle", () => {
 		const { host, ctx } = await start(manager);
 		const result = await runAssistant(host, ctx, assistant([call("c1", "read", { path: "a" })]));
 		expect(result[0].blocked).toBe(true);
-		expect(result[0].result.content[0].text).toContain("Not in a scope");
+		expect(result[0].result.content[0].text).toContain("Outside all scopes");
 		const view = await outbound(host, ctx);
 		expect(texts(view).join("\n")).toContain("You are outside all scopes.");
 	});
@@ -474,9 +472,7 @@ describe("scope lifecycle", () => {
 			ctx,
 			assistant([call("e2", "scope", { end: true })]),
 		);
-		expect(youngerEnd[0].output.content[0].text).toContain(
-			"No elder sibling scope was collapsed.",
-		);
+		expect(youngerEnd[0].output.content[0].text).not.toContain("was collapsed");
 		const joined = texts(await outbound(host, ctx)).join("\n");
 		expect(joined).toContain("read:elder");
 		expect(joined).toContain("read:younger");

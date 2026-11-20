@@ -17,10 +17,27 @@ import { continueFeedback } from "../tools/results.mjs";
  */
 function retirePendingBatch(station, registry, ctx, toolCallId) {
 	const batch = station?.pendingFission;
+	if (!batch || batch.retired === true) return false;
 	// A flow-owned station may itself have opened an inner batch, so the
 	// pending descriptor, not the flow flag, decides who retires.
-	if (!batch || batch.retired === true) return false;
-	if (batch.toolCallId !== toolCallId) return false;
+	//
+	// The scope call opens an execution barrier: every call after it in the
+	// same assistant message runs exactly once in the owner's context, and its
+	// result is copied into every flow. Retirement is therefore deferred until
+	// both the scope receipt and every trailing result have arrived. Aborting on
+	// the scope receipt alone would cancel the trailing calls the barrier
+	// promised, and the batch would start with unanswered tool calls.
+	if (batch.remainingTrailingIds instanceof Set && batch.remainingTrailingIds.has(toolCallId)) {
+		batch.remainingTrailingIds.delete(toolCallId);
+	} else if (batch.toolCallId === toolCallId) {
+		batch.scopeResultSeen = true;
+	} else {
+		return false;
+	}
+	const ready =
+		batch.scopeResultSeen === true &&
+		(!(batch.remainingTrailingIds instanceof Set) || batch.remainingTrailingIds.size === 0);
+	if (!ready) return false;
 	batch.retired = true;
 	// Arm the station's own gate before the scheduler or the host sees the
 	// abort: a started turn can deliver its next tool call immediately.
@@ -193,8 +210,21 @@ export function wireHooks(pi, registry) {
 	} catch (error) {
 		record("hooks", error, { missing: ["tool_result"], optional: true });
 	}
-	hackContext(pi, (event, ctx) =>
-		bindDispatch(ctx).onContext(event?.messages, ctx),
+	hackContext(
+		pi,
+		(event, ctx) => bindDispatch(ctx).onContext(event?.messages, ctx),
+		{
+			// The station's manager writes this session's own leaf. Falling back
+			// to `ctx.sessionManager` would let a flow append its receipt to the
+			// shared manager's current leaf, which belongs to another flow.
+			managerFor: (ctx) => {
+				try {
+					return registry.stationFor(ctx)?.manager ?? null;
+				} catch {
+					return null;
+				}
+			},
+		},
 	);
 	pi.on("before_agent_start", (event, ctx) => {
 		const station = registry.stationFor(ctx);
@@ -237,7 +267,32 @@ export function wireHooks(pi, registry) {
 			const station = registry.stationFor(ctx);
 			if (!station?.pendingFission || station.fissionFlow) return undefined;
 			const batch = station.pendingFission;
-			if (batch.retired !== true) return undefined;
+			if (batch.retired !== true) {
+				// The turn can end before a trailing call ever produced its
+				// result (a host abort, a killed tool, a refused call the host
+				// never answered). The barrier promised only the calls that
+				// actually ran, so settle that subset now; otherwise the batch
+				// would wait for a retirement that can no longer arrive.
+				const owed =
+					batch.remainingTrailingIds instanceof Set &&
+					batch.remainingTrailingIds.size > 0;
+				if (!owed) return undefined;
+				batch.retired = true;
+				station.markOwnerRetired?.({
+					batchId: batch.batchId,
+					toolCallId: batch.toolCallId,
+					identity: ctx?.agent ?? null,
+				});
+				try {
+					registry.fissionScheduler?.()?.retireOwner?.({
+						batchId: batch.batchId,
+						station,
+						ctx,
+					});
+				} catch (error) {
+					record("hooks", error, { fission: batch.batchId, retire: true });
+				}
+			}
 			const port = registry.fissionScheduler?.();
 			if (typeof port?.onOwnerEnd !== "function") return undefined;
 			let outcome;

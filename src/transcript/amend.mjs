@@ -21,7 +21,26 @@ export function findAmendTarget(state, messages, currentAssistantIndex, scope) {
 		return reject("NO_BEAT", "The transcript has no assistant beat.");
 	}
 
-	const beginAssistantIndex = findToolCallIndex(messages, scope.beginToolCallId);
+	// A flow's begin id is `batchCallId:index`; no tool call carries that id.
+	// Its boundary is the flow's own `scope.begin` custom message (or the
+	// batch's tool result when the custom entry is not in this window). Find
+	// the newest such boundary so the search never crosses into a sibling's
+	// copied segment.
+	let beginAssistantIndex = findToolCallIndex(messages, scope.beginToolCallId);
+	if (beginAssistantIndex < 0) {
+		const batchCallId = scope.beginToolCallId.replace(/:\d+$/, "");
+		for (let index = messages.length - 1; index >= 0; index -= 1) {
+			const message = messages[index];
+			if (message?.role === "custom" && message.customType === "scope.begin") {
+				beginAssistantIndex = index;
+				break;
+			}
+			if (message?.role === "toolResult" && message.toolCallId === batchCallId) {
+				beginAssistantIndex = index;
+				break;
+			}
+		}
+	}
 	if (beginAssistantIndex < 0) {
 		return reject("SCOPE_BOUNDARY", "The scope begin message is not in the transcript.");
 	}
@@ -32,6 +51,12 @@ export function findAmendTarget(state, messages, currentAssistantIndex, scope) {
 
 	for (let index = lastIndex; index >= 0; index -= 1) {
 		const message = messages[index];
+		// A closed scope — a nested sibling's end, or a segment copied from
+		// another flow — is a hard boundary. Amending across it would revive a
+		// beat the closed scope already accounted for.
+		if (message?.role === "custom" && message.customType === "scope.end") {
+			return reject("SCOPE_BOUNDARY", "A closed scope boundary is not amendable across.");
+		}
 		if (message?.role !== "assistant") continue;
 		if (amends.has(beatKey(message))) continue;
 

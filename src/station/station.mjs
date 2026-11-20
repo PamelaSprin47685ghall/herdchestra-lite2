@@ -125,6 +125,10 @@ export function receiptTextOf(message) {
 		.join("\n");
 }
 
+import { loadDoc, render } from "../prompts/index.mjs";
+
+const E = loadDoc("errors");
+
 export class SessionStation {
 	constructor(manager, pi, tickets, registry, pricingCatalog) {
 		this.manager = manager;
@@ -394,7 +398,10 @@ export class SessionStation {
 			if (receipt.limitMs > 0 && receipt.elapsedMs > receipt.limitMs) {
 				return {
 					block: true,
-					reason: `OVERTIME: that tool ran ${Math.round(receipt.elapsedMs)}ms in the chess-clock phase, past its ${receipt.limitMs}ms limit, and was killed. Its result is gone. You are out of normal time: shrink the work, close the scope, or hand off now.`,
+					reason: render(E["overtime-killed"], {
+						elapsed: Math.round(receipt.elapsedMs),
+						limit: receipt.limitMs,
+					}),
 				};
 			}
 			return undefined;
@@ -402,16 +409,45 @@ export class SessionStation {
 		if (!this.deferScopePreflight(id, name)) return undefined;
 		const verdict = onToolCall(this, { toolCallId: id, toolName: name }, ctx, true);
 		if (verdict) return verdict;
+			const barrierLimit = this.barrierToolLimit(id);
+			if (barrierLimit !== null) return { limitMs: barrierLimit };
 		const limitMs = this.toolTimeLimit();
 		return limitMs === null ? undefined : { limitMs };
+	}
+
+	/**
+	 * The barrier's own wall clock, not the enclosing scope's. A trailing call
+	 * is the shared first beat of every flow in the batch, so it pays the
+	 * batch's `time`, not the scope the owner was already inside.
+	 */
+	barrierToolLimit(toolCallId) {
+		const batch = this.pendingFission;
+		if (!batch || batch.retired === true) return null;
+		const ids = batch.trailingCallIds;
+		if (!Array.isArray(ids) || !ids.includes(toolCallId)) return null;
+		if (!Number.isFinite(batch.deadlineAt)) return null;
+		const now = Date.now();
+		return now < batch.deadlineAt ? batch.deadlineAt - now + 1000 : 1000;
 	}
 
 	/** 1000 ms once the innermost scope's deadline has passed, else null. */
 	toolTimeLimit() {
 		const scope = currentScope(this.state);
-		if (!scope) return null;
-		const deadline = effectiveDeadline(this.state);
-		if (deadline === null) return null;
+		const pending = this.pendingFission;
+		const trailingDeadline =
+			pending &&
+			pending.retired !== true &&
+			pending.remainingTrailingIds instanceof Set &&
+			pending.remainingTrailingIds.size > 0 &&
+			Number.isFinite(pending.deadlineAt)
+				? pending.deadlineAt
+				: null;
+		const scopeDeadline = scope ? effectiveDeadline(this.state) : null;
+		const deadlines = [scopeDeadline, trailingDeadline].filter((value) =>
+			Number.isFinite(value),
+		);
+		if (deadlines.length === 0) return null;
+		const deadline = Math.min(...deadlines);
 		const now = Date.now();
 		if (now < deadline) {
 			// A tool started in normal time may run only up to the deadline
@@ -419,7 +455,7 @@ export class SessionStation {
 			// exactly deadline + 1s.
 			return deadline - now + 1000;
 		}
-		if (scope.overtimeAt === null) scope.overtimeAt = now;
+		if (scope && scope.overtimeAt === null) scope.overtimeAt = now;
 		return 1000;
 	}
 
@@ -748,8 +784,12 @@ export class SessionStation {
 	withSkillReceipt(original, result, ctx) {
 		const messages = Array.isArray(result?.messages) ? result.messages : original;
 		const last = messages.at(-1);
-		const text = skillReceiptText(this.state, this.relayOn(ctx));
-		if (last?.herdSkill === true && receiptTextOf(last) === text) return result;
+		// A trailing receipt means nothing has been said since the last one. The
+		// same turn can call the context handler twice, and the receipt's clock
+		// line changes across a second boundary; comparing text would then append
+		// a second Skill and hand the provider a prefix it never cached. Reuse the
+		// message as is, timestamp included.
+		if (last?.herdSkill === true) return result;
 		const skill = this.skillReceipt(ctx);
 		return { ...result, messages: [...messages, skill] };
 	}

@@ -138,11 +138,11 @@ describe("cached position after adoption", () => {
 		expect(merged[KEY].cachedUntilPos).toBe(12);
 	});
 
-	test("equally fresh entries keep the conservative position", () => {
+	test("equally fresh entries keep the heir's position", () => {
 		const merged = mergeModelCaches(
 			{ [KEY]: { cachedUntilPos: 4, lastUsedAt: 1000 } },
 			{ [KEY]: { cachedUntilPos: 12, lastUsedAt: 1000 } },
 		);
-		expect(merged[KEY].cachedUntilPos).toBe(4);
+		expect(merged[KEY].cachedUntilPos).toBe(12);
 	});
 });

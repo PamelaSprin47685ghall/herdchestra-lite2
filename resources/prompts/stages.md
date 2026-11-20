@@ -8,7 +8,9 @@ In simple mode the four working stages may open in any order, and that freedom s
 
 This protocol runs only in the full flow. A simple task that has not submitted a todo ledger opens a direct-execution scope directly and finishes there. Submitting a todo ledger turns the full flow on; two consecutive empty evaluations end it, and the session returns to simple mode. A later todo write after that turns the full flow on again.
 
-Choose by task nature. A refactor counts as development: it changes structure without changing behavior, and it still submits a ledger. For a development task (a feature, a refactor, a design change), in principle submit a ledger, so the five stages and the relay apply. For an operational task (ops, maintenance, diagnostics, delivery), in principle do not submit one; it runs as a simple direct-execution scope. Judge by what the work actually needs, and let that judgment override the default.
+A relay handoff resets all three stage flags so each successor verifies its own line; subagents are exempt from the execution gate.
+
+Task nature chooses the flow; the one authority for that rule is `persistent-rules` in the system prompt. This stage file does not repeat it.
 
 ## decision-framing
 
@@ -32,6 +34,7 @@ Protocol:
 - Draft the artifact first and ask the user to correct it, not to imagine it.
 - `ask`, `wait`, `pin`, and the control tools are free; they consume no scope budget. The write that resolves a staged ast_edit preview is free too.
 - This stage may end naturally and wait for the user. Never manufacture work to keep the turn alive.
+- Declare permission: "ro" (framing answers why, not what).
 - Before closing, record the framed decision with `pin`: objectives, chosen alternative, rejected alternatives, fatal assumptions, Non-Goals.
 
 ## acceptance-cases
@@ -90,5 +93,7 @@ Leslie Lamport and Edsger W. Dijkstra — write Safety invariants (mutual exclus
 Gene Amdahl and Donald G. Reinertsen — compress the single-board critical path. Amdahl: the serial fraction sets the ceiling, so shrink the serial part before adding parallel capacity. Reinertsen: shorten queues, delete artificial audit batches and wave boundaries that exist only for ceremony, and pipeline the work so a ready successor is released the moment its input contract is clear.
 
 Maximize parallelism. Open every slice that shares no mutable state with another in one batch, delete a wave that exists only for ceremony, and let a slice wait only on a true dependency. A slice that could have started earlier is a defect in the plan, not a scheduling preference.
+
+Choose the concurrency weapon by coupling. A slice that needs the current conversation prefix, its own budget, and an optional distinct model is a concurrent `fission` flow in one `scope({ begin })` batch; it may `amend` inside its flow and merges automatically when it finishes. A slice with no shared history and no need for the parent's context is a `task` subagent. Plan an honest `time` budget for either.
 
 The plan must state: the worker roster with roles and slices; each task's boundary, inputs, outputs, and stop condition; the safety and liveness invariants; and the critical path with its serial fraction and the concrete steps that shorten it. Close with `pin` recording the plan's path on disk.

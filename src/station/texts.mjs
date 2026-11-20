@@ -1,7 +1,7 @@
 // Station texts: every model-facing scope string. The prose lives in
 // resources/prompts/receipts/scope.md; this module chooses and composes it.
 
-import { budgetText, currentScope } from "../scope/index.mjs";
+import { budgetText, currentScope, findPendingReportElder } from "../scope/index.mjs";
 import { DECISION_FRAMING } from "../scope/stages.mjs";
 import { handoffToolBlockedReason } from "../relay/index.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
@@ -50,10 +50,8 @@ function endText(
 	}
 	if (foldedReport !== null) {
 		lines.push(render(T["end.elder-folded"], { report: foldedReport }));
-	} else {
-		lines.push(T["end.no-elder"]);
 	}
-	lines.push(render(T["end.keeps-turns"], { report }));
+	lines.push(T["end.keeps-turns"]);
 	if (deferredCount > 0) {
 		lines.push(
 			render(
@@ -133,6 +131,15 @@ function clockLine(state, now = Date.now()) {
 export function skillReceiptText(state, relayOn = true) {
 	const scope = currentScope(state);
 	const fullFlow = state.relay?.fullFlow === true;
+	const boundary = Number.isInteger(state.relay?.generation) && state.relay.generation >= 0
+		? state.relay.generation
+		: 0;
+	const pendingElder = findPendingReportElder(
+		state,
+		scope?.id ?? null,
+		boundary,
+		Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
+	);
 	const lines = scope
 		? [
 			render(T["receipt.inside"], {
@@ -149,6 +156,16 @@ export function skillReceiptText(state, relayOn = true) {
 	if (scope?.stage) {
 		lines.push(render(T["receipt.stage"], { stage: scope.stage }));
 	}
+	// `begin.elder_report` tells the model to summarize the pending elder, but
+	// only this receipt knows whether one exists. Naming it here is what keeps
+	// that parameter honest; a generic reminder would be ignored.
+	lines.push(
+		pendingElder
+			? render(T["receipt.pending-elder"], {
+				intent: JSON.stringify(pendingElder.intent ?? ""),
+			})
+			: T["receipt.no-pending-elder"],
+	);
 	lines.push(clockLine(state));
 	if (state.herdMode) {
 		lines.push(T["receipt.herd-rules"]);

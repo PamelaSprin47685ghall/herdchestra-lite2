@@ -12,11 +12,8 @@ You are now inside this scope.
 Intent: {{intent}}
 {{stage_line}}
 Budget (innermost scope only): {{budget}}.
-Only the innermost scope's budget is used. An unlisted budgeted tool has zero budget calls. scope, amend, defer, pin, ask, and wait are free where allowed; the write that resolves a staged ast_edit preview (xd://resolve or xd://reject) is free.
-todo is free but forbidden inside any active scope. Close every scope before updating the ledger.
-Calls in one assistant message spend at most one unit in total, split across budgeted tools by call count and rounded to two decimals. A tool whose balance runs out is blocked while the rest of the message still runs.
 {{closing_line}}
-Close with scope({ end: true }). This scope stays visible as the hot workbench. When opening its next sibling, pass its summary in begin.elder_report.
+This scope stays visible as the hot workbench. When opening its next sibling, pass its summary in begin.elder_report.
 
 ## begin.herd
 
@@ -42,13 +39,9 @@ Scope closed. You are outside all scopes.
 
 Your elder sibling scope at this level was collapsed; its begin receipt now reads: {{report}}
 
-## end.no-elder
-
-No elder sibling scope was collapsed.
-
 ## end.keeps-turns
 
-This scope keeps its internal turns until a younger sibling scope closes; its begin receipt will then read: {{report}}
+This scope stays visible verbatim as the hot workbench. Summarize it in begin.elder_report only if you later open another sibling at this level.
 
 ## end.defers-delivered
 
@@ -80,7 +73,7 @@ Do not write the final user-facing answer yet. Continue inside the enclosing sco
 
 ## end.promoted
 
-You are outside all scopes. Only a promoted empty-ledger successor evaluation allows the final user-facing answer as ordinary assistant text. Do not put it in return_markdown. Finishing is not a tool call.
+You are outside all scopes. Only a promoted empty-ledger successor evaluation allows the final user-facing answer as ordinary assistant text. Finishing is not a tool call.
 
 ## end.finish
 
@@ -138,6 +131,14 @@ Herd mode: {{mode}}.
 
 Stage: {{stage}}.
 
+## receipt.pending-elder
+
+Pending elder at this level: {{intent}} (summarize it in begin.elder_report if you open a sibling).
+
+## receipt.no-pending-elder
+
+No pending elder at this level (pass elder_report: null if you open a scope).
+
 ## receipt.no-ledger
 
 No todo ledger submitted yet: new scopes must declare permission: "ro"; permission "rw" (including an omitted value) is refused.
@@ -185,3 +186,32 @@ Simple mode: this task runs without a ledger, so no relay applies. Write the fin
 ## language
 
 (Routine reminder appended at the end of every turn; not a new user message.) 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。
+
+## fission.begin
+
+Fission batch {{batch}} registered with {{flows}} flow(s) in {{stage}}.
+{{flow_lines}}
+The owner retires after this receipt. Each flow opens its own scope beneath it, and the batch ends when every flow has closed.
+
+## fission.flow-lines
+
+- flow {{index}}: {{intent}}
+
+## fission.flow-receipt
+
+Fission flow {{label}} (batch {{batch}}, index {{index}}, stage {{stage}}).
+Intent: {{intent}}
+Budget: {{budget}}. Permission: {{permission}}. Model: {{model}}.
+This receipt assigns this flow only; sibling receipts assign the other flows.
+Your flow scope is already open. Call scope({ end: true }) when complete, or open a nested fission batch to delegate completion. Do not call todo.
+
+## fission.flow-intent
+
+Fission flow {{label}} (batch {{batch}}, index {{index}}, stage {{stage}}).
+Intent: {{intent}}
+Budget for this flow: {{budget}}. Permission: {{permission}}.
+Your flow scope is already open. Call scope({ end: true }) when complete, or open a nested fission batch to delegate completion. Do not call todo.
+
+## fission.flow-end-declared
+
+Flow completion declared. The scheduler will close this scope after the tool result is persisted.

@@ -15,7 +15,7 @@ import {
   validateFission,
 } from "../scope/index.mjs";
 import { MAIN_AGENT } from "../host/policy.mjs";
-import { findBegin } from "../transcript/index.mjs";
+import { findBegin, toolCalls } from "../transcript/index.mjs";
 import { invalidatePromotion } from "../relay/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
@@ -40,9 +40,6 @@ const E = loadDoc("errors");
 
 function handleAmendCall(station, call, base, currentIndex) {
   const state = station.state;
-  if (station.fissionFlow) {
-    return errorResult("AMEND_UNAVAILABLE_IN_FISSION", "Amend is unavailable in fission because rewriting shared history can overwrite another flow's entries.");
-  }
   const args = parseArgs(call);
   const reflection = trimText(args.reflection);
   if (!reflection) {
@@ -327,12 +324,26 @@ function handleFissionBegin(station, call, { args, ctx, base, currentMessage, cu
   }
   if (options.mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
   if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
+  // The scope call is an execution barrier, not only a gate: every call listed
+  // after it in the same assistant message runs once in the owner's context,
+  // and its result is copied to every flow in the batch. The owner must stay
+  // alive until the last of those results arrives; only then may it retire.
+  const beginCalls = toolCalls(currentMessage);
+  const barrierIndex = beginCalls.findIndex((entry) => entry.id === call.id);
+  const trailingCalls = barrierIndex >= 0 ? beginCalls.slice(barrierIndex + 1) : [];
+  const trailingCallIds = trailingCalls.map((entry) => entry.id);
   station.pendingFission = {
     batchId: registered.batchId,
     toolCallId: call.id,
     stage,
     flows: split.items,
     retired: false,
+    totals: validation.totals,
+    trailingCallIds,
+    remainingTrailingIds: new Set(trailingCallIds),
+    trailingExecuted: [],
+    scopeResultSeen: false,
+    deadlineAt: Date.now() + Math.round(begin.time * 1000),
   };
   // The caller persists after this handler returns, before the tool_result hook
   // retires the owner, so the reserved budgets are on disk either way.
@@ -343,16 +354,18 @@ function handleFissionBegin(station, call, { args, ctx, base, currentMessage, cu
 }
 
 function fissionBeginText(registered, flows, stage) {
-  const lines = [
-    `Fission batch ${registered.batchId} registered with ${flows.length} flow(s) in ${stage}.`,
-  ];
-  for (const [index, flow] of flows.entries()) {
-    lines.push(`- flow ${index}: ${flow.intent}`);
-  }
-  lines.push(
-    "The owner retires after this receipt. Each flow will open its own scope beneath the receipt, and the batch ends when every flow has closed.",
-  );
-  return lines.join("\n");
+  const T = loadDoc("receipts/scope");
+  const flowLines = flows
+    .map((flow, index) =>
+      render(T["fission.flow-lines"], { index, intent: flow.intent }),
+    )
+    .join("\n");
+  return render(T["fission.begin"], {
+    batch: registered.batchId,
+    flows: flows.length,
+    stage,
+    flow_lines: flowLines,
+  });
 }
 
 function handleScopeCall(station, call, { base, currentMessage, currentPersisted, sameMessageBeginIds, ctx }) {
@@ -380,7 +393,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       try {
         scheduler.requestFlowEnd(station.fissionFlow.id);
         station.fissionFlow.endToolCallId = call.id;
-        return textResult("Flow completion declared. The scheduler will close this scope after the tool result is persisted.");
+        return textResult(loadDoc("receipts/scope")["fission.flow-end-declared"]);
       } catch (error) {
         return errorResult(error.code ?? "FISSION_END_FAILED", String(error.message ?? error));
       }

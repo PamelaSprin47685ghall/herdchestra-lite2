@@ -72,9 +72,19 @@
 // context the receipt directly follows the call and the batch boundary follows
 // the receipt, so the provider's call/result pairing stays adjacent.
 
-import { beginScope, closeScope, splitFissionBudget, validateFission } from "../scope/accounting.mjs";
-import { createFlowState } from "../scope/state.mjs";
-import { scopeOrder } from "../scope/index.mjs";
+import {
+	beginScope,
+	closeScope,
+	sealClosedParentChildren,
+	splitFissionBudget,
+	validateFission,
+} from "../scope/accounting.mjs";
+import { createFlowState, put } from "../scope/state.mjs";
+import {
+	normalizeToolName,
+	roundAmount,
+} from "../scope/budget.mjs";
+import { beatShares, chargeTool, isFreeCall, scopeOrder } from "../scope/index.mjs";
 import {
 	findBegin,
 	findToolCallIndex,
@@ -94,9 +104,14 @@ import {
 	recoverIncompleteHandoffs,
 } from "../transcript/fission.mjs";
 import { installFissionEvents } from "./fission-events.mjs";
+import { rememberSession } from "./capture.mjs";
 import { createFissionSession, deriveFissionConfig } from "./fission-session.mjs";
+import { compareMessagePrefix } from "./fission-session.mjs";
 import { isFissionManager } from "./fission-manager.mjs";
 import { toolCalls } from "../transcript/messages.mjs";
+import { loadDoc, render } from "../prompts/index.mjs";
+
+const RECEIPTS = loadDoc("receipts/scope");
 import { depthAt, findToolResultId, maxHandoffId, tailOf } from "./fission-journal.mjs";
 import {
 	flowStillHoldsCopy,
@@ -248,6 +263,28 @@ export function mergeCollapses(ownerRecords, heirRecords) {
 }
 
 /**
+ * Merge the flow's amend keys into the owner's.
+ *
+ * An amend is a fact about a beat on the branch that produced it. The owner
+ * may have amended before the batch opened and the heir may amend inside its
+ * flow; overwriting either set would revive the other side's retracted beats
+ * on the next request. Keys are strings, so the union is exact.
+ */
+export function mergeAmends(ownerAmends, heirAmends) {
+	const merged = [];
+	const seen = new Set();
+	for (const key of [
+		...(Array.isArray(ownerAmends) ? ownerAmends : []),
+		...(Array.isArray(heirAmends) ? heirAmends : []),
+	]) {
+		if (typeof key !== "string" || key === "" || seen.has(key)) continue;
+		seen.add(key);
+		merged.push(key);
+	}
+	return merged;
+}
+
+/**
  * Merge per-model cache records, keeping the position that is still valid.
  *
  * `cachedUntilPos` is a promise about what the provider still holds. The
@@ -258,8 +295,9 @@ export function mergeCollapses(ownerRecords, heirRecords) {
  * warmed prefix was truncated back to the owner's older position, and every
  * later decision priced already-cached content as a miss.
  *
- * A stale entry proves nothing, so freshness decides first; only when both
- * clocks are equally fresh does the more conservative position win.
+ * A stale entry proves nothing, so freshness decides first. With equal clocks
+ * the heir's position wins: adoption continues on the heir's branch, and the
+ * owner's older minimum would truncate a prefix the heir just warmed.
  */
 export function mergeModelCaches(ownerCaches, heirCaches) {
 	const merged = {};
@@ -279,7 +317,7 @@ export function mergeModelCaches(ownerCaches, heirCaches) {
 			merged[key] = heirAt > ownerAt ? { ...existing, ...entry } : { ...entry, ...existing };
 			continue;
 		}
-		merged[key] = { ...existing, ...entry, cachedUntilPos: Math.min(ownerPos, heirPos) };
+		merged[key] = { ...existing, ...entry, cachedUntilPos: heirPos };
 	}
 	return merged;
 }
@@ -303,6 +341,30 @@ const OWNER_MODE_KEYS = new Set([
 ]);
 
 /**
+ * True when a message is the owner's own abort artifact.
+ *
+ * Retiring the owner used to abort with a reason string, which the host stores
+ * as a synthetic assistant message (`stopReason: "aborted"`) plus an error
+ * tool result. Those bytes belong to no turn the model should read: keeping
+ * them between the scope call and the flow's receipt changes the prefix the
+ * flow already cached.
+ */
+function isRetiredOwnerArtifact(message) {
+	if (!message || typeof message !== "object") return false;
+	if (
+		message.stopReason === "aborted" &&
+		message.errorMessage === "Fission owner retired"
+	) {
+		return true;
+	}
+	return (
+		message.isError === true &&
+		typeof message.content === "string" &&
+		message.content.includes("Fission owner retired")
+	);
+}
+
+/**
  * Compose the owner's context after adoption.
  *
  * The owner keeps its own messages as the prefix, then the flow's receipt, the
@@ -316,7 +378,9 @@ const OWNER_MODE_KEYS = new Set([
  * The owner's ack for the batch's scope call is dropped, not kept beside the
  * receipt: both answer the same toolCallId, and a provider rejects a call that
  * is answered twice. The ack was the current turn's own new content, so
- * replacing it costs nothing that was already cached.
+ * replacing it costs nothing that was already cached. Trailing barrier results
+ * move with the receipt for the same reason: the receiving branch must read
+ * `receipt, trailingResults` in that order, exactly as the heir did.
  */
 export function composeAdoptedMessages(ownerMessages, heirMessages, options = {}) {
 	const owner = Array.isArray(ownerMessages) ? ownerMessages : [];
@@ -326,17 +390,30 @@ export function composeAdoptedMessages(ownerMessages, heirMessages, options = {}
 		: 0;
 	const tail = heir.slice(Math.min(from, heir.length));
 	const callId = typeof options.callId === "string" ? options.callId : null;
+	const trailingIds = new Set(
+		Array.isArray(options.trailingCallIds)
+			? options.trailingCallIds
+			: options.trailingCallIds instanceof Set
+				? [...options.trailingCallIds]
+				: [],
+	);
+	const trailing = Array.isArray(options.trailing) ? options.trailing : [];
 	const prefix = callId === null
 		? owner
 		: owner.filter(
 			(message) =>
-				!(message?.role === "toolResult" && message.toolCallId === callId),
+				!(
+					message?.role === "toolResult" &&
+					(message.toolCallId === callId || trailingIds.has(message.toolCallId))
+				) &&
+				!isRetiredOwnerArtifact(message),
 		);
 	const receipt = Array.isArray(options.receipt) ? options.receipt : [];
 	const boundaries = Array.isArray(options.boundaries) ? options.boundaries : [];
 	return [
 		...prefix,
 		...receipt,
+		...trailing,
 		...boundaries,
 		...tail,
 	];
@@ -600,7 +677,24 @@ export function createFissionScheduler(options = {}) {
 				{ flowId: plan.flowId, reason: created.reason },
 			);
 		}
-		return { session: created.session, limitations: created.limitations ?? [] };
+		// A flow whose request head differs from the owner's by even one byte
+		// starts in a cold provider-cache namespace: the batch would pay the
+		// whole prefix again on every begin and every adopted return. The
+		// frames are hashes of the exact values the host will send, so the
+		// comparison is a fact, not an estimate.
+		const frames = created.frames ?? null;
+		if (frames?.mismatches?.length > 0) {
+			recordLimit(
+				"FISSION_PREFIX_MISMATCH",
+				`flow ${plan.flowId} request head differs from the owner: ${frames.mismatches.join(", ")}`,
+				{ flowId: plan.flowId, frames },
+			);
+		}
+		return {
+			session: created.session,
+			limitations: created.limitations ?? [],
+			frames,
+		};
 	}
 
 	function promptFor(flow) {
@@ -796,6 +890,8 @@ export function createFissionScheduler(options = {}) {
 			begin: request.begin,
 			items: [],
 			totals: {},
+			trailingCallIds: [],
+			barrierExecuted: [],
 			owner,
 			parentFlow,
 			parentBatch: parentFlow?.batch ?? null,
@@ -1381,13 +1477,16 @@ export function createFissionScheduler(options = {}) {
 			content: [
 				{
 					type: "text",
-					text: [
-						`Fission flow ${flow.label} (batch ${flow.batch.id}, index ${flow.index}, stage ${flow.batch.stage}).`,
-						`Intent: ${flow.item.intent}`,
-						`Budget: ${budget || "none"}. Permission: ${flow.item.permission}. Model: ${modelLabel(flow.model)}.`,
-						"This receipt assigns this flow only; sibling receipts assign the other flows.",
-						"Your flow scope is already open. When your work is complete, call scope({ end: true }); do not call todo. To delegate a nested batch, call scope({ begin: { stage, elder_report, fission: [...] } }); this retires your flow and the nested batch completes it.",
-					].join("\n"),
+					text: render(RECEIPTS["fission.flow-receipt"], {
+						label: flow.label,
+						batch: flow.batch.id,
+						index: flow.index,
+						stage: flow.batch.stage,
+						intent: flow.item.intent,
+						budget: budget || "none",
+						permission: flow.item.permission,
+						model: modelLabel(flow.model),
+					}),
 				},
 			],
 			details: {
@@ -1582,7 +1681,13 @@ export function createFissionScheduler(options = {}) {
 					flow,
 				);
 			}
-			if (closed?.ok) recordFlowCollapse(flow, closed.scope);
+			if (closed?.ok) {
+				// The closed scope is now an elder at its own level. Seal its
+				// children before recording it, so a nested batch that already
+				// closed never asks for another report.
+				sealClosedParentChildren(flow.state, closed.scope.id);
+				recordFlowCollapse(flow, closed.scope);
+			}
 		} catch (error) {
 			batchWarning(flow.batch, "SCOPE_CLOSE_FAILED", error, flow);
 		}
@@ -1692,6 +1797,10 @@ export function createFissionScheduler(options = {}) {
 			levelRegex,
 			vibeInactive: true,
 			durableAtomicWrites: true,
+			// A beat the source flow retracted must not come back to life in
+			// the recipient: the copied segment is the recipient's prefix, and
+			// a revived beat would change the bytes the provider caches.
+			amends: record.amends ?? null,
 		});
 		if (!result || !isNonEmptyString(result.tail) || !Array.isArray(result.entries)) {
 			throw refusal(
@@ -1780,6 +1889,10 @@ export function createFissionScheduler(options = {}) {
 			sourceIndex: flow.index,
 			from: flow.beginId,
 			to: endId,
+			// The copied segment must not revive a beat this flow amended
+			// away. Snapshot the keys at enqueue time: the flow may close and
+			// release its state before the copy actually runs.
+			amends: Array.isArray(flow.state?.amends) ? [...flow.state.amends] : [],
 			status: "queued",
 		};
 		batch.handoffs.push(record);
@@ -1826,6 +1939,8 @@ export function createFissionScheduler(options = {}) {
 			adoptFrom: heir.adoptFrom,
 			callId: batch.toolCallId,
 			receipt: heir.receiptId ? boundaryMessages(heir.receiptId) : [],
+			trailing: heir.trailingResults ?? [],
+			trailingCallIds: (heir.trailingResults ?? []).map((message) => message.toolCallId),
 			boundaries: [
 				...(batch.batchBeginId ? boundaryMessages(batch.batchBeginId) : []),
 				...(heir.beginId ? boundaryMessages(heir.beginId) : []),
@@ -1866,6 +1981,7 @@ export function createFissionScheduler(options = {}) {
 		const ownerCollapses = target.collapses;
 		const ownerCaches = target.modelCaches;
 		const ownerCharges = target.charges;
+		const ownerAmends = target.amends;
 		for (const key of Object.keys(heir.state)) {
 			if (SHARED_STATE_FIELDS.has(key)) continue;
 			if (OWNER_MODE_KEYS.has(key)) continue;
@@ -1873,6 +1989,7 @@ export function createFissionScheduler(options = {}) {
 		}
 		target.epoch = ownerEpoch;
 		target.collapses = mergeCollapses(ownerCollapses, heir.state.collapses);
+		target.amends = mergeAmends(ownerAmends, heir.state.amends);
 		target.modelCaches = mergeModelCaches(ownerCaches, heir.state.modelCaches);
 		// Flow charges name flow scopes that are already closed; the owner's own
 		// charges describe scopes it still holds open.
@@ -2415,7 +2532,14 @@ export function createFissionScheduler(options = {}) {
 		const agent = batch.owner.agent;
 		let abort;
 		if (typeof agent?.abort === "function") {
-			abort = () => agent.abort("Fission owner retired");
+			// The host treats a bare abort as a dropped provider stream and
+			// retries it, which writes an `aborted` assistant message into the
+			// owner's transcript. That message then sits between the scope call
+			// and the flow receipt and breaks the prefix the flow inherits. The
+			// terminal symbol is the host's own "this turn ended deliberately"
+			// marker, so no artifact is synthesized.
+			abort = () =>
+				agent.abort(Symbol.for("pi-agent-core.terminal-tool-result"));
 		} else if (typeof request.ctx?.abort === "function") {
 			abort = () => request.ctx.abort();
 		}
@@ -2709,12 +2833,52 @@ export function createFissionScheduler(options = {}) {
 		const budget = Object.entries(flow.item.budget)
 			.map(([tool, amount]) => `${tool} ${amount}`)
 			.join(", ");
-		return [
-			`Fission flow ${flow.label} (batch ${flow.batch.id}, index ${flow.index}, stage ${flow.batch.stage}).`,
-			`Intent: ${flow.item.intent}`,
-			`Budget for this flow: ${budget || "none"}. Permission: ${flow.item.permission}.`,
-			"Your flow scope is already open. When your work is complete, call scope({ end: true }); do not call todo. To delegate a nested batch, call scope({ begin: { stage, elder_report, fission: [...] } }); this retires your flow and the nested batch completes it.",
-		].join("\n");
+		return render(RECEIPTS["fission.flow-intent"], {
+			label: flow.label,
+			batch: flow.batch.id,
+			index: flow.index,
+			stage: flow.batch.stage,
+			intent: flow.item.intent,
+			budget: budget || "none",
+			permission: flow.item.permission,
+		});
+	}
+
+	/**
+	 * Charge the batch's shared first beat to one flow.
+	 *
+	 * The owner ran those barrier calls once; every flow inherits their results
+	 * as if its own first assistant message had produced them. The beat's one
+	 * unit is split across its functional tools exactly as `chargeTool` splits
+	 * an ordinary message, so a one-flow batch pays what the single-flow path
+	 * paid. A flow that budgets nothing for a tool shares the result without
+	 * paying, because the tool's share belongs to the flows that asked for it.
+	 */
+	function chargeSharedFirstBeat(batch, flow, pending) {
+		const executed = Array.isArray(pending?.trailingExecuted)
+			? pending.trailingExecuted
+			: [];
+		if (executed.length === 0) return;
+		const beatTools = executed.map((entry) => ({
+			name: entry.toolName,
+			free: isFreeCall(entry.toolName, entry.input),
+		}));
+		const shares = beatShares(beatTools);
+		const scope = flow.state.scopes.at(-1);
+		for (const [tool, share] of Object.entries(shares)) {
+			if (!(share > 0)) continue;
+			const budgeted = Object.hasOwn(scope?.budget ?? {}, tool) ? scope.budget[tool] : 0;
+			if (!(budgeted > 0)) continue;
+			const charged = chargeTool(flow.state, {
+				toolCallId: `${batch.toolCallId}:${flow.index}:first:${tool}`,
+				toolName: tool,
+				beatTools,
+				input: undefined,
+			});
+			if (!charged.ok) {
+				batchWarning(batch, "FIRST_BEAT_CHARGE_FAILED", new Error(charged.reason), flow);
+			}
+		}
 	}
 
 	async function startBatchBody(batch) {
@@ -2859,6 +3023,11 @@ export function createFissionScheduler(options = {}) {
 				endedAt: null,
 				endedOrder: 0,
 			};
+			// A flow's own context only names the manager, and every flow shares
+			// one. Capturing the session under these monotonically required keys
+			// is what lets `sessionOf(ctx)` return the flow instead of the owner;
+			// its manager mapping is keyed per flow proxy, so it stays unambiguous.
+			rememberSession(session);
 			batch.flows.push(flow);
 			flow.station = newFlowStation(batch.station, flow);
 			for (const limit of spawned[index].limitations ?? []) {
@@ -2890,23 +3059,108 @@ export function createFissionScheduler(options = {}) {
 		// every flow. The owner's ack is not: each flow gets its own receipt
 		// under the batch begin, so the disk chain is
 		// toolCall -> batch begin -> receipt -> flow begin.
-		const batchBegin = manager.getEntry(batch.batchBeginId);
-		const historyParent = batchBegin?.parentId ?? null;
-		const history = historyParent ? handoffMessages(manager.getBranch(historyParent)) : [];
+		//
+		// The model prefix comes from the owner's live list, not from the
+		// journal. A journal rebuild is byte-equal only while every writer kept
+		// disk and memory identical; `amend`, a custom wrapper, or a same-beat
+		// tool order can differ by one message and the flow's first request then
+		// misses the cache the owner just filled. The live list is exactly what
+		// the owner's last request sent, minus the bytes no flow may see: the
+		// owner's own ack and a retirement artifact.
+		// A batch opened at a scope barrier keeps the owner alive until every
+		// trailing call has produced its result. Those results are the batch's
+		// shared first beat: they ran once, they answer the calls in the opening
+		// assistant message, and every flow receives them.
+		const pending = batch.station?.pendingFission?.batchId === batch.id
+			? batch.station.pendingFission
+			: null;
+		const trailingCallIds = Array.isArray(pending?.trailingCallIds)
+			? pending.trailingCallIds
+			: [];
+		const trailingIdSet = new Set(trailingCallIds);
+		const ownerMessages = Array.isArray(batch.owner.agent?.state?.messages)
+			? batch.owner.agent.state.messages
+			: [];
+		const byCallId = new Map();
+		for (const message of ownerMessages) {
+			if (message?.role === "toolResult" && trailingIdSet.has(message.toolCallId)) {
+				byCallId.set(message.toolCallId, message);
+			}
+		}
+		const trailingResults = [];
+		for (const id of trailingCallIds) {
+			const message = byCallId.get(id);
+			if (message) {
+				trailingResults.push(structuredClone(message));
+				continue;
+			}
+			const executed = (pending?.trailingExecuted ?? []).find((entry) => entry.toolCallId === id);
+			if (!executed) continue;
+			// The host ended the turn before this call's result was persisted.
+			// Answer it anyway: an unanswered toolCall in a flow's prefix would
+			// make the provider reject the request. This path is recovery-only.
+			trailingResults.push({
+				role: "toolResult",
+				toolCallId: id,
+				toolName: executed.toolName,
+				content: [{
+					type: "text",
+					text: "The tool did not complete before the owner retired; no result was persisted.",
+				}],
+				isError: true,
+				timestamp: Date.now(),
+			});
+		}
+		const history =
+			ownerMessages.length > 0
+				? ownerMessages.filter(
+						(message) =>
+							!(
+								message?.role === "toolResult" &&
+								(message.toolCallId === batch.toolCallId || trailingIdSet.has(message.toolCallId))
+							) && !isRetiredOwnerArtifact(message),
+					)
+				: (() => {
+						const batchBegin = manager.getEntry(batch.batchBeginId);
+						const historyParent = batchBegin?.parentId ?? null;
+						return historyParent
+							? handoffMessages(manager.getBranch(historyParent))
+							: [];
+					})();
 		const batchBoundary = boundaryMessages(batch.batchBeginId);
 		for (const flow of batch.flows) {
 			flow.receiptId = appendMessageAt(batch.batchBeginId, receiptMessage(flow));
-			flow.beginId = writeAt(flow.receiptId, "scope.begin", beginData(flow));
+			// The disk chain is batchBegin -> receipt -> shared results -> flow
+			// begin. A later sibling copy starts at `beginId`, so the shared
+			// results are never copied twice from another flow.
+			let anchor = flow.receiptId;
+			for (const result of trailingResults) {
+				anchor = appendMessageAt(anchor, structuredClone(result));
+			}
+			flow.beginId = writeAt(anchor, "scope.begin", beginData(flow));
+			flow.trailingResults = trailingResults.map((message) => structuredClone(message));
 			// The model needs the call and its own result adjacent. The batch
 			// boundary is the receipt's disk parent, but injecting it between
 			// the call and the result would break the provider's tool protocol,
-			// so the boundary follows the receipt in the model context.
+			// so the boundary follows the shared results in the model context.
 			flow.agent.state.messages.push(
 				...history,
 				...boundaryMessages(flow.receiptId),
+				...flow.trailingResults.map((message) => structuredClone(message)),
 				...batchBoundary,
 				...boundaryMessages(flow.beginId),
 			);
+			// The flow's first request begins with exactly the owner prefix
+			// (minus the bytes no flow may see). A mismatch here means the
+			// provider will not hit the cache the owner just filled.
+			const prefix = compareMessagePrefix(history, flow.agent.state.messages);
+			if (!prefix.ok) {
+				recordLimit(
+					"FISSION_MESSAGE_PREFIX_MISMATCH",
+					`flow ${flow.id} message prefix differs from the owner (${prefix.frame.length} messages)`,
+					{ flowId: flow.id, frame: prefix.frame },
+				);
+			}
 			// Adoption appends only what the flow itself produced after this
 			// boundary block; the injected prefix stays out of the owner's
 			// conversation.
@@ -2925,6 +3179,10 @@ export function createFissionScheduler(options = {}) {
 					{ flowId: flow.id },
 				);
 			}
+		}
+
+		for (const flow of batch.flows) {
+			chargeSharedFirstBeat(batch, flow, pending);
 		}
 
 		for (const flow of batch.flows) {

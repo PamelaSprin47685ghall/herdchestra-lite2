@@ -20,11 +20,38 @@ function agentState(target) {
 	return read(read(target, "agent"), "state");
 }
 
-/** The live session bound to this context, or null. Never throws. */
+/**
+ * The live session bound to this context, or null. Never throws.
+ *
+ * `capture` keys sessions by manager too, because the extension context
+ * exposes the manager and not the session. That mapping is ambiguous for a
+ * fission flow: every flow shares the owner's manager, so a manager lookup
+ * answers with the owner session and a flow's write lands in the owner's
+ * transcript. The context's own agent id resolves it: a captured session whose
+ * `getAgentId()` disagrees with `ctx.agent.id` is a different session and is
+ * never returned.
+ */
 export function sessionOf(ctx) {
+	const expected = read(read(ctx, "agent"), "id");
 	try {
 		const session = sessionFor(ctx);
-		if (session) return session;
+		if (session) {
+			let actual = null;
+			try {
+				actual = typeof session.getAgentId === "function" ? session.getAgentId() : null;
+			} catch {
+				actual = null;
+			}
+			if (
+				typeof expected !== "string" ||
+				expected === "" ||
+				typeof actual !== "string" ||
+				actual === "" ||
+				actual === expected
+			) {
+				return session;
+			}
+		}
 	} catch {
 		// A host that throws from its capture hook is treated as absent.
 	}

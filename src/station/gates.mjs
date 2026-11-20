@@ -30,6 +30,9 @@ import {
 	parseArgs,
 } from "./messages.mjs";
 import { insideScopeText } from "./texts.mjs";
+import { loadDoc } from "../prompts/index.mjs";
+
+const E = loadDoc("errors");
 
 /**
  * Record the model's own report while a handoff waits.
@@ -63,6 +66,65 @@ function noteFailure(station, error) {
 	}
 	if (station) station.lastError = String(error?.message ?? error);
 	record("gates", error);
+}
+
+/**
+ * Admit one call listed after `scope({ begin })` in the same assistant
+ * message. The owner executes it exactly once; the scheduler copies its result
+ * into every flow. A call no flow budgeted cannot be paid for, so it is
+ * refused before it runs.
+ */
+function admitTrailing(station, event, atDispatch) {
+	const { toolName, toolCallId } = event;
+	const pending = station.pendingFission;
+	if (toolName === "todo") {
+		return {
+			block: true,
+			reason:
+				"TODO_OUTSIDE_SCOPE_ONLY: todo is forbidden inside any active scope; the barrier call runs in the owner's context.",
+		};
+	}
+	if (toolName === "scope") {
+		const args = parseArgs({ arguments: event.input ?? event.arguments ?? {} });
+		if (args.begin !== undefined && args.begin !== null) {
+			return {
+				block: true,
+				reason: `FISSION_BATCH_PENDING: a second batch cannot open before batch ${pending.batchId} retires.`,
+			};
+		}
+		if (args.end === true) {
+			return {
+				block: true,
+				reason:
+					"SAME_MESSAGE_BOUNDARY: a scope cannot be opened and closed in the same assistant message.",
+			};
+		}
+	}
+	if (toolName === "ask") {
+		if (station.state.herdMode && pending.stage === DECISION_FRAMING) return undefined;
+		return {
+			block: true,
+			reason:
+				'ask is allowed only when the user has enabled /herd and the current scope has stage: "decision-framing".',
+		};
+	}
+	if (toolName === "wait") return undefined;
+	if (CONTROL_TOOLS.has(toolName)) return undefined;
+	const input = event.input ?? event.arguments ?? {};
+	if (isFreeCall(toolName, input)) return undefined;
+	const tool = toolName === "apply_patch" ? "edit" : toolName;
+	const totals = pending.totals ?? {};
+	if (!(Number(totals[tool]) > 0)) {
+		return {
+			block: true,
+			reason: `BUDGET_EXHAUSTED: no flow in batch ${pending.batchId} budgets "${tool}", so the shared first beat cannot pay for it.`,
+		};
+	}
+	if (!atDispatch && !pending.trailingExecuted.some((entry) => entry.toolCallId === toolCallId)) {
+		pending.trailingExecuted.push({ toolCallId, toolName, input });
+		station.persist?.();
+	}
+	return undefined;
 }
 
 function onAssistantMessage(station, message, ctx) {
@@ -107,8 +169,14 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 	// other stations, so only the retired owner is refused here.
 	const retirement = ownerRetirement(station, ctx);
 	if (retirement) return { block: true, reason: retirement.reason };
-	if (station.fissionFlow && toolName === "amend") {
-		return { block: true, reason: "AMEND_UNAVAILABLE_IN_FISSION: amend can overwrite another flow's shared history." };
+	const pending = station.pendingFission;
+	if (
+		pending &&
+		pending.retired !== true &&
+		pending.remainingTrailingIds instanceof Set &&
+		pending.remainingTrailingIds.has(toolCallId)
+	) {
+		return admitTrailing(station, event, atDispatch);
 	}
 	// `permission` is a declaration, not an enforcement boundary. A scope that
 	// says `"ro"` is trusted: the system never blocks a write because the scope
@@ -184,8 +252,7 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 		if (!scope) {
 			return {
 				block: true,
-				reason:
-					"Not in a scope. Outside all scopes only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, fission: [{ intent, budget, permission }] } }); one flow is a one-item fission array, and every item must declare permission.",
+				reason: E["not-in-scope"],
 			};
 		}
 		const deadline = effectiveDeadline(state);
@@ -249,7 +316,7 @@ function onContext(station, messages, ctx) {
 function onSessionStop(station, ctx) {
 	if (station.fissionFlow) {
 		if (station.fissionFlow.endRequested || station.pendingFission?.retired) return undefined;
-		return continueFeedback("Your flow is still open. When your work is complete, call scope({ end: true }).");
+		return continueFeedback(E["flow-open"]);
 	}
 	if (station.state.herdMode) return undefined;
 	if (!station.relayOn(ctx)) return undefined;

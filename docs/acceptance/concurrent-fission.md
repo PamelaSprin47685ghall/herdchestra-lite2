@@ -172,13 +172,13 @@
 - path: `/tmp/fission-accept/11-ledger-and-amend`
 - threshold: 85
 - steps:
-  1. 在 fission 内调用 `amend`，检查返回 `AMEND_UNAVAILABLE_IN_FISSION`，并说明会覆盖别流追加；确认文件未被重写。
+  1. 在 fission 内调用 `amend`，确认它撤销本流上一拍并退回流内预算，磁盘共享文件未被重写；再尝试跨本流 `scope.begin` 或已闭合兄弟段 `amend`，确认返回 `SCOPE_BOUNDARY`。
   2. 检查抄写白名单：session_init、credential_pin、ttsr_injection、reset_boundary、compaction、fission.* 不进入被抄段；compaction 改为裁剪窗口摘要 CustomMessage；未被排除的 message/custom/model_usage/label/thinking_level/mode_change/branch_summary 按序进入。
   3. 检查 pin 合并进 `session.pins` 并按规范去重，defer 只留流内且终止时留审计，不抄给接收方。
   4. 检查 `model_usage` owner.parentId 经过 mapId，`activeLeafId` 清除，段外引用仍指向旧段。
   5. 把结果交给扮演用户的 actor，请他判断：“审计账没有变成模型对话，pin/defer/amend 的边界是否可信？”
-- expected: amend 明确拒绝；白名单/裁剪正确；跨流 pin/defer 语义正确。
-- rubric: 100 = 四步全成立且无多余 entry；90 = 一种被排除类型未明确观测但结果正确；85 = amend 拒绝和 fission.* 排除正确；84 = pin 去重只按文本未验规范字段；75 = compaction 被照抄；0 = amend 重写共享文件。未跑 amend 扣 5；未看 model_usage owner 扣 5；未看 defer 审计扣 5。hard fail：任何账本消息进入接收方上下文。双侧 WTP，final = min。
+- expected: 流内 amend 成功且隔离；跨边界被拒；白名单/裁剪正确；跨流 pin/defer 语义正确。
+- rubric: 100 = 四步全成立且无多余 entry；90 = 一种被排除类型未明确观测但结果正确；85 = 流内 amend 与 fission.* 排除正确；84 = pin 去重只按文本未验规范字段；75 = compaction 被照抄；0 = amend 重写共享文件。未跑 amend 扣 5；未看 model_usage owner 扣 5；未看 defer 审计扣 5。hard fail：任何账本消息进入接收方上下文。双侧 WTP，final = min。
 
 ## CASE-12
 

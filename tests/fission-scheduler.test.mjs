@@ -745,7 +745,12 @@ describe("fission scheduler", () => {
 		});
 		expect(outcome).toEqual({ ok: true, abort: false });
 		expect(h.ownerAgent.aborted).toBe(true);
-		expect(h.ownerAgent.abortReason).toBe("Fission owner retired");
+		// Retirement must be terminal. A reason string made the host retry the
+		// owner's turn and synthesize an `aborted` assistant message, which then
+		// sat between the scope call and the flow receipt.
+		expect(h.ownerAgent.abortReason).toBe(
+			Symbol.for("pi-agent-core.terminal-tool-result"),
+		);
 		expect(contextAborted).toBe(false);
 	});
 

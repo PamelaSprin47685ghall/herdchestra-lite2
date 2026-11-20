@@ -532,13 +532,13 @@ export function createFissionManager(shared, options = {}) {
 	operations.discardEntryDurably = () => {
 		throw new FissionManagerError(
 			"FISSION_UNSUPPORTED",
-			"discardEntryDurably() is the amend path and rewrites the shared journal; amend is unavailable in fission",
+			"discardEntryDurably() rewrites the shared journal by entry id; a flow amends through its own state.amends instead",
 		);
 	};
 	operations.discardEntriesDurably = () => {
 		throw new FissionManagerError(
 			"FISSION_UNSUPPORTED",
-			"discardEntriesDurably() removes journal entries across every flow and is the amend path; amend is unavailable in fission",
+			"discardEntriesDurably() removes journal entries across every flow; a flow amends through its own state.amends instead",
 		);
 	};
 	operations.ingestReplicatedEntry = () => {

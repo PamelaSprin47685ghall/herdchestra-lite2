@@ -8,7 +8,9 @@ When a scope folds, its user messages move before its opening `scope` call. Thei
 
 `scope({ begin: { stage, elder_report, fission: [{ intent, budget, permission }] } })` opens one batch of flows. `begin.fission` is a non-empty array; there is no single-flow begin shape, so one flow is a one-item array. `begin.stage` covers the whole batch, `begin.elder_report` is required (a string or `null`), and each item carries its own `intent`, `budget`, `permission`, and optional `model`. The entire array is validated before any flow starts: one invalid item rejects the whole batch and opens nothing.
 
-A fission begin currently cannot also close a scope. `scope({ begin, end: true })` is refused before any state change; close the open scope with a plain `scope({ end: true })` call, then open the batch in a following call. A flow does not open or close its own scope — the scheduler writes both ends — and `amend` is unavailable in fission.
+A fission begin currently cannot also close a scope. `scope({ begin, end: true })` is refused before any state change; close the open scope with a plain `scope({ end: true })` call, then open the batch in a following call. A flow does not open or close its own scope — the scheduler writes both ends.
+
+`scope({ begin })` is also an execution barrier. Tool calls listed after it in the same assistant message run once on the owner, and their results are copied into every flow in the batch; calls listed before it run first in the outer context. `amend` is available inside every flow: it edits that flow's own record, refunds its budget, and never rewrites the shared journal. A beat revoked by `amend` is not copied into a sibling flow, and a flow cannot amend across its own begin or a closed sibling boundary.
 
 ## Running from source
 

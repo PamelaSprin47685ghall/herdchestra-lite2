@@ -30,20 +30,6 @@ export function appendHistoryMessage(manager, message, source = null) {
 	return true;
 }
 
-function textOf(message) {
-	if (!message || typeof message !== "object") return "";
-	if (typeof message.content === "string") return message.content;
-	if (!Array.isArray(message.content)) return "";
-	return message.content
-		.filter((block) => block?.type === "text")
-		.map((block) => block.text)
-		.join("\n");
-}
-
-function sameMessage(a, b) {
-	return Boolean(a && b) && a.role === b.role && textOf(a) === textOf(b);
-}
-
 function lastPersistedMessage(manager) {
 	const branch = typeof manager.getBranch === "function" ? manager.getBranch() : [];
 	let last = null;
@@ -53,19 +39,49 @@ function lastPersistedMessage(manager) {
 	return last;
 }
 
-function persistSkill(manager, skill) {
+function isSkill(message) {
+	return message?.herdSkill === true;
+}
+
+/**
+ * Append the turn's skill receipt to the branch and the live transcript.
+ *
+ * `source` is what makes the three views agree: without it the receipt lands
+ * on disk only, the provider never sees it in the request that produced it, and
+ * the next turn replays a prefix that never existed for the cache. The receipt
+ * also has to stay *one* message: the same turn can run the context handler
+ * twice, and the clock line changes with the second, so text equality is not
+ * an identity test. A trailing receipt means "nothing has been said since the
+ * last one", and reusing it keeps the bytes -- timestamp included -- unchanged.
+ */
+function persistSkill(manager, skill, source = null) {
 	if (!manager || typeof manager.appendMessage !== "function") return;
-	if (sameMessage(lastPersistedMessage(manager), skill)) return;
-	appendHistoryMessage(manager, skill);
+	if (isSkill(lastPersistedMessage(manager))) return;
+	appendHistoryMessage(manager, skill, source);
 }
 
 /** Wrap a context handler so its trailing skill message is persisted too. */
-export function hackContext(pi, handler) {
+export function hackContext(pi, handler, options = {}) {
+	const managerFor =
+		typeof options.managerFor === "function" ? options.managerFor : null;
 	return pi.on("context", (event, ctx) => {
 		const result = handler(event, ctx);
 		if (!result || typeof result !== "object" || !Array.isArray(result.messages)) return result;
 		const skill = result.messages.at(-1);
-		if (skill?.herdSkill === true) persistSkill(ctx?.sessionManager ?? null, skill);
+		if (skill?.herdSkill !== true) return result;
+		// The station owns the journal this context belongs to. `ctx.sessionManager`
+		// is whatever the host exposed for this session; on a flow that can be the
+		// shared raw manager, whose leaf is another flow's. The station's manager
+		// is the one the flow's own writes go through.
+		let manager = null;
+		if (managerFor) {
+			try {
+				manager = managerFor(ctx) ?? null;
+			} catch {
+				manager = null;
+			}
+		}
+		persistSkill(manager ?? ctx?.sessionManager ?? null, skill, ctx);
 		return result;
 	});
 }

@@ -7,9 +7,20 @@ import {
 	incompleteHandoffs,
 	levelPattern,
 	mapId,
+	shiftBoundaryData,
 	planHandoffRecovery,
 	recoverIncompleteHandoffs,
 } from "../src/transcript/fission.mjs";
+
+/**
+ * A boundary keeps its structure and carries the readable line in `note`.
+ * Compare the structure, and assert the prose separately.
+ */
+function structure(content) {
+	const parsed = JSON.parse(content);
+	delete parsed.note;
+	return parsed;
+}
 
 // Exercise the consumer against a branch-aware journal, not a call-count mock.
 function journal() {
@@ -97,8 +108,19 @@ describe("fission transcript consumption", () => {
 		expect(branch.at(-1).id).toBe(result.tail);
 		expect(branch.map((entry) => entry.type)).toEqual(["message", "custom", "custom", "message", "custom", "custom"]);
 		const context = [{ role: "user", content: "recipient" }, ...handoffMessages(branch.slice(2, -1))];
-		expect(context.map((message) => message.content)).toEqual([
-			"recipient", '{"intent":"source"}', "You are still inside scope level 3: work. Remaining budget: 3.", "{}",
+		// A boundary keeps its structure and carries the readable line in `note`.
+		const structure = (content) => {
+			const parsed = JSON.parse(content);
+			delete parsed.note;
+			return parsed;
+		};
+		expect(context.filter((message) => message.content.startsWith("{")).map((message) => structure(message.content))).toEqual([
+			{ intent: "source" },
+			{},
+		]);
+		expect(context.filter((message) => !message.content.startsWith("{")).map((message) => message.content)).toEqual([
+			"recipient",
+			"You are still inside scope level 3: work. Remaining budget: 3.",
 		]);
 		expect(result.messages.map((message) => message.content)).toEqual(context.slice(1).map((message) => message.content));
 		expect(source[2].message.content).toContain("level 2");
@@ -114,8 +136,8 @@ describe("fission transcript consumption", () => {
 		expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult", "custom", "custom"]);
 		expect(messages[0].content[0].id).toBe("call-1");
 		expect(messages[1].toolCallId).toBe("call-1");
-		expect(JSON.parse(messages[2].content)).toEqual({ batch: "inner" });
-		expect(JSON.parse(messages[3].content)).toEqual({ flow: "inner.0" });
+		expect(structure(messages[2].content)).toEqual({ batch: "inner" });
+		expect(structure(messages[3].content)).toEqual({ flow: "inner.0" });
 	});
 
 	test("keeps every result of a multi-call turn ahead of a deferred boundary", () => {
@@ -332,9 +354,8 @@ describe("fission transcript consumption", () => {
 			vibeInactive: true,
 			durableAtomicWrites: true,
 		});
-		expect(result.messages.map((message) => message.content)).toEqual([
+		expect(result.messages.filter((message) => !message.content.startsWith("{")).map((message) => message.content)).toEqual([
 			"summary from before the scope",
-			'{"intent":"source"}',
 			"You are still inside scope level 3: work.",
 		]);
 		expect(sm.getBranch().at(-1).id).toBe(result.tail);
@@ -479,10 +500,8 @@ describe("fission handoff replay", () => {
 		});
 		// 12.5: the rewritten window keeps the source's entry count and types,
 		// and its level text moves by the recorded shift.
-		expect(handoffMessages(branch.slice(2, -1)).map((message) => message.content)).toEqual([
-			'{"intent":"source"}',
+		expect(handoffMessages(branch.slice(2, -1)).map((message) => message.content).filter((content) => !content.startsWith("{"))).toEqual([
 			"You are still inside scope level 3: work.",
-			"{}",
 		]);
 		// The abandoned half copy stays in the journal, off the active branch.
 		const residueBegin = sm.getEntries().find((entry) => entry.customType === "fission.handoff.begin" && entry.id !== branch[1].id);
@@ -540,5 +559,29 @@ describe("fission handoff replay", () => {
 		expect(result.replay[0]).toMatchObject({ handoffId: 52, status: "skipped" });
 		expect(result.retired).toHaveLength(1);
 		expect(incompleteHandoffs(sm.getEntries())).toEqual([]);
+	});
+});
+
+describe("sibling transplant keeps a boundary honest", () => {
+	test("a copied boundary moves its level by the shift and drops the source parent", () => {
+		const copied = shiftBoundaryData(
+			{ intent: "flow work", level: 2, parentIntent: "source parent", parentBudget: "read 1/3", note: "stale", batchId: "b1" },
+			1,
+		);
+
+		expect(copied.level).toBe(3);
+		expect(copied.parentIntent).toBeUndefined();
+		expect(copied.parentBudget).toBeUndefined();
+		expect(copied.note).toBeUndefined();
+		expect(copied.intent).toBe("flow work");
+		expect(copied.batchId).toBe("b1");
+	});
+
+	test("a negative shift cannot claim a level below the top", () => {
+		expect(shiftBoundaryData({ level: 0 }, -1).level).toBe(0);
+	});
+
+	test("a boundary without a level survives the copy unchanged", () => {
+		expect(shiftBoundaryData({ intent: "x" }, 2)).toEqual({ intent: "x" });
 	});
 });

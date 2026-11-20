@@ -3,7 +3,7 @@
 
 import { rememberSession, sessionMatchesContext } from "./capture.mjs";
 import { messagesOf } from "./adapter.mjs";
-import { commitSkillReceipt } from "./hack-context.mjs";
+import { commitSkillReceipt, sameAssistantFrame } from "./hack-context.mjs";
 import { isDeepStrictEqual } from "node:util";
 
 const PREPARATION = Symbol.for("herdchestra-lite2.context-preparation.v1");
@@ -47,7 +47,7 @@ export function splitRequestHistory(messages, committed) {
 		if (end < 0) {
 			let matches = 0;
 			for (let index = messages.length - 1; index >= 0; index -= 1) {
-				if (isDeepStrictEqual(messages[index], tail)) {
+				if (sameAssistantFrame(messages[index], tail) || isDeepStrictEqual(messages[index], tail)) {
 					end = index;
 					matches += 1;
 				}

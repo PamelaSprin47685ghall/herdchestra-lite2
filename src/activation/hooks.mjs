@@ -5,7 +5,6 @@ import { record } from "../host/diagnostics.mjs";
 import { installContextPreparation } from "../host/context-preparation.mjs";
 import { wireProviderObservation } from "../host/provider-observer.mjs";
 import { installScopeDispatch } from "../host/scope-dispatch.mjs";
-import { continueFeedback } from "../tools/results.mjs";
 
 /**
  * Mark the owner's registered batch as retiring and end its run. The host
@@ -225,7 +224,9 @@ export function wireHooks(pi, registry) {
 		const station = bindDispatch(ctx);
 		return station.onBeforeAgentStart(event, ctx);
 	});
-	pi.on("session_stop", (_event, ctx) => {
+	pi.on("session_stop", (event, ctx) => {
+		const reason = event?.last_assistant_message?.stopReason;
+		if (event?.signal?.aborted || reason === "aborted" || reason === "error") return undefined;
 		const station = registry.stationForStop(ctx);
 		if (station?.pendingFission && !station.fissionFlow) {
 			const batch = station.pendingFission;

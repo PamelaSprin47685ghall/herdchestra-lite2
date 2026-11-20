@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import { SessionStation } from "../src/station/station.mjs";
 import { createState, beginScope, chargeTool, beatShares } from "../src/scope/index.mjs";
-import { composeAdoptedMessages } from "../src/host/fission-scheduler.mjs";
 import { wireHooks } from "../src/activation/hooks.mjs";
 
 const tickets = { steer: () => {}, canSteer: false, activateTools: () => undefined };
@@ -181,48 +180,3 @@ describe("shared first beat", () => {
 	});
 });
 
-describe("adoption with shared results", () => {
-	test("receipt precedes the shared results and the ack is dropped", () => {
-		const open = assistantMessage([
-			{ id: "scope", name: "scope" },
-			{ id: "t1", name: "read" },
-			{ id: "t2", name: "grep" },
-		]);
-		const ack = { ...toolResult("scope", "registered"), toolName: "scope" };
-		const r1 = toolResult("t1", "a.mjs content");
-		const r2 = toolResult("t2", "match");
-		const receipt = { role: "custom", customType: "scope.begin", content: "flow receipt", timestamp: 3 };
-		const batch = { role: "custom", customType: "scope.begin", content: "batch begin", timestamp: 4 };
-		const begin = { role: "custom", customType: "scope.begin", content: "flow begin", timestamp: 5 };
-		const tail = [assistantMessage([{ id: "x", name: "read" }]), toolResult("x")];
-
-		const heir = [open, receipt, r1, r2, batch, begin, ...tail];
-		const owner = [open, ack, r1, r2];
-
-		const messages = composeAdoptedMessages(owner, heir, {
-			// The prefix a flow injects is open + receipt + shared results +
-			// batch begin + flow begin, so its own activity starts at index 6.
-			adoptFrom: 6,
-			callId: "scope",
-			receipt: [receipt],
-			trailing: [r1, r2],
-			trailingCallIds: ["t1", "t2"],
-			boundaries: [batch, begin],
-		});
-
-		expect(messages.map((message) => message.role)).toEqual([
-			"assistant",
-			"custom",
-			"toolResult",
-			"toolResult",
-			"custom",
-			"custom",
-			"assistant",
-			"toolResult",
-		]);
-		expect(messages[1]).toBe(receipt);
-		expect(messages[2].toolCallId).toBe("t1");
-		expect(messages[3].toolCallId).toBe("t2");
-		expect(messages.some((message) => message.role === "toolResult" && message.toolCallId === "scope")).toBe(false);
-	});
-});

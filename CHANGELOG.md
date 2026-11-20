@@ -6,6 +6,12 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Esc pauses active fission flows without closing their scopes. New input resumes the original flows. Pending broadcasts use omp's Steering panel, support Alt+Up and Esc restoration, and appear only once on first delivery.
+- An open flow that stops normally receives a steer to continue instead of crashing the batch. Recoverable external failures wait for user input; permanent per-flow failures no longer discard a completed sibling's work.
+- Request preparation can verify interrupted tails and match live assistant frames without rewriting them. Spawning no longer duplicates the SDK-restored history, and takeover keeps the heir's warmed message prefix.
+
 ## [2.3.0] — 2026-11-19
 
 This release numbers the workflow work accumulated since 2.1.0 as a minor

@@ -409,6 +409,27 @@ test("missing committed tails and uncommitted outputs fail instead of becoming i
 	assert.throws(() => splitRequestHistory([{ role: "toolResult", toolCallId: "unknown" }], []), { code: "CONTEXT_PREPARATION_HISTORY_MISMATCH" });
 });
 
+test("a live steer in the same loop follows the assistant frame despite host snapshot metadata", async () => {
+	const f = fixture();
+	installContextPreparation(f.session, f);
+	await f.prepare();
+	const first = f.loop.messages.slice();
+	const answer = {
+		role: "assistant", api: "openai-completions", provider: "test", model: "test",
+		responseId: "one", timestamp: 100, stopReason: "stop", content: [{ type: "text", text: "First answer" }],
+	};
+	const saved = { ...answer, completedAt: 105, contextSnapshot: { promptTokens: 200 } };
+	f.session.agent.state.messages.push(saved);
+	f.manager.appendMessage(saved);
+	const input = { role: "custom", customType: "fission.broadcast", content: "next direction" };
+	f.loop.messages.push(answer, input);
+	await f.prepare();
+	assert.deepEqual(f.loop.messages.slice(0, first.length), first);
+	assert.equal(f.loop.messages.at(-3), answer);
+	assert.equal(f.loop.messages.at(-2).herdSkill, true);
+	assert.equal(f.loop.messages.at(-1), input);
+});
+
 test("a reused pending input object cannot be mistaken for the committed tail", async () => {
 	const f = fixture();
 	const input = f.loop.messages[0];

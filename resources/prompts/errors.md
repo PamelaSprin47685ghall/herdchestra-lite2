@@ -120,7 +120,7 @@ ask is allowed only when the user has enabled /herd and the current scope has st
 
 ## flow-open
 
-This flow is still open. When the work is complete, call scope({ end: true }).
+This flow is still open. Continue the unfinished work now. Once the work is complete, call scope({ end: true }).
 
 ## overtime-killed
 

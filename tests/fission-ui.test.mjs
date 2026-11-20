@@ -191,6 +191,27 @@ describe("installFissionUI", () => {
 		expect(seen).toEqual([firstStart, firstEnd]);
 	});
 
+	test("the first delivered steer is rendered once even while another flow is streaming", async () => {
+		const session = createSession();
+		const acknowledged = Promise.withResolvers();
+		const bridge = installFissionUI(session, { broadcastPresented: acknowledged.resolve });
+		const seen = [];
+		session.subscribe(async (event) => { await Promise.resolve(); seen.push(event); });
+		bridge.accept("a", start("still streaming"));
+		const message = { role: "custom", customType: "fission.broadcast", content: "internal prefix", details: {
+			fissionBroadcast: { broadcastId: "b1", text: "my steer" },
+		} };
+		for (const flow of ["b", "a"]) {
+			bridge.accept(flow, { type: "message_start", message });
+			bridge.accept(flow, { type: "message_end", message });
+		}
+		expect(await acknowledged.promise).toBe("b1");
+		expect(seen.filter((event) => event.type === "message_start" && event.message.role === "user").map((event) => event.message.content))
+			.toEqual([[{ type: "text", text: "my steer" }]]);
+		expect(message.content).toBe("internal prefix");
+		expect(seen.some((event) => event.type === "message_end" && event.message.role === "assistant")).toBe(false);
+	});
+
 	test("refuses a second attach and a source without subscribe", () => {
 		const bridge = installFissionUI(createSession());
 		bridge.attach("a", createSession());

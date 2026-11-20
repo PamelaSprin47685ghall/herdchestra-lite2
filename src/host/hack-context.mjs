@@ -3,15 +3,26 @@
 // the committed receipt, including its clock and budget text.
 
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { messagesOf } from "./adapter.mjs";
 
 function sameMessage(left, right) {
 	return left === right || JSON.stringify(left) === JSON.stringify(right);
 }
 
-function branchMessages(manager) {
+// Core keeps the final provider frame in the loop and publishes a snapshot
+// that AgentSession enriches for persistence. Compare content and its stable
+// identity, not that bookkeeping; neither copy is changed for replay.
+export function sameAssistantFrame(left, right) {
+	return left?.role === "assistant" && right?.role === "assistant" && Number.isFinite(right.timestamp) &&
+		left.timestamp === right.timestamp && left.provider === right.provider && left.api === right.api &&
+		left.model === right.model && left.responseId === right.responseId && left.stopReason === right.stopReason &&
+		isDeepStrictEqual(left.content, right.content);
+}
+
+function branchMessages(manager, options) {
 	if (typeof manager.buildSessionContext === "function") {
-		const messages = manager.buildSessionContext()?.messages;
+		const messages = manager.buildSessionContext(options)?.messages;
 		if (!Array.isArray(messages)) throw new TypeError("The session context has no message array.");
 		return messages;
 	}
@@ -108,7 +119,7 @@ function lastTurnMessage(messages) {
 }
 
 function sameTurnMessage(left, right) {
-	if (sameMessage(left, right)) return true;
+	if (left === right || sameAssistantFrame(left, right) || sameMessage(left, right)) return true;
 	const custom = (message) => message?.role === "custom" || message?.role === "hookMessage";
 	if (!custom(left) || !custom(right)) return false;
 	// The host normalizes custom messages and removes private display details
@@ -165,6 +176,13 @@ export function commitSkillReceipt(manager, messages, source = null) {
 	let receipt;
 	let reuse = false;
 	try {
+		const tail = lastTurnMessage(prefix);
+		if (!sameTurnMessage(lastTurnMessage(journal), tail) && typeof manager.buildSessionContext === "function") {
+			// The model projection drops aborted/failed turns; their journal
+			// entries still witness the live tail. Never send this UI projection.
+			const transcript = branchMessages(manager, { transcript: true });
+			if (sameTurnMessage(lastTurnMessage(transcript), tail)) journal = transcript;
+		}
 		const key = turnKey(prefix);
 		const persisted = journal.at(-1);
 		if (isSkill(persisted)) {
@@ -190,10 +208,10 @@ export function commitSkillReceipt(manager, messages, source = null) {
 		} else {
 			receipt = { ...proposed, herdSkillTurn: key };
 		}
-		if (!sameTurnMessage(lastTurnMessage(journal), lastTurnMessage(prefix))) {
+		if (!sameTurnMessage(lastTurnMessage(journal), tail)) {
 			throw new Error("The journal and the request end at different messages.");
 		}
-		if (live && !sameTurnMessage(lastTurnMessage(live), lastTurnMessage(prefix))) {
+		if (live && !sameTurnMessage(lastTurnMessage(live), tail)) {
 			throw new Error("Live history and the request end at different messages.");
 		}
 	} catch (error) {

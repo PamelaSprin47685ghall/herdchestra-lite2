@@ -332,10 +332,9 @@ function onContext(station, messages, ctx) {
 }
 
 function onSessionStop(station, ctx) {
-	if (station.fissionFlow) {
-		if (station.fissionFlow.endRequested || station.pendingFission?.retired) return undefined;
-		return continueFeedback(E["flow-open"]);
-	}
+	// Flow turns are settled and nudged by their scheduler, after the host's
+	// recovery and abort have finished. A second continuation here races it.
+	if (station.fissionFlow) return undefined;
 	if (station.state.herdMode) return undefined;
 	if (!station.relayOn(ctx)) return undefined;
 	const scope = currentScope(station.state);

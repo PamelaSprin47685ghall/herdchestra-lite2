@@ -32,7 +32,7 @@ function harness({ leaves = [], live = true, disposed = false } = {}) {
 		live,
 		disposed,
 		broadcasts: [],
-		cancels: [],
+		pauses: 0,
 		broadcastResult: null,
 	};
 	const scheduler = {
@@ -49,9 +49,9 @@ function harness({ leaves = [], live = true, disposed = false } = {}) {
 				}
 			);
 		},
-		cancelAll(reason) {
-			state.cancels.push(reason);
-			return [];
+		pauseAll() {
+			state.pauses += 1;
+			return { restored: [], settled: Promise.resolve() };
 		},
 	};
 	return { session: new OwnerSession(), scheduler, state };
@@ -118,9 +118,7 @@ describe("fission owner input broadcast", () => {
 		installFissionInput(session, scheduler);
 		expect(Object.hasOwn(session, "prompt")).toBe(true);
 
-		// The bridge stays installed through the ordinary prompts that come
-		// before any batch exists; only a call that has seen a live batch arms
-		// restoration.
+		// The same session can open another batch after ordinary input.
 		state.live = true;
 		expect(await session.prompt("during the batch")).toBe(false);
 		expect(state.broadcasts).toEqual(["during the batch"]);
@@ -131,9 +129,9 @@ describe("fission owner input broadcast", () => {
 		expect(forwarded).toBe(true);
 		expect(session.prompts).toEqual(["after the batch"]);
 		expect(state.broadcasts).toEqual(["during the batch"]);
-		expect(Object.hasOwn(session, "prompt")).toBe(false);
-		expect(Object.hasOwn(session, "steer")).toBe(false);
-		expect(Object.hasOwn(session, "abort")).toBe(false);
+		state.live = true;
+		expect(await session.prompt("next batch")).toBe(false);
+		expect(state.broadcasts).toEqual(["during the batch", "next batch"]);
 	});
 
 	test("a bridge installed before any batch survives ordinary prompts", async () => {
@@ -198,22 +196,19 @@ describe("fission owner abort fan-out", () => {
 		const { session, scheduler, state } = harness({ leaves: FLOWS });
 		installFissionInput(session, scheduler);
 
-		await session.abort({ reason: "User interrupt" });
+		await session.abort({ reason: "Interrupted by user" });
 
-		expect(state.cancels).toEqual(["User interrupt"]);
+		expect(state.pauses).toBe(1);
 		expect(session.aborts).toHaveLength(1);
 	});
 
-	test("an abort with no active leaf is the owner's retirement, not a fan-out", async () => {
+	test("Esc also pauses a batch before its first active leaf exists", async () => {
 		const { session, scheduler, state } = harness({ leaves: [] });
 		installFissionInput(session, scheduler);
 
-		await session.abort({ reason: "User interrupt" });
+		await session.abort({ reason: "Interrupted by user" });
 
-		// retireOwner() aborts the owner Agent directly and returns
-		// `abort: false`; this path also covers a ctx.abort() fallback that
-		// arrives before the first flow exists.
-		expect(state.cancels).toEqual([]);
+		expect(state.pauses).toBe(1);
 		expect(session.aborts).toHaveLength(1);
 	});
 
@@ -224,21 +219,21 @@ describe("fission owner abort fan-out", () => {
 
 		await session.abort();
 
-		expect(state.cancels).toEqual([]);
+		expect(state.pauses).toBe(0);
 		expect(session.aborts).toEqual([null]);
 	});
 
 	test("a cancelled fan-out still aborts the owner", async () => {
 		const { session, scheduler, state } = harness({ leaves: FLOWS });
-		scheduler.cancelAll = () => {
+		scheduler.pauseAll = () => {
 			throw new Error("flows already gone");
 		};
 		installFissionInput(session, scheduler);
 
-		await session.abort();
+		await session.abort({ reason: "Interrupted by user" });
 
 		expect(session.aborts).toHaveLength(1);
-		expect(state.cancels).toEqual([]);
+		expect(state.pauses).toBe(0);
 	});
 });
 
@@ -306,7 +301,7 @@ describe("fission input across the batch boundary", () => {
 		expect(session.prompts).toEqual([]);
 	});
 
-	test("a partial broadcast names the flows that missed it", async () => {
+	test("a partially admitted broadcast is not returned to the editor for resubmission", async () => {
 		const { session, scheduler, state } = harness({ leaves: FLOWS });
 		state.broadcastResult = {
 			ok: true,
@@ -317,13 +312,7 @@ describe("fission input across the batch boundary", () => {
 		};
 		installFissionInput(session, scheduler);
 
-		const failure = await session.prompt("hello").then(
-			() => null,
-			(error) => error,
-		);
-
-		expect(failure?.code).toBe("FISSION_BROADCAST_PARTIAL");
-		expect(failure?.message).toContain("f1");
+		await expect(session.prompt("hello")).resolves.toBe(false);
 		expect(session.prompts).toEqual([]);
 		expect(state.broadcasts).toEqual(["hello"]);
 	});

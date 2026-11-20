@@ -35,14 +35,6 @@ function scopeEvent(id, input) {
 }
 
 describe("fission flow scope admission", () => {
-	test("requires an explicit end before a flow can stop", () => {
-		const station = flowStation();
-		station.relayOn = () => true;
-		expect(onSessionStop(station, {}).additionalContext).toContain("scope({ end: true })");
-		station.fissionFlow.endRequested = true;
-		expect(onSessionStop(station, {})).toBeUndefined();
-	});
-
 	// The main session is the path the nudge originally served: a scope left
 	// open when the model stops must produce a continuation that names the
 	// closing call, not merely the idea of closing.

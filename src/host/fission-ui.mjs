@@ -43,7 +43,7 @@ export function isRetiredOwnerArtifact(event) {
  * Install before the session's UI subscribes. Existing subscribers are private
  * to the host and cannot be moved into the multiplexed stream afterwards.
  */
-export function installFissionUI(session) {
+export function installFissionUI(session, { hasBatch = () => false, broadcastPresented } = {}) {
 	if (!session || typeof session.subscribe !== "function") {
 		throw new TypeError("Session subscribe is unavailable");
 	}
@@ -56,11 +56,58 @@ export function installFissionUI(session) {
 	const flows = new Map();
 	const owner = Symbol("owner");
 	let active = true;
-	const mux = createEventMux((event) => {
+	let working = false;
+	let interrupted = false;
+	const publishedBroadcasts = new Set();
+	function publish(event, acknowledged) {
+		const pending = acknowledged ? [] : null;
 		for (const entry of [...listeners]) {
-			if (entry.active) entry.listener(event);
+			if (!entry.active) continue;
+			const result = entry.listener(event);
+			if (pending && result?.then) pending.push(result);
 		}
-	});
+		if (pending?.length) void Promise.allSettled(pending).then(acknowledged);
+		else acknowledged?.();
+	}
+	const mux = createEventMux(publish);
+
+	function publishBroadcast(event) {
+		const message = event.message;
+		const data = message?.details?.fissionBroadcast;
+		if (message?.customType !== "fission.broadcast" || typeof data?.text !== "string") return false;
+		if (event.type !== "message_start" || publishedBroadcasts.has(data.broadcastId)) return true;
+		publishedBroadcasts.add(data.broadcastId);
+		// Let the native composer reconcile its optimistic echo against the
+		// original submission. User messages don't own the assistant's display
+		// lease: another flow can still be streaming when this steer is sent.
+		const images = Array.isArray(message.content) ? message.content.filter((part) => part.type === "image") : [];
+		const input = { ...message, role: "user", attribution: "user", content: [{ type: "text", text: data.text }, ...images] };
+		publish(
+			{ ...event, message: input },
+			broadcastPresented && (() => broadcastPresented(data.broadcastId)),
+		);
+		publish({ type: "message_end", message: input });
+		return true;
+	}
+
+	function accept(id, event) {
+		if (id !== owner && interrupted) return;
+		if (publishBroadcast(event)) return;
+		if (event.type === "agent_start") {
+			if (working && (id !== owner || hasBatch())) return;
+			working = true;
+		}
+		if (event.type === "agent_end") {
+			if (hasBatch() || id !== owner) return;
+			working = false;
+		}
+		// Maintenance and queue state belong to the individual AgentSession.
+		// Forwarding another session's controls advertises an abort target the
+		// owner doesn't have. Its work is represented by the aggregate loader.
+		if (id !== owner && (event.type === "agent_pause" || event.type === "queue_update" ||
+			event.type.startsWith("auto_retry_") || event.type.startsWith("auto_compaction_"))) return;
+		mux.accept(id, event);
+	}
 
 	function restoreSubscribe() {
 		if (session.subscribe !== subscribe) return;
@@ -91,7 +138,7 @@ export function installFissionUI(session) {
 	// Register once so one host event enters the mux once, not once per listener.
 	const unsubscribeOwner = original.call(session, (event) => {
 		if (!active || isRetiredOwnerArtifact(event)) return;
-		mux.accept(owner, event);
+		accept(owner, event);
 	});
 	// Define the method instead of assigning it: an accessor's setter is host
 	// state this bridge must not touch, and a refused patch has to leave the
@@ -114,9 +161,27 @@ export function installFissionUI(session) {
 	}
 
 	const bridge = {
+		get presentsBroadcasts() { return listeners.size > 0; },
+		beginWork() {
+			if (!active) return;
+			interrupted = false;
+			if (working) return;
+			working = true;
+			mux.accept(owner, { type: "agent_start" });
+		},
+		queueChanged() {
+			if (active) publish({ type: "queue_update", ...session.getQueuedMessages?.() });
+		},
+		endWork({ messages, interrupted: wasInterrupted }) {
+			if (!active || !working) return;
+			working = false;
+			interrupted = wasInterrupted === true;
+			if (interrupted) for (const flow of flows.keys()) mux.drop(flow);
+			mux.accept(owner, { type: "agent_end", messages });
+		},
 		accept(flow, event) {
 			if (!active) throw new Error("Fission UI bridge is disposed");
-			mux.accept(flow, event);
+			accept(flow, event);
 		},
 		cancel(flow, endEvent) {
 			if (!active) throw new Error("Fission UI bridge is disposed");
@@ -126,7 +191,7 @@ export function installFissionUI(session) {
 			if (!active) throw new Error("Fission UI bridge is disposed");
 			if (flows.has(flow)) throw new Error("Flow is already attached");
 			if (typeof source?.subscribe !== "function") throw new TypeError("Flow subscribe is unavailable");
-			const unsubscribe = source.subscribe((event) => mux.accept(flow, event));
+			const unsubscribe = source.subscribe((event) => accept(flow, event));
 			flows.set(flow, unsubscribe);
 			return () => {
 				if (flows.get(flow) !== unsubscribe) return;

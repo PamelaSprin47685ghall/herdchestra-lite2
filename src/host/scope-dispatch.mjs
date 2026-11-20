@@ -31,7 +31,7 @@ function gateTool(tool, manager, admit) {
 					? AbortSignal.any([signal, controller.signal])
 					: controller.signal;
 			const after = () =>
-				gate?.(toolCallId, tool.name, ctx, {
+				!signal?.aborted && gate?.(toolCallId, tool.name, ctx, {
 					elapsedMs: Date.now() - startedAt,
 					limitMs,
 				});

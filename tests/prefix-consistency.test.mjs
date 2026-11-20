@@ -7,10 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import {
-	composeAdoptedMessages,
-	mergeModelCaches,
-} from "../src/host/fission-scheduler.mjs";
+import { mergeModelCaches } from "../src/host/fission-scheduler.mjs";
 import { handoffMessages } from "../src/transcript/fission.mjs";
 import { appendHistoryMessage } from "../src/host/hack-context.mjs";
 import { rememberSession } from "../src/host/capture.mjs";
@@ -46,28 +43,6 @@ describe("replayed boundaries", () => {
 	test("an unparseable timestamp is stable", () => {
 		const [message] = handoffMessages([entry({ timestamp: "not a date" })]);
 		expect(message.timestamp).toBe(0);
-	});
-});
-
-describe("adopted context", () => {
-	test("drops the owner ack and the retirement artifact", () => {
-		const call = {
-			role: "assistant",
-			content: [{ type: "toolCall", id: "call-1", name: "scope", arguments: {} }],
-		};
-		const ack = { role: "toolResult", toolCallId: "call-1", content: "ok" };
-		const aborted = {
-			role: "assistant",
-			stopReason: "aborted",
-			errorMessage: "Fission owner retired",
-			content: [],
-		};
-		const receipt = { role: "toolResult", toolCallId: "call-1", content: "receipt" };
-		const composed = composeAdoptedMessages([call, aborted, ack], [], {
-			callId: "call-1",
-			receipt: [receipt],
-		});
-		expect(composed).toEqual([call, receipt]);
 	});
 });
 

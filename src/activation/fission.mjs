@@ -256,25 +256,15 @@ function tokenRateRelays(scheduler, ownerSession) {
 // User input must reach every active leaf instead, and Esc must stop the whole
 // batch, not an idle owner.
 //
-// The host exposes three public entries for this: AgentSession.prompt,
-// AgentSession.steer, and AgentSession.abort. This bridge patches them on the
-// owner session object only. It never patches the prototype and never patches a
-// flow session, because every flow owns its own AgentSession: a nudge sent
-// through a flow's own extension instance cannot cross this bridge.
+// Only the owner instance is bridged. Native isStreaming stays untouched:
+// the host needs it to settle the owner's retirement. The aggregate loader
+// supplies the normal Esc/clearQueue path independently of native busy state.
 //
-// The scheduler's retirement path is not intercepted. retireOwner() aborts the
-// owner Agent directly with `agent.abort()`, which never passes through
-// AgentSession.abort. When that path falls back to `ctx.abort()`, no flow has
-// spawned yet, so `activeLeaves()` is empty and the abort wrapper delegates
-// untouched. An abort after the last flow closed is host cleanup for the same
-// reason.
-//
-// Restoration is lazy and exact. Each wrapper re-reads scheduler liveness
-// before it acts. When no batch is live, it restores the host's own method and
-// delegates, so an idle session carries no patched method. Disposal also
-// uninstalls the bridge before the host's own dispose runs.
+// Between batches the bridge delegates unchanged. Only disposal or explicit
+// uninstall removes it; `/new` can reuse both the manager and the session.
 
-const INPUT_METHODS = Object.freeze(["prompt", "steer", "abort"]);
+const INPUT_METHODS = ["prompt", "steer", "abort", "clearQueue", "getQueuedMessages", "popLastQueuedMessage", "resetSessionContext"];
+const USER_INTERRUPT = "Interrupted by user";
 
 function inputBridges() {
 	const state = activationState();
@@ -310,6 +300,10 @@ function runningLeaves(scheduler) {
 	} catch {
 		return [];
 	}
+}
+
+function hasInputRecipient(scheduler) {
+	return scheduler.canBroadcast?.() || (scheduler.inputLeaves?.() ?? runningLeaves(scheduler)).length > 0;
 }
 
 /**
@@ -363,7 +357,7 @@ async function settleInputWindow(scheduler) {
 	for (;;) {
 		if (!batchIsLive(scheduler)) return "closed";
 		if (liveBatchRecords(scheduler).length === 0) return "timeout";
-		if (runningLeaves(scheduler).length > 0) return "leaf";
+		if (hasInputRecipient(scheduler)) return "leaf";
 		if (Date.now() - startedAt >= budget) return "timeout";
 		await defaultSleep(INPUT_SETTLE_POLL_MS);
 	}
@@ -374,10 +368,10 @@ function isFlowInput(value) {
 	return typeof value === "string" && value.trim() !== "" && !value.startsWith("/");
 }
 
-function broadcastText(scheduler, text) {
+async function broadcastText(scheduler, text, images) {
 	let outcome;
 	try {
-		outcome = scheduler.broadcast(text);
+		outcome = await scheduler.broadcast(text, { images });
 	} catch (error) {
 		throw new Error(`fission input was not delivered: ${error?.message ?? error}`);
 	}
@@ -387,23 +381,15 @@ function broadcastText(scheduler, text) {
 	}
 	const failures = Array.isArray(outcome.failures) ? outcome.failures : [];
 	if (failures.length > 0) {
-		// A broadcast is one instruction for every running flow. The flows that
-		// accepted it now read `(broadcast to N flows)`, so a silent miss would
-		// leave one flow working from stale instructions while its own context
-		// claims the user restated them. Report the gap instead of returning
-		// success for a partial delivery.
-		const missed = failures
-			.map((failure) => failure?.flowId ?? failure?.error ?? "an unnamed flow")
-			.join(", ");
-		const error = new Error(`fission input did not reach ${missed}`);
-		error.code = "FISSION_BROADCAST_PARTIAL";
-		record("fission", error, {
+		// The scheduler already warns for each refused copy. Rejecting the
+		// submission here would hand the draft back to the editor even though
+		// other flows accepted it, inviting a duplicate broadcast.
+		record("fission", "A broadcast was only partially admitted", {
 			seam: "input.broadcast",
 			broadcastId: outcome.broadcastId ?? null,
 			delivered: Array.isArray(outcome.delivered) ? outcome.delivered : [],
 			failed: failures,
 		});
-		throw error;
 	}
 	return outcome;
 }
@@ -417,17 +403,14 @@ function noRecipient(verb) {
 /**
  * Bind one owner AgentSession to one fission scheduler.
  *
- * While a batch is live, `prompt()` and `steer()` broadcast their text to every
- * active leaf, and `abort()` fans out through `cancelAll()` before the owner's
- * own cleanup runs. Outside that window every method delegates untouched.
+ * While a batch is live, its broadcast ledger feeds the native input queue.
+ * Operator interrupts pause the flows before native owner cleanup.
  *
- * Returns the installed bridge, or null when the host exposes none of the three
- * methods or when no method can be redefined. A refusal leaves the session as
- * the host built it.
+ * Returns the installed bridge, or null when no method can be redefined.
  */
 export function installFissionInput(session, scheduler) {
 	if (!session || (typeof session !== "object" && typeof session !== "function")) return null;
-	if (typeof scheduler?.broadcast !== "function" || typeof scheduler?.cancelAll !== "function") {
+	if (typeof scheduler?.broadcast !== "function" || typeof scheduler?.pauseAll !== "function") {
 		return null;
 	}
 	const inputs = inputBridges();
@@ -436,11 +419,8 @@ export function installFissionInput(session, scheduler) {
 
 	const patched = new Map();
 	const wrappers = new Map();
+	let clearedInterrupt;
 	let active = true;
-	// A bridge is installed when the session starts, long before any batch
-	// exists. Ordinary prompts in that window must delegate without removing
-	// the bridge, or the batch this session later opens would run unbridged.
-	let sawLiveBatch = false;
 
 	function callOriginal(name, receiver, args) {
 		const saved = patched.get(name);
@@ -473,19 +453,8 @@ export function installFissionInput(session, scheduler) {
 		uninstall: restore,
 	};
 
-	/**
-	 * Whether this call belongs to the flows. The first call that observes a
-	 * live batch arms restoration; a call after that batch closed restores the
-	 * host methods and delegates. A session that never opened a batch keeps the
-	 * bridge installed for the batch it may open later.
-	 */
 	function inBatchWindow() {
-		if (batchIsLive(scheduler)) {
-			sawLiveBatch = true;
-			return true;
-		}
-		if (sawLiveBatch) restore();
-		return false;
+		return active && batchIsLive(scheduler);
 	}
 
 	function makePrompt() {
@@ -497,7 +466,7 @@ export function installFissionInput(session, scheduler) {
 				// selecting the retired owner's abort as its final answer before
 				// the flows finish and the heir is adopted.
 				if (active && batchIsLive(scheduler)) {
-					await createDisposeBarrier({ scheduler }).wait();
+					await createDisposeBarrier({ scheduler }).wait({ untilPaused: true });
 					if (typeof this?.waitForIdle === "function") {
 						await this.waitForIdle();
 					}
@@ -505,15 +474,24 @@ export function installFissionInput(session, scheduler) {
 				return result;
 			}
 			if (!isFlowInput(text)) return callOriginal("prompt", this, args);
-			if (runningLeaves(scheduler).length === 0) {
+			const interrupt = scheduler.interruptEpoch?.();
+			if (!hasInputRecipient(scheduler)) {
 				const settled = await settleInputWindow(scheduler);
+				if (scheduler.interruptEpoch?.() !== interrupt) throw new Error("The input was interrupted before it could be queued.");
 				// The batch finished while we waited: adoption has already moved
 				// the conversation to the heir, so the host's own prompt is now
 				// the correct recipient for this text.
 				if (settled === "closed") return callOriginal("prompt", this, args);
-				if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
+				if (!hasInputRecipient(scheduler)) throw noRecipient("input");
 			}
-			broadcastText(scheduler, text);
+			const outcome = await broadcastText(scheduler, text, args[1]?.images);
+			await scheduler.waitForBroadcastPresentation?.(outcome.broadcastId);
+			// A fresh interactive submission temporarily owns the native loader.
+			// Returning while a resumed leaf is still preparing its first response
+			// would let the host tear that loader down: its own agent is idle.
+			if (outcome.resumed && batchIsLive(scheduler)) {
+				await createDisposeBarrier({ scheduler }).wait({ untilPaused: true });
+			}
 			// The owner produced no turn. The broadcast itself is displayed once
 			// by the multiplexer under its broadcastId.
 			return false;
@@ -525,38 +503,70 @@ export function installFissionInput(session, scheduler) {
 			const [text] = args;
 			if (!active || !inBatchWindow()) return callOriginal("steer", this, args);
 			if (!isFlowInput(text)) return callOriginal("steer", this, args);
-			if (runningLeaves(scheduler).length === 0) {
+			const interrupt = scheduler.interruptEpoch?.();
+			if (!hasInputRecipient(scheduler)) {
 				const settled = await settleInputWindow(scheduler);
+				if (scheduler.interruptEpoch?.() !== interrupt) throw new Error("The input was interrupted before it could be queued.");
 				if (settled === "closed") return callOriginal("steer", this, args);
-				if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
+				if (!hasInputRecipient(scheduler)) throw noRecipient("steer");
 			}
-			broadcastText(scheduler, text);
+			await broadcastText(scheduler, text, args[1]);
 			return undefined;
 		};
 	}
 
 	function makeAbort() {
 		return async function abort(...args) {
-			if (!active || !inBatchWindow()) return callOriginal("abort", this, args);
-			// No flow is running: this is the scheduler's owner retirement or
-			// post-batch cleanup, not a user interrupt. Delegate untouched.
-			if (runningLeaves(scheduler).length === 0) return callOriginal("abort", this, args);
-			const [options] = args;
-			const reason =
-				typeof options?.reason === "string" && options.reason !== ""
-					? options.reason
-					: "user-interrupt";
-			try {
-				scheduler.cancelAll(reason);
-			} catch (error) {
-				// The fan-out failure must not prevent the owner's own abort.
-				record("fission", error, { seam: "input.abort", cancelled: false });
+			let interruption;
+			if (args[0]?.reason === USER_INTERRUPT && active && inBatchWindow()) {
+				try {
+					interruption = clearedInterrupt ?? scheduler.pauseAll();
+				} catch (error) {
+					record("fission", error, { seam: "input.abort" });
+				}
 			}
-			return callOriginal("abort", this, args);
+			clearedInterrupt = undefined;
+			await Promise.all([callOriginal("abort", this, args), interruption?.settled]);
 		};
 	}
 
-	const factories = { prompt: makePrompt, steer: makeSteer, abort: makeAbort };
+	function makeClearQueue() {
+		return function clearQueue(...args) {
+			const native = callOriginal("clearQueue", this, args);
+			if (!args[0]?.forInterrupt || !active || !inBatchWindow()) return native;
+			const interruption = scheduler.pauseAll();
+			clearedInterrupt = interruption;
+			queueMicrotask(() => { if (clearedInterrupt === interruption) clearedInterrupt = undefined; });
+			return {
+				steering: [...native.steering, ...interruption.restored],
+				followUp: [...native.followUp, ...(interruption.followUp ?? [])],
+			};
+		};
+	}
+
+	function makeResetContext() {
+		return async function resetSessionContext(...args) {
+			if (active && scheduler.hasActiveWork?.()) return undefined;
+			if (active && scheduler.hasPausedWork?.()) {
+				const outcome = await createDisposeBarrier({ scheduler }).wait({ reason: "Context cleared" });
+				if (outcome !== "quiescent") throw new Error("Fission is still stopping; retry /clear after it has settled.");
+			}
+			return callOriginal("resetSessionContext", this, args);
+		};
+	}
+
+	const factories = {
+		prompt: makePrompt, steer: makeSteer, abort: makeAbort, clearQueue: makeClearQueue,
+		resetSessionContext: makeResetContext,
+		getQueuedMessages: () => function getQueuedMessages() {
+			const native = callOriginal("getQueuedMessages", this, []);
+			const pending = active ? scheduler.queuedBroadcasts?.() : undefined;
+			return pending?.length ? { ...native, steering: [...native.steering, ...pending] } : native;
+		},
+		popLastQueuedMessage: () => function popLastQueuedMessage() {
+			return (active ? scheduler.popBroadcast?.() : undefined) ?? callOriginal("popLastQueuedMessage", this, []);
+		},
+	};
 	for (const name of INPUT_METHODS) {
 		if (typeof session[name] !== "function") continue;
 		const original = session[name];
@@ -634,6 +644,7 @@ const BARRIER_POLL_MS = 25;
 const BARRIER_CANCEL_SWEEP_MS = 250;
 const TERMINAL_BATCH_STATUSES = new Set([
 	"closed",
+	"partial",
 	"cancelled",
 	"crashed",
 	"failed",
@@ -861,6 +872,7 @@ export function createDisposeBarrier({
 		let sweptAt = reason !== null ? startedAt : 0;
 		for (;;) {
 			if (released !== null) return "released";
+			if (options.untilPaused && scheduler?.hasPausedWork?.() && !scheduler.hasActiveWork?.()) return "paused";
 			// Adopt a reason that arrived while this wait was already running.
 			// The earlier bound (ceiling or a first reason) is never extended.
 			if (escalated !== null && reason === null) {
@@ -977,9 +989,13 @@ export function installDisposeBarrier(session, scheduler, options = {}) {
 			const receiver = this ?? session;
 			disposeCall = (async () => {
 				try {
+					if (scheduler.hasPausedWork?.() && !disposalReason(args[0])) {
+						await barrier.wait({ reason: "Session disposed" });
+					} else {
+						await barrier.wait(args[0]);
+					}
 					// The barrier never replaces the host's dispose. If it cannot
 					// decide, the caller still receives the teardown it asked for.
-					await barrier.wait(args[0]);
 					if (!disposalReason(args[0]) && typeof receiver?.waitForIdle === "function") {
 						await receiver.waitForIdle();
 					}
@@ -1050,10 +1066,12 @@ export function announceFlowWarning(event, options = {}) {
 	if (event?.type !== "flow.warning") return null;
 	const code = typeof event.code === "string" && event.code ? event.code : "FLOW_WARNING";
 	const text = typeof event.text === "string" ? event.text : "";
+	const failure = ["FLOW_FAILED", "FLOW_SPAWN_FAILED", "FLOW_BLOCKED"].includes(code)
+		? `${event.label ?? event.flowId}: ${event.message}` : null;
 	let shown = false;
-	if (text !== "" && typeof options.notify === "function") {
+	if ((failure || text !== "") && typeof options.notify === "function") {
 		try {
-			options.notify(text, code);
+			options.notify(failure ?? text, code);
 			shown = true;
 		} catch {
 			// A notice that cannot render must not break the scheduler.
@@ -1105,7 +1123,6 @@ function attach(state, registry, ctx) {
 				record("fission", error, { seam: "input", optional: true });
 			}
 		}
-		installDisposeBarrier(view.session, existing.scheduler);
 		return ready(state, "the scheduler is bound to this shared journal");
 	}
 
@@ -1160,8 +1177,12 @@ function attach(state, registry, ctx) {
 	}
 
 	let bridge = null;
+	let scheduler;
 	try {
-		bridge = installFissionUI(session);
+		bridge = installFissionUI(session, {
+			hasBatch: () => scheduler?.hasLiveBatches() === true,
+			broadcastPresented: (id) => scheduler?.broadcastPresented(id),
+		});
 	} catch (error) {
 		// Without the multiplexer flow events do not reach the screen. The
 		// scheduler still runs, and owns installFissionEvents as its bridge.
@@ -1170,7 +1191,6 @@ function attach(state, registry, ctx) {
 
 	const resolveModel = modelResolver(session);
 	let relays = null;
-	let scheduler;
 	try {
 		scheduler = createFissionScheduler({
 			manager,
@@ -1287,6 +1307,20 @@ export function wireFission(pi, registry) {
 			record("fission", error, { missing: [event], optional: true });
 		}
 	}
+	for (const event of ["session_before_switch", "session_before_tree"]) {
+		pi.on(event, (_event, ctx) => {
+			const entry = state.byManager.get(ctx?.sessionManager);
+			if (!entry?.scheduler.hasLiveBatches() || hostView(ctx).session !== entry.ownerSession) return;
+			return createDisposeBarrier({ scheduler: entry.scheduler }).wait({ reason: "Session changed" })
+				.then((outcome) => outcome === "quiescent" ? undefined : { cancel: true });
+		});
+	}
+	pi.on("session_before_shutdown", (_event, ctx) => {
+		const entry = state.byManager.get(ctx?.sessionManager);
+		if (entry?.scheduler.hasLiveBatches() && hostView(ctx).session === entry.ownerSession) {
+			entry.scheduler.cancelAll("Session closing");
+		}
+	});
 	return {
 		ensure,
 		status: () => state.status,

@@ -184,6 +184,9 @@ function makeFlowSession(plan) {
 			listeners.push(listener);
 			return () => {};
 		},
+		emit(event) {
+			for (const listener of listeners) listener(event);
+		},
 		prompt(message) {
 			// The real AgentSession.prompt() treats its argument as text and
 			// calls string methods on it. Fail exactly as the host does when a
@@ -366,6 +369,218 @@ function twoFlows() {
 		{ intent: "second", budget: { read: 2, bash: 1 }, permission: "rw" },
 	];
 }
+
+test("Esc restores a broadcast once and resumes both original flows without rebuilding history", async () => {
+	const sessions = [];
+	const h = harness({ fission: twoFlows(), hooks: { spawnFlow(plan) {
+		const session = makeFlowSession(plan);
+		session.turns = [];
+		session.agent.continue = () => {
+			session.turns.push(session.agent.drainSteering());
+			return new Promise((resolve) => { session.complete = resolve; });
+		};
+		session.abort = async ({ reason }) => {
+			session.agent.abort(reason);
+			session.complete();
+		};
+		sessions.push(session);
+		return { session };
+	} } });
+	const registered = register(h, "call-esc-resume");
+	expect(reserve(h).ok).toBe(true);
+	h.manager.appendMessage({ role: "toolResult", toolCallId: "call-esc-resume", content: "registered" });
+	await h.scheduler.onOwnerEnd({ batch: registered.batch });
+	const histories = sessions.map(({ agent }) => agent.state.messages.slice());
+	h.scheduler.broadcast("already sent to the first flow");
+	const [sent] = sessions[0].agent.drainSteering();
+	sessions[0].emit({ type: "message_start", message: sent });
+	const steer = sessions[1].agent.steer;
+	sessions[1].agent.steer = () => { throw new Error("temporary queue refusal"); };
+	expect(h.scheduler.broadcast("right must get this after the first").failures).toHaveLength(1);
+	sessions[1].agent.steer = steer;
+	const [sentNext] = sessions[0].agent.drainSteering();
+	sessions[0].emit({ type: "message_start", message: sentNext });
+	h.scheduler.broadcast("not delivered");
+	expect(h.scheduler.queuedBroadcasts()).toEqual(["not delivered"]);
+	const pause = h.scheduler.pauseAll();
+	expect(pause.restored).toEqual([{ text: "not delivered" }]);
+	await pause.settled;
+	expect(h.scheduler.hasActiveWork()).toBe(false);
+	expect(sessions.map((session) => session.turns.length)).toEqual([1, 1]);
+	expect(sessions.map((session) => session.agent.abortReason)).toEqual(["Interrupted by user", "Interrupted by user"]);
+	await h.scheduler.broadcast("continue here");
+	for (const [index, session] of sessions.entries()) {
+		expect(session.turns[1].map(({ content }) => content)).toEqual(index === 0
+			? ["(broadcast to 2 flows)\n\ncontinue here"]
+			: ["(broadcast to 2 flows)\n\nalready sent to the first flow", "(broadcast to 2 flows)\n\nright must get this after the first", "(broadcast to 2 flows)\n\ncontinue here"]);
+		expect(session.agent.state.messages.slice(0, histories[index].length)).toEqual(histories[index]);
+		h.scheduler.requestFlowEnd(session.agent.id);
+		session.complete();
+	}
+	expect((await h.scheduler.waitForBatch(registered.batchId)).status).toBe("closed");
+});
+
+test("broadcast chips follow first delivery and Alt+Up withdraws copies from both queues", async () => {
+	const h = harness({ fission: twoFlows() });
+	const registered = register(h, "call-pending-chip");
+	expect(reserve(h).ok).toBe(true);
+	h.manager.appendMessage({ role: "toolResult", toolCallId: "call-pending-chip", content: "registered" });
+	await h.scheduler.onOwnerEnd({ batch: registered.batch });
+	const [left, right] = h.spawned.map(({ session }) => session);
+	h.scheduler.broadcast("stays in both");
+	h.scheduler.broadcast("back to editor");
+	expect(h.scheduler.queuedBroadcasts()).toEqual(["stays in both", "back to editor"]);
+	expect(h.scheduler.popBroadcast()).toEqual({ text: "back to editor", queue: "steering" });
+	const [first] = left.agent.drainSteering();
+	left.emit({ type: "message_start", message: first });
+	expect(h.scheduler.queuedBroadcasts()).toEqual([]);
+	expect(h.scheduler.popBroadcast()).toBeUndefined();
+	expect(right.agent.drainSteering().map(({ content }) => content)).toEqual(["(broadcast to 2 flows)\n\nstays in both"]);
+});
+
+test("Esc and the next broadcast reach nested leaves without waking their retired parent", async () => {
+	const sessions = new Map();
+	const h = harness({ fission: twoFlows(), hooks: { spawnFlow(plan) {
+		const session = makeFlowSession(plan);
+		session.turns = [];
+		session.agent.continue = () => {
+			session.turns.push(session.agent.drainSteering());
+			return new Promise((resolve) => { session.complete = resolve; });
+		};
+		session.abort = async ({ reason }) => {
+			session.agent.abort(reason);
+			session.complete();
+		};
+		sessions.set(plan.flowId, session);
+		return { session };
+	} } });
+	const root = register(h, "call-esc-tree");
+	expect(reserve(h).ok).toBe(true);
+	h.manager.appendMessage({ role: "toolResult", toolCallId: "call-esc-tree", content: "registered" });
+	await h.scheduler.onOwnerEnd({ batch: root.batch });
+	const [parent, peer] = h.scheduler.listFlows();
+	const child = await startNested(h, { toolCallId: "call-esc-tree-child", parentFlowId: parent.flowId,
+		fission: [{ intent: "leaf", budget: { read: 1 }, permission: "ro" }] });
+	const leaf = h.scheduler.listFlows().find((flow) => flow.batchId === child.batchId);
+	const peerSession = sessions.get(peer.flowId);
+	const leafSession = sessions.get(leaf.flowId);
+	await h.scheduler.pauseAll().settled;
+	expect(h.scheduler.hasActiveWork()).toBe(false);
+	expect([peerSession.agent.abortReason, leafSession.agent.abortReason]).toEqual(["Interrupted by user", "Interrupted by user"]);
+	expect((await h.scheduler.broadcast("继续嵌套任务")).delivered).toEqual([leaf.label, peer.label]);
+	expect(sessions.get(parent.flowId).turns).toEqual([[]]);
+	for (const session of [leafSession, peerSession]) {
+		expect(session.turns[1].map(({ content }) => content)).toEqual(["(broadcast to 2 flows)\n\n继续嵌套任务"]);
+		h.scheduler.requestFlowEnd(session.agent.id);
+		session.complete();
+	}
+	expect((await h.scheduler.waitForBatch(root.batchId)).status).toBe("closed");
+});
+
+test("clean stops keep nudging and an external error waits for user input without recreating the flow", async () => {
+	let session;
+	const h = harness({ fission: twoFlows().slice(0, 1), hooks: { spawnFlow(plan) {
+		session = makeFlowSession(plan);
+		session.agent.continue = () => {
+			session.agent.drainSteering();
+			return new Promise((resolve) => { session.complete = resolve; });
+		};
+		return { session };
+	} } });
+	const registered = register(h, "call-nudge-continue");
+	expect(reserve(h).ok).toBe(true);
+	h.manager.appendMessage({ role: "toolResult", toolCallId: "call-nudge-continue", content: "registered" });
+	await h.scheduler.onOwnerEnd({ batch: registered.batch });
+	for (let n = 0; n < 12; n += 1) {
+		const previous = session.complete;
+		session.agent.state.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+		previous();
+		await waitFor(() => session.complete !== previous);
+	}
+	expect(session.agent.steered).toHaveLength(12);
+	session.agent.state.messages.push({ role: "assistant", stopReason: "error", errorStatus: 401, errorMessage: "Credentials expired", content: [] });
+	session.complete();
+	await waitFor(() => !h.scheduler.hasActiveWork());
+	const prefix = session.agent.state.messages.slice();
+	expect(h.scheduler.hasLiveBatches()).toBe(true);
+	expect(session.agent.steered).toHaveLength(12);
+	await h.scheduler.broadcast("继续");
+	expect(session.agent.state.messages.slice(0, prefix.length)).toEqual(prefix);
+	expect(session.agent.state.messages.at(-1).content).toContain("继续");
+	h.scheduler.requestFlowEnd(session.agent.id);
+	session.complete();
+	expect((await h.scheduler.waitForBatch(registered.batchId)).status).toBe("closed");
+});
+
+test("a repairable factory failure retries only the failed flow and keeps one batch boundary", async () => {
+	const attempts = [0, 0];
+	const sessions = [];
+	let repaired = false;
+	const h = harness({ fission: twoFlows(), hooks: { spawnFlow(plan) {
+		const index = Number(plan.flowId.at(-1));
+		attempts[index] += 1;
+		if (index === 1 && !repaired) throw Object.assign(new Error("Connection refused"), { code: "ECONNREFUSED" });
+		const session = makeFlowSession(plan);
+		session.agent.continue = () => {
+			session.agent.drainSteering();
+			return new Promise((resolve) => { session.complete = resolve; });
+		};
+		sessions[index] = session;
+		return { session };
+	} } });
+	const registered = register(h, "call-start-recovery");
+	expect(reserve(h).ok).toBe(true);
+	h.manager.appendMessage({ role: "toolResult", toolCallId: "call-start-recovery", content: "registered" });
+	expect((await h.scheduler.onOwnerEnd({ batch: registered.batch })).code).toBe("FISSION_START_BLOCKED");
+	expect(h.scheduler.hasActiveWork()).toBe(false);
+	repaired = true;
+	expect((await h.scheduler.broadcast("继续")).delivered).toHaveLength(2);
+	expect(attempts).toEqual([1, 2]);
+	for (const session of sessions) {
+		expect(session.agent.state.messages.at(-1).content).toContain("继续");
+		h.scheduler.requestFlowEnd(session.agent.id);
+		session.complete();
+	}
+	expect((await h.scheduler.waitForBatch(registered.batchId)).status).toBe("closed");
+	expect(h.manager.getEntries().filter(({ customType, data }) => customType === "scope.begin" && data.fissionBatch)).toHaveLength(1);
+});
+
+test("Esc in the factory window restores pending input and blocks every first turn until a new broadcast", async () => {
+	const factory = Promise.withResolvers();
+	const sessions = [];
+	const h = harness({ fission: twoFlows(), hooks: { async spawnFlow(plan) {
+		await factory.promise;
+		const session = makeFlowSession(plan);
+		session.agent.continue = () => {
+			session.agent.drainSteering();
+			return new Promise((resolve) => { session.complete = resolve; });
+		};
+		sessions.push(session);
+		return { session };
+	} } });
+	const registered = register(h, "call-esc-spawn");
+	expect(reserve(h).ok).toBe(true);
+	h.manager.appendMessage({ role: "toolResult", toolCallId: "call-esc-spawn", content: "registered" });
+	const starting = h.scheduler.onOwnerEnd({ batch: registered.batch });
+	const pending = h.scheduler.broadcast("return this to the editor");
+	expect(h.scheduler.queuedBroadcasts()).toEqual(["return this to the editor"]);
+	expect(h.scheduler.pauseAll().restored).toEqual([{ text: "return this to the editor" }]);
+	await pending;
+	factory.resolve();
+	await starting;
+	expect(sessions.map((session) => session.complete)).toEqual([undefined, undefined]);
+	const first = h.scheduler.broadcast("继续");
+	const second = h.scheduler.broadcast("second direction");
+	await Promise.all([first, second]);
+	for (const session of sessions) {
+		expect(session.agent.state.messages.at(-1).content).toContain("继续");
+		expect(session.agent.steering.map(({ content }) => content)).toEqual(["(broadcast to 2 flows)\n\nsecond direction"]);
+		expect(session.agent.state.messages.some((message) => message.content === "return this to the editor")).toBe(false);
+		h.scheduler.requestFlowEnd(session.agent.id);
+		session.complete();
+	}
+	expect((await h.scheduler.waitForBatch(registered.batchId)).status).toBe("closed");
+});
 
 /** The registration contract a flow proxy exposes: its marker and wrapped manager. */
 function flowProxy(shared) {
@@ -637,14 +852,14 @@ describe("fission scheduler", () => {
 		await h.scheduler.flowEnded(flows[0].flowId);
 
 		expect(h.scheduler.listFlows()[0].status).toBe("crashed");
-		// The sibling keeps running; the batch fails only once every flow stops.
+		// The sibling keeps running and its completed work survives the failure.
 		expect(h.scheduler.listFlows()[1].status).toBe("running");
 		h.scheduler.requestFlowEnd(flows[1].flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(flows[1].flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
-		expect(done.status).toBe("failed");
-		expect(done.outcome).toBe("failed");
+		expect(done.status).toBe("partial");
+		expect(done.outcome).toBe("partial");
 		expect(done.flows[0].status).toBe("crashed");
 		expect(done.flows[1].status).not.toBe("crashed");
 	});
@@ -901,7 +1116,7 @@ describe("fission scheduler", () => {
 		expect(h.scheduler.listFlows().map((flow) => flow.status)).toEqual(["running", "running"]);
 	});
 
-	test("a bindFlow failure returns the original error after cleanup", async () => {
+	test("a bindFlow failure reports its cause without stopping another flow", async () => {
 		const h = harness({
 			fission: twoFlows(),
 			hooks: {
@@ -914,14 +1129,13 @@ describe("fission scheduler", () => {
 		expect(reserve(h).ok).toBe(true);
 		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-e", content: "registered" });
 		const outcome = await h.scheduler.onOwnerEnd({ batchId: registered.batchId });
-		expect(outcome.ok).toBe(false);
-		expect(outcome.code).toBe(FISSION_SCHEDULER_CODES.UNSUPPORTED);
-		expect(outcome.detail).toContain("bindFlow failed for");
-		expect(outcome.detail).toContain("registry said no");
-		const status = h.scheduler.batchStatus(registered.batchId);
-		expect(status.status).toBe("failed");
-		expect(status.flows.map((flow) => flow.status)).toEqual(["crashed", "crashed"]);
-		expect(h.bindings).toHaveLength(2);
+		expect(outcome.ok).toBe(true);
+		const [first] = h.scheduler.listFlows();
+		h.scheduler.requestFlowEnd(first.flowId);
+		h.spawned[0].session.finish.resolve();
+		const status = await h.scheduler.waitForBatch(registered.batchId);
+		expect(status.status).toBe("partial");
+		expect(status.flows.map(({ status, error }) => [status, error])).toEqual([["closed", null], ["crashed", "registry said no"]]);
 	});
 
 	test("startup retires a chained half handoff without claiming it was delivered", async () => {
@@ -1059,7 +1273,8 @@ describe("fission scheduler", () => {
 		)).toBe(false);
 	});
 
-	test("a spawn failure keeps its reason and cleans without throwing", async () => {
+	test("a spawn failure keeps its reason while the healthy flow completes", async () => {
+		let survivor;
 		const h = harness({
 			fission: twoFlows(),
 			hooks: {
@@ -1067,7 +1282,8 @@ describe("fission scheduler", () => {
 					// options.spawnFlow receives the derived plan: batch, flowId,
 					// label, item, model, sessionManager, owner. It has no index.
 					if (plan.flowId.endsWith(".1")) throw new Error("spawn boom");
-					return { session: makeFlowSession(plan) };
+					survivor = makeFlowSession(plan);
+					return { session: survivor };
 				},
 			},
 		});
@@ -1075,23 +1291,22 @@ describe("fission scheduler", () => {
 		expect(reserve(h).ok).toBe(true);
 		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-f", content: "registered" });
 		const outcome = await h.scheduler.onOwnerEnd({ batchId: registered.batchId });
-		expect(outcome.ok).toBe(false);
-		expect(outcome.code).toBe(FISSION_SCHEDULER_CODES.SPAWN_FAILED);
-		expect(outcome.detail).toContain("1 of 2 flow sessions could not be created");
-		expect(outcome.detail).toContain("spawn boom");
-		const status = h.scheduler.batchStatus(registered.batchId);
-		expect(status.status).toBe("failed");
-		expect(status.flows).toEqual([]);
-		// The registered begin is closed even though the owner's scope stack
-		// never entered the batch.
+		expect(outcome.ok).toBe(true);
+		const [flow] = outcome.flows;
+		h.scheduler.requestFlowEnd(flow.flowId);
+		survivor.finish.resolve();
+		const status = await h.scheduler.waitForBatch(registered.batchId);
+		expect(status.status).toBe("partial");
+		expect(status.flows.map(({ status, error }) => [status, error])).toEqual([["closed", null], ["crashed", "spawn boom"]]);
 		const end = h.manager.getEntry(h.manager.getLeafId());
 		expect(end.customType).toBe("scope.end");
 		expect(end.data.batchId).toBe(registered.batchId);
-		expect(end.data.status).toBe("failed");
+		expect(end.data.status).toBe("partial");
 	});
 
-	test("a subscribe failure keeps its reason and detaches the earlier flow", async () => {
+	test("a subscribe failure leaves the earlier flow attached until it finishes", async () => {
 		const detached = [];
+		let survivor;
 		const h = harness({
 			fission: twoFlows(),
 			hooks: {
@@ -1102,6 +1317,7 @@ describe("fission scheduler", () => {
 							throw new Error("subscribe boom");
 						};
 					} else {
+						survivor = session;
 						const subscribe = session.subscribe.bind(session);
 						session.subscribe = (listener) => {
 							const off = subscribe(listener);
@@ -1119,24 +1335,15 @@ describe("fission scheduler", () => {
 		expect(reserve(h).ok).toBe(true);
 		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-g", content: "registered" });
 		const outcome = await h.scheduler.onOwnerEnd({ batchId: registered.batchId });
-		expect(outcome.ok).toBe(false);
-		expect(outcome.code).toBe(FISSION_SCHEDULER_CODES.UNSUPPORTED);
-		expect(outcome.detail).toContain("subscribe boom");
+		expect(outcome.ok).toBe(true);
 		const [firstFlow] = h.scheduler.listFlows();
-		expect(firstFlow.index).toBe(0);
+		expect(detached).toEqual([]);
+		h.scheduler.requestFlowEnd(firstFlow.flowId);
+		survivor.finish.resolve();
+		const status = await h.scheduler.waitForBatch(registered.batchId);
 		expect(detached).toEqual([firstFlow.flowId]);
-		expect(h.scheduler.batchStatus(registered.batchId).flows.every(
-			(flow) => flow.status === "crashed",
-		)).toBe(true);
-		const end = h.manager.getEntry(h.manager.getLeafId());
-		expect(end.customType).toBe("scope.end");
-		expect(end.data.batchId).toBe(registered.batchId);
-		expect(end.data.status).toBe("failed");
-		// The failure happened before any receipt or flow boundary, so the
-		// journal has no flow scope to close.
-		expect(h.manager.getEntries().some((entry) =>
-			entry.customType === "scope.end" && entry.data?.flow,
-		)).toBe(false);
+		expect(status.status).toBe("partial");
+		expect(status.flows.map(({ status, error }) => [status, error])).toEqual([["closed", null], ["crashed", "subscribe boom"]]);
 	});
 
 	test("cancelBatch before start closes the registered batch boundary", async () => {
@@ -1558,10 +1765,8 @@ describe("fission scheduler", () => {
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(second.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
-		// A sibling crash fails the batch summary even though the surviving
-		// flow completed and adopts the conversation.
-		expect(done.status).toBe("failed");
-		expect(done.outcome).toBe("failed");
+		expect(done.status).toBe("partial");
+		expect(done.outcome).toBe("partial");
 		expect(done.flows.map((flow) => flow.status)).toEqual(["crashed", "closed"]);
 		expect(done.heir).toBe(second.label);
 		expect(h.ownerAgent.state.messages).toEqual(h.spawned[1].session.agent.state.messages);

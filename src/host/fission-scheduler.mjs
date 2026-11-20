@@ -106,12 +106,12 @@ import {
 import { installFissionEvents } from "./fission-events.mjs";
 import { rememberSession } from "./capture.mjs";
 import { createFissionSession, deriveFissionConfig } from "./fission-session.mjs";
-import { compareMessagePrefix } from "./fission-session.mjs";
 import { isFissionManager } from "./fission-manager.mjs";
 import { toolCalls } from "../transcript/messages.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
 const RECEIPTS = loadDoc("receipts/scope");
+const FLOW_OPEN_NUDGE = loadDoc("errors")["flow-open"];
 import { depthAt, findToolResultId, maxHandoffId, tailOf } from "./fission-journal.mjs";
 import {
 	flowStillHoldsCopy,
@@ -163,6 +163,8 @@ const MANAGER_METHODS = [
 ];
 const HANDOFF_METHODS = ["appendEntriesAtomically", "getSessionFile", "ingestReplicatedEntry"];
 const TERMINAL = new Set(["closed", "cancelled", "crashed"]);
+// The host uses this reason to classify an operator interrupt (not a retry).
+const USER_INTERRUPT = "Interrupted by user";
 const COST_CAP_CODES = new Set([
 	"COST_CAP",
 	"COST_CAP_EXCEEDED",
@@ -362,61 +364,6 @@ function isRetiredOwnerArtifact(message) {
 		typeof message.content === "string" &&
 		message.content.includes("Fission owner retired")
 	);
-}
-
-/**
- * Compose the owner's context after adoption.
- *
- * The owner keeps its own messages as the prefix, then the flow's receipt, the
- * batch's structural boundaries, and the heir's own activity. Adopting the
- * heir's array wholesale would interleave those boundaries into a conversation
- * that never contained them, which changes bytes the provider already cached
- * and breaks the prompt-cache prefix at the oldest boundary. Appending them
- * after the owner's conversation keeps the same content visible while leaving
- * the cached prefix untouched.
- *
- * The owner's ack for the batch's scope call is dropped, not kept beside the
- * receipt: both answer the same toolCallId, and a provider rejects a call that
- * is answered twice. The ack was the current turn's own new content, so
- * replacing it costs nothing that was already cached. Trailing barrier results
- * move with the receipt for the same reason: the receiving branch must read
- * `receipt, trailingResults` in that order, exactly as the heir did.
- */
-export function composeAdoptedMessages(ownerMessages, heirMessages, options = {}) {
-	const owner = Array.isArray(ownerMessages) ? ownerMessages : [];
-	const heir = Array.isArray(heirMessages) ? heirMessages : [];
-	const from = Number.isInteger(options.adoptFrom) && options.adoptFrom >= 0
-		? options.adoptFrom
-		: 0;
-	const tail = heir.slice(Math.min(from, heir.length));
-	const callId = typeof options.callId === "string" ? options.callId : null;
-	const trailingIds = new Set(
-		Array.isArray(options.trailingCallIds)
-			? options.trailingCallIds
-			: options.trailingCallIds instanceof Set
-				? [...options.trailingCallIds]
-				: [],
-	);
-	const trailing = Array.isArray(options.trailing) ? options.trailing : [];
-	const prefix = callId === null
-		? owner
-		: owner.filter(
-			(message) =>
-				!(
-					message?.role === "toolResult" &&
-					(message.toolCallId === callId || trailingIds.has(message.toolCallId))
-				) &&
-				!isRetiredOwnerArtifact(message),
-		);
-	const receipt = Array.isArray(options.receipt) ? options.receipt : [];
-	const boundaries = Array.isArray(options.boundaries) ? options.boundaries : [];
-	return [
-		...prefix,
-		...receipt,
-		...trailing,
-		...boundaries,
-		...tail,
-	];
 }
 
 /**
@@ -674,7 +621,7 @@ export function createFissionScheduler(options = {}) {
 			throw refusal(
 				FISSION_SCHEDULER_CODES.SESSION_UNSUPPORTED,
 				`${plan.flowId}: ${created.detail}`,
-				{ flowId: plan.flowId, reason: created.reason },
+				{ flowId: plan.flowId, reason: created.reason, cause: created.error },
 			);
 		}
 		// These frames compare session construction. Provider conversion runs
@@ -905,11 +852,13 @@ export function createFissionScheduler(options = {}) {
 			carryOver: [],
 			costCapped: false,
 			cancelled: false,
+			paused: parentFlow?.batch.paused ?? false,
 			ownerRetired: false,
 			ownerEnded: false,
 			batchBeginId: null,
 			scopeId: null,
 			startPromise: null,
+			startBlocked: false,
 			handoffs: [],
 			warnings: [],
 			limits: [],
@@ -937,6 +886,7 @@ export function createFissionScheduler(options = {}) {
 		// session may interact again, so the retirement gate ends here.
 		station?.clearOwnerRetired?.(batch.id);
 		batch.resolveDone(result);
+		endPresentationIfIdle({ messages: batch.owner.agent?.state?.messages ?? [] });
 	}
 
 	function isTerminal(flow) {
@@ -960,14 +910,16 @@ export function createFissionScheduler(options = {}) {
 	// written its end (closed/cancelled/crashed) or is already the heir cannot
 	// receive another segment.
 	function canReceive(flow) {
-		if (!["spawning", "running", "ending"].includes(flow.status)) return false;
+		if (flow.error || !["spawning", "running", "ending"].includes(flow.status)) return false;
 		return flow.nested.every((batch) => batch.done === true);
 	}
 
 	function nextOpenFlow(batch, sourceIndex) {
-		const count = batch.flows.length;
-		for (let offset = 1; offset < count; offset += 1) {
-			const candidate = batch.flows[(sourceIndex + offset) % count];
+		const flows = batch.flows;
+		let index = flows.findIndex((flow) => flow.index === sourceIndex);
+		for (let offset = 1; offset < flows.length; offset += 1) {
+			index = (index + 1) % flows.length;
+			const candidate = flows[index];
 			if (candidate && canReceive(candidate)) return candidate;
 		}
 		return null;
@@ -988,8 +940,8 @@ export function createFissionScheduler(options = {}) {
 		return null;
 	}
 
-	function collectRunning(batch, target = []) {
-		if (batch.done) return target;
+	function collectRunning(batch, target = [], includePaused = false) {
+		if (batch.done || (batch.paused && !includePaused)) return target;
 		// A flow that opened a nested batch has retired: only its innermost
 		// running descendants are leaves. Sibling flows of the same batch are
 		// still leaves, though, so nesting is resolved per flow rather than
@@ -1000,7 +952,7 @@ export function createFissionScheduler(options = {}) {
 			for (const child of flow.nested) {
 				if (child.done === true) continue;
 				opened = true;
-				collectRunning(child, leaves);
+				collectRunning(child, leaves, includePaused);
 			}
 			if (leaves.length > 0) {
 				target.push(...leaves);
@@ -1023,20 +975,21 @@ export function createFissionScheduler(options = {}) {
 			// it, but its stream can never show new input: a copy delivered there
 			// would be retracted on the next settle and would hold the text
 			// against every other recipient in the meantime.
-			if (flow.status === "running" && flow.endRequested !== true && !flow.cancelReason) {
+			if (!flow.nestedSealed && flow.status === "running" && flow.endRequested !== true && !flow.cancelReason &&
+				(includePaused || !flow.blocked)) {
 				target.push(flow);
 			}
 		}
 		return target;
 	}
 
-	function activeLeaves() {
+	function activeLeaves(includePaused = false) {
 		const leaves = [];
 		for (const batch of batches) {
 			if (batch.parentBatch || batch.done) continue;
-			collectRunning(batch, leaves);
+			collectRunning(batch, leaves, includePaused);
 		}
-		return [...new Map(leaves.map((flow) => [flow.id, flow])).values()];
+		return leaves;
 	}
 
 	// Broadcast text reaches a flow as a queued steer. If the flow declares
@@ -1052,10 +1005,10 @@ export function createFissionScheduler(options = {}) {
 	// longer show anything.
 	const broadcastLedger = new Map();
 
-	function broadcastRecord(broadcastId, text) {
+	function broadcastRecord(broadcastId, text, images) {
 		let record = broadcastLedger.get(broadcastId);
 		if (!record) {
-			record = { text, shown: false, copies: new Map(), stuck: new Map() };
+			record = { text, images, shown: false, copies: new Map(), stuck: new Map() };
 			broadcastLedger.set(broadcastId, record);
 		}
 		return record;
@@ -1099,35 +1052,121 @@ export function createFissionScheduler(options = {}) {
 	}
 
 	function enqueueBroadcast(recipients, text, broadcastId) {
+		const row = broadcastRecord(broadcastId, text);
 		const labels = recipients.map((flow) => flow.label);
 		const delivered = [];
 		const failed = [];
+		const deferred = [];
 		for (const flow of recipients) {
-			if (typeof flow.agent?.steer !== "function") {
-				const failure = { flowId: flow.id, error: "agent.steer() is unavailable" };
-				failed.push(failure);
-				undeliveredWarning(flow.batch, "BROADCAST_DELIVERY_FAILED", { broadcastId, text }, failure);
-				continue;
-			}
 			const message = {
 				role: "custom",
 				customType: "fission.broadcast",
-				content: `(broadcast to ${recipients.length} flows)\n\n${text}`,
+				content: row.images?.length
+					? [{ type: "text", text: `(broadcast to ${recipients.length} flows)\n\n${text}` }, ...row.images]
+					: `(broadcast to ${recipients.length} flows)\n\n${text}`,
 				display: true,
-				details: { fissionBroadcast: { broadcastId, recipients: labels } },
+				details: { fissionBroadcast: { broadcastId, recipients: labels, text } },
 				timestamp: Date.now(),
 			};
+			const entry = { message, broadcastId, text };
 			try {
+				// A refused copy must not be overtaken by a later broadcast.
+				flushDeferredSteers(flow);
 				flow.agent.steer(message);
 				rememberBroadcast(flow, message, broadcastId, text);
 				delivered.push(flow.label);
 			} catch (error) {
 				const failure = { flowId: flow.id, error: error?.message ?? String(error) };
 				failed.push(failure);
+				deferred.push({ flow, entry });
 				undeliveredWarning(flow.batch, "BROADCAST_DELIVERY_FAILED", { broadcastId, text }, failure);
 			}
 		}
+		// A totally refused submission stays with the caller. Once any copy
+		// was accepted, the scheduler owns the rest; do not ask for a resend.
+		if (delivered.length > 0) {
+			for (const { flow, entry } of deferred) (flow.resumeSteers ??= []).push(entry);
+		}
+		bridge.queueChanged?.();
 		return { labels, delivered, failed };
+	}
+
+	function flushDeferredSteers(flow) {
+		const deferred = flow.resumeSteers;
+		while (deferred?.length) {
+			const entry = deferred[0];
+			flow.agent.steer(entry.message);
+			rememberBroadcast(flow, entry.message, entry.broadcastId, entry.text);
+			deferred.shift();
+		}
+	}
+
+	function markBroadcastShown(message) {
+		const id = message?.details?.fissionBroadcast?.broadcastId;
+		const row = broadcastLedger.get(id);
+		if (!row || row.shown) return;
+		row.shown = true;
+		bridge.queueChanged?.();
+	}
+
+	function waitForBroadcastPresentation(id) {
+		const row = broadcastLedger.get(id);
+		if (!row || row.presented || !bridge.presentsBroadcasts) return;
+		row.presentation ??= Promise.withResolvers();
+		return row.presentation.promise;
+	}
+
+	function broadcastPresented(id) {
+		const row = broadcastLedger.get(id);
+		if (!row) return;
+		row.presented = true;
+		row.presentation?.resolve();
+	}
+
+	function withdrawBroadcast(id) {
+		const row = broadcastLedger.get(id);
+		if (!row) return;
+		broadcastLedger.delete(id);
+		row.withdrawn?.resolve();
+		row.presentation?.resolve();
+	}
+
+	function restoredInput(row) {
+		return row.images?.length ? { text: row.text, images: row.images } : { text: row.text };
+	}
+
+	function popBroadcast() {
+		let candidate;
+		for (const [id, row] of broadcastLedger) {
+			if (!broadcastSettled(row) && (row.awaiting || row.copies.size)) candidate = [id, row];
+		}
+		if (!candidate) return;
+		const [id, row] = candidate;
+		const targets = [];
+		for (const flowId of row.copies.keys()) {
+			const flow = findFlow(flowId);
+			const agent = flow?.agent;
+			const matches = (message) => message?.details?.fissionBroadcast?.broadcastId === id;
+			const pending = agent?.peekSteeringQueue?.();
+			// Like native Alt+Up, never retract an input already in-flight.
+			if (!pending?.some(matches) || typeof agent.replaceQueue !== "function" ||
+				agent.peekUndeliveredQueuedMessages?.().some(matches)) return;
+			targets.push({ flow, agent, remaining: pending.filter((message) => !matches(message)) });
+		}
+		for (const { flow, agent, remaining } of targets) {
+			agent.replaceQueue("steering", remaining);
+			flow.pendingBroadcasts = flow.pendingBroadcasts.filter((entry) => entry.broadcastId !== id);
+		}
+		for (const batch of batches) {
+			batch.carryOver = batch.carryOver.filter((entry) => entry.broadcastId !== id);
+			for (const flow of batch.flows) {
+				flow.inheritedCarry = flow.inheritedCarry.filter((entry) => entry.broadcastId !== id);
+				if (flow.resumeSteers?.length) flow.resumeSteers = flow.resumeSteers.filter((entry) => entry.broadcastId !== id);
+			}
+		}
+		withdrawBroadcast(id);
+		bridge.queueChanged?.();
+		return { ...restoredInput(row), queue: "steering" };
 	}
 
 	/**
@@ -1141,7 +1180,8 @@ export function createFissionScheduler(options = {}) {
 	function settlePendingBroadcasts(flow) {
 		const pending = Array.isArray(flow.pendingBroadcasts) ? flow.pendingBroadcasts.splice(0) : [];
 		const inherited = Array.isArray(flow.inheritedCarry) ? flow.inheritedCarry.splice(0) : [];
-		const consumed = consumedBroadcastIds(flow);
+		if (flow.resumeSteers?.length) inherited.push(...flow.resumeSteers.splice(0));
+		const consumed = pending.length ? consumedBroadcastIds(flow) : null;
 		const unlanded = pending.filter((entry) => !isConsumed(flow, entry, consumed));
 		const stuck = retractOwnQueuedCopies(flow, unlanded);
 		const released = refreshStuckCopies();
@@ -1173,6 +1213,69 @@ export function createFissionScheduler(options = {}) {
 		}
 		for (const entry of inherited) routeBroadcast(flow, entry);
 		for (const held of released) routeBroadcast(held.flow, held.entry);
+	}
+
+	function withdrawInterruptInput() {
+		const restored = new Set();
+		const undelivered = [];
+		for (const batch of batches) {
+			if (batch.done) continue;
+			for (const flow of batch.flows) {
+				const pending = flow.pendingBroadcasts.splice(0);
+				const consumed = pending.length ? consumedBroadcastIds(flow) : null;
+				const unlanded = pending.filter((entry) => !isConsumed(flow, entry, consumed));
+				const stuck = retractOwnQueuedCopies(flow, unlanded);
+				for (const entry of pending) {
+					const row = broadcastRecord(entry.broadcastId, entry.text);
+					if (isConsumed(flow, entry, consumed)) row.shown = true;
+					if (!stuck.has(entry)) {
+						row.copies.delete(flow.id);
+						row.stuck.delete(flow.id);
+						if (!isConsumed(flow, entry, consumed)) undelivered.push({ flow, entry, row });
+					} else {
+						row.copies.set(flow.id, "stuck");
+						row.stuck.set(flow.id, { flow, entry });
+						undeliveredWarning(batch, "BROADCAST_RETRACT_FAILED", entry, flow.id);
+					}
+					restored.add(entry.broadcastId);
+				}
+				for (const entry of flow.inheritedCarry.splice(0)) {
+					restored.add(entry.broadcastId);
+				}
+			}
+			for (const entry of batch.carryOver.splice(0)) {
+				restored.add(entry.broadcastId);
+			}
+		}
+		// Once an operator instruction has landed anywhere, it is no longer a
+		// draft. Park the remaining copies out of the native queues until the
+		// same leaf resumes, ahead of its new instruction and without an echo.
+		// Entries already in the native queue precede any later refused copy.
+		for (let i = undelivered.length - 1; i >= 0; i -= 1) {
+			const { flow, entry, row } = undelivered[i];
+			if (row.shown) (flow.resumeSteers ??= []).unshift(entry);
+		}
+		for (const batch of batches) {
+			if (batch.done) continue;
+			for (const flow of batch.flows) {
+				if (!flow.resumeSteers?.length) continue;
+				flow.resumeSteers = flow.resumeSteers.filter((entry) => {
+					if (broadcastLedger.get(entry.broadcastId)?.shown) return true;
+					restored.add(entry.broadcastId);
+					return false;
+				});
+			}
+		}
+		const entries = [];
+		// Map insertion order is submission order, independent of which leaf
+		// still held a copy at the time of the interrupt.
+		for (const [id, row] of broadcastLedger) {
+			if ((!row.awaiting && !restored.has(id)) || broadcastSettled(row)) continue;
+			entries.push(restoredInput(row));
+			withdrawBroadcast(id);
+		}
+		bridge.queueChanged?.();
+		return entries;
 	}
 
 	// A copy that could not be proven gone was a fact about one moment, not a
@@ -1309,18 +1412,18 @@ export function createFissionScheduler(options = {}) {
 	// settles, so admission and settlement are separate facts. A host session
 	// that ignores the options argument never fills the probe; its silence is
 	// "unknown", never "not queued".
-	function injectOwnerInput(batch, text, probe) {
+	function injectOwnerInput(batch, text, probe, images) {
 		const owner = batch.owner;
 		if (typeof owner?.session?.steer === "function") {
 			probe.supported = true;
-			return owner.session.steer(text, undefined, {
+			return owner.session.steer(text, images, {
 				onPromptQueued: () => {
 					probe.queued = true;
 				},
 			});
 		}
 		if (typeof owner?.agent?.steer === "function") {
-			return owner.agent.steer({ role: "user", content: text, timestamp: Date.now() });
+			return owner.agent.steer({ role: "user", content: images?.length ? [{ type: "text", text }, ...images] : text, timestamp: Date.now() });
 		}
 		throw new Error("the owner exposes no steer()");
 	}
@@ -1348,6 +1451,7 @@ export function createFissionScheduler(options = {}) {
 		const probe = { supported: false, queued: false, definitive: false };
 		const land = (ok, detail) => {
 			record.ownerDelivery = false;
+			broadcastPresented(entry.broadcastId);
 			if (probe.queued) {
 				record.accepted = true;
 				if (!ok) {
@@ -1373,7 +1477,7 @@ export function createFissionScheduler(options = {}) {
 		};
 		let delivery;
 		try {
-			delivery = injectOwnerInput(root, entry.text, probe);
+			delivery = injectOwnerInput(root, entry.text, probe, record.images);
 		} catch (error) {
 			// No steer path exists at all: nothing can have been queued.
 			probe.definitive = true;
@@ -1560,6 +1664,11 @@ export function createFissionScheduler(options = {}) {
 			status: batch.status,
 			heir: anchor.label,
 			flows: batch.flows.map((flow) => flow.label),
+			failures: [...(batch.spawnFailures ?? []), ...batch.flows.filter((flow) => flow.status === "crashed").map((flow) => ({
+				flowId: flow.id,
+				label: flow.label,
+				error: flow.error?.message ?? null,
+			}))],
 			level: afterClose.level,
 			parentIntent: afterClose.intent,
 			parentBudget: afterClose.budget,
@@ -1577,6 +1686,7 @@ export function createFissionScheduler(options = {}) {
 			stage: batch.stage,
 			status: batch.status,
 			heir: null,
+			failedFlows: batch.spawnFailures,
 			flows: batch.flows.map((flow) => flow.label),
 		};
 		try {
@@ -1823,6 +1933,8 @@ export function createFissionScheduler(options = {}) {
 
 	async function copyRecord(batch, record, target) {
 		record.status = "copying";
+		const copying = Promise.withResolvers();
+		target.copying = copying.promise;
 		try {
 			const result = await performCopy(record, target);
 			mergePins(batch.station.state.pins, result.pins);
@@ -1850,6 +1962,9 @@ export function createFissionScheduler(options = {}) {
 				target: target.label,
 				error: record.error,
 			});
+		} finally {
+			target.copying = null;
+			copying.resolve();
 		}
 	}
 
@@ -1924,22 +2039,13 @@ export function createFissionScheduler(options = {}) {
 				`heir ${heir.label} exposes no message array`,
 			);
 		}
-		// Capture the owner's messages before reset() clears the array, and take
-		// only the heir's own activity.
+		// The heir started from the owner's live prefix and owns the selected
+		// journal branch, including any legitimate folds during its run. Do not
+		// reconstruct that history from the owner's stale pre-fission view.
 		const ownerMessages = Array.isArray(owner.agent.state?.messages)
 			? owner.agent.state.messages.slice()
 			: [];
-		const messages = composeAdoptedMessages(ownerMessages, heirMessages, {
-			adoptFrom: heir.adoptFrom,
-			callId: batch.toolCallId,
-			receipt: heir.receiptId ? boundaryMessages(heir.receiptId) : [],
-			trailing: heir.trailingResults ?? [],
-			trailingCallIds: (heir.trailingResults ?? []).map((message) => message.toolCallId),
-			boundaries: [
-				...(batch.batchBeginId ? boundaryMessages(batch.batchBeginId) : []),
-				...(heir.beginId ? boundaryMessages(heir.beginId) : []),
-			],
-		});
+		const messages = heirMessages.slice();
 
 		// The owner keeps its own model. The leaf and messages must change
 		// together so its next turn attaches to the history it actually sees.
@@ -2056,6 +2162,7 @@ export function createFissionScheduler(options = {}) {
 			code,
 			message: String(error?.message ?? error),
 			flowId: flow?.id ?? null,
+			label: flow?.label ?? null,
 		};
 		batch.warnings.push(warning);
 		emit(batch, "flow.warning", warning);
@@ -2149,7 +2256,7 @@ export function createFissionScheduler(options = {}) {
 				onFlowTerminal(flow);
 				return;
 			}
-			if (flow.error && !flow.retired) {
+			if (flow.error) {
 				try {
 					writeAborted(flow, `flow failed: ${flow.error.message ?? flow.error}`);
 				} catch (error) {
@@ -2178,6 +2285,7 @@ export function createFissionScheduler(options = {}) {
 					return;
 				}
 				flow.endId = endId;
+				injectBoundaries(flow, [endId]);
 				flow.status = "closed";
 				onFlowTerminal(flow);
 				enqueueHandoff(flow.batch, flow, endId);
@@ -2205,7 +2313,8 @@ export function createFissionScheduler(options = {}) {
 			batch.status = "finalizing";
 			await batch.flushChain;
 
-			if (anchor && anchor.status === "waiting-heir") {
+			const needsFlowEnd = anchor?.status === "waiting-heir";
+			if (needsFlowEnd) {
 				await drainToAnchor(batch, anchor);
 				// The heir's own flow scope closes here, before promotion, so the
 				// batch scope is on top when closeBatchScope() runs. finishFlow()
@@ -2225,6 +2334,8 @@ export function createFissionScheduler(options = {}) {
 					batchWarning(batch, "HEIR_END_FAILED", error, anchor);
 					anchor.status = "crashed";
 				}
+			} else if (anchor?.status === "closed") {
+				await drainToAnchor(batch, anchor);
 			} else if (anchor && batch.handoffs.some((record) => record.status === "queued")) {
 				for (const record of batch.handoffs) {
 					if (record.status !== "queued") continue;
@@ -2259,29 +2370,24 @@ export function createFissionScheduler(options = {}) {
 					batchWarning(batch, "HEIR_END_FAILED", error, anchor);
 				}
 			}
-			// A crash anywhere in the batch fails the batch summary, even when
-			// the surviving anchor is closed and usable. A cost cap is a
-			// cancellation, not a crash, so it stays out of this flag.
-			const failed = batch.flows.some(
+			// A usable heir preserves completed work even if a peer failed.
+			const failed = batch.spawnFailures?.length > 0 || batch.flows.some(
 				(flow) =>
 					flow.status === "crashed" ||
 					(flow.error && !flow.costCapped && !flow.cancelReason),
 			);
+			const terminalStatus = batch.costCapped ? "cost-capped"
+				: usable ? (failed ? "partial" : "closed")
+				: anchor?.cancelReason ? "cancelled" : "failed";
 			if (anchor) {
-				batch.status = failed
-					? "failed"
-					: batch.costCapped
-						? "cost-capped"
-						: usable
-							? "closed"
-							: anchor.cancelReason
-								? "cancelled"
-								: "failed";
+				batch.status = terminalStatus;
 				try {
 					// The model sees the boundaries the scheduler wrote on the
 					// heir's behalf, in journal order: its own scope.end, then the
 					// batch scope.end. Adoption splices this context into the owner.
-					if (takeover && anchor.endId) injectBoundaries(anchor, [anchor.endId]);
+					if (takeover && anchor.endId && (needsFlowEnd || anchor.status === "crashed")) {
+						injectBoundaries(anchor, [anchor.endId]);
+					}
 					const batchEndId = writeBatchEnd(batch, anchor);
 					if (takeover) injectBoundaries(anchor, [batchEndId]);
 				} catch (error) {
@@ -2296,7 +2402,7 @@ export function createFissionScheduler(options = {}) {
 				});
 			}
 
-			const boundaryFailed = batch.status === "failed" && !failed && usable && !batch.costCapped;
+			const boundaryFailed = batch.status !== terminalStatus;
 			let adopted = false;
 			if (takeover) {
 				batch.status = "finalizing";
@@ -2313,18 +2419,8 @@ export function createFissionScheduler(options = {}) {
 					promote(batch, anchor, { persist: false });
 					adopted = true;
 					batch.adoptionFailed = false;
-					batch.status = failed || boundaryFailed
-						? "failed"
-						: batch.costCapped
-							? "cost-capped"
-							: usable
-								? "closed"
-								: "failed";
-					batch.outcome = failed || boundaryFailed
-						? (usable ? "failed" : "failed-with-takeover")
-						: usable
-							? "closed"
-							: "failed-with-takeover";
+					batch.status = boundaryFailed ? "failed" : terminalStatus;
+					batch.outcome = !usable ? "failed-with-takeover" : batch.status;
 					emit(batch, "batch.adopted", {
 						heir: anchor.label,
 						limitations: failures.map((failure) => failure.code),
@@ -2358,6 +2454,7 @@ export function createFissionScheduler(options = {}) {
 			const needsPostScopeTurn =
 				!batch.parentBatch &&
 				!batch.parentFlow &&
+				!batch.paused && !batch.cancelled &&
 				adopted &&
 				usable &&
 				anchor?.endRequested === true &&
@@ -2588,7 +2685,9 @@ export function createFissionScheduler(options = {}) {
 	}
 
 	async function startRegisteredBatch(batch) {
+		if (batch.done) return answer(batch);
 		if (batch.startPromise) return batch.startPromise;
+		batch.status = "starting";
 		batch.startPromise = (async () => {
 			try {
 				// agent_end can fire before message_end/toolResult persistence
@@ -2602,6 +2701,7 @@ export function createFissionScheduler(options = {}) {
 					}
 					await batch.owner.session.settleInFlightMessagePersistence();
 				}
+				if (batch.done) return answer(batch);
 				const ackId = batch.ackId
 					?? findToolResultId(manager, batch.toolCallId)
 					?? batch.ctx?.ackId
@@ -2937,46 +3037,68 @@ export function createFissionScheduler(options = {}) {
 			}
 		}
 
-		const settled = await Promise.allSettled(planned.map((plan) => spawnFlow(batch, plan)));
+		const settled = await Promise.allSettled(planned.map(async (plan) => {
+			const prior = batch.preparedSpawns?.[plan.index];
+			if (prior?.status === "fulfilled") return prior.value;
+			if (prior?.status === "rejected" && !isExternalFailure(prior.reason)) throw prior.reason;
+			const spawned = await spawnFlow(batch, plan);
+			const { session } = spawned;
+			try {
+				assertAgentShape(session.agent);
+				if (typeof session.agent.continue !== "function" && !promptFor({ session, agent: session.agent })) {
+					throw new Error("neither agent.continue() nor prompt() is available");
+				}
+				if (typeof session.getAgentId === "function" && session.getAgentId() !== plan.flowId) {
+					throw new Error("session identity does not match the flow");
+				}
+				return spawned;
+			} catch (error) {
+				try {
+					await releaseUnstartedSession(session);
+				} catch (cleanupError) {
+					batchWarning(batch, "START_CLEANUP_FAILED", cleanupError, plan);
+				}
+				throw error;
+			}
+		}));
+		if (batch.done) {
+			await Promise.all(settled.map((result) => result.status === "fulfilled" && releaseUnstartedSession(result.value.session)));
+			return answer(batch);
+		}
 		const failed = settled
 			.map((result, index) => ({ result, index }))
 			.filter(({ result }) => result.status === "rejected");
-		if (failed.length > 0) {
-			const failures = failed.map(({ result, index }) => ({
-				flowId: planned[index].flowId,
-				message: result.reason?.message ?? String(result.reason),
-			}));
+		// Retry only failed factories, before writing any branch-local receipt.
+		const retryable = failed.filter(({ result }) => isExternalFailure(result.reason));
+		if (retryable.length > 0) {
+			batch.preparedSpawns = settled;
+			batch.startBlocked = true;
+			batch.status = "registered";
+			for (const { result, index } of retryable) {
+				batchWarning(batch, "FLOW_BLOCKED", externalCause(result.reason), {
+					id: planned[index].flowId, label: planned[index].label,
+				});
+			}
+			endPresentationIfIdle({ messages: [] });
+			return { ok: false, batchId: batch.id, code: "FISSION_START_BLOCKED" };
+		}
+		batch.preparedSpawns = null;
+		batch.spawnFailures = failed.map(({ result, index }) => ({
+			flowId: planned[index].flowId,
+			label: planned[index].label,
+			index,
+			status: "crashed",
+			error: result.reason?.message ?? String(result.reason),
+		}));
+		for (const failure of batch.spawnFailures) {
+			batchWarning(batch, "FLOW_SPAWN_FAILED", failure.error, { id: failure.flowId, label: failure.label });
+		}
+		if (failed.length === planned.length) {
 			throw refusal(
 				FISSION_SCHEDULER_CODES.SPAWN_FAILED,
-				`${failed.length} of ${planned.length} flow sessions could not be created: ${failures.map((failure) => `${failure.flowId}: ${failure.message}`).join("; ")}`,
-				{ failures },
+				`No flow session could be created: ${batch.spawnFailures.map((failure) => `${failure.flowId}: ${failure.error}`).join("; ")}`,
+				{ failures: batch.spawnFailures },
 			);
-		}
-		const spawned = settled.map((result) => result.value);
-
-		for (let index = 0; index < spawned.length; index += 1) {
-			const { session } = spawned[index];
-			if (
-				typeof session?.agent?.continue !== "function" &&
-				!session?.prompt &&
-				!session?.agent?.prompt
-			) {
-				throw refusal(
-					FISSION_SCHEDULER_CODES.SESSION_UNSUPPORTED,
-					`${planned[index].flowId}: neither agent.continue() nor prompt() is available`,
-					{ flowId: planned[index].flowId },
-				);
-			}
-			if (typeof session.getAgentId === "function") {
-				const actual = session.getAgentId();
-				if (actual !== planned[index].flowId) {
-					throw refusal(
-						FISSION_SCHEDULER_CODES.SESSION_UNSUPPORTED,
-						`${planned[index].flowId}: session agent id is ${String(actual)}; binding uses that string`,
-						{ flowId: planned[index].flowId, actual },
-					);
-				}
-			}
 		}
 
 		// The control handler reserved the combined budget on the owner's
@@ -2985,17 +3107,10 @@ export function createFissionScheduler(options = {}) {
 		openBatchScope(batch);
 
 		for (let index = 0; index < planned.length; index += 1) {
+			if (settled[index].status !== "fulfilled") continue;
 			const plan = planned[index];
-			const { session } = spawned[index];
+			const { session, limitations } = settled[index].value;
 			const agent = session.agent;
-			if (!isObject(agent)) {
-				throw refusal(
-					FISSION_SCHEDULER_CODES.SESSION_UNSUPPORTED,
-					`${plan.flowId}: the session exposes no agent object`,
-					{ flowId: plan.flowId },
-				);
-			}
-			assertAgentShape(agent);
 
 			const state = createFlowState(batch.owner.state);
 			const opened = beginScope(state, {
@@ -3030,7 +3145,6 @@ export function createFissionScheduler(options = {}) {
 				cancelReason: null,
 				error: null,
 				endInfo: null,
-				retired: false,
 				endRequested: false,
 				pendingBroadcasts: [],
 				inheritedCarry: [],
@@ -3050,7 +3164,7 @@ export function createFissionScheduler(options = {}) {
 			rememberSession(session, manager);
 			batch.flows.push(flow);
 			flow.station = newFlowStation(batch.station, flow);
-			for (const limit of spawned[index].limitations ?? []) {
+			for (const limit of limitations ?? []) {
 				recordLimit(limit.code, limit.detail, { flowId: flow.id });
 				batch.limits.push({ code: limit.code, detail: limit.detail, flowId: flow.id });
 			}
@@ -3067,11 +3181,8 @@ export function createFissionScheduler(options = {}) {
 						// Detach is best effort.
 					}
 				}
-				throw refusal(
-					FISSION_SCHEDULER_CODES.UNSUPPORTED,
-					`${plan.flowId}: ${error?.message ?? error}`,
-					{ flowId: plan.flowId, cause: error?.message },
-				);
+				flow.error = error;
+				batchWarning(batch, "FLOW_SPAWN_FAILED", error, flow);
 			}
 		}
 
@@ -3158,32 +3269,21 @@ export function createFissionScheduler(options = {}) {
 				anchor = appendMessageAt(anchor, structuredClone(result));
 			}
 			flow.beginId = writeAt(anchor, "scope.begin", beginData(flow));
-			flow.trailingResults = trailingResults.map((message) => structuredClone(message));
 			// The model needs the call and its own result adjacent. The batch
 			// boundary is the receipt's disk parent, but injecting it between
 			// the call and the result would break the provider's tool protocol,
 			// so the boundary follows the shared results in the model context.
-			flow.agent.state.messages.push(
+			// The SDK may already have restored the owner branch, including its
+			// acknowledgement. Replace that seed; appending would duplicate the
+			// entire conversation and make the host rename repeated call IDs.
+			flow.agent.state.messages = [
 				...history,
 				...boundaryMessages(flow.receiptId),
-				...flow.trailingResults.map((message) => structuredClone(message)),
+				...trailingResults.map((message) => structuredClone(message)),
 				...batchBoundary,
 				...boundaryMessages(flow.beginId),
-			);
-			// Check the copied agent-message prefix before provider conversion.
-			// Provider observation separately compares each flow's later payloads.
-			const prefix = compareMessagePrefix(history, flow.agent.state.messages);
-			if (!prefix.ok) {
-				recordLimit(
-					"FISSION_MESSAGE_PREFIX_MISMATCH",
-					`flow ${flow.id} message prefix differs from the owner (${prefix.frame.length} messages)`,
-					{ flowId: flow.id, frame: prefix.frame },
-				);
-			}
-			// Adoption appends only what the flow itself produced after this
-			// boundary block; the injected prefix stays out of the owner's
-			// conversation.
-			flow.adoptFrom = flow.agent.state.messages.length;
+			];
+			if (flow.error) continue;
 			try {
 				options.bindFlow(flow.id, flow.station, flow.permission, {
 					batchId: batch.id,
@@ -3195,12 +3295,13 @@ export function createFissionScheduler(options = {}) {
 				// now so the first flow request also retains its Skill in the loop.
 				const removePreparation = options.prepareFlow?.(flow.session, flow.station);
 				if (typeof removePreparation === "function") flow.unsubscribe.push(removePreparation);
-			} catch (error) {
-				throw refusal(
-					FISSION_SCHEDULER_CODES.UNSUPPORTED,
-					`bindFlow failed for ${flow.id}: ${error?.message ?? error}`,
-					{ flowId: flow.id },
+				const removePauseGate = flow.agent.addBeforeModelCall?.(() =>
+					flow.batch.paused || flow.blocked ? { stop: true } : undefined,
 				);
+				if (typeof removePauseGate === "function") flow.unsubscribe.push(removePauseGate);
+			} catch (error) {
+				flow.error = error;
+				batchWarning(batch, "FLOW_SPAWN_FAILED", error, flow);
 			}
 		}
 
@@ -3209,6 +3310,10 @@ export function createFissionScheduler(options = {}) {
 		}
 
 		for (const flow of batch.flows) {
+			if (flow.error) {
+				void finishFlow(flow);
+				continue;
+			}
 			if (!flow.cancelReason && batch.cancelled) flow.cancelReason = "cancelled";
 			if (flow.cancelReason) {
 				closeFlowScope(flow);
@@ -3221,23 +3326,8 @@ export function createFissionScheduler(options = {}) {
 				onFlowTerminal(flow);
 				continue;
 			}
-			const prompt = promptFor(flow);
 			flow.status = "running";
-			flow.startedAt = Date.now();
-			emit(batch, "flow.started", { flowId: flow.id, label: flow.label });
-			let pending;
-			try {
-				pending = typeof flow.agent?.continue === "function"
-					? flow.agent.continue()
-					: prompt(intentText(flow));
-			} catch (error) {
-				crashFlow(flow, error);
-				continue;
-			}
-			Promise.resolve(pending).then(
-				() => settleFlow(flow, { aborted: false }),
-				(error) => crashFlow(flow, error),
-			).catch((error) => crashFlow(flow, error));
+			if (!batch.paused) launchFlow(flow);
 		}
 
 		if (!batch.done && !batch.finalizing) batch.status = "running";
@@ -3321,7 +3411,119 @@ export function createFissionScheduler(options = {}) {
 		}
 	}
 
+	async function releaseUnstartedSession(session) {
+		const proxy = session?.sessionManager;
+		if (!isFissionManager(proxy)) return;
+		proxy.seal();
+		await proxy.close();
+		await proxy.releaseRetainedEntries();
+	}
+
 	// -- Events ---------------------------------------------------------------
+
+	function flowMayRun(flow) {
+		return !disposed && !flow.batch.paused && !flow.batch.done &&
+			!flow.blocked && !flow.cancelReason && !flow.endRequested && flow.status === "running";
+	}
+
+	function launchFlow(flow, fallbackText = intentText(flow)) {
+		if (!flowMayRun(flow)) return;
+		if (flow.startedAt === null) {
+			flow.startedAt = Date.now();
+			emit(flow.batch, "flow.started", { flowId: flow.id, label: flow.label });
+		}
+		const epoch = (flow.turnEpoch ?? 0) + 1;
+		flow.turnEpoch = epoch;
+		bridge.beginWork?.();
+		void runFlowTurn(flow, epoch, fallbackText).catch((error) => {
+			if (flow.turnEpoch === epoch) crashFlow(flow, error);
+		});
+	}
+
+	async function runFlowTurn(flow, epoch, fallbackText) {
+		if (flow.copying) {
+			await flow.copying;
+			if (flow.turnEpoch !== epoch) return;
+			if (flow.cancelReason) {
+				settleFlow(flow, { aborted: true });
+				return;
+			}
+			if (!flowMayRun(flow)) return;
+		}
+		const before = flow.session.getLastAssistantMessage?.() ?? lastAssistant(flow);
+		const previousCap = flow.session.costCapRefusal;
+		flow.turnStartAssistant = before;
+		try {
+			if (typeof flow.agent?.continue === "function") await flow.agent.continue();
+			else await promptFor(flow)(fallbackText);
+		} catch (error) {
+			if (flow.turnEpoch !== epoch) return;
+			if (flow.cancelReason) {
+				settleFlow(flow, { aborted: true });
+				return;
+			}
+			if (!flowMayRun(flow) || !blockExternalFailure(flow, error)) throw error;
+			return;
+		}
+		if (flow.turnEpoch !== epoch) return;
+		if (flowMayRun(flow) && !flow.nested.some((batch) => batch.ownerRetired)) {
+			// Core continue() resolves before AgentSession's persistence/recovery.
+			await flow.session.waitForIdle?.();
+			if (flow.turnEpoch !== epoch) return;
+			const cap = flow.session.costCapRefusal;
+			if (flowMayRun(flow) && cap && cap !== previousCap) {
+				flow.batch.costCapped = true;
+				flow.costCapped = true;
+				settleFlow(flow, { aborted: true, reason: cap.message ?? "cost-capped" });
+				return;
+			}
+			const last = flow.session.getLastAssistantMessage?.() ?? lastAssistant(flow);
+			if (flowMayRun(flow) && last !== before && last?.stopReason === "aborted" && last.errorMessage === USER_INTERRUPT) {
+				// A native tool dialog can abort its own session rather than the
+				// owner. An operator interrupt still owns the whole batch.
+				scheduler.pauseAll();
+				return;
+			}
+			if (flowMayRun(flow) && last !== before && last?.stopReason === "error" &&
+				blockExternalFailure(flow, stopErrorFromMessage(last))) return;
+			if (flowMayRun(flow) && last !== before && last?.stopReason === "error") {
+				settleFlow(flow, { error: stopErrorFromMessage(last) });
+				return;
+			}
+			if (flowMayRun(flow) && flow.error && blockExternalFailure(flow, flow.error)) return;
+			if (flowMayRun(flow) && last !== before && last?.stopReason === "stop" && !flow.error) {
+				const text = FLOW_OPEN_NUDGE;
+				if (typeof flow.agent.continue === "function") {
+					flow.agent.steer({ role: "developer", content: [{ type: "text", text }], attribution: "agent", timestamp: Date.now() });
+				}
+				launchFlow(flow, text);
+				return;
+			}
+		}
+		settleFlow(flow, { aborted: false });
+	}
+
+	function blockExternalFailure(flow, error) {
+		if (!isExternalFailure(error)) return false;
+		flow.blocked = true;
+		flow.error = error;
+		batchWarning(flow.batch, "FLOW_BLOCKED", error, flow);
+		endPresentationIfIdle({ messages: flow.agent.state.messages });
+		return true;
+	}
+
+	function externalCause(error) {
+		return error?.details?.cause ?? error?.cause ?? error;
+	}
+
+	function isExternalFailure(error) {
+		const cause = externalCause(error);
+		if (costCapError(error) || costCapError(cause)) return false;
+		const status = Number(cause?.errorStatus ?? cause?.status ?? cause?.statusCode ?? /^([45]\d\d)\b/.exec(cause?.message ?? "")?.[1]);
+		return [401, 402, 403, 404, 408, 409, 429].includes(status) ||
+			(status >= 500 && status < 600) || /^(?:ECONN|EAI_|ETIMEDOUT|ENET|EHOST|UND_ERR_)/.test(cause?.code ?? "") ||
+			/\b(?:api key|credentials?|authentication|unauthorized|rate.limit|quota|timed out|network|connection|overloaded|service unavailable)\b/i.test(cause?.message ?? "");
+	}
 
 	function stopErrorFromMessage(message) {
 		const error = new Error(
@@ -3330,42 +3532,49 @@ export function createFissionScheduler(options = {}) {
 				: "the provider reported an error stop reason",
 		);
 		error.stopReason = "error";
+		error.errorStatus = message.errorStatus;
 		return error;
 	}
 
 	// The host can resolve a turn normally while its assistant message says the
 	// turn failed. Read the last assistant message so an error stop reason can
 	// never be reported as a completed flow.
-	function lastAssistantStopError(flow) {
+	function lastAssistant(flow) {
 		const messages = flow.agent?.state?.messages;
 		if (!Array.isArray(messages)) return null;
 		for (let index = messages.length - 1; index >= 0; index -= 1) {
 			const message = messages[index];
 			if (message?.role !== "assistant") continue;
-			return message.stopReason === "error" ? stopErrorFromMessage(message) : null;
+			return message;
 		}
 		return null;
 	}
 
 	function settleFlow(flow, info = {}) {
-		if (isTerminal(flow)) return flow.finishPromise;
+		if (isTerminal(flow) || ((flow.batch.paused || flow.blocked) && !flow.endRequested &&
+			!flow.cancelReason && !info.error && !flow.nested.some((child) => child.ownerRetired))) return flow.finishPromise;
 		// A child registered before the parent's turn ended may not have had its
 		// own agent_end yet. Start it here so the parent waits on a live child
 		// instead of a descriptor nobody will advance.
 		pendingNested(flow);
-		if (!flow.endRequested && !flow.nested.some((batch) => batch.ownerRetired) && !info.error && !info.aborted && !flow.cancelReason) {
-			info = { ...info, error: new Error("flow stopped without calling scope({ end: true })") };
-		}
 		if (!info.error && info.aborted !== true && !flow.cancelReason) {
-			const failure = lastAssistantStopError(flow);
-			if (failure) info = { ...info, error: failure };
+			const last = lastAssistant(flow);
+			if (last !== flow.turnStartAssistant && last?.stopReason === "error") {
+				info = { ...info, error: stopErrorFromMessage(last) };
+			}
+		}
+		if (!flow.endRequested && !flow.nested.some((batch) => batch.ownerRetired) && !info.error && !info.aborted && !flow.cancelReason && !flow.error) {
+			info = { ...info, error: new Error("Flow ended without a completion receipt or a normal model stop") };
 		}
 		const capped = classifyCostCap(flow, info.error);
 		flow.endInfo = { ...(flow.endInfo ?? {}), ...info };
 		if (info.aborted === true && !flow.cancelReason) {
 			flow.cancelReason = info.reason ?? "aborted";
 		}
-		if (info.error && !capped) flow.error = info.error;
+		if (info.error && !capped && flow.error !== info.error) {
+			flow.error = info.error;
+			batchWarning(flow.batch, "FLOW_FAILED", info.error, flow);
+		}
 		void finishFlow(flow);
 		return flow.finishPromise;
 	}
@@ -3391,6 +3600,7 @@ export function createFissionScheduler(options = {}) {
 			return;
 		}
 		flow.error = failure;
+		batchWarning(flow.batch, "FLOW_FAILED", failure, flow);
 		flow.endInfo = { ...(flow.endInfo ?? {}), aborted: false, error: flow.error };
 		void finishFlow(flow);
 	}
@@ -3402,28 +3612,20 @@ export function createFissionScheduler(options = {}) {
 			// An observer must not break the flow.
 		}
 		if (!isObject(event)) return;
+		if (event.type === "message_start" || event.type === "message_end") markBroadcastShown(event.message);
 		if (event.type === "agent_end") {
 			pendingNested(flow);
-			if (flow.endRequested || flow.cancelReason || flow.error || flow.nested.some((batch) => batch.ownerRetired)) {
+			if (flow.endRequested || flow.cancelReason || flow.nested.some((batch) => batch.ownerRetired)) {
 				settleFlow(flow, { aborted: Boolean(flow.cancelReason) });
 			}
 			return;
 		}
 		if (event.type === "message_end") {
-			const message = event.message;
-			if (
-				message?.role === "assistant" &&
-				message.stopReason === "error" &&
-				!flow.cancelReason &&
-				!flow.error
-			) {
-				const failure = stopErrorFromMessage(message);
-				if (!classifyCostCap(flow, failure)) flow.error = failure;
-			}
 			void scheduleFlush(flow.batch);
 			return;
 		}
 		if (event.type === "error" && !flow.error) {
+			if (flow.batch.paused && !flow.cancelReason) return;
 			const failure = event.error instanceof Error
 				? event.error
 				: new Error(String(event.error?.message ?? event.message ?? "flow error"));
@@ -3431,12 +3633,166 @@ export function createFissionScheduler(options = {}) {
 		}
 	}
 
+	async function interruptFlow(flow, reason = USER_INTERRUPT) {
+		try {
+			if (typeof flow.session.abort === "function") await flow.session.abort({ reason });
+			else flow.agent.abort(reason);
+			await flow.session.waitForIdle?.();
+		} catch (error) {
+			batchWarning(flow.batch, "FLOW_INTERRUPT_FAILED", error, flow);
+			if (!flow.cancelReason) crashFlow(flow, error);
+		}
+	}
+
+	function pauseAll() {
+		const targets = batches.filter((batch) => !batch.done && !batch.paused);
+		for (const batch of targets) batch.paused = true;
+		const restored = withdrawInterruptInput();
+		const followUp = [];
+		const pending = [];
+		for (const batch of targets) {
+			for (const flow of batch.flows) {
+				if (flow.status !== "running" || flow.endRequested || flow.cancelReason) continue;
+				try {
+					const input = flow.session.clearQueue?.({ forInterrupt: true });
+					if (input) {
+						restored.push(...input.steering);
+						followUp.push(...input.followUp);
+					}
+				} catch (error) {
+					batchWarning(batch, "FLOW_QUEUE_RETRACT_FAILED", error, flow);
+				}
+				// A retired parent still has to settle into its nested batch.
+				if (!flow.nested.some((child) => child.ownerRetired)) flow.turnEpoch = (flow.turnEpoch ?? 0) + 1;
+				flow.interrupt = interruptFlow(flow);
+				pending.push(flow.interrupt);
+			}
+		}
+		if (targets.length > 0 || restored.length > 0) {
+			endPresentationIfIdle({ messages: [], interrupted: true });
+		}
+		return { restored, followUp, settled: Promise.all(pending) };
+	}
+
+	async function resumeBroadcast(text, broadcastOptions) {
+		const previous = queuedAdmission;
+		const gate = Promise.withResolvers();
+		const admission = previous ? Promise.all([previous, gate.promise]) : gate.promise;
+		queuedAdmission = admission;
+		void admission.then(() => {
+			if (queuedAdmission === admission) queuedAdmission = null;
+		});
+		try {
+			return await admitBroadcast(text, broadcastOptions, previous);
+		} finally {
+			gate.resolve();
+		}
+	}
+
+	async function admitBroadcast(text, broadcastOptions, previous) {
+		const paused = batches.filter(isSuspendedBatch);
+		const starting = batches.filter((batch) => !batch.done && batch.status === "starting");
+		const generation = interruptGeneration;
+		const id = broadcastOptions.broadcastId ?? `bc${++broadcastSeq}`;
+		const row = broadcastRecord(id, text, broadcastOptions.images);
+		row.awaiting = true;
+		row.withdrawn = Promise.withResolvers();
+		bridge.queueChanged?.();
+		for (const batch of paused) {
+			if (!batch.startBlocked) continue;
+			batch.paused = true; // Hold the first provider request for the resume input.
+			batch.startBlocked = false;
+			batch.startPromise = null;
+			void startRegisteredBatch(batch);
+		}
+		await Promise.race([row.withdrawn.promise, Promise.all([
+			previous,
+			...starting.map((batch) => batch.startPromise),
+			...paused.flatMap((batch) => batch.flows.length === 0
+				? [batch.startPromise] : batch.flows.map((flow) => flow.interrupt)),
+		])]);
+		if (!broadcastLedger.has(id)) return { ok: true, broadcastId: id, delivered: [], failures: [] };
+		row.awaiting = false;
+		row.withdrawn = null;
+		if (generation !== interruptGeneration) {
+			broadcastLedger.delete(id);
+			bridge.queueChanged?.();
+			return { ok: false, detail: "The broadcast was interrupted before it could be delivered." };
+		}
+		const recipients = activeLeaves(true);
+		if (!recipients.length && paused.some((batch) => batch.startBlocked)) {
+			broadcastLedger.delete(id);
+			bridge.queueChanged?.();
+			return { ok: false, detail: "The batch is still blocked. Fix the reported issue and send another message to resume." };
+		}
+		const resumed = recipients.filter((flow) => flow.batch.paused || flow.blocked);
+		const outcome = broadcastTo(recipients, text, { ...broadcastOptions, broadcastId: id });
+		if (!outcome.ok) return outcome;
+		for (const batch of paused) batch.paused = false;
+		for (const flow of resumed) {
+			if (!outcome.delivered.includes(flow.label)) {
+				flow.blocked = true;
+				continue;
+			}
+			flow.blocked = false;
+			flow.error = null;
+			flow.interrupt = null;
+			launchFlow(flow, text);
+		}
+		return { ...outcome, resumed: resumed.length > 0 };
+	}
+
+	let interruptGeneration = 0;
+	let queuedAdmission = null;
+
+	function isSuspendedBatch(batch) {
+		return !batch.done && (batch.paused || batch.startBlocked || batch.flows.some((flow) => flow.blocked && !isTerminal(flow)));
+	}
+
+	function hasActiveWork() {
+		return !disposed && batches.some((batch) => !batch.done && !batch.paused && !batch.startBlocked &&
+			(batch.flows.length === 0 || batch.finalizing || batch.flows.some((flow) =>
+				!isTerminal(flow) && !flow.blocked && !flow.nested.some((child) => !child.done))));
+	}
+
+	function endPresentationIfIdle(event) {
+		if (!hasActiveWork()) {
+			bridge.endWork?.(event);
+			releasePendingPresentations();
+		}
+	}
+
+	function releasePendingPresentations() {
+		for (const row of broadcastLedger.values()) row.presentation?.resolve();
+	}
+
+	function broadcastTo(recipients, text, options) {
+		if (!recipients.length) {
+			if (options.broadcastId) broadcastLedger.delete(options.broadcastId);
+			bridge.queueChanged?.();
+			return { ok: false, code: FISSION_SCHEDULER_CODES.NO_ACTIVE_FLOW, detail: "no running flow; after the batch closes, input belongs to the heir" };
+		}
+		const id = options.broadcastId ?? `bc${++broadcastSeq}`;
+		broadcastRecord(id, text, options.images);
+		const { labels, delivered, failed } = enqueueBroadcast(recipients, text, id);
+		if (!delivered.length) {
+			broadcastLedger.delete(id);
+			return { ok: false, code: FISSION_SCHEDULER_CODES.UNSUPPORTED, detail: "no flow accepted the broadcast", failures: failed };
+		}
+		return { ok: true, broadcastId: id, recipients: labels, delivered, failures: failed };
+	}
+
 	// Cancelling a flow cancels its whole subtree. A retired parent may itself
 	// be "ending" while its nested leaves still generate, so the recursion
 	// carries the reason through every level instead of stopping at children.
 	function cancelDescendants(flow, reason, seen = new Set()) {
 		for (const childBatch of flow.nested) {
+			if (childBatch.done) continue;
 			childBatch.cancelled = true;
+			if (childBatch.flows.length === 0) {
+				scheduler.cancelBatch(childBatch.id, reason);
+				continue;
+			}
 			for (const childFlow of childBatch.flows) {
 				if (isTerminal(childFlow) || seen.has(childFlow.id)) continue;
 				seen.add(childFlow.id);
@@ -3448,13 +3804,22 @@ export function createFissionScheduler(options = {}) {
 				) {
 					try {
 						settlePendingBroadcasts(childFlow);
-						childFlow.agent.abort();
+						abortCancelledFlow(childFlow);
 					} catch (error) {
 						batchWarning(childFlow.batch, "CANCEL_CASCADE_FAILED", error, childFlow);
 					}
 				}
 				cancelDescendants(childFlow, childFlow.cancelReason ?? reason, seen);
 			}
+		}
+	}
+
+	function abortCancelledFlow(flow) {
+		if (flow.batch.paused || flow.blocked || typeof flow.session.abort === "function") {
+			flow.interrupt ??= interruptFlow(flow, flow.cancelReason);
+			void flow.interrupt.then(() => settleFlow(flow, { aborted: true }));
+		} else {
+			flow.agent.abort(flow.cancelReason);
 		}
 	}
 
@@ -3466,19 +3831,21 @@ export function createFissionScheduler(options = {}) {
 			label: batch.label,
 			stage: batch.stage,
 			status: batch.status,
+			paused: batch.paused,
 			outcome: batch.outcome ?? null,
 			ackId: batch.ackId ?? null,
 			batchBeginId: batch.batchBeginId,
 			heir: batch.heir?.label ?? null,
-			flows: batch.flows.map((flow) => ({
+			flows: [...batch.flows.map((flow) => ({
 				flowId: flow.id,
 				label: flow.label,
 				index: flow.index,
 				status: flow.status,
+				error: flow.error?.message ?? null,
 				beginId: flow.beginId ?? null,
 				receiptId: flow.receiptId ?? null,
 				nested: flow.nested.map((child) => child.id),
-			})),
+			})), ...(batch.spawnFailures ?? [])].sort((a, b) => a.index - b.index),
 			handoffs: batch.handoffs.map((record) => ({
 				handoffId: record.handoffId,
 				from: record.from,
@@ -3493,6 +3860,20 @@ export function createFissionScheduler(options = {}) {
 	}
 
 	const scheduler = {
+		pauseAll() {
+			interruptGeneration += 1;
+			return pauseAll();
+		},
+		interruptEpoch: () => interruptGeneration,
+		hasActiveWork,
+		hasPausedWork: () => batches.some(isSuspendedBatch),
+		canBroadcast: () => batches.some((batch) => !batch.done && (batch.startBlocked || batch.status === "starting")),
+		inputLeaves: () => activeLeaves(true),
+		queuedBroadcasts: () => [...broadcastLedger.values()]
+			.filter((row) => !broadcastSettled(row) && (row.awaiting || row.copies.size > 0)).map((row) => row.text),
+		popBroadcast,
+		broadcastPresented,
+		waitForBroadcastPresentation,
 		registerBatch,
 		retireOwner,
 		onOwnerEnd,
@@ -3561,6 +3942,7 @@ export function createFissionScheduler(options = {}) {
 				);
 			}
 			if (isTerminal(flow)) return { ok: false, code: "ALREADY_TERMINAL", status: flow.status };
+			if (flow.cancelReason && flow.interrupt) return { ok: true, flowId, reason: flow.cancelReason };
 			if (typeof flow.agent?.abort !== "function") {
 				throw refusal(
 					FISSION_SCHEDULER_CODES.UNSUPPORTED,
@@ -3579,20 +3961,27 @@ export function createFissionScheduler(options = {}) {
 			// The abort must not revive a copy this stream can never show:
 			// withdraw and reroute it before the host restores its queues.
 			settlePendingBroadcasts(flow);
-			flow.agent.abort();
+			abortCancelledFlow(flow);
 			return { ok: true, flowId, reason: flow.cancelReason };
 		},
 
 		cancelAll(reason = "cancelled") {
+			interruptGeneration += 1;
+			// Whole-session teardown must not carry an undelivered steer to
+			// the owner that is about to switch or close its conversation.
+			withdrawInterruptInput();
 			const results = [];
-			const seen = new Set();
 			for (const batch of batches) {
+				if (batch.done) continue;
+				batch.cancelled = true;
+				if (batch.flows.length === 0) {
+					results.push(scheduler.cancelBatch(batch.id, reason));
+					continue;
+				}
 				for (const flow of batch.flows) {
-					if (seen.has(flow.id) || isTerminal(flow)) continue;
 					if (flow.status !== "running" && flow.status !== "spawning") continue;
-					seen.add(flow.id);
 					try {
-						results.push(scheduler.cancelFlow(flow.id, reason));
+						results.push(scheduler.cancelFlow(flow.id, reason, { cascade: false }));
 					} catch (error) {
 						results.push({ ok: false, flowId: flow.id, error: error?.message ?? String(error) });
 					}
@@ -3611,6 +4000,14 @@ export function createFissionScheduler(options = {}) {
 			if (batch.done) return { ok: false, code: "ALREADY_TERMINAL", status: batch.status };
 			batch.cancelled = true;
 			if (batch.flows.length === 0) {
+				if (batch.startBlocked) {
+					for (const result of batch.preparedSpawns ?? []) {
+						if (result.status === "fulfilled") {
+							void releaseUnstartedSession(result.value.session).catch((error) => batchWarning(batch, "START_CLEANUP_FAILED", error));
+						}
+					}
+					batch.preparedSpawns = null;
+				}
 				batch.status = "cancelled";
 				closeUnstartedBatch(batch);
 				closeBatchScope(batch);
@@ -3647,28 +4044,8 @@ export function createFissionScheduler(options = {}) {
 			if (!content.trim()) {
 				return { ok: false, code: FISSION_SCHEDULER_CODES.INVALID_REQUEST, detail: "broadcast text is empty" };
 			}
-			const recipients = activeLeaves();
-			if (recipients.length === 0) {
-				return {
-					ok: false,
-					code: FISSION_SCHEDULER_CODES.NO_ACTIVE_FLOW,
-					detail: "no running flow; after the batch closes, input belongs to the heir",
-				};
-			}
-			broadcastSeq += 1;
-			const broadcastId = isNonEmptyString(broadcastOptions.broadcastId)
-				? broadcastOptions.broadcastId
-				: `bc${broadcastSeq}`;
-			const { labels, delivered, failed } = enqueueBroadcast(recipients, content, broadcastId);
-			if (delivered.length === 0) {
-				return {
-					ok: false,
-					code: FISSION_SCHEDULER_CODES.UNSUPPORTED,
-					detail: "no flow accepted the broadcast",
-					failures: failed,
-				};
-			}
-			return { ok: true, broadcastId, recipients: labels, delivered, failures: failed };
+			if (queuedAdmission || scheduler.hasPausedWork() || scheduler.canBroadcast()) return resumeBroadcast(content, broadcastOptions);
+			return broadcastTo(activeLeaves(), content, broadcastOptions);
 		},
 
 		hasRunningFlows(batchId) {

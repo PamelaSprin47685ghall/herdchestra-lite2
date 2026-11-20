@@ -145,6 +145,9 @@ describe("barrier integration", () => {
 			unbindFlow() {},
 			spawnFlow(plan) {
 				const session = makeFlowSession(plan.flowId);
+				// createAgentSession restores the existing journal before the
+				// scheduler installs this flow's own branch and receipt.
+				session.agent.state.messages = structuredClone(ownerAgent.state.messages);
 				spawned.push(session);
 				return { session };
 			},
@@ -228,6 +231,9 @@ describe("barrier integration", () => {
 			expect(tail[3].customType).toBe("scope.begin");
 
 			const messages = spawned[index].agent.state.messages;
+			expect(messages.filter((message) => message.role === "assistant")).toEqual([open]);
+			expect(messages.filter((message) => message.role === "toolResult").map((message) => message.toolCallId))
+				.toEqual(["scope-call", "t1", "t2"]);
 			const receiptAt = messages.findIndex(
 				(message) =>
 					message?.role === "toolResult" &&
@@ -251,5 +257,14 @@ describe("barrier integration", () => {
 			const scope = bindings[index].station.state.scopes.at(-1);
 			expect(scope.remaining).toEqual({ read: 0.5, grep: 0.5 });
 		}
+		const first = flows[0];
+		scheduler.requestFlowEnd(first.flowId);
+		await scheduler.flowEnded(first.flowId);
+		const heir = flows[1];
+		const warmed = spawned[1].agent.state.messages.slice();
+		scheduler.requestFlowEnd(heir.flowId);
+		await scheduler.flowEnded(heir.flowId);
+		expect((await scheduler.waitForBatch(registered.batchId)).status).toBe("closed");
+		expect(ownerAgent.state.messages.slice(0, warmed.length)).toEqual(warmed);
 	});
 });

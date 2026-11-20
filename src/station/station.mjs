@@ -643,6 +643,7 @@ export class SessionStation {
 
 	maybeNudge(message, ctx) {
 		if (!message || message.role !== "assistant") return;
+		if (message.stopReason === "aborted" || message.stopReason === "error") return;
 		// Flow completion is managed by the fission scheduler, not the relay.
 		if (this.fissionFlow) return;
 		if (!this.relayOn(ctx)) return;

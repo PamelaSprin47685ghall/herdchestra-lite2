@@ -295,6 +295,21 @@ test("missing journal output stops preparation before it writes a receipt", () =
 	assert.equal(fixture.entries.length, 1);
 });
 
+test("an interrupted tail is checked against the journal without rewriting the committed prefix", () => {
+	const fixture = harness();
+	const first = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx);
+	const interrupted = { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "partial" }], timestamp: 10 };
+	fixture.manager.appendMessage(interrupted);
+	fixture.session.agent.state.messages.push(interrupted);
+	fixture.manager.buildSessionContext = ({ transcript } = {}) => ({
+		messages: fixture.entries.map(({ message }) => message).filter((message) => transcript || message !== interrupted),
+	});
+	const next = commitSkillReceipt(fixture.manager, [...first, interrupted, skill("next", 20)], fixture.ctx);
+	assert.deepEqual(next.slice(0, first.length), first);
+	assert.equal(next.at(-2), interrupted);
+	assert.equal(fixture.entries.at(-2).message, interrupted);
+});
+
 for (const [role, customType] of [
 	["custom", "vibe-mode-context"],
 	["hookMessage", "vibe-mode-context"],

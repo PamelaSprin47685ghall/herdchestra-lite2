@@ -12,6 +12,12 @@ A fission begin currently cannot also close a scope. `scope({ begin, end: true }
 
 `scope({ begin })` is also an execution barrier. Tool calls listed after it in the same assistant message run once on the owner, and their results are copied into every flow in the batch; calls listed before it run first in the outer context. `amend` is available inside every flow: it edits that flow's own record, refunds its budget, and never rewrites the shared journal. A beat revoked by `amend` is not copied into a sibling flow, and a flow cannot amend across its own begin or a closed sibling boundary.
 
+During a batch, **Esc** pauses the running flows without closing their scopes. The next ordinary message broadcasts to all unfinished leaves and wakes those that were paused. Until the first copy is delivered, a broadcast appears once in omp's native **Steering** panel: **Alt+Up** takes it back, and **Esc** returns undelivered input to the editor. Later copies reach their flows without another transcript echo.
+
+A flow that stops normally without `scope({ end: true })` gets a steer to continue. A recoverable provider or startup error instead waits for your input: fix the external issue and send `继续` (or another ordinary message). A permanent failure is reported separately; a healthy sibling can still complete and take over the conversation.
+
+Pause, resume, and takeover do not rebuild the flow's message prefix. Actual cache hits still depend on the provider and request headers: a model switch, a compaction, or the host's different tool definitions for interactive and headless sessions can change cache eligibility.
+
 ## Running from source
 
 omp loads the installed copy at `~/.omp/plugins/node_modules/herdchestra-lite2`, not this working tree, so an edit here does not reach a running session by itself. After changing `src/` or `resources/`:

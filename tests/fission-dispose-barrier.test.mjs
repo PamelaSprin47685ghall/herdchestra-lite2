@@ -124,6 +124,8 @@ describe("createDisposeBarrier", () => {
 			live: { live: true, ids: ["b1"] },
 			graceMs: 20,
 			ceilingMs: 50,
+			// No teardown reason has arrived, so the state reports none.
+			teardown: null,
 		});
 	});
 

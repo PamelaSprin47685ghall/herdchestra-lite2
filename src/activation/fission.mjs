@@ -396,6 +396,11 @@ export function uninstallFissionInput(session) {
 // first, and the wait is bounded by HERDCHESTRA_FISSION_CANCEL_GRACE_MS so a
 // stuck spawn cannot hold Ctrl-C forever.
 //
+// The host memoizes `dispose()`, so a signal that arrives during an ordinary
+// wait calls this wrapper again with a reason. That call must not be dropped:
+// it upgrades the wait in place -- cancel now, arm the same grace bound -- and
+// still shares the one dispose call.
+//
 // An ordinary dispose carries no postmortem reason, and it has no default
 // ceiling: a legitimate long flow must be allowed to finish, and sealing the
 // shared journal under live flows would drop their entries. The wait therefore
@@ -538,6 +543,10 @@ export function createDisposeBarrier({
 	// A release must reach a waiter sleeping inside nextTick(); these resolvers
 	// are the waiters that can be woken without waiting for the poll interval.
 	const waiters = new Set();
+	// A teardown reason can arrive after an ordinary wait has begun, because the
+	// host memoizes `dispose()`. The upgrade lives outside `wait` so it can
+	// reach the in-flight loop; repeated reasons keep the first deadline.
+	let escalated = null;
 
 	function release(reason = "released") {
 		if (released !== null) return false;
@@ -558,6 +567,30 @@ export function createDisposeBarrier({
 		} catch (error) {
 			record("fission", error, { barrier: "cancel", optional: true });
 		}
+	}
+
+	/**
+	 * Upgrade the wait with a teardown reason that arrived after it began.
+	 *
+	 * Cancelling immediately is what makes Ctrl-C effective while an ordinary
+	 * dispose is waiting; the grace deadline is armed once and never extended
+	 * by repeated signals. Accepts the dispose options object or a raw reason.
+	 */
+	function escalate(input) {
+		const next = typeof input === "string"
+			? (input !== "" ? input : null)
+			: disposalReason(input);
+		if (next === null) return false;
+		sweep(next);
+		const at = now();
+		if (escalated === null) {
+			escalated = { reason: next, deadline: at + grace, sweptAt: at };
+		} else {
+			escalated.reason = next;
+			escalated.sweptAt = at;
+		}
+		wake();
+		return true;
 	}
 
 	/**
@@ -599,10 +632,10 @@ export function createDisposeBarrier({
 	}
 
 	async function wait(options = {}) {
-		const reason = disposalReason(options);
+		let reason = disposalReason(options);
 		if (reason !== null) sweep(reason);
 		const startedAt = now();
-		const deadline = reason !== null
+		let deadline = reason !== null
 			? startedAt + grace
 			: ceiling > 0
 				? startedAt + ceiling
@@ -610,6 +643,15 @@ export function createDisposeBarrier({
 		let sweptAt = reason !== null ? startedAt : 0;
 		for (;;) {
 			if (released !== null) return "released";
+			// Adopt a reason that arrived while this wait was already running.
+			// The earlier bound (ceiling or a first reason) is never extended.
+			if (escalated !== null && reason === null) {
+				reason = escalated.reason;
+				deadline = deadline === null
+					? escalated.deadline
+					: Math.min(deadline, escalated.deadline);
+				sweptAt = escalated.sweptAt;
+			}
 			const liveness = schedulerLiveness(scheduler);
 			if (liveness === null) {
 				// The barrier cannot prove the journal is safe to seal. Say so
@@ -650,12 +692,14 @@ export function createDisposeBarrier({
 	return {
 		wait,
 		release,
+		escalate,
 		state() {
 			return {
 				released,
 				live: schedulerLiveness(scheduler),
 				graceMs: grace,
 				ceilingMs: ceiling,
+				teardown: escalated ? { ...escalated } : null,
 			};
 		},
 	};
@@ -728,6 +772,11 @@ export function installDisposeBarrier(session, scheduler, options = {}) {
 				}
 				return Reflect.apply(original, receiver, args);
 			})();
+		} else {
+			// The host memoizes its dispose call, so a postmortem signal during
+			// an ordinary wait arrives here, not inside `wait`. Cancel the flows
+			// now and bound the shared wait by the grace window.
+			barrier.escalate(args[0]);
 		}
 		return disposeCall;
 	}

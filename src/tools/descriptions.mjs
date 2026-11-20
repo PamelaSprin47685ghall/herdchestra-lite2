@@ -9,9 +9,12 @@ import { loadDoc } from "../prompts/index.mjs";
 const scope = loadDoc("tools/scope");
 
 export const SCOPE_DESCRIPTION = scope.tool;
-export const BEGIN_INTENT_DESCRIPTION = scope["begin.intent"];
-export const BUDGET_DESCRIPTION = scope["begin.budget"];
-export const PERMISSION_DESCRIPTION = scope["begin.permission"];
+// The intent, budget, permission, and model texts describe one fission item.
+export const BEGIN_INTENT_DESCRIPTION = scope["fission.intent"];
+export const BUDGET_DESCRIPTION = scope["fission.budget"];
+export const PERMISSION_DESCRIPTION = scope["fission.permission"];
+export const FISSION_DESCRIPTION = scope["begin.fission"];
+export const MODEL_DESCRIPTION = scope["fission.model"];
 export const END_DESCRIPTION = scope.end;
 export const ELDER_REPORT_DESCRIPTION = scope["begin.elder_report"];
 export const AMEND_DESCRIPTION = scope["amend.tool"];
@@ -32,20 +35,21 @@ export const scopeParameters = {
 		begin: {
 			type: "object",
 			additionalProperties: false,
-			required: ["intent", "stage", "budget", "elder_report", "permission"],
+			required: ["stage", "elder_report", "fission"],
 			properties: {
-				intent: { type: "string", minLength: 1, description: BEGIN_INTENT_DESCRIPTION },
-				budget: { type: "object", additionalProperties: { type: "integer", minimum: 0 }, description: BUDGET_DESCRIPTION },
-				permission: { type: "string", enum: ["ro", "rw"], description: PERMISSION_DESCRIPTION },
-				model: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }], description: scope["begin.model"] },
 				stage: {
 					type: "string",
 					enum: [...WORKFLOW_STAGES],
 					description: scope["begin.stage"],
 				},
+				elder_report: {
+					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
+					description: ELDER_REPORT_DESCRIPTION,
+				},
 				fission: {
 					type: "array",
 					minItems: 1,
+					description: FISSION_DESCRIPTION,
 					items: {
 						type: "object",
 						additionalProperties: false,
@@ -54,13 +58,9 @@ export const scopeParameters = {
 							intent: { type: "string", minLength: 1, description: BEGIN_INTENT_DESCRIPTION },
 							budget: { type: "object", additionalProperties: { type: "integer", minimum: 0 }, description: BUDGET_DESCRIPTION },
 							permission: { type: "string", enum: ["ro", "rw"], description: PERMISSION_DESCRIPTION },
-							model: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }], description: scope["begin.model"] },
+							model: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }], description: MODEL_DESCRIPTION },
 						},
 					},
-				},
-				elder_report: {
-					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
-					description: ELDER_REPORT_DESCRIPTION,
 				},
 			},
 			description: scope.begin,

@@ -56,9 +56,11 @@ describe("tool contracts map to their documents", () => {
 	test("scope", () => {
 		const doc = loadDoc("tools/scope");
 		expect(scopeTools.SCOPE_DESCRIPTION).toBe(doc.tool);
-		expect(scopeTools.BEGIN_INTENT_DESCRIPTION).toBe(doc["begin.intent"]);
-		expect(scopeTools.BUDGET_DESCRIPTION).toBe(doc["begin.budget"]);
-		expect(scopeTools.PERMISSION_DESCRIPTION).toBe(doc["begin.permission"]);
+		expect(scopeTools.BEGIN_INTENT_DESCRIPTION).toBe(doc["fission.intent"]);
+		expect(scopeTools.BUDGET_DESCRIPTION).toBe(doc["fission.budget"]);
+		expect(scopeTools.PERMISSION_DESCRIPTION).toBe(doc["fission.permission"]);
+		expect(scopeTools.FISSION_DESCRIPTION).toBe(doc["begin.fission"]);
+		expect(scopeTools.MODEL_DESCRIPTION).toBe(doc["fission.model"]);
 		expect(scopeTools.END_DESCRIPTION).toBe(doc.end);
 		expect(scopeTools.ELDER_REPORT_DESCRIPTION).toBe(doc["begin.elder_report"]);
 		expect(scopeTools.AMEND_DESCRIPTION).toBe(doc["amend.tool"]);
@@ -86,13 +88,23 @@ describe("tool contracts map to their documents", () => {
 
 	test("schemas carry the mapped text", () => {
 		const scope = loadDoc("tools/scope");
-		expect(scopeTools.scopeParameters.properties.begin.description).toBe(scope.begin);
-		expect(scopeTools.scopeParameters.properties.begin.properties.stage.description).toBe(
-			scope["begin.stage"],
-		);
-		expect(scopeTools.scopeParameters.properties.begin.properties.model.description).toBe(
-			scope["begin.model"],
-		);
+		const begin = scopeTools.scopeParameters.properties.begin;
+		expect(begin.description).toBe(scope.begin);
+		expect(begin.required).toEqual(["stage", "elder_report", "fission"]);
+		expect(begin.properties.stage.description).toBe(scope["begin.stage"]);
+		expect(begin.properties.elder_report.description).toBe(scope["begin.elder_report"]);
+		expect(begin.properties).not.toHaveProperty("intent");
+		expect(begin.properties).not.toHaveProperty("budget");
+		expect(begin.properties).not.toHaveProperty("permission");
+		expect(begin.properties).not.toHaveProperty("model");
+		expect(begin.properties.fission).toMatchObject({ type: "array", minItems: 1 });
+		expect(begin.properties.fission.description).toBe(scope["begin.fission"]);
+		const item = begin.properties.fission.items;
+		expect(item.required).toEqual(["intent", "budget", "permission"]);
+		expect(item.properties.intent.description).toBe(scope["fission.intent"]);
+		expect(item.properties.budget.description).toBe(scope["fission.budget"]);
+		expect(item.properties.permission.description).toBe(scope["fission.permission"]);
+		expect(item.properties.model.description).toBe(scope["fission.model"]);
 		expect(scopeTools.amendParameters.properties.reflection.description).toBe(
 			scope["amend.reflection"],
 		);

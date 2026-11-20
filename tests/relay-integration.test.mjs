@@ -1417,10 +1417,12 @@ describe("handoff transaction recovery", () => {
 });
 
 describe("scope begin permission", () => {
-	test("the schema requires permission ro|rw", () => {
+	test("the schema requires permission ro|rw on each fission item", () => {
 		const begin = scopeParameters.properties.begin;
-		expect(begin.required).toContain("permission");
-		expect(begin.properties.permission.enum).toEqual(["ro", "rw"]);
+		expect(begin.required).toEqual(["stage", "elder_report", "fission"]);
+		const item = begin.properties.fission.items;
+		expect(item.required).toContain("permission");
+		expect(item.properties.permission.enum).toEqual(["ro", "rw"]);
 	});
 
 	test("permission ro opens before the first ledger submission", async () => {

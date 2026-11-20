@@ -102,7 +102,15 @@ const assistant = (content, timestamp) => ({
 	content,
 	timestamp: timestamp ?? Date.now(),
 });
-const call = (id, name, args) => ({ type: "toolCall", id, name, arguments: args });
+const call = (id, name, args) => ({
+	type: "toolCall",
+	id,
+	name,
+	arguments:
+		name === "scope" && args?.begin && args.begin.time === undefined
+			? { ...args, begin: { ...args.begin, time: 60 } }
+			: args,
+});
 const toolResult = (id, name, text, isError = false) => ({
 	role: "toolResult",
 	toolCallId: id,

@@ -8,6 +8,8 @@ In simple mode the four working stages may open in any order, and that freedom s
 
 This protocol runs only in the full flow. A simple task that has not submitted a todo ledger opens a direct-execution scope directly and finishes there. Submitting a todo ledger turns the full flow on; two consecutive empty evaluations end it, and the session returns to simple mode. A later todo write after that turns the full flow on again.
 
+Choose by task nature. For a development task (a feature, a refactor, a design change), in principle submit a ledger, so the five stages and the relay apply. For an operational task (ops, maintenance, diagnostics, delivery), in principle do not submit one; it runs as a simple direct-execution scope. Judge by what the work actually needs, and let that judgment override the default.
+
 ## decision-framing
 
 [Stage: decision-framing]

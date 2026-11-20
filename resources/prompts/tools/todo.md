@@ -6,6 +6,8 @@ Operations: init replaces and submits the whole ledger; view is a read-only chec
 
 Write every item so the next agent can understand the work: the user requirement, acceptance evidence, unresolved risks, and the next concrete action. Summarize requirements without omitting or narrowing them; you do not need to quote them. The tool result appends RELAY STATE: the current generation, this generation's first evaluation, whether the ledger is empty, whether stopping is allowed, and the next required action.
 
+Choose by task nature. For a development task (a feature, a refactor, a design change), in principle submit a ledger, so the five stages and the relay apply. For an operational task (ops, maintenance, diagnostics, delivery), in principle do not submit one; it runs as a simple direct-execution scope. Judge by what the work actually needs, and let that judgment override the default.
+
 ## op
 
 One incremental todo operation. Omit it and the native tool infers the operation from the other fields. init replaces and submits the entire ledger from list (list: [] submits an empty ledger). start moves an existing task to in_progress. done completes it. rm removes it. drop abandons it. block marks it blocked, with reason as the blocker note. unblock returns it to pending. append adds items to a phase. view is a read-only check: it does NOT advance the relay evaluation and does not change the ledger. To submit a ledger, use a write operation, most explicitly init with the full list. A failed call never advances the relay state. In simple mode a view is a no-op that keeps the flow simple.

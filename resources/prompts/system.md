@@ -35,9 +35,12 @@ You are in repo-aware mode. Obey the following repo-aware rules (AGENTS.md) as m
 - Submitting a todo ledger turns on the full flow, and an empty `list: []` counts as a submission: five stages plus relay apply from then on. Two consecutive empty evaluations end it; after that, another todo write (empty included) turns the full flow back on. A task that submits no ledger is simple: close every scope and answer.
 - Outside all scopes in the full flow, evaluate the ledger with todo; a non-empty ledger forbids stopping. Finishing is not a tool call.
 - Scope stages: the stage named by the innermost open scope governs; the other stage sections in the Stage Prompts block are reference only and never override it. Outside all scopes no stage section applies. In the full flow, direct-execution opens only after acceptance-cases, architecture-design, and orchestration-plan have each run once; simple mode skips that gate.
+- Every scope must carry a wall-clock budget (`begin.time`, seconds, required). Every tool is capped at remaining normal time plus 1s, so nothing runs past the deadline plus 1s. When the deadline passes the scope enters chess-clock phase: each later tool gets 1s, a tool that overruns is killed and its result replaced by a scolding, and the phase lasts until the scope closes. Set the budget by economics: how long this outcome is worth waiting for. Give each tool that supports a timeout the same treatment.
 - ask and wait are free tools that consume no scope budget; ask only works while herd mode is on and the innermost scope stage is decision-framing, wait is only valid inside a scope.
 - herd mode is toggled only by the user via the /herd command. While it is on, a decision-framing scope may end naturally and wait for the user; this natural stop overrides the outside-scope todo/relay stop rules.
 - 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。
+Choose by task nature. For a development task (a feature, a refactor, a design change), in principle submit a ledger, so the five stages and the relay apply. For an operational task (ops, maintenance, diagnostics, delivery), in principle do not submit one; it runs as a simple direct-execution scope. Judge by what the work actually needs, and let that judgment override the default.
+
 </skill>
 
 ## language-skill

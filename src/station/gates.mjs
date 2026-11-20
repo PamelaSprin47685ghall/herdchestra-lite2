@@ -5,6 +5,7 @@
 import {
 	chargeTool,
 	currentScope,
+	effectiveDeadline,
 	isFreeCall,
 	truncateForHostBoundary,
 } from "../scope/index.mjs";
@@ -134,6 +135,10 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 				reason:
 					"Not in a scope. Outside all scopes only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { intent, stage, budget, elder_report, permission } }) before using any other tool.",
 			};
+		}
+		const deadline = effectiveDeadline(state);
+		if (deadline !== null && Date.now() >= deadline && scope.overtimeAt === null) {
+			scope.overtimeAt = Date.now();
 		}
 		if (toolName === "wait") return undefined;
 		const found = station.assistantForToolCall(toolCallId);

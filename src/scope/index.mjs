@@ -4,6 +4,7 @@ export {
   createState,
   currentScope,
   scopeOrder,
+  effectiveDeadline,
   CACHE_TTL_MS,
   modelCacheFor,
   cacheIsFresh,

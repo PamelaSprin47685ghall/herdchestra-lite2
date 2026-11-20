@@ -38,6 +38,14 @@ All notable changes to this extension. The format follows
 
 ### Changed
 
+- Task nature now selects the flow by default. The persistent rules, the stage
+  prompt header, and the `todo` tool description say the same thing: a
+  development task (a feature, a refactor, a design change) in principle
+  submits a ledger, so the five stages and the relay apply; an operational task
+  (ops, maintenance, diagnostics, delivery) in principle finishes in one simple
+  `direct-execution` scope. Judgment about what the work actually needs
+  overrides the default, so the rule guides the choice instead of forcing it.
+  A prompt contract test pins the sentence in all three documents.
 - The no-ledger nudge names both lawful ledger shapes. A model that had nothing
   to do saw only `todo({op:"init", list:[{phase,items}]})` and "The ledger must
   state what the user still needs", and invented work to satisfy it. The

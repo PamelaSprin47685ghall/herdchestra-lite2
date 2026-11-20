@@ -153,7 +153,7 @@ way, and only a genuine seam failure exits 1.
 Set `begin.model` to an omp `/switch` selector to use a different model for a scope:
 
 ```js
-scope({ begin: { intent: "Review the results", stage: "direct-execution", budget: { read: 3 }, model: "@smol" } })
+scope({ begin: { intent: "Review the results", stage: "direct-execution", budget: { read: 3 }, time: 120, model: "@smol" } })
 ```
 
 Omit `model` or use `null` to inherit the enclosing scope’s model, or the session model when there is no enclosing scope. Closing a scope restores the enclosing model. A combined `end: true` and `begin` inherits from the enclosing scope, not from the scope being closed. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.

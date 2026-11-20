@@ -15,11 +15,39 @@ function gateTool(tool, manager, admit) {
 		// ACP exposes an execute getter through a Proxy. Define on its target
 		// and keep the target implementation, not the outer approval closure.
 		const execute = descriptor?.value ?? tool.execute;
-		const guarded = function (toolCallId, params, signal, onUpdate, ctx) {
+		const guarded = async function (toolCallId, params, signal, onUpdate, ctx) {
 			const gate = sessions.get(ctx?.sessionManager);
-			const denial = gate?.(toolCallId, tool.name, ctx);
-			if (denial) throw new Error(denial.reason);
-			return execute.call(this, toolCallId, params, signal, onUpdate, ctx);
+			const verdict = gate?.(toolCallId, tool.name, ctx);
+			if (verdict?.block) throw new Error(verdict.reason);
+			const limitMs = verdict?.limitMs ?? 0;
+			const startedAt = Date.now();
+			if (limitMs <= 0) {
+				return execute.call(this, toolCallId, params, signal, onUpdate, ctx);
+			}
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), limitMs);
+			const linked =
+				signal && typeof AbortSignal.any === "function"
+					? AbortSignal.any([signal, controller.signal])
+					: controller.signal;
+			const after = () =>
+				gate?.(toolCallId, tool.name, ctx, {
+					elapsedMs: Date.now() - startedAt,
+					limitMs,
+				});
+			let outcome;
+			try {
+				outcome = await execute.call(this, toolCallId, params, linked, onUpdate, ctx);
+			} catch (error) {
+				const replacement = after();
+				if (replacement?.block) throw new Error(replacement.reason);
+				throw error;
+			} finally {
+				clearTimeout(timer);
+			}
+			const replacement = after();
+			if (replacement?.block) throw new Error(replacement.reason);
+			return outcome;
 		};
 		Object.defineProperty(tool, "execute", {
 			configurable: true,

@@ -6,7 +6,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { beginScope, createState } from "../src/scope/index.mjs";
+import { beginScope as beginScopeRaw, createState } from "../src/scope/index.mjs";
+
+function beginScope(state, params) {
+  return beginScopeRaw(state, { time: 60, ...params });
+}
 import { handoffFocus, successorOpeningText } from "../src/relay/texts.mjs";
 import { stagePromptsBlock } from "../src/host/prompts.mjs";
 import {

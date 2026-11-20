@@ -32,8 +32,13 @@ export const scopeParameters = {
 		begin: {
 			type: "object",
 			additionalProperties: false,
-			required: ["intent", "stage", "budget", "elder_report", "permission"],
+			required: ["intent", "stage", "budget", "elder_report", "permission", "time"],
 			properties: {
+				time: {
+					type: "number",
+					minimum: 0,
+					description: scope["begin.time"],
+				},
 				intent: { type: "string", minLength: 1, description: BEGIN_INTENT_DESCRIPTION },
 				stage: {
 					type: "string",

@@ -95,7 +95,11 @@ function assistant(content, timestamp) {
 }
 
 function call(id, name, args) {
-	return { type: "toolCall", id, name, arguments: args };
+	const withTime =
+		name === "scope" && args?.begin && args.begin.time === undefined
+			? { ...args, begin: { ...args.begin, time: 60 } }
+			: args;
+	return { type: "toolCall", id, name, arguments: withTime };
 }
 
 function toolResult(id, name, text, isError = false) {
@@ -1123,6 +1127,74 @@ describe("herd mode", () => {
 		]));
 		expect(read[0].blocked).toBe(true);
 		expect(read[0].result.content[0].text).toContain('Tool "read" has no budget left');
+	});
+
+	test("a begin without time is refused", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const refused = await runAssistant(host, ctx, assistant([
+			{ type: "toolCall", id: "nt1", name: "scope", arguments: { begin: { intent: "no time", stage: "direct-execution", budget: {}, elder_report: null, permission: "ro" } } },
+		]));
+		expect(JSON.stringify(refused)).toContain("INVALID_TIME");
+	});
+
+	test("a scope records a wall-clock deadline in its receipt", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const opened = await runAssistant(host, ctx, assistant([
+			call("t1", "scope", { begin: { intent: "timed", stage: "direct-execution", budget: { read: 1 }, time: 5, elder_report: null, permission: "ro" } }),
+		]));
+		expect(opened[0].blocked).toBe(false);
+		expect(opened[0].result.content[0].text).toContain("time 0:05/0:05");
+	});
+
+	test("kills a tool that overruns deadline+1s and replaces its result", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const session = {
+			agent: { beforeToolCall: async () => undefined },
+			sessionManager: manager,
+		};
+		rememberSession(session);
+		let sawSignal = null;
+		const slowExecute = (id, params, signal) => {
+			sawSignal = signal;
+			return new Promise((resolve) =>
+				setTimeout(
+					() => resolve({ content: [{ type: "text", text: "slow finished" }] }),
+					1300,
+				),
+			);
+		};
+		host.tools.set("slow", { name: "slow", execute: slowExecute });
+		const begin = {
+			intent: "timed",
+			stage: "direct-execution",
+			budget: { slow: 1 },
+			time: 0.1,
+			elder_report: null,
+			permission: "ro",
+		};
+		const message = assistant([call("b2", "scope", { begin }), call("s1", "slow", {})]);
+		await emit(host.handlers, "assistant_message", { type: "assistant_message", message }, ctx);
+		const scopeTool = host.tools.get("scope");
+		const tool = host.tools.get("slow");
+		await session.agent.beforeToolCall(
+			{ assistantMessage: message, toolCall: { id: "b2", name: "scope" }, tool: scopeTool },
+			undefined,
+		);
+		const scopeOut = await scopeTool.execute("b2", { begin }, undefined, undefined, ctx);
+		expect(scopeOut.isError).not.toBe(true);
+		await session.agent.beforeToolCall(
+			{ assistantMessage: message, toolCall: { id: "s1", name: "slow" }, tool },
+			undefined,
+		);
+		const outcome = await tool
+			.execute("s1", {}, undefined, undefined, ctx)
+			.catch((error) => error);
+		expect(sawSignal?.aborted).toBe(true);
+		expect(outcome).toBeInstanceOf(Error);
+		expect(String(outcome?.message ?? outcome)).toContain("OVERTIME");
 	});
 
 	test("herd mode allows a text-only turn to stop naturally", async () => {

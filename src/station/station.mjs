@@ -28,6 +28,7 @@ import {
 	createUsageLedger,
 	currentScope,
 	deferIntent,
+	effectiveDeadline,
 	planStateEntry,
 	serializeState,
 } from "../scope/index.mjs";
@@ -419,9 +420,48 @@ export class SessionStation {
 		);
 	}
 
-	admitScopeDispatch(id, name, ctx) {
+	admitScopeDispatch(id, name, ctx, receipt = null) {
+		if (receipt) {
+			const scope = currentScope(this.state);
+			const deadline = effectiveDeadline(this.state);
+			if (
+				scope &&
+				deadline !== null &&
+				Date.now() >= deadline &&
+				scope.overtimeAt === null
+			) {
+				scope.overtimeAt = Date.now();
+			}
+			if (receipt.limitMs > 0 && receipt.elapsedMs > receipt.limitMs) {
+				return {
+					block: true,
+					reason: `OVERTIME: that tool ran ${Math.round(receipt.elapsedMs)}ms in the chess-clock phase, past its ${receipt.limitMs}ms limit, and was killed. Its result is gone. You are out of normal time: shrink the work, close the scope, or hand off now.`,
+				};
+			}
+			return undefined;
+		}
 		if (!this.deferScopePreflight(id, name)) return undefined;
-		return onToolCall(this, { toolCallId: id, toolName: name }, ctx, true);
+		const verdict = onToolCall(this, { toolCallId: id, toolName: name }, ctx, true);
+		if (verdict) return verdict;
+		const limitMs = this.toolTimeLimit();
+		return limitMs === null ? undefined : { limitMs };
+	}
+
+	/** 1000 ms once the innermost scope's deadline has passed, else null. */
+	toolTimeLimit() {
+		const scope = currentScope(this.state);
+		if (!scope) return null;
+		const deadline = effectiveDeadline(this.state);
+		if (deadline === null) return null;
+		const now = Date.now();
+		if (now < deadline) {
+			// A tool started in normal time may run only up to the deadline
+			// plus the one-second chess-clock unit, so the effective limit is
+			// exactly deadline + 1s.
+			return deadline - now + 1000;
+		}
+		if (scope.overtimeAt === null) scope.overtimeAt = now;
+		return 1000;
 	}
 
 	findBeginEntry(beginToolCallId) {

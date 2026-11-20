@@ -36,7 +36,7 @@
   3. 让 relay 进入交接：提交一次空账本（`todo` 写操作，列表为空）。记录本代际的
      `todo` 结果返回的 RELAY STATE：Generation 与 `canStop: no`。
   4. 继任者接手后，**不要**重新开 S2–S4，直接 `scope({ begin: { stage:
-     "direct-execution", ... } })`。记录工具返回的原文。
+     "direct-execution", time: 60, ... } })`。记录工具返回的原文。
   5. 依次开三个缺失阶段（顺序任意），再开 `direct-execution`。记录每步返回。
   6. 在步骤 5 之后关闭所有 scope，检查 `todo` 的 RELAY STATE 未被异常改写（仍在本代际，
      账本与步骤 3 一致）。

@@ -153,6 +153,17 @@ describe("stage and system prompts map to their documents", () => {
 		);
 	});
 
+	test("task nature chooses the flow by default", () => {
+		const doc = loadDoc("stages");
+		const texts = [doc.header, persistentOperatingSkill, todoTools.TODO_DESCRIPTION];
+		for (const text of texts) {
+			expect(text).toContain("Choose by task nature.");
+			expect(text).toContain("in principle submit a ledger");
+			expect(text).toContain("in principle do not submit one");
+			expect(text).toContain("let that judgment override the default");
+		}
+	});
+
 	test("system pieces", () => {
 		const doc = loadDoc("system");
 		expect(commonRulesText).toBe(doc["common-rules"]);
@@ -205,5 +216,14 @@ describe("injectSystemPrompt", () => {
 		const value = { prompt: "Host prompt." };
 		expect(injectSystemPrompt(value)).toBe(value);
 		expect(injectSystemPrompt(null)).toBe(null);
+	});
+});
+
+describe("scope schema", () => {
+	test("declares time as required and takes its text from the prompt document", () => {
+		const begin = scopeTools.scopeParameters.properties.begin;
+		expect(begin.required).toContain("time");
+		expect(begin.properties.time.type).toBe("number");
+		expect(begin.properties.time.description).toContain("Wall-clock budget");
 	});
 });

@@ -55,7 +55,7 @@ function withdrawDefer(scope, toolCallId) {
 }
 
 export function beginScope(state, params) {
-  const { toolCallId, intent, stage, budget } = params || {};
+  const { toolCallId, intent, stage, budget, time } = params || {};
   if (!isNonEmptyString(intent)) {
     return failure("INVALID_INTENT", "intent must be a non-empty string.");
   }
@@ -69,7 +69,14 @@ export function beginScope(state, params) {
       "Budget must be a plain object of non-negative integer tool budgets.",
     );
   }
-  const scope = makeScope(state, toolCallId, intent, stage, normalized);
+  if (typeof time !== "number" || !Number.isFinite(time) || time <= 0) {
+    return failure(
+      "INVALID_TIME",
+      "time is required and must be a positive number of seconds.",
+    );
+  }
+  const timeBudgetMs = Math.round(time * 1000);
+  const scope = makeScope(state, toolCallId, intent, stage, normalized, timeBudgetMs);
   // Optional model identity: { modelSpec, modelKey, previousModelSpec,
   // previousModelKey, baseModelKey }. Strings or null only.
   const model = isPlainObject(params?.model) ? params.model : null;

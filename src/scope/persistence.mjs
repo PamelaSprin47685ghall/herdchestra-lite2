@@ -89,6 +89,10 @@ function copyCollapse(collapse) {
 function measuredFields(source) {
   const out = {};
   for (const key of [
+    "timeBudgetMs",
+    "openedAt",
+    "deadlineAt",
+    "overtimeAt",
     "baseInputTokens",
     "preBeginInputTokens",
     "endInputTokens",
@@ -233,6 +237,12 @@ function validScope(scope) {
     return false;
   }
   if (typeof scope.beginToolCallId !== "string") return false;
+  for (const key of ["timeBudgetMs", "openedAt", "deadlineAt", "overtimeAt"]) {
+    if (scope[key] === undefined || scope[key] === null) continue;
+    if (typeof scope[key] !== "number" || !Number.isFinite(scope[key]) || scope[key] <= 0) {
+      return false;
+    }
+  }
   if (!validBudgetCounts(scope.budget)) return false;
   if (!validAmountCounts(scope.remaining)) return false;
   if (!validAmountCounts(scope.spent)) return false;

@@ -38,7 +38,7 @@
 - steps:
   1. 新建会话，确认 `todo({op:"view"})` 的 `RELAY STATE` 为 `Generation: 0`、`First todo evaluation of this generation: not evaluated yet`、`Can stop now: no`。**不要**提交任何 ledger。
   2. 以用户身份发一条明确且无需编排的任务，例如：把 `README.md` 第 25 行表格里的 "Default mode" 改成 "Default"。
-  3. 模型直接调用 `scope({ begin: { intent: "...", stage: "direct-execution", budget: { read: 1, edit: 1 }, permission: "rw" } })`，不调用 `todo`。
+  3. 模型直接调用 `scope({ begin: { intent: "...", stage: "direct-execution", budget: { read: 1, edit: 1 }, time: 60, permission: "rw" } })`，不调用 `todo`。
   4. 读回 `scope` 返回原文；执行改动；再 `scope({ end: true })`。
   5. 由扮演用户的执行者记录：是否被迫写 todo、是否被两个 gate 拒绝、是否被接力文案催促。
 - expected:
@@ -66,7 +66,7 @@
   1. 接续 CASE-SIMPLE-001 的会话（`fullFlow === false`）。
   2. 以用户身份发一条明显需要多步的任务，例如新增一个小功能并补三个测试。
   3. 模型调用 `todo({ op: "init", list: [{ phase: "实现", items: ["A", "B", "C"] }] })`。
-  4. 读回 `RELAY STATE`；然后尝试 `scope({ begin: { stage: "direct-execution", permission: "rw" } })`，不先开 S2/S3/S4。
+  4. 读回 `RELAY STATE`；然后尝试 `scope({ begin: { stage: "direct-execution", time: 60, permission: "rw" } })`，不先开 S2/S3/S4。
   5. 依次开 `acceptance-cases`、`architecture-design`、`orchestration-plan`，再开 S5。
 - expected:
   - 步骤 4 返回 `STAGE_FLAGS_UNMET`，缺失清单恰为 `acceptance-cases, architecture-design, orchestration-plan`，且状态未被破坏。
@@ -94,7 +94,7 @@
   2. 按返回文案写 handoff 报告，不调用任何工具；等待继任者接手。
   3. 继任者接手后先不写账本：调用 `todo({ op: "view" })`，逐字记录 `Flow`、`Can stop now`、`Next` 三行。
      若输出中没有 `Flow` 行，停止本 CASE：当前进程是陈旧构建，按文件头前置同步并重启后重跑。
-  4. 仍不写账本：尝试 `scope({ begin: { stage: "direct-execution", permission: "rw" } })`，记录返回原文。
+  4. 仍不写账本：尝试 `scope({ begin: { stage: "direct-execution", time: 60, permission: "rw" } })`，记录返回原文。
      预期 `RW_BEFORE_LEDGER`。若返回 `STAGE_FLAGS_UNMET`，回看步骤 3：无 `Flow` 行即陈旧构建，
      有 `Flow: full flow` 才是门禁顺序缺陷。若意外成功，立即 `scope({ end: true })` 关闭并继续。
      若用脚本代替手工，每次工具调用必须使用唯一的 toolCallId：同一 id 重放会命中
@@ -294,7 +294,7 @@
 - threshold: 90
 - steps:
   1. 前置：完成 `CASE-REOPEN-004` 步骤 4–5，处于 reopened 状态（`Flow: full flow`、`Can stop now: yes`、上一周期三标志已清零）。
-  2. 以用户身份发一条需要编排的新任务；先尝试 `scope({ begin: { stage: "direct-execution", permission: "rw" } })`，记录返回原文。
+  2. 以用户身份发一条需要编排的新任务；先尝试 `scope({ begin: { stage: "direct-execution", time: 60, permission: "rw" } })`，记录返回原文。
   3. 依次开 `acceptance-cases`、`architecture-design`、`orchestration-plan`，各完成一件真实工作并 `scope({ end: true })`；然后开 S5 完成该任务。
   4. 在 scope 外调用 `todo({ op: "init", list: [] })`，逐字记录 `Flow`、`Handoff pending`、`Can stop now`、`Next`。
   5. 按 `Next` 写交接报告，不调用任何工具；等待继任者接手。

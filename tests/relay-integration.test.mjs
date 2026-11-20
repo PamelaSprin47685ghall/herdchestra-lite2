@@ -161,7 +161,11 @@ function assistant(content, timestamp) {
 }
 
 function call(id, name, args) {
-	return { type: "toolCall", id, name, arguments: args };
+	const withTime =
+		name === "scope" && args?.begin && args.begin.time === undefined
+			? { ...args, begin: { ...args.begin, time: 60 } }
+			: args;
+	return { type: "toolCall", id, name, arguments: withTime };
 }
 
 function toolResult(id, name, text, isError, details) {

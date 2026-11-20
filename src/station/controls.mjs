@@ -199,6 +199,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       intent: args.begin?.intent,
       stage,
       budget: args.begin?.budget,
+      time: args.begin?.time,
     });
     if (!validation.ok) return errorResult(validation.code, validation.reason);
   }
@@ -263,6 +264,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       intent: args.begin?.intent,
       stage,
       budget: args.begin?.budget,
+      time: args.begin?.time,
     });
     if (!out.ok) return errorResult(out.code, out.reason);
     if (mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
@@ -399,6 +401,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       intent: args.begin.intent,
       stage,
       budget: args.begin.budget,
+      time: args.begin.time,
     });
     text += `\n\n${beginText(opened.scope)}`;
     if (opened.ok) {

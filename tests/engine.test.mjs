@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyAmend,
-  beginScope,
+  beginScope as beginScopeRaw,
   beatShares,
   budgetText,
   chargeTool,
@@ -184,6 +184,10 @@ describe("createState", () => {
   });
 });
 
+function beginScope(state, params) {
+  return beginScopeRaw(state, { time: 60, ...params });
+}
+
 describe("beginScope", () => {
   test("pushes a scope and returns it", () => {
     const state = createState();
@@ -194,7 +198,7 @@ describe("beginScope", () => {
       budget: { read: 7, bash: 6 },
     });
     expect(result.ok).toBe(true);
-    expect(result.scope).toEqual({
+    expect(result.scope).toMatchObject({
       modelSpec: null,
       modelKey: null,
       previousModelSpec: null,
@@ -822,11 +826,15 @@ describe("closeScope", () => {
 });
 
 describe("budgetText", () => {
+  function toolShares(text) {
+    return text.split(", time ")[0];
+  }
+
   test("reports remaining/budget sorted by tool name", () => {
     const { state, scope } = openScope("work", { read: 7, bash: 6 });
-    expect(budgetText(scope)).toBe("bash 6.00/6.00, read 7.00/7.00");
+    expect(toolShares(budgetText(scope))).toBe("bash 6.00/6.00, read 7.00/7.00");
     chargeTool(state, { toolCallId: "call_bash", toolName: "bash" });
-    expect(budgetText(scope)).toBe("bash 5.00/6.00, read 7.00/7.00");
+    expect(toolShares(budgetText(scope))).toBe("bash 5.00/6.00, read 7.00/7.00");
   });
 
   test("shows fractional shares with two decimals", () => {
@@ -844,11 +852,11 @@ describe("budgetText", () => {
       groupKey: "beat-1",
       beatTools,
     });
-    expect(budgetText(scope)).toBe("bash 0.67/1.00, read 0.33/1.00");
+    expect(toolShares(budgetText(scope))).toBe("bash 0.67/1.00, read 0.33/1.00");
   });
 
-  test("returns an empty string when there is no budget", () => {
-    expect(budgetText(openScope("work", {}).scope)).toBe("");
+  test("shows only the clock when there is no tool budget", () => {
+    expect(budgetText(openScope("work", {}).scope)).toMatch(/^time \d+:\d\d\/\d+:\d\d$/);
     expect(budgetText(null)).toBe("");
     expect(budgetText({})).toBe("");
   });

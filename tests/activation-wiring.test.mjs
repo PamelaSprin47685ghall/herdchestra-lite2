@@ -4,6 +4,7 @@ import {
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
 } from "../src/host/diagnostics.mjs";
+import { announceFlowWarning } from "../src/activation/fission.mjs";
 import { wireHooks } from "../src/activation/hooks.mjs";
 
 function harness({ scheduler = null, batch = null, fissionFlow = null } = {}) {
@@ -303,5 +304,70 @@ describe("fission stop guard", () => {
 
 		expect(emit(pi, "session_stop", {}, ownerContext())).toBe("stopped");
 		expect(station.stopCalls).toBe(1);
+	});
+});
+
+describe("fission flow warning visibility", () => {
+	test("keeps the failure identity in diagnostics and the text in the interface", () => {
+		const recorded = [];
+		const shown = [];
+		const result = announceFlowWarning(
+			{
+				type: "flow.warning",
+				batchId: "b1",
+				flowId: "f1",
+				broadcastId: "n1",
+				code: "CARRY_OVER_INPUT_UNKNOWN",
+				message: "the owner agent refused the steer",
+				text: "keep me",
+			},
+			{
+				record: (...args) => recorded.push(args),
+				notify: (text, code) => shown.push({ text, code }),
+			},
+		);
+
+		expect(result).toEqual({ code: "CARRY_OVER_INPUT_UNKNOWN", text: "keep me", shown: true });
+		expect(recorded).toHaveLength(1);
+		const [domain, message, detail] = recorded[0];
+		expect(domain).toBe("fission");
+		expect(message).toBe("CARRY_OVER_INPUT_UNKNOWN: the owner agent refused the steer");
+		expect(detail).toMatchObject({
+			seam: "flow.warning",
+			batchId: "b1",
+			flowId: "f1",
+			broadcastId: "n1",
+			chars: 7,
+		});
+		// Diagnostics do not copy user text when the interface already shows it.
+		expect(detail.text).toBeUndefined();
+		expect(shown).toEqual([{ text: "keep me", code: "CARRY_OVER_INPUT_UNKNOWN" }]);
+	});
+
+	test("carries the text into diagnostics when no interface can show it", () => {
+		const recorded = [];
+		announceFlowWarning(
+			{
+				type: "flow.warning",
+				code: "CARRY_OVER_INPUT_FAILED",
+				message: "gone",
+				text: "recover me",
+			},
+			{
+				record: (...args) => recorded.push(args),
+				notify: () => {
+					throw new Error("the notifier is broken");
+				},
+			},
+		);
+		expect(recorded[0][2].text).toBe("recover me");
+	});
+
+	test("ignores batch events that are not warnings", () => {
+		const recorded = [];
+		expect(
+			announceFlowWarning({ type: "flow.begin" }, { record: (...args) => recorded.push(args) }),
+		).toBeNull();
+		expect(recorded).toEqual([]);
 	});
 });

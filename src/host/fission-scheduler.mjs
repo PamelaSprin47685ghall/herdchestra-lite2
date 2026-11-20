@@ -662,6 +662,7 @@ export function createFissionScheduler(options = {}) {
 			flows: [],
 			status: "registered",
 			heir: null,
+			carryOver: [],
 			costCapped: false,
 			cancelled: false,
 			ownerRetired: false,
@@ -755,14 +756,36 @@ export function createFissionScheduler(options = {}) {
 		// replacing the whole batch with the first open child found.
 		for (const flow of batch.flows) {
 			const leaves = [];
+			let opened = false;
 			for (const child of flow.nested) {
-				if (child.done !== true) collectRunning(child, leaves);
+				if (child.done === true) continue;
+				opened = true;
+				collectRunning(child, leaves);
 			}
 			if (leaves.length > 0) {
 				target.push(...leaves);
 				continue;
 			}
-			if (flow.status === "running") target.push(flow);
+			// An open nested batch means this flow already retired into its
+			// subtree, so it is never a leaf of this batch itself, even when
+			// that subtree yields no running leaf because its last flow is
+			// ending. Handing input to such a flow would queue a steer that its
+			// own settle retracts when it resumes; the text must travel upward
+			// as data instead.
+			if (opened) continue;
+			// A flow that ran scope({ end: true }) has declared completion even
+			// while its status still reads "running" until agent_end. Its only
+			// remaining work is closing, so a steer would queue a model call it
+			// can no longer show: an invisible turn in an already retired flow.
+			// It is not an active leaf for input; the last live flow or the heir
+			// receives the text instead.
+			// A cancelled flow still reads "running" until its agent_end settles
+			// it, but its stream can never show new input: a copy delivered there
+			// would be retracted on the next settle and would hold the text
+			// against every other recipient in the meantime.
+			if (flow.status === "running" && flow.endRequested !== true && !flow.cancelReason) {
+				target.push(flow);
+			}
 		}
 		return target;
 	}
@@ -774,6 +797,575 @@ export function createFissionScheduler(options = {}) {
 			collectRunning(batch, leaves);
 		}
 		return [...new Map(leaves.map((flow) => [flow.id, flow])).values()];
+	}
+
+	// Broadcast text reaches a flow as a queued steer. If the flow declares
+	// completion before its next model call, the host carries that queue into a
+	// fresh run after retirement: an invisible turn in a detached stream.
+	// Remember every copy we enqueue so retirement can settle it.
+	//
+	// One ledger row per broadcastId decides where the text is shown. A copy is
+	// "queued" on the flow that holds it. "shown" means one conversation already
+	// displays the text, because a flow consumed its copy or the heir received
+	// it as input. After that no second copy may be delivered, and a flow that
+	// retired without consuming is never mistaken for a holder: it can no
+	// longer show anything.
+	const broadcastLedger = new Map();
+
+	function broadcastRecord(broadcastId, text) {
+		let record = broadcastLedger.get(broadcastId);
+		if (!record) {
+			record = { text, shown: false, copies: new Map(), stuck: new Map() };
+			broadcastLedger.set(broadcastId, record);
+		}
+		return record;
+	}
+
+	// A ledger row stops routing while the text may still be delivered a second
+	// time: a conversation shows it, the owner took it into its queue, delivery
+	// ended in a state where a retry could duplicate it, or a failed retraction
+	// left a copy reachable inside a retiring flow. A stuck copy is tracked per
+	// flow and re-probed at every settle, so it holds healthy copies back only
+	// while it is genuinely still reachable.
+	function broadcastSettled(record) {
+		return (
+			record.shown === true ||
+			record.accepted === true ||
+			record.unknown === true ||
+			record.stuck.size > 0
+		);
+	}
+
+	function rememberBroadcast(flow, message, broadcastId, text) {
+		flow.pendingBroadcasts.push({ message, broadcastId, text });
+		broadcastRecord(broadcastId, text).copies.set(flow.id, "queued");
+	}
+
+	// Record text that has no conversation left to land in. The warning carries
+	// the whole broadcast so it can be recovered, and the ledger keeps its row
+	// so a later settle never delivers a second copy to excuse the failure.
+	function undeliveredWarning(batch, code, entry, detail) {
+		const reason = detail?.error ?? detail?.message ?? detail;
+		const warning = {
+			code,
+			message: reason ? String(reason) : code,
+			flowId: detail?.flowId ?? null,
+			broadcastId: entry?.broadcastId ?? null,
+			text: typeof entry?.text === "string" ? entry.text : null,
+		};
+		batch.warnings.push(warning);
+		emit(batch, "flow.warning", warning);
+		return warning;
+	}
+
+	function enqueueBroadcast(recipients, text, broadcastId) {
+		const labels = recipients.map((flow) => flow.label);
+		const delivered = [];
+		const failed = [];
+		for (const flow of recipients) {
+			if (typeof flow.agent?.steer !== "function") {
+				const failure = { flowId: flow.id, error: "agent.steer() is unavailable" };
+				failed.push(failure);
+				undeliveredWarning(flow.batch, "BROADCAST_DELIVERY_FAILED", { broadcastId, text }, failure);
+				continue;
+			}
+			const message = {
+				role: "custom",
+				customType: "fission.broadcast",
+				content: `(broadcast to ${recipients.length} flows)\n\n${text}`,
+				display: true,
+				details: { fissionBroadcast: { broadcastId, recipients: labels } },
+				timestamp: Date.now(),
+			};
+			try {
+				flow.agent.steer(message);
+				rememberBroadcast(flow, message, broadcastId, text);
+				delivered.push(flow.label);
+			} catch (error) {
+				const failure = { flowId: flow.id, error: error?.message ?? String(error) };
+				failed.push(failure);
+				undeliveredWarning(flow.batch, "BROADCAST_DELIVERY_FAILED", { broadcastId, text }, failure);
+			}
+		}
+		return { labels, delivered, failed };
+	}
+
+	/**
+	 * A flow that stops accepting turns must not run another one. The host
+	 * deliberately keeps queued steering across an abort and auto-continues
+	 * from it, so a broadcast queued before scope({ end: true }) would become a
+	 * silent extra turn in a detached stream. Retract only the copies this flow
+	 * holds and has not consumed, then route them onward: a live flow that
+	 * holds no copy, or the batch carry ledger that ends at the heir.
+	 */
+	function settlePendingBroadcasts(flow) {
+		const pending = Array.isArray(flow.pendingBroadcasts) ? flow.pendingBroadcasts.splice(0) : [];
+		const inherited = Array.isArray(flow.inheritedCarry) ? flow.inheritedCarry.splice(0) : [];
+		const consumed = consumedBroadcastIds(flow);
+		const unlanded = pending.filter((entry) => !isConsumed(flow, entry, consumed));
+		const stuck = retractQueuedCopies(flow, unlanded);
+		const released = refreshStuckCopies();
+		for (const entry of pending) {
+			const record = broadcastRecord(entry.broadcastId, entry.text);
+			if (isConsumed(flow, entry, consumed)) {
+				record.copies.delete(flow.id);
+				record.stuck.delete(flow.id);
+				record.shown = true;
+				continue;
+			}
+			if (stuck.has(entry)) {
+				// The copy is still reachable inside this retiring flow.
+				// Routing a second copy now could show the text twice, so hold
+				// routing and report the text instead of pretending the
+				// retraction succeeded. The entry stays on record so a later
+				// settle can prove it gone and release the other copies.
+				record.copies.set(flow.id, "stuck");
+				record.stuck.set(flow.id, { flow, entry });
+				undeliveredWarning(flow.batch, "BROADCAST_RETRACT_FAILED", entry, { flowId: flow.id });
+				continue;
+			}
+			record.copies.delete(flow.id);
+			record.stuck.delete(flow.id);
+		}
+		for (const entry of pending) {
+			if (isConsumed(flow, entry, consumed) || stuck.has(entry)) continue;
+			routeBroadcast(flow, entry);
+		}
+		for (const entry of inherited) routeBroadcast(flow, entry);
+		for (const held of released) routeBroadcast(held.flow, held.entry);
+	}
+
+	// A copy that could not be proven gone was a fact about one moment, not a
+	// life sentence for the ledger row. The host may have dropped it after the
+	// abort, or the flow may have shown it after all. Re-probe every held copy
+	// at each settle: only a copy whose queues and transcript still lack it is
+	// released, and a copy the transcript now shows marks the text as shown.
+	function refreshStuckCopies() {
+		const released = [];
+		for (const record of broadcastLedger.values()) {
+			for (const [flowId, held] of record.stuck) {
+				const consumed = consumedBroadcastIds(held.flow);
+				if (isConsumed(held.flow, held.entry, consumed)) {
+					record.stuck.delete(flowId);
+					record.copies.delete(flowId);
+					record.shown = true;
+					continue;
+				}
+				const isCopy = (message) =>
+					message === held.entry.message ||
+					message?.details?.fissionBroadcast?.broadcastId === held.entry.broadcastId;
+				if (flowStillHoldsCopy(held.flow, held.entry, isCopy, { withdrew: false, withdrawn: [] })) {
+					continue;
+				}
+				record.stuck.delete(flowId);
+				record.copies.delete(flowId);
+				released.push(held);
+			}
+		}
+		return released;
+	}
+
+	// The broadcast ids this flow's own message list already displays. The host
+	// may clone a queued message instead of moving the same object, so the id in
+	// its details is the reliable witness; object identity is kept for a host
+	// that appends the message as-is.
+	function consumedBroadcastIds(flow) {
+		const messages = Array.isArray(flow.agent?.state?.messages) ? flow.agent.state.messages : [];
+		const ids = new Set();
+		for (const message of messages) {
+			const id = message?.details?.fissionBroadcast?.broadcastId;
+			if (typeof id === "string" && id) ids.add(id);
+		}
+		return ids;
+	}
+
+	function isConsumed(flow, entry, consumedIds) {
+		if (consumedIds.has(entry.broadcastId)) return true;
+		const messages = Array.isArray(flow.agent?.state?.messages) ? flow.agent.state.messages : [];
+		return messages.includes(entry.message);
+	}
+
+	// The host keeps a queued copy in three places: the pending steering and
+	// follow-up queues, the batch it dequeued for the next model call, and the
+	// live-steered messages a provider already took into its in-flight
+	// response. clearSteeringQueue() touches only the first, and abort()
+	// restores the other two, so a whole-queue clear both destroys the user's
+	// own input and lets our copy resurface as a ghost turn. Take back only the
+	// copies this flow queued: withdraw the undelivered ones before the abort,
+	// which makes the host neither record nor requeue them, then strip our
+	// messages from both pending queues with peek/replace. Anything that is not
+	// ours goes back where it was.
+	// Return the entries whose copy could not be proven gone. A missing or
+	// throwing read proves nothing, so it counts as still held: routing such a
+	// copy onward would show the text a second time if the host ever runs the
+	// stale copy.
+	//
+	// Every host call stands alone. Withdraw, restore, and strip touch
+	// different queues and can refuse independently: one failure must not skip
+	// the rest of the retraction, and the host's own input must never vanish
+	// with it. A refused rewrite is reported with the affected text.
+	function retractQueuedCopies(flow, entries) {
+		if (entries.length === 0) return new Set();
+		const agent = flow.agent;
+		const ours = new Set(entries.map((entry) => entry.message));
+		const ids = new Set(entries.map((entry) => entry.broadcastId));
+		const isCopy = (message) =>
+			ours.has(message) ||
+			ids.has(message?.details?.fissionBroadcast?.broadcastId);
+		const probe = {
+			withdrew: false,
+			withdrawn: [],
+			withdrawnByQueue: { steering: [], followUp: [] },
+		};
+		// The withdraw is the only call that can prove a provider no longer
+		// holds a copy. Its failure is reported, and the pending queues are
+		// still stripped below.
+		if (typeof agent?.withdrawUndeliveredQueuedMessages === "function") {
+			try {
+				const withdrawn = agent.withdrawUndeliveredQueuedMessages() ?? {};
+				probe.withdrew = true;
+				probe.withdrawnByQueue.steering = Array.isArray(withdrawn.steering) ? withdrawn.steering : [];
+				probe.withdrawnByQueue.followUp = Array.isArray(withdrawn.followUp) ? withdrawn.followUp : [];
+				probe.withdrawn = [
+					...probe.withdrawnByQueue.steering,
+					...probe.withdrawnByQueue.followUp,
+				];
+			} catch (error) {
+				batchWarning(flow.batch, "FLOW_QUEUE_RETRACT_FAILED", error, flow);
+			}
+		}
+		// The withdraw takes every undelivered message, not only ours. Put the
+		// host's own input back one queue at a time: a refusal in one queue
+		// never strands the other, and whatever cannot be put back is reported
+		// with its text rather than silently lost.
+		if (probe.withdrew) {
+			for (const queue of ["steering", "followUp"]) {
+				const withdrawn = probe.withdrawnByQueue[queue];
+				try {
+					const restored = requeueKept(agent, queue, withdrawn, isCopy);
+					for (const message of restored.lost) {
+						reportLostInput(flow, queue, message, restored.error);
+					}
+				} catch (error) {
+					// requeueKept is total by design; this guards a host whose
+					// accessors throw, so no message goes unreported.
+					for (const message of withdrawn.filter((message) => !isCopy(message))) {
+						reportLostInput(flow, queue, message, error);
+					}
+				}
+			}
+		}
+		// Strip our copies from both pending queues. Each queue stands alone: a
+		// throwing read or rewrite of one is reported and the other still runs,
+		// because a skipped strip leaves a ghost turn behind.
+		for (const queue of ["steering", "followUp"]) {
+			const peek = queue === "steering" ? agent?.peekSteeringQueue : agent?.peekFollowUpQueue;
+			if (typeof peek !== "function" || typeof agent?.replaceQueue !== "function") continue;
+			try {
+				const pending = peek.call(agent);
+				if (!Array.isArray(pending)) continue;
+				const kept = pending.filter((message) => !isCopy(message));
+				if (kept.length !== pending.length) agent.replaceQueue(queue, kept);
+			} catch (error) {
+				batchWarning(flow.batch, "FLOW_QUEUE_RETRACT_FAILED", error, flow);
+			}
+		}
+		const stuck = new Set();
+		for (const entry of entries) {
+			if (flowStillHoldsCopy(flow, entry, isCopy, probe)) stuck.add(entry);
+		}
+		return stuck;
+	}
+
+	function flowStillHoldsCopy(flow, entry, isCopy, probe) {
+		const agent = flow.agent;
+		for (const peek of [
+			agent?.peekSteeringQueue,
+			agent?.peekFollowUpQueue,
+			agent?.peekUndeliveredQueuedMessages,
+		]) {
+			if (typeof peek !== "function") continue;
+			let pending;
+			try {
+				pending = peek.call(agent);
+			} catch {
+				return true;
+			}
+			if (Array.isArray(pending) && pending.some(isCopy)) return true;
+		}
+		if (probe.withdrawn.some(isCopy)) return false;
+		// No readable queue lists the copy. A successful withdraw call emptied
+		// the undelivered set; without one, an unreadable undelivered set could
+		// still hold it.
+		return !probe.withdrew && typeof agent?.peekUndeliveredQueuedMessages !== "function";
+	}
+
+	// The host withdraws every undelivered message of a run, not only ours. Put
+	// the user's own input back at the head of its queue, where the host's abort
+	// restoration would have kept it, so preserving our text never costs theirs.
+	//
+	// Nothing here throws. A message the host handed back and then refused to
+	// take again is returned as lost, so the caller can report it with its text
+	// instead of letting the exception be its only trace.
+	function requeueKept(agent, queue, messages, isCopy) {
+		if (!Array.isArray(messages)) return { lost: [], error: null };
+		const kept = messages.filter((message) => !isCopy(message));
+		if (kept.length === 0) return { lost: [], error: null };
+		const peek = queue === "steering" ? agent?.peekSteeringQueue : agent?.peekFollowUpQueue;
+		const readQueue = () => {
+			if (typeof peek !== "function") return null;
+			try {
+				const pending = peek.call(agent);
+				return Array.isArray(pending) ? pending : null;
+			} catch {
+				return null;
+			}
+		};
+		let pending = readQueue();
+		let error = null;
+		if (pending !== null && typeof agent?.replaceQueue === "function") {
+			try {
+				agent.replaceQueue(queue, [...kept, ...pending]);
+				return { lost: [], error };
+			} catch (caught) {
+				error = caught;
+				// A refused rewrite may still have landed; read again before
+				// adding a second copy of the user's text.
+				pending = readQueue();
+				if (pending === null) return { lost: kept, error };
+			}
+		}
+		const missing = pending === null ? kept : kept.filter((message) => !pending.includes(message));
+		const lost = [];
+		for (const message of missing) {
+			try {
+				if (queue === "steering") {
+					if (typeof agent?.steer !== "function") throw new Error("agent.steer() is unavailable");
+					agent.steer(message);
+				} else {
+					if (typeof agent?.followUp !== "function") throw new Error("agent.followUp() is unavailable");
+					agent.followUp(message);
+				}
+			} catch (caught) {
+				error ??= caught;
+				lost.push(message);
+			}
+		}
+		if (lost.length === 0) return { lost, error };
+		// Trust an append only when the queue confirms it. An unreadable queue
+		// proves nothing, so the message stays reported.
+		const after = readQueue();
+		if (after === null) return { lost, error };
+		return { lost: lost.filter((message) => !after.includes(message)), error };
+	}
+
+	// A withdrawn message the host gave back and then refused to take again is
+	// the user's own input at risk. Report it with its text; a swallowed
+	// exception must never be the only trace of a lost sentence.
+	function reportLostInput(flow, queue, message, error) {
+		const warning = {
+			code: "QUEUE_INPUT_RESTORE_FAILED",
+			message: String(error?.message ?? error ?? `the host did not take back a withdrawn ${queue} message`),
+			flowId: flow.id,
+			queue,
+			text: messageText(message),
+		};
+		flow.batch.warnings.push(warning);
+		emit(flow.batch, "flow.warning", warning);
+	}
+
+	function messageText(message) {
+		const content = message?.content;
+		if (typeof content === "string") return content;
+		if (!Array.isArray(content)) return null;
+		const parts = content
+			.map((part) =>
+				typeof part === "string" ? part : typeof part?.text === "string" ? part.text : "")
+			.filter((part) => part.length > 0);
+		return parts.length > 0 ? parts.join("\n") : null;
+	}
+
+	// Place one unconsumed copy. The text must end up in exactly one live
+	// conversation: drop it when a conversation already shows it or a live flow
+	// still holds a queued copy, hand it to a flow that holds none, and carry it
+	// upward when this batch has no live recipient left.
+	function routeBroadcast(flow, entry) {
+		const record = broadcastRecord(entry.broadcastId, entry.text);
+		if (broadcastSettled(record)) return;
+		const leaves = activeLeaves();
+		const heldElsewhere = leaves.some((candidate) =>
+			candidate.id !== flow.id && record.copies.get(candidate.id) === "queued");
+		if (heldElsewhere) return;
+		const targets = leaves.filter((candidate) =>
+			candidate.id !== flow.id && record.copies.get(candidate.id) !== "queued");
+		if (targets.length > 0) {
+			const { delivered } = enqueueBroadcast(targets, entry.text, entry.broadcastId);
+			// A partial delivery already shows the text and reported every
+			// refusal. Only a total failure leaves no copy anywhere, and that
+			// text must travel upward instead of being dropped.
+			if (delivered.length > 0) return;
+		}
+		carryBroadcast(flow.batch, entry);
+	}
+
+	// Park text on the nearest batch that has not finalized. A batch that is
+	// already done can no longer release its ledger, so walk upward; a done root
+	// has adopted its heir already, which makes the owner the right recipient.
+	function carryBroadcast(batch, entry) {
+		const record = broadcastRecord(entry.broadcastId, entry.text);
+		if (broadcastSettled(record)) return;
+		let target = batch;
+		while (target.done && target.parentBatch) target = target.parentBatch;
+		if (target.done) {
+			deliverOwnerInput(batch, entry);
+			return;
+		}
+		if (!Array.isArray(target.carryOver)) target.carryOver = [];
+		if (!target.carryOver.some((item) => item.broadcastId === entry.broadcastId)) {
+			target.carryOver.push({ text: entry.text, broadcastId: entry.broadcastId });
+		}
+	}
+
+	function rootBatch(batch) {
+		let root = batch;
+		while (root.parentBatch) root = root.parentBatch;
+		return root;
+	}
+
+	// Hand text to the owner conversation. Returns the host's thenable when the
+	// steer settles later; throws when the owner exposes no steer path at all.
+	//
+	// `probe` records what the call itself can prove. The host announces queue
+	// admission synchronously through `onPromptQueued`, before its promise
+	// settles, so admission and settlement are separate facts. A host session
+	// that ignores the options argument never fills the probe; its silence is
+	// "unknown", never "not queued".
+	function injectOwnerInput(batch, text, probe) {
+		const owner = batch.owner;
+		if (typeof owner?.session?.steer === "function") {
+			probe.supported = true;
+			return owner.session.steer(text, undefined, {
+				onPromptQueued: () => {
+					probe.queued = true;
+				},
+			});
+		}
+		if (typeof owner?.agent?.steer === "function") {
+			return owner.agent.steer({ role: "user", content: text, timestamp: Date.now() });
+		}
+		throw new Error("the owner exposes no steer()");
+	}
+
+	// "shown" is a promise about the conversation, not about the call. Three
+	// outcomes must stay distinct:
+	//  - admitted: the copy entered the owner's queue. That is terminal even if
+	//    the promise rejects afterwards, because steering the text again would
+	//    show it twice; the warning below preserves it instead.
+	//  - probed and never admitted: the call failed before queueing, so a later
+	//    batch may still hand the text over once.
+	//  - no admission probe (an owner path without steer options): a rejection
+	//    cannot prove the text never queued, so a retry could duplicate it.
+	//    Report the unknown outcome with the text and stop.
+	function deliverOwnerInput(batch, entry) {
+		const root = rootBatch(batch);
+		const record = broadcastRecord(entry.broadcastId, entry.text);
+		if (broadcastSettled(record) || record.ownerDelivery) return;
+		record.ownerDelivery = true;
+		const probe = { supported: false, queued: false, definitive: false };
+		const land = (ok, detail) => {
+			record.ownerDelivery = false;
+			if (probe.queued) {
+				record.accepted = true;
+				if (!ok) {
+					undeliveredWarning(
+						root,
+						"CARRY_OVER_INPUT_ACCEPTED_WITH_ERROR",
+						entry,
+						detail,
+					);
+				}
+				return;
+			}
+			if (ok) {
+				record.shown = true;
+				return;
+			}
+			if (!probe.supported && !probe.definitive) {
+				record.unknown = true;
+				undeliveredWarning(root, "CARRY_OVER_INPUT_UNKNOWN", entry, detail);
+				return;
+			}
+			undeliveredWarning(root, "CARRY_OVER_INPUT_FAILED", entry, detail);
+		};
+		let delivery;
+		try {
+			delivery = injectOwnerInput(root, entry.text, probe);
+		} catch (error) {
+			// No steer path exists at all: nothing can have been queued.
+			probe.definitive = true;
+			land(false, error);
+			return;
+		}
+		if (delivery && typeof delivery.then === "function") {
+			delivery.then(
+				(value) => land(value !== false),
+				(error) => land(false, error),
+			);
+			return;
+		}
+		land(delivery !== false);
+	}
+
+	// The batch has closed and the heir is the conversation. A broadcast that
+	// every flow retired before consuming enters the heir as ordinary input, so
+	// the text is both preserved and answered exactly once.
+	//
+	// A live leaf elsewhere still shows the text better than the owner, so hand
+	// it over first. A nested batch must not steer its parent flow's agent: the
+	// parent resumes into its own retirement, which retracts queued copies. Its
+	// text travels as data instead, through the parent flow's settle while that
+	// flow is alive, and through the enclosing batch's ledger when it is not.
+	//
+	// The owner is steered only by the root batch, after adopt() has replaced
+	// the owner's context: an earlier steer is erased by that reset, and the
+	// text would be lost with it. Every child batch therefore parks its text
+	// upward and lets the root release it once.
+	function releaseCarryOver(batch) {
+		const pending = Array.isArray(batch.carryOver) ? batch.carryOver.splice(0) : [];
+		for (const entry of pending) {
+			const record = broadcastRecord(entry.broadcastId, entry.text);
+			if (broadcastSettled(record)) continue;
+			// The flow that owns this batch retired into it. Its child is done
+			// now, so the leaf scan sees it running again until its own
+			// finishFlow resumes, but a steer into it would be retracted the
+			// moment it resumes retirement. Its text is delivered as data by
+			// the parent branch below.
+			const leaves = activeLeaves().filter((candidate) => candidate !== batch.parentFlow);
+			if (leaves.some((candidate) => record.copies.get(candidate.id) === "queued")) continue;
+			const targets = leaves.filter((candidate) => record.copies.get(candidate.id) !== "queued");
+			if (targets.length > 0) {
+				const { delivered } = enqueueBroadcast(targets, entry.text, entry.broadcastId);
+				if (delivered.length > 0) continue;
+			}
+			const parent = batch.parentFlow;
+			if (parent && !isTerminal(parent)) {
+				if (!Array.isArray(parent.inheritedCarry)) parent.inheritedCarry = [];
+				parent.inheritedCarry.push(entry);
+				// finishFlow may already be between awaits, past its own settle
+				// point; settle now instead of waiting for a run that will not
+				// come around again.
+				settlePendingBroadcasts(parent);
+				continue;
+			}
+			// A terminal parent can no longer settle. Its text waits in the
+			// enclosing batch, which releases it after that batch has adopted,
+			// or hands it to the root once the root itself has adopted.
+			if (batch.parentBatch) {
+				carryBroadcast(batch.parentBatch, entry);
+				continue;
+			}
+			deliverOwnerInput(batch, entry);
+		}
 	}
 
 	// -- Scope boundaries -----------------------------------------------------
@@ -1284,6 +1876,7 @@ export function createFissionScheduler(options = {}) {
 
 	async function finishFlow(flow) {
 		if (flow.finishPromise) return flow.finishPromise;
+		settlePendingBroadcasts(flow);
 		const run = async () => {
 			if (flow.status === "running" || flow.status === "spawning") flow.status = "ending";
 			// The flow's turn is over. Its agent_end has already offered
@@ -1295,6 +1888,10 @@ export function createFissionScheduler(options = {}) {
 			if (flow.status !== "ending" && flow.status !== "waiting-heir") return;
 			await settleFlowSession(flow);
 			await scheduleFlush(flow.batch);
+			// A nested batch may have released its carry while those awaits were
+			// pending. That text arrived after the settle above; without a
+			// second pass it stays in flow.inheritedCarry forever.
+			settlePendingBroadcasts(flow);
 			if (!subtreeClosed(flow)) {
 				flow.finishPromise = null;
 				return;
@@ -1518,6 +2115,7 @@ export function createFissionScheduler(options = {}) {
 
 			emit(batch, "batch.closed", { status: batch.status, heir: anchor?.label ?? null });
 			resolveBatch(batch, answer(batch));
+			releaseCarryOver(batch);
 			if (batch.parentFlow) {
 				queueMicrotask(() => {
 					void finishFlow(batch.parentFlow);
@@ -1531,6 +2129,7 @@ export function createFissionScheduler(options = {}) {
 			for (const flow of batch.flows) releaseFlow(flow);
 			emit(batch, "batch.closed", { status: batch.status, heir: anchor?.label ?? null });
 			resolveBatch(batch, answer(batch));
+			releaseCarryOver(batch);
 		});
 		return batch.finalizePromise;
 	}
@@ -2119,6 +2718,8 @@ export function createFissionScheduler(options = {}) {
 				endInfo: null,
 				retired: false,
 				endRequested: false,
+				pendingBroadcasts: [],
+				inheritedCarry: [],
 				released: false,
 				nested: [],
 				nestedSealed: false,
@@ -2429,6 +3030,7 @@ export function createFissionScheduler(options = {}) {
 					typeof childFlow.agent?.abort === "function"
 				) {
 					try {
+						settlePendingBroadcasts(childFlow);
 						childFlow.agent.abort();
 					} catch (error) {
 						batchWarning(childFlow.batch, "CANCEL_CASCADE_FAILED", error, childFlow);
@@ -2494,6 +3096,7 @@ export function createFissionScheduler(options = {}) {
 		retireEndedFlow(flowId) {
 			const flow = findFlow(flowId);
 			if (!flow?.endRequested || isTerminal(flow)) return;
+			settlePendingBroadcasts(flow);
 			flow.agent.abort(Symbol.for("pi-agent-core.terminal-tool-result"));
 		},
 
@@ -2556,6 +3159,9 @@ export function createFissionScheduler(options = {}) {
 			if (cancelOptions.cascade !== false) {
 				cancelDescendants(flow, flow.cancelReason);
 			}
+			// The abort must not revive a copy this stream can never show:
+			// withdraw and reroute it before the host restores its queues.
+			settlePendingBroadcasts(flow);
 			flow.agent.abort();
 			return { ok: true, flowId, reason: flow.cancelReason };
 		},
@@ -2636,28 +3242,7 @@ export function createFissionScheduler(options = {}) {
 			const broadcastId = isNonEmptyString(broadcastOptions.broadcastId)
 				? broadcastOptions.broadcastId
 				: `bc${broadcastSeq}`;
-			const labels = recipients.map((flow) => flow.label);
-			const delivered = [];
-			const failed = [];
-			for (const flow of recipients) {
-				if (typeof flow.agent?.steer !== "function") {
-					failed.push({ flowId: flow.id, error: "agent.steer() is unavailable" });
-					continue;
-				}
-				try {
-					flow.agent.steer({
-						role: "custom",
-						customType: "fission.broadcast",
-						content: `(broadcast to ${recipients.length} flows)\n\n${content}`,
-						display: true,
-						details: { fissionBroadcast: { broadcastId, recipients: labels } },
-						timestamp: Date.now(),
-					});
-					delivered.push(flow.label);
-				} catch (error) {
-					failed.push({ flowId: flow.id, error: error?.message ?? String(error) });
-				}
-			}
+			const { labels, delivered, failed } = enqueueBroadcast(recipients, content, broadcastId);
 			if (delivered.length === 0) {
 				return {
 					ok: false,

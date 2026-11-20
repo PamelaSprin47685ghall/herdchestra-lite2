@@ -85,17 +85,78 @@ function makeAgent(id) {
 	const agent = {
 		id,
 		steered: [],
+		steering: [],
+		followUpQueue: [],
+		liveSteered: [],
+		withdrawn: 0,
+		cleared: 0,
 		aborted: false,
 		state: { messages: [], isStreaming: false },
 		reset() {
 			agent.state.messages.length = 0;
+			// Adoption replaces the context; queued and live-steered input is
+			// not part of it. Text steered before adopt() is therefore lost,
+			// exactly as the real owner session loses it.
+			agent.steering = [];
+			agent.followUpQueue = [];
+			agent.liveSteered = [];
 		},
 		abort(reason) {
 			agent.aborted = true;
 			agent.abortReason = reason;
+			// The host requeues messages it dequeued but never recorded when the
+			// run aborts. withdrawUndeliveredQueuedMessages() empties
+			// liveSteered first, so a withdrawn copy never comes back.
+			if (agent.liveSteered.length > 0) {
+				agent.steering = [...agent.liveSteered, ...agent.steering];
+				agent.liveSteered = [];
+			}
 		},
 		steer(message) {
 			agent.steered.push(message);
+			agent.steering.push(message);
+		},
+		followUp(message) {
+			agent.followUpQueue.push(message);
+		},
+		clearSteeringQueue() {
+			agent.cleared += 1;
+			agent.steering = [];
+		},
+		clearFollowUpQueue() {
+			agent.cleared += 1;
+			agent.followUpQueue = [];
+		},
+		peekSteeringQueue() {
+			return agent.steering.slice();
+		},
+		peekFollowUpQueue() {
+			return agent.followUpQueue.slice();
+		},
+		peekUndeliveredQueuedMessages() {
+			return agent.liveSteered.slice();
+		},
+		withdrawUndeliveredQueuedMessages() {
+			agent.withdrawn += 1;
+			return { steering: agent.liveSteered.splice(0), followUp: [] };
+		},
+		replaceQueue(queue, messages) {
+			if (queue === "steering") agent.steering = messages.slice();
+			else agent.followUpQueue = messages.slice();
+		},
+		// Test-only: the next model call drains the pending steering queue into
+		// the transcript, as the host records a delivered steer.
+		drainSteering() {
+			const drained = agent.steering.splice(0);
+			agent.state.messages.push(...drained);
+			return drained;
+		},
+		// Test-only: a provider takes the steer into its in-flight response. The
+		// copy leaves the queue but is not recorded yet, so abort would restore
+		// it unless it was withdrawn.
+		takeLiveSteering() {
+			agent.liveSteered.push(...agent.steering.splice(0));
+			return agent.liveSteered;
 		},
 	};
 	return agent;
@@ -1237,6 +1298,96 @@ describe("fission scheduler", () => {
 		expect(empty.code).toBe(FISSION_SCHEDULER_CODES.INVALID_REQUEST);
 	});
 
+	test("a flow that declared completion is never a broadcast recipient", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-closing-bc");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "call-closing-bc",
+			content: "registered",
+		});
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+		const firstSession = h.spawned.find(({ plan }) => plan.flowId === first.flowId).session;
+		const secondSession = h.spawned.find(({ plan }) => plan.flowId === second.flowId).session;
+
+		// The flow has run scope({ end: true }). Its status still reads
+		// "running" until agent_end arrives, but its only remaining work is
+		// closing. A steer now can only start an extra turn whose stream is
+		// already retired, so the flow must not be offered as a recipient.
+		h.scheduler.requestFlowEnd(first.flowId);
+		expect(h.scheduler.listFlows().find((flow) => flow.flowId === first.flowId).status).toBe("running");
+		expect(h.scheduler.activeLeaves().map((flow) => flow.id)).toEqual([second.flowId]);
+
+		const partial = h.scheduler.broadcast("late note");
+		expect(partial.ok).toBe(true);
+		expect(partial.recipients).toEqual([second.label]);
+		expect(firstSession.agent.steered).toEqual([]);
+		expect(secondSession.agent.steered).toHaveLength(1);
+		expect(secondSession.agent.steered[0].content.endsWith("late note")).toBe(true);
+
+		// With every remaining flow closing, nobody can take the text. The
+		// owner bridge waits for the batch to close and hands it to the heir.
+		h.scheduler.requestFlowEnd(second.flowId);
+		expect(h.scheduler.activeLeaves()).toEqual([]);
+		const none = h.scheduler.broadcast("last note");
+		expect(none.ok).toBe(false);
+		expect(none.code).toBe(FISSION_SCHEDULER_CODES.NO_ACTIVE_FLOW);
+		expect(firstSession.agent.steered).toEqual([]);
+		expect(secondSession.agent.steered).toHaveLength(1);
+	});
+
+	test("a broadcast queued before scope end is cleared and carried to the heir", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-carry-bc");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "call-carry-bc",
+			content: "registered",
+		});
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+		const firstSession = h.spawned.find(({ plan }) => plan.flowId === first.flowId).session;
+		const secondSession = h.spawned.find(({ plan }) => plan.flowId === second.flowId).session;
+
+		// Both flows take the broadcast while they are still running. Their next
+		// model call is the scope end they have already committed to, so neither
+		// will ever consume the queued copy.
+		const sent = h.scheduler.broadcast("keep this instruction");
+		expect(sent.ok).toBe(true);
+		expect(firstSession.agent.steering).toHaveLength(1);
+		expect(secondSession.agent.steering).toHaveLength(1);
+
+		// Retirement clears the queue before the host can continue it as an
+		// invisible post-retirement turn. The sibling already holds the same
+		// copy, so it is not duplicated there.
+		h.scheduler.requestFlowEnd(first.flowId);
+		h.scheduler.retireEndedFlow(first.flowId);
+		expect(firstSession.agent.cleared).toBe(0);
+		expect(firstSession.agent.steering).toEqual([]);
+		expect(secondSession.agent.steering).toHaveLength(1);
+		h.spawned[0].session.finish.resolve();
+		await h.scheduler.flowEnded(first.flowId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === first.flowId).status === "closed",
+		);
+
+		// The last flow also retires without consuming it. With no flow left,
+		// the text belongs to the heir and enters exactly once as user input.
+		h.scheduler.requestFlowEnd(second.flowId);
+		h.scheduler.retireEndedFlow(second.flowId);
+		expect(secondSession.agent.cleared).toBe(0);
+		expect(secondSession.agent.steering).toEqual([]);
+		h.spawned[1].session.finish.resolve();
+		await h.scheduler.flowEnded(second.flowId);
+		await h.scheduler.waitForBatch(registered.batchId);
+
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("keep this instruction");
+	});
+
 	test("cancelling one flow leaves its sibling running and yields to the sibling heir", async () => {
 		const h = harness({ fission: twoFlows() });
 		const registered = register(h, "call-cancel");
@@ -1445,5 +1596,657 @@ describe("fission scheduler", () => {
 		expect(done.status).toBe("closed");
 		expect(done.heir).toBe(sibling.label);
 		expect(done.flows.map((flow) => flow.status)).toEqual(["cancelled", "closed"]);
+	});
+
+	test("a broadcast carried out of a nested batch reaches the owner once", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-nested-carry");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-nested-carry", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [parent, sibling] = h.scheduler.listFlows();
+		const nested = await startNested(h, {
+			toolCallId: "call-nested-carry-n1",
+			parentFlowId: parent.flowId,
+			fission: [{ intent: "leaf", budget: { read: 1, bash: 1 }, permission: "ro" }],
+		});
+		const leaf = h.scheduler.listFlows().find((flow) => flow.batchId === nested.batchId);
+		const parentSession = h.spawned.find(({ plan }) => plan.flowId === parent.flowId).session;
+		const leafSession = h.spawned.find(({ plan }) => plan.flowId === leaf.flowId).session;
+
+		// The sibling ends first, leaving the nested leaf as the only recipient.
+		h.scheduler.requestFlowEnd(sibling.flowId);
+		h.spawned[1].session.finish.resolve();
+		await h.scheduler.flowEnded(sibling.flowId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === sibling.flowId).status === "closed",
+		);
+
+		const sent = h.scheduler.broadcast("nested note");
+		expect(sent.delivered).toEqual([leaf.label]);
+		expect(leafSession.agent.steering).toHaveLength(1);
+
+		// The leaf retires before its next model call, so the copy can never be
+		// shown in its own stream; the inner batch carries it upward.
+		h.scheduler.requestFlowEnd(leaf.flowId);
+		h.scheduler.retireEndedFlow(leaf.flowId);
+		expect(leafSession.agent.steering).toEqual([]);
+		// The ending leaf is no longer an input leaf, and the parent that
+		// retired into the subtree must not be promoted in its place: a steer
+		// into the parent would only be retracted when it resumes.
+		expect(h.scheduler.activeLeaves()).toEqual([]);
+		leafSession.finish.resolve();
+		await h.scheduler.flowEnded(leaf.flowId);
+		await h.scheduler.waitForBatch(registered.batchId);
+
+		// The parent resumes into its own retirement, which retracts queued
+		// copies. A steer into the parent's agent would have been erased there;
+		// the text must survive as data and reach the root conversation, once.
+		expect(parentSession.agent.steered).toEqual([]);
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("nested note");
+	});
+
+	test("cancelling the only flow still hands its broadcast to the owner", async () => {
+		const h = harness({ fission: [{ intent: "only", budget: { read: 2, bash: 1 }, permission: "ro" }] });
+		const registered = register(h, "call-cancel-carry");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-cancel-carry", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [only] = h.scheduler.listFlows();
+		const session = h.spawned[0].session;
+
+		const sent = h.scheduler.broadcast("do not lose this");
+		expect(sent.delivered).toEqual([only.label]);
+		expect(session.agent.steering).toHaveLength(1);
+
+		expect(h.scheduler.cancelFlow(only.flowId, "user pressed Esc").ok).toBe(true);
+		await h.scheduler.flowEnded(only.flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+
+		// The cancelled stream can never show the copy, so it is retracted; the
+		// user's text is not cancelled with it.
+		expect(session.agent.steering).toEqual([]);
+		expect(done.status).toBe("cancelled");
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("do not lose this");
+	});
+
+	test("a broadcast one flow consumed is never shown again", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-shown-once");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-shown-once", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+		const firstSession = h.spawned[0].session;
+		const secondSession = h.spawned[1].session;
+
+		const sent = h.scheduler.broadcast("run the same note");
+		expect(sent.delivered).toHaveLength(2);
+		const [firstCopy] = firstSession.agent.steering;
+
+		// The first flow's next model call drains the queue: the copy is now in
+		// its message list, and its stream shows the text.
+		firstSession.agent.steering = [];
+		firstSession.agent.state.messages.push(firstCopy);
+		h.scheduler.requestFlowEnd(first.flowId);
+		h.scheduler.retireEndedFlow(first.flowId);
+		expect(firstSession.agent.cleared).toBe(0);
+		firstSession.finish.resolve();
+		await h.scheduler.flowEnded(first.flowId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === first.flowId).status === "closed",
+		);
+
+		// The second flow never consumed its copy. The text was already shown in
+		// the first stream, so it must not enter the surviving stream again, nor
+		// the owner conversation a second time.
+		h.scheduler.requestFlowEnd(second.flowId);
+		h.scheduler.retireEndedFlow(second.flowId);
+		expect(secondSession.agent.cleared).toBe(0);
+		expect(secondSession.agent.steering).toEqual([]);
+		secondSession.finish.resolve();
+		await h.scheduler.flowEnded(second.flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+
+		expect(done.flows.map((flow) => flow.status)).toEqual(["closed", "closed"]);
+		expect(h.ownerAgent.steered).toEqual([]);
+	});
+
+	test("cancelling a flow with no queued broadcast leaves its input queue", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-keep-queue");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-keep-queue", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+		const firstSession = h.spawned[0].session;
+		const typed = { role: "user", content: "typed while busy", timestamp: Date.now() };
+		firstSession.agent.steering.push(typed);
+
+		expect(h.scheduler.cancelFlow(first.flowId, "user pressed Esc").ok).toBe(true);
+		await h.scheduler.flowEnded(first.flowId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === first.flowId).status === "cancelled",
+		);
+		// Nothing the scheduler queued is pending, so a whole-queue clear would
+		// only destroy the user's own input.
+		expect(firstSession.agent.cleared).toBe(0);
+		expect(firstSession.agent.steering).toEqual([typed]);
+
+		h.scheduler.requestFlowEnd(second.flowId);
+		h.spawned[1].session.finish.resolve();
+		await h.scheduler.flowEnded(second.flowId);
+		await h.scheduler.waitForBatch(registered.batchId);
+	});
+
+	test("a live-steered copy is withdrawn before the abort can revive it", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-live-steer");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-live-steer", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+		const firstSession = h.spawned[0].session;
+		const secondSession = h.spawned[1].session;
+
+		const sent = h.scheduler.broadcast("answer before you retire");
+		expect(sent.delivered).toHaveLength(2);
+		// Each provider takes its copy into the in-flight response: the message
+		// is no longer in the pending queue, and a plain abort would requeue it
+		// as an invisible turn in a stream that is already closing.
+		firstSession.agent.takeLiveSteering();
+		secondSession.agent.takeLiveSteering();
+		expect(firstSession.agent.steering).toEqual([]);
+
+		h.scheduler.requestFlowEnd(first.flowId);
+		h.scheduler.retireEndedFlow(first.flowId);
+		expect(firstSession.agent.withdrawn).toBeGreaterThanOrEqual(1);
+		expect(firstSession.agent.liveSteered).toEqual([]);
+		// The abort restores only what the host still holds. The ghost turn
+		// would have left the copy in the queue again.
+		expect(firstSession.agent.aborted).toBe(true);
+		expect(firstSession.agent.steering).toEqual([]);
+
+		firstSession.finish.resolve();
+		await h.scheduler.flowEnded(first.flowId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === first.flowId).status === "closed",
+		);
+
+		// The sibling still holds its own copy, so the text is not duplicated
+		// there and not parked for the heir yet.
+		expect(secondSession.agent.liveSteered).toHaveLength(1);
+		expect(secondSession.agent.steering).toEqual([]);
+
+		h.scheduler.requestFlowEnd(second.flowId);
+		h.scheduler.retireEndedFlow(second.flowId);
+		expect(secondSession.agent.withdrawn).toBeGreaterThanOrEqual(1);
+		expect(secondSession.agent.liveSteered).toEqual([]);
+		expect(secondSession.agent.steering).toEqual([]);
+		secondSession.finish.resolve();
+		await h.scheduler.flowEnded(second.flowId);
+		await h.scheduler.waitForBatch(registered.batchId);
+
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("answer before you retire");
+	});
+
+	test("retracting a broadcast keeps the user's own input queued", async () => {
+		const h = harness({ fission: [{ intent: "only", budget: { read: 2, bash: 1 }, permission: "ro" }] });
+		const registered = register(h, "call-keep-typed");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-keep-typed", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [only] = h.scheduler.listFlows();
+		const session = h.spawned[0].session;
+
+		expect(h.scheduler.broadcast("scheduler note").ok).toBe(true);
+		const typed = { role: "user", content: "my own sentence", timestamp: Date.now() };
+		session.agent.steering.push(typed);
+
+		expect(h.scheduler.cancelFlow(only.flowId, "user pressed Esc").ok).toBe(true);
+		// The copy leaves both the pending queue and the undelivered set; the
+		// sentence the user typed stays exactly where it was, and no whole-queue
+		// clear was needed to make that happen.
+		expect(session.agent.steering).toEqual([typed]);
+		expect(session.agent.cleared).toBe(0);
+		expect(session.agent.withdrawn).toBeGreaterThanOrEqual(1);
+
+		await h.scheduler.flowEnded(only.flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+		expect(done.status).toBe("cancelled");
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("scheduler note");
+	});
+
+	test("a nested carry released during the parent's settle still reaches the heir", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-late-carry");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-late-carry", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [parent, sibling] = h.scheduler.listFlows();
+		const nested = await startNested(h, {
+			toolCallId: "call-late-carry-n1",
+			parentFlowId: parent.flowId,
+			fission: [{ intent: "leaf", budget: { read: 1, bash: 1 }, permission: "ro" }],
+		});
+		const leaf = h.scheduler.listFlows().find((flow) => flow.batchId === nested.batchId);
+		const parentSession = h.spawned.find(({ plan }) => plan.flowId === parent.flowId).session;
+		const siblingSession = h.spawned.find(({ plan }) => plan.flowId === sibling.flowId).session;
+		const leafSession = h.spawned.find(({ plan }) => plan.flowId === leaf.flowId).session;
+
+		h.scheduler.requestFlowEnd(sibling.flowId);
+		siblingSession.finish.resolve();
+		await h.scheduler.flowEnded(sibling.flowId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === sibling.flowId).status === "closed",
+		);
+
+		const sent = h.scheduler.broadcast("survive the settle");
+		expect(sent.delivered).toEqual([leaf.label]);
+		expect(leafSession.agent.steering).toHaveLength(1);
+
+		// The parent enters finishFlow and blocks inside settleFlowSession, the
+		// same await window in which a nested batch can release its carry.
+		let releaseSettle;
+		let settleEntered;
+		const gate = new Promise((resolve) => {
+			releaseSettle = resolve;
+		});
+		const entered = new Promise((resolve) => {
+			settleEntered = resolve;
+		});
+		parentSession.onSettle = async () => {
+			settleEntered();
+			await gate;
+		};
+		const finishing = h.scheduler.flowEnded(parent.flowId);
+		await entered;
+
+		// The leaf retires before consuming the copy, and its batch releases the
+		// text while the parent is still inside that await.
+		h.scheduler.requestFlowEnd(leaf.flowId);
+		h.scheduler.retireEndedFlow(leaf.flowId);
+		expect(leafSession.agent.steering).toEqual([]);
+		leafSession.finish.resolve();
+		await h.scheduler.flowEnded(leaf.flowId);
+
+		// Nothing may reach the owner before adoption, and the parent's own
+		// stream must not receive a steer it would retract on resumption.
+		expect(parentSession.agent.steered).toEqual([]);
+		expect(h.ownerAgent.steered).toEqual([]);
+
+		releaseSettle();
+		await finishing;
+		await h.scheduler.waitForBatch(registered.batchId);
+
+		expect(parentSession.agent.steered).toEqual([]);
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("survive the settle");
+	});
+
+	test("a broadcast every live flow refuses is carried to the heir, not dropped", async () => {
+		const sessions = [];
+		const h = harness({
+			fission: twoFlows(),
+			hooks: {
+				spawnFlow(plan) {
+					const session = makeFlowSession(plan);
+					sessions.push({ plan, session });
+					return { session };
+				},
+			},
+		});
+		const registered = register(h, "call-refused-broadcast");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "call-refused-broadcast",
+			content: "registered",
+		});
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [parent, sibling] = h.scheduler.listFlows();
+		const parentSession = sessions.find(({ plan }) => plan.flowId === parent.flowId).session;
+		const siblingSession = sessions.find(({ plan }) => plan.flowId === sibling.flowId).session;
+
+		// The sibling ends before the broadcast, so the parent holds the only
+		// copy that can survive.
+		h.scheduler.requestFlowEnd(sibling.flowId);
+		siblingSession.finish.resolve();
+		await h.scheduler.flowEnded(sibling.flowId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === sibling.flowId).status === "closed",
+		);
+		const sent = h.scheduler.broadcast("rescue this note");
+		expect(sent.delivered).toEqual([parent.label]);
+		expect(parentSession.agent.steering).toHaveLength(1);
+
+		// A nested leaf appears after the broadcast and holds no copy, so the
+		// parent's retiring copy is re-routed to it. That leaf refuses every
+		// steer: a delivery that silently drops the text here would lose it.
+		const nested = await startNested(h, {
+			toolCallId: "call-refused-broadcast-n1",
+			parentFlowId: parent.flowId,
+			fission: [{ intent: "leaf", budget: { read: 1, bash: 1 }, permission: "ro" }],
+		});
+		const leaf = h.scheduler.listFlows().find((flow) => flow.batchId === nested.batchId);
+		const leafSession = sessions.find(({ plan }) => plan.flowId === leaf.flowId).session;
+		leafSession.agent.steer = () => {
+			throw new Error("the leaf refuses steering");
+		};
+		await h.scheduler.flowEnded(parent.flowId);
+
+		expect(leafSession.agent.steering).toEqual([]);
+		expect(parentSession.agent.steering).toEqual([]);
+		// The refusal happened in the nested leaf's batch: that is where the
+		// operator can find the flow that could not take the text.
+		const refused = h.scheduler.batchStatus(nested.batchId).warnings
+			.find((warning) => warning.code === "BROADCAST_DELIVERY_FAILED");
+		expect(refused).toBeDefined();
+		expect(refused.text).toBe("rescue this note");
+
+		h.scheduler.requestFlowEnd(leaf.flowId);
+		h.scheduler.retireEndedFlow(leaf.flowId);
+		leafSession.finish.resolve();
+		await h.scheduler.flowEnded(leaf.flowId);
+		await h.scheduler.waitForBatch(registered.batchId);
+		await waitFor(() => h.ownerAgent.steered.length >= 1);
+
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("rescue this note");
+	});
+
+	test("a rejected owner steer is reported and never marks the text shown", async () => {
+		const h = harness({ fission: [{ intent: "only", budget: { read: 2, bash: 1 }, permission: "ro" }] });
+		let steerCalls = 0;
+		h.ownerSession.steer = (text) => {
+			steerCalls += 1;
+			if (steerCalls === 1) return Promise.reject(new Error("the owner conversation is gone"));
+			h.ownerAgent.steered.push({ role: "user", content: text, timestamp: Date.now() });
+			return undefined;
+		};
+
+		const first = register(h, "call-owner-reject-1");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-owner-reject-1", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: first.batch });
+		const [only] = h.scheduler.listFlows();
+		const session = h.spawned[0].session;
+		expect(h.scheduler.broadcast("recover me", { broadcastId: "shared-note" }).ok).toBe(true);
+		h.scheduler.requestFlowEnd(only.flowId);
+		h.scheduler.retireEndedFlow(only.flowId);
+		session.finish.resolve();
+		await h.scheduler.flowEnded(only.flowId);
+		await h.scheduler.waitForBatch(first.batchId);
+		await waitFor(() =>
+			h.scheduler.batchStatus(first.batchId).warnings.some(
+				(warning) => warning.code === "CARRY_OVER_INPUT_FAILED",
+			),
+		);
+
+		const warning = h.scheduler.batchStatus(first.batchId).warnings
+			.find((item) => item.code === "CARRY_OVER_INPUT_FAILED");
+		expect(warning.text).toBe("recover me");
+		expect(h.ownerAgent.steered).toEqual([]);
+
+		// The rejected hand-off must not close the ledger row. A later batch
+		// that carries the same broadcast id can still deliver the text once.
+		const second = register(h, "call-owner-reject-2");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-owner-reject-2", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: second.batch });
+		const later = h.scheduler.listFlows().find((flow) => flow.batchId === second.batchId);
+		const laterSession = h.spawned[1].session;
+		expect(h.scheduler.broadcast("recover me", { broadcastId: "shared-note" }).ok).toBe(true);
+		h.scheduler.requestFlowEnd(later.flowId);
+		h.scheduler.retireEndedFlow(later.flowId);
+		laterSession.finish.resolve();
+		await h.scheduler.flowEnded(later.flowId);
+		await h.scheduler.waitForBatch(second.batchId);
+
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("recover me");
+	});
+
+	test("a broadcast that cannot be retracted is reported, not re-delivered", async () => {
+		const h = harness({ fission: [{ intent: "only", budget: { read: 2, bash: 1 }, permission: "ro" }] });
+		const registered = register(h, "call-retract-fail");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-retract-fail", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [only] = h.scheduler.listFlows();
+		const session = h.spawned[0].session;
+
+		expect(h.scheduler.broadcast("never duplicate this").ok).toBe(true);
+		const [copy] = session.agent.steering;
+		// The host refuses both the withdraw and the queue rewrite, so the copy
+		// stays queued. Deleting the ledger row and re-routing it elsewhere
+		// would show the text twice if that queue ever runs.
+		session.agent.withdrawUndeliveredQueuedMessages = () => {
+			throw new Error("the queue is sealed");
+		};
+		session.agent.replaceQueue = () => {
+			throw new Error("the queue is sealed");
+		};
+
+		expect(h.scheduler.cancelFlow(only.flowId, "user pressed Esc").ok).toBe(true);
+		expect(session.agent.steering).toEqual([copy]);
+		await h.scheduler.flowEnded(only.flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+
+		const warning = done.warnings.find((item) => item.code === "BROADCAST_RETRACT_FAILED");
+		expect(warning).toBeDefined();
+		expect(warning.text).toBe("never duplicate this");
+		expect(done.status).toBe("cancelled");
+		expect(h.ownerAgent.steered).toEqual([]);
+	});
+
+	test("an owner steer admitted to the queue is terminal even when the call rejects", async () => {
+		const h = harness({ fission: [{ intent: "only", budget: { read: 2, bash: 1 }, permission: "ro" }] });
+		const admitted = [];
+		h.ownerSession.steer = (text, _images, options) => {
+			admitted.push(text);
+			// The host pushes the message and admits it synchronously, then its
+			// promise can still reject (for example, a run that settles while
+			// the call is in flight). Admission, not settlement, proves the
+			// copy reached the owner's queue.
+			options?.onPromptQueued?.([{ role: "user", content: text }]);
+			return Promise.reject(new Error("the run ended after the queue accepted it"));
+		};
+
+		const first = register(h, "call-owner-admit-1");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-owner-admit-1", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: first.batch });
+		const [only] = h.scheduler.listFlows();
+		const session = h.spawned[0].session;
+		expect(h.scheduler.broadcast("queued once", { broadcastId: "admitted-note" }).ok).toBe(true);
+
+		h.scheduler.requestFlowEnd(only.flowId);
+		h.scheduler.retireEndedFlow(only.flowId);
+		session.finish.resolve();
+		await h.scheduler.flowEnded(only.flowId);
+		await h.scheduler.waitForBatch(first.batchId);
+		await waitFor(() =>
+			h.scheduler.batchStatus(first.batchId).warnings.some(
+				(warning) => warning.code === "CARRY_OVER_INPUT_ACCEPTED_WITH_ERROR",
+			),
+		);
+
+		// The late rejection is reported with the text, not hidden, and the
+		// admitted copy keeps its place in the owner's queue.
+		const warning = h.scheduler.batchStatus(first.batchId).warnings
+			.find((item) => item.code === "CARRY_OVER_INPUT_ACCEPTED_WITH_ERROR");
+		expect(warning.text).toBe("queued once");
+		expect(admitted).toEqual(["queued once"]);
+
+		// The same broadcast id in a later batch must not steer the owner again:
+		// the host already holds the copy, so a retry would show the text twice.
+		const second = register(h, "call-owner-admit-2");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-owner-admit-2", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: second.batch });
+		const later = h.scheduler.listFlows().find((flow) => flow.batchId === second.batchId);
+		const laterSession = h.spawned[1].session;
+		expect(h.scheduler.broadcast("queued once", { broadcastId: "admitted-note" }).ok).toBe(true);
+		h.scheduler.requestFlowEnd(later.flowId);
+		h.scheduler.retireEndedFlow(later.flowId);
+		laterSession.finish.resolve();
+		await h.scheduler.flowEnded(later.flowId);
+		await h.scheduler.waitForBatch(second.batchId);
+
+		expect(admitted).toEqual(["queued once"]);
+	});
+
+	test("an owner steer with no admission signal is reported as unknown, not retried", async () => {
+		const h = harness({ fission: [{ intent: "only", budget: { read: 2, bash: 1 }, permission: "ro" }] });
+		// The owner-agent path takes no options, so nothing can prove whether a
+		// rejected call queued the text. Retrying could duplicate it; stopping
+		// and reporting the preserved text is the only outcome that cannot lie.
+		let steerCalls = 0;
+		h.ownerAgent.steer = () => {
+			steerCalls += 1;
+			return Promise.reject(new Error("the owner agent refused the steer"));
+		};
+
+		const first = register(h, "call-owner-unknown-1");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-owner-unknown-1", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: first.batch });
+		const [only] = h.scheduler.listFlows();
+		const session = h.spawned[0].session;
+		expect(h.scheduler.broadcast("ambiguous note", { broadcastId: "unknown-note" }).ok).toBe(true);
+
+		h.scheduler.requestFlowEnd(only.flowId);
+		h.scheduler.retireEndedFlow(only.flowId);
+		session.finish.resolve();
+		await h.scheduler.flowEnded(only.flowId);
+		await h.scheduler.waitForBatch(first.batchId);
+		await waitFor(() =>
+			h.scheduler.batchStatus(first.batchId).warnings.some(
+				(warning) => warning.code === "CARRY_OVER_INPUT_UNKNOWN",
+			),
+		);
+
+		const warning = h.scheduler.batchStatus(first.batchId).warnings
+			.find((item) => item.code === "CARRY_OVER_INPUT_UNKNOWN");
+		expect(warning.text).toBe("ambiguous note");
+		expect(steerCalls).toBe(1);
+
+		const second = register(h, "call-owner-unknown-2");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-owner-unknown-2", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: second.batch });
+		const later = h.scheduler.listFlows().find((flow) => flow.batchId === second.batchId);
+		const laterSession = h.spawned[1].session;
+		expect(h.scheduler.broadcast("ambiguous note", { broadcastId: "unknown-note" }).ok).toBe(true);
+		h.scheduler.requestFlowEnd(later.flowId);
+		h.scheduler.retireEndedFlow(later.flowId);
+		laterSession.finish.resolve();
+		await h.scheduler.flowEnded(later.flowId);
+		await h.scheduler.waitForBatch(second.batchId);
+
+		expect(steerCalls).toBe(1);
+	});
+
+	test("a refused requeue reports the user's text and still strips the other queue", async () => {
+		const h = harness({ fission: [{ intent: "only", budget: { read: 2, bash: 1 }, permission: "ro" }] });
+		const registered = register(h, "call-requeue-split");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-requeue-split", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [only] = h.scheduler.listFlows();
+		const session = h.spawned[0].session;
+
+		expect(h.scheduler.broadcast("never lose the note").ok).toBe(true);
+		const [copy] = session.agent.steering;
+		// The host moved a second copy of our broadcast into the follow-up
+		// queue, as a provider transition can. The steering restore below then
+		// refuses; the follow-up strip must still run.
+		session.agent.followUpQueue.push(copy);
+		const typed = { role: "user", content: "keep my own sentence", timestamp: Date.now() };
+		const followUpTyped = { role: "user", content: "and my follow-up", timestamp: Date.now() };
+		// The host withdraws both queues and hands the user's messages back. The
+		// steering queue refuses both the rewrite and the append; before the
+		// split, that exception also swallowed the follow-up restore.
+		session.agent.withdrawUndeliveredQueuedMessages = () => ({
+			steering: [typed],
+			followUp: [followUpTyped],
+		});
+		session.agent.replaceQueue = (queue, messages) => {
+			if (queue === "steering") throw new Error("steering is sealed");
+			session.agent.followUpQueue = messages.slice();
+		};
+		session.agent.steer = () => {
+			throw new Error("steer is sealed");
+		};
+
+		expect(h.scheduler.cancelFlow(only.flowId, "user pressed Esc").ok).toBe(true);
+		await h.scheduler.flowEnded(only.flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+
+		const lost = done.warnings.find((warning) => warning.code === "QUEUE_INPUT_RESTORE_FAILED");
+		expect(lost).toBeDefined();
+		expect(lost.queue).toBe("steering");
+		expect(lost.text).toBe("keep my own sentence");
+		expect(lost.message).toContain("sealed");
+		// The follow-up message was restored and our copy stripped from it even
+		// though the steering rewrite failed first.
+		expect(session.agent.followUpQueue).toEqual([followUpTyped]);
+		// The steering copy is still held, so the ledger reports the broadcast
+		// instead of routing a duplicate.
+		const stuck = done.warnings.find((warning) => warning.code === "BROADCAST_RETRACT_FAILED");
+		expect(stuck.text).toBe("never lose the note");
+		expect(h.ownerAgent.steered).toEqual([]);
+	});
+
+	test("a copy proven gone after its flow dies releases the healthy copies", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-leak-release");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-leak-release", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+		const firstSession = h.spawned[0].session;
+		const secondSession = h.spawned[1].session;
+
+		expect(h.scheduler.broadcast("release the healthy copy").ok).toBe(true);
+		const [firstCopy] = firstSession.agent.steering;
+		expect(firstCopy).toBeDefined();
+		const workingPeek = firstSession.agent.peekSteeringQueue;
+		// The first flow's host is unreadable, so retirement cannot prove its
+		// copy gone and the ledger must hold the broadcast.
+		const sealed = () => {
+			throw new Error("the queue is sealed");
+		};
+		firstSession.agent.withdrawUndeliveredQueuedMessages = sealed;
+		firstSession.agent.peekSteeringQueue = sealed;
+		firstSession.agent.peekFollowUpQueue = sealed;
+		firstSession.agent.peekUndeliveredQueuedMessages = sealed;
+		expect(h.scheduler.cancelFlow(first.flowId, "user pressed Esc").ok).toBe(true);
+		await h.scheduler.flowEnded(first.flowId);
+		expect(h.scheduler.batchStatus(registered.batchId).warnings
+			.some((warning) => warning.code === "BROADCAST_RETRACT_FAILED")).toBe(true);
+
+		// The abort dropped the copy and the host is readable again: a later
+		// settle can now prove the stuck copy gone.
+		firstSession.agent.steering = [];
+		firstSession.agent.peekSteeringQueue = workingPeek;
+		firstSession.agent.peekFollowUpQueue = () => [];
+		firstSession.agent.peekUndeliveredQueuedMessages = () => [];
+
+		// The second flow retires without consuming. Its copy is retracted, and
+		// the text must still reach the owner exactly once.
+		h.scheduler.requestFlowEnd(second.flowId);
+		h.scheduler.retireEndedFlow(second.flowId);
+		secondSession.finish.resolve();
+		await h.scheduler.flowEnded(second.flowId);
+		await h.scheduler.waitForBatch(registered.batchId);
+
+		expect(h.ownerAgent.steered).toHaveLength(1);
+		expect(h.ownerAgent.steered[0].content).toBe("release the healthy copy");
 	});
 });

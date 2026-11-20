@@ -900,6 +900,56 @@ function installPort(registry, scheduler) {
 	registry.setFissionScheduler(scheduler);
 }
 
+/** The session UI's warning channel, or null when it has none. */
+function sessionNotice(ctx) {
+	const ui = ctx?.ui;
+	if (typeof ui?.notify === "function") {
+		return (text, code) =>
+			ui.notify(
+				`Herdchestra fission: ${code}. The text is preserved here:\n${text}`,
+				"warning",
+			);
+	}
+	if (typeof ui?.showWarning === "function") {
+		return (text, code) =>
+			ui.showWarning(`Herdchestra fission: ${code}. The text is preserved here:\n${text}`);
+	}
+	return null;
+}
+
+/**
+ * Surface one scheduler warning to its two audiences. The diagnostic ring keeps
+ * the failure identity and the text length, following the tickets convention of
+ * not copying user input into diagnostics; the interface receives the preserved
+ * text, which is the only copy left once the batch is gone. When no interface
+ * can show it, the text goes into the ring so `/herd-diag` can still recover it.
+ */
+export function announceFlowWarning(event, options = {}) {
+	if (event?.type !== "flow.warning") return null;
+	const code = typeof event.code === "string" && event.code ? event.code : "FLOW_WARNING";
+	const text = typeof event.text === "string" ? event.text : "";
+	let shown = false;
+	if (text !== "" && typeof options.notify === "function") {
+		try {
+			options.notify(text, code);
+			shown = true;
+		} catch {
+			// A notice that cannot render must not break the scheduler.
+		}
+	}
+	const detail = {
+		seam: "flow.warning",
+		batchId: event.batchId ?? null,
+		flowId: event.flowId ?? null,
+		broadcastId: event.broadcastId ?? null,
+		chars: text.length,
+	};
+	if (text !== "" && !shown) detail.text = text;
+	const sink = typeof options.record === "function" ? options.record : record;
+	sink("fission", `${code}: ${String(event.message ?? code)}`, detail);
+	return { code, text, shown };
+}
+
 /** Build the scheduler for this manager, or refuse with the exact gap. */
 function attach(state, registry, ctx) {
 	const view = hostView(ctx);
@@ -1013,6 +1063,7 @@ function attach(state, registry, ctx) {
 					record("fission", error, { persist: true });
 				}
 			},
+			onBatchEvent: (event) => announceFlowWarning(event, { notify: sessionNotice(ctx) }),
 			...(bridge ? { bridge } : {}),
 		});
 	} catch (error) {

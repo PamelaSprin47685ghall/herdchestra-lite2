@@ -498,6 +498,8 @@ closed(batch) = 该批次的全部流都已 closed
 - **必须标注为广播。** 每条流收到的消息带 `details.fissionBroadcast = { broadcastId, recipients }`，正文以一行 `(broadcast to N flows)` 开头。没有这行标注，流会以为自己被单独点名，后面围绕一个不存在的专属指令推理。
 - **界面只显示一次。** 复用器按 `broadcastId` 去重：第一次出现渲染，后续流里的同一份丢弃。否则一次广播会在屏幕上出现 N 次。
 - **广播不参与抄写。** 每条流都已直接收到它；抄写再带一遍会让接收方看到同一条用户指令两次，且无法判断哪次更晚。
+- **回传给所有者只成功一次。** 所有流都没消费的广播最后交给 owner 会话：`session.steer(text, undefined, { onPromptQueued })`。入队回调同步发生在 Promise 结算之前，因此「已入队」以回调为准，不以 resolve 为准。一次 steer 已入队后即使 Promise 再 reject，也不得重投——重投就是屏幕上、上下文里各出现两次。回调从未触发的 reject 才算未受理，留给后续批次再交一次；没有回调可注册的 owner 路径（`agent.steer`）无法证明「没入队」，按未知收束，附原文报告。三种结果各写一条 warning（`CARRY_OVER_INPUT_FAILED` / `CARRY_OVER_INPUT_ACCEPTED_WITH_ERROR` / `CARRY_OVER_INPUT_UNKNOWN`），`text` 原样保留。
+- **失败要落到人能看见的地方。** 调度器把 warning 交给 `onBatchEvent`；接线层订阅 `flow.warning`：诊断环只记 code、批次 / 流 / broadcastId 与字符数（沿用 `tickets` 不抄用户原文的约定），界面拿原文提示用户；界面不可用时原文进诊断环，`/herd-diag` 是最后的兜底。
 - **批次结束后归继承者。** 没有 running 流时，输入照常进会话——那时继承者已经接管，它就是普通的主 agent。
 - **取消 / 崩溃**：写 `fission.aborted { label, reason }`，不参与合拢，entry 留在旁支；同批其余流继续。
 - **model**：每条流由自己的 Agent 持有，不走宿主 `/switch`，因此不触发 `pendingModelSwitch` 与关闭时恢复。所有者被停止后，它的模型字段不再影响会话；继承者的模型成为活动模型（见 5.9）。

@@ -445,7 +445,6 @@ export function deriveFissionConfig(options = {}) {
 		bindProcessState: false,
 		agentId: flowId,
 		agentDisplayName: label,
-		parentTaskPrefix: flowId,
 		asyncJobManager,
 		parentAgentId: isNonEmptyString(ownerId) ? ownerId : "Main",
 		agentRegistry,

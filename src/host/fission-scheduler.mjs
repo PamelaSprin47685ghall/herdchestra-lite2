@@ -492,6 +492,10 @@ export function createFissionScheduler(options = {}) {
 			return options.createFlowStation(base, flow, flow.batch);
 		}
 		if (!isObject(base)) return base;
+		const flowManager = flow.session?.sessionManager ?? base.manager;
+		if (typeof base.forkForFlow === "function") {
+			return base.forkForFlow(flow.state, flowManager);
+		}
 		const view = Object.create(base);
 		view.state = flow.state;
 		view.fissionFlow = null;
@@ -1773,7 +1777,7 @@ export function createFissionScheduler(options = {}) {
 		target.splice(0, target.length, ...heirMessages);
 
 		const model = heir.model ?? heir.session?.model;
-		if (model) {
+		if (model && owner.session?.model !== model) {
 			if (typeof owner.session?.setModel === "function") {
 				try {
 					await owner.session.setModel(model);
@@ -1809,13 +1813,14 @@ export function createFissionScheduler(options = {}) {
 		return failures;
 	}
 
-	function promote(batch, heir) {
+	function promote(batch, heir, { persist = true } = {}) {
 		const target = batch.owner.state;
 		for (const key of Object.keys(heir.state)) {
 			if (SHARED_STATE_FIELDS.has(key)) continue;
 			target[key] = heir.state[key];
 		}
 		target.pinSeen = heir.state.pinSeen;
+		if (!persist) return;
 		try {
 			options.onPromote?.(target, heir.state, batch);
 			options.persist?.();
@@ -2107,7 +2112,7 @@ export function createFissionScheduler(options = {}) {
 						recordLimit(failure.code, failure.detail, { flowId: anchor.id });
 						batch.limits.push({ ...failure, flowId: anchor.id });
 					}
-					promote(batch, anchor);
+					promote(batch, anchor, { persist: false });
 					batch.status = failed || boundaryFailed
 						? "failed"
 						: batch.costCapped
@@ -2144,10 +2149,31 @@ export function createFissionScheduler(options = {}) {
 			}
 
 			closeBatchScope(batch);
+			if (takeover) {
+				try {
+					options.onPromote?.(batch.owner.state, anchor.state, batch);
+					options.persist?.();
+				} catch (error) {
+					batchWarning(batch, "PROMOTION_CALLBACK_FAILED", error, anchor);
+				}
+			}
 			for (const flow of batch.flows) releaseFlow(flow);
 
 			emit(batch, "batch.closed", { status: batch.status, heir: anchor?.label ?? null });
 			resolveBatch(batch, answer(batch));
+			const needsPostScopeTurn =
+				!batch.parentBatch &&
+				!batch.parentFlow &&
+				takeover &&
+				usable &&
+				anchor?.endRequested === true &&
+				typeof batch.owner.agent?.continue === "function" &&
+				batch.owner.agent.state?.isStreaming !== true;
+			if (needsPostScopeTurn) {
+				void Promise.resolve(batch.owner.agent.continue()).catch((error) => {
+					batchWarning(batch, "POST_BATCH_CONTINUE_FAILED", error, anchor);
+				});
+			}
 			releaseCarryOver(batch);
 			if (batch.parentFlow) {
 				queueMicrotask(() => {
@@ -2243,6 +2269,11 @@ export function createFissionScheduler(options = {}) {
 		const validation = validateFission(batch.owner.state, begin, gateOptions(request));
 		if (!validation.ok) {
 			throw refusal(validation.code ?? "INVALID_FISSION", validation.reason, { batchId: batch.id });
+		}
+		for (const item of validation.items) {
+			if (item.model !== undefined && item.model !== null) {
+				resolveModel(item, batch.owner);
+			}
 		}
 		const computed = sumBudgets(validation.items);
 		if (request.totals && !sameCounts(request.totals, computed)) {

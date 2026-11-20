@@ -173,6 +173,47 @@ export class SessionStation {
 		this.usage.restoreFromBranch(this.manager);
 	}
 
+	forkForFlow(flowState, flowManager) {
+		const view = Object.create(this);
+		view.manager = flowManager ?? this.manager;
+		view.state = flowState;
+		view.anchor = createPersistenceAnchor({
+			manager: view.manager,
+			state: () => view.state,
+			initialState: null,
+			initialEntryId: null,
+			serialize: serializeState,
+			plan: planStateEntry,
+			type: SESSION_STATE_TYPE,
+			noteError: (domain, error) => view.noteError(domain, error),
+		});
+		view.processed = createProcessedLedger();
+		view.dispatch = createDispatchTracker();
+		view.nudged = new WeakSet();
+		view.lastError = null;
+		view.hostBoundaryKey = null;
+		view.agentPolicy = null;
+		view.ownerRetired = null;
+		view.handoffReport = null;
+		view.todoGrantKey = null;
+		view.pendingModelSwitch = null;
+		view.modelSwitchInFlight = null;
+		view.fissionFlow = null;
+		view.pendingFission = null;
+		view.usage = createUsageLedger({
+			state: view.state,
+			contextMessages: () => view.contextMessages(),
+			persist: () => view.persist(),
+			foldBatch: (args) => view.foldBatch(args),
+			noteError: (domain, error) => view.noteError(domain, error),
+			sliceChars,
+			netRemovableTokens,
+			modelKeyOf: (message) => modelKey(message),
+			actualModelOf: (ctx) => actualModel(ctx),
+		});
+		return view;
+	}
+
 	// -- Usage ledger ---------------------------------------------------------
 
 	// The measured usage facts live in ../scope/usage-ledger.mjs. Siblings read
@@ -202,6 +243,7 @@ export class SessionStation {
 	// -- Policy --------------------------------------------------------------
 
 	policy(ctx) {
+		if (this.fissionFlow) return MAIN_AGENT;
 		if (this.agentPolicy !== null) return this.agentPolicy;
 		const policy = agentPolicy(ctx);
 		// Freeze only a verdict backed by the host's persisted contract. The

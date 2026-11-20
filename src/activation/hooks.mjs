@@ -207,10 +207,13 @@ export function wireHooks(pi, registry) {
 			const running = batchRunning(port, batch);
 			if (!running && station.pendingFission === batch) station.pendingFission = null;
 			if (running) {
-				return continueFeedback(
-					`Fission batch ${batch.batchId} is still running. The owner has retired; the batch completes only when every flow has closed.`,
-				);
+				// A retired owner must never be woken up by a session_stop
+				// continuation turn; makePrompt's barrier holds the caller open.
+				return undefined;
 			}
+		}
+		if (station?.ownerRetirement?.(ctx)) {
+			return undefined;
 		}
 		return station.onSessionStop(ctx);
 	});

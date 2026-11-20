@@ -626,4 +626,23 @@ describe("fission async model adoption", () => {
 		expect(done.limits).toEqual([]);
 		expect(h.ownerAgent.state.messages).toEqual(secondSession.agent.state.messages);
 	});
+
+	test("closes batch scope before persisting and triggers owner continue when heir declared scope end", async () => {
+		const h = harness({
+			fission: sameModelFlows(),
+		});
+		let continued = 0;
+		h.ownerAgent.continue = async () => {
+			continued += 1;
+		};
+		const registered = await startBatch(h, "call-post-scope-continue");
+		await closeFirstFlow(h, registered);
+		const [, second] = h.scheduler.listFlows();
+		const secondSession = h.spawned[1].session;
+		await endHeir(h, second, secondSession);
+		await h.scheduler.waitForBatch(registered.batchId);
+
+		expect(h.station.state.scopes).toHaveLength(1);
+		expect(continued).toBe(1);
+	});
 });

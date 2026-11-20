@@ -123,7 +123,57 @@ function modelResolver(session) {
 			}
 		};
 	}
-	return null;
+	const registry = session?.modelRegistry;
+	if (!registry || typeof registry !== "object") return null;
+	const hasLookup =
+		typeof registry.find === "function" ||
+		typeof registry.getAvailable === "function" ||
+		typeof registry.getAll === "function";
+	if (!hasLookup) return null;
+	return (spec) => {
+		if (spec && typeof spec === "object") return spec;
+		if (typeof spec !== "string") return null;
+		const trimmed = spec.trim();
+		if (!trimmed) return null;
+		const colon = trimmed.lastIndexOf(":");
+		const slash = trimmed.lastIndexOf("/");
+		const base = colon > slash ? trimmed.slice(0, colon) : trimmed;
+		const firstSlash = base.indexOf("/");
+		if (firstSlash > 0 && typeof registry.find === "function") {
+			try {
+				const found = registry.find(base.slice(0, firstSlash), base.slice(firstSlash + 1));
+				if (found) return found;
+			} catch {
+				// Fall through to list scan.
+			}
+		}
+		const lists = [];
+		for (const fn of [registry.getAvailable, registry.getAll]) {
+			if (typeof fn !== "function") continue;
+			try {
+				const items = fn.call(registry);
+				if (Array.isArray(items)) lists.push(items);
+			} catch {
+				// Ignore throwing registry accessors.
+			}
+		}
+		const lower = base.toLowerCase();
+		for (const list of lists) {
+			for (const model of list) {
+				if (!model || typeof model !== "object") continue;
+				const full = model.provider && model.id ? `${model.provider}/${model.id}` : null;
+				if (full === base || model.id === base) return model;
+			}
+		}
+		for (const list of lists) {
+			for (const model of list) {
+				if (!model || typeof model !== "object") continue;
+				const full = model.provider && model.id ? `${model.provider}/${model.id}` : null;
+				if (full?.toLowerCase() === lower || model.id?.toLowerCase() === lower) return model;
+			}
+		}
+		return null;
+	};
 }
 
 function liveBatchElsewhere(state, manager) {
@@ -447,6 +497,9 @@ export function installFissionInput(session, scheduler) {
 				// the flows finish and the heir is adopted.
 				if (active && batchIsLive(scheduler)) {
 					await createDisposeBarrier({ scheduler }).wait();
+					if (typeof this?.waitForIdle === "function") {
+						await this.waitForIdle();
+					}
 				}
 				return result;
 			}
@@ -926,6 +979,9 @@ export function installDisposeBarrier(session, scheduler, options = {}) {
 					// The barrier never replaces the host's dispose. If it cannot
 					// decide, the caller still receives the teardown it asked for.
 					await barrier.wait(args[0]);
+					if (!disposalReason(args[0]) && typeof receiver?.waitForIdle === "function") {
+						await receiver.waitForIdle();
+					}
 				} catch (error) {
 					record("fission", error, { barrier: "dispose", optional: true });
 				}

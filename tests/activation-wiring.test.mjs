@@ -217,8 +217,7 @@ describe("fission stop guard", () => {
 
 		const feedback = emit(pi, "session_stop", {}, ownerContext());
 
-		expect(feedback.continue).toBe(true);
-		expect(feedback.additionalContext).toContain("Fission batch b1 is still running");
+		expect(feedback).toBeUndefined();
 		expect(station.stopCalls).toBe(0);
 		expect(station.pendingFission).toBe(batch);
 	});
@@ -246,7 +245,7 @@ describe("fission stop guard", () => {
 
 		const feedback = emit(running.pi, "session_stop", {}, ownerContext());
 
-		expect(feedback.continue).toBe(true);
+		expect(feedback).toBeUndefined();
 		expect(running.station.stopCalls).toBe(0);
 		expect(running.station.pendingFission).toBe(runningBatch);
 
@@ -292,7 +291,7 @@ describe("fission stop guard", () => {
 
 		const feedback = emit(pi, "session_stop", {}, ownerContext());
 
-		expect(feedback.continue).toBe(true);
+		expect(feedback).toBeUndefined();
 		expect(station.stopCalls).toBe(0);
 	});
 

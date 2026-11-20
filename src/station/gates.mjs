@@ -212,6 +212,9 @@ function observeHostBoundary(station, messages) {
 function onContext(station, messages, ctx) {
 	const original = Array.isArray(messages) ? messages : [];
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return { messages: original };
+	if (!station.fissionFlow && (station.ownerRetirement?.(ctx) || station.pendingFission?.retired === true)) {
+		return { messages: original };
+	}
 	station.ensureTools(ctx);
 	observeHostBoundary(station, original);
 	station.observeActualModel(ctx);

@@ -99,7 +99,7 @@ describe("deriveFissionConfig", () => {
 		expect(config.bindProcessState).toBe(false);
 		expect(config.agentId).toBe("flow-a");
 		expect(config.agentDisplayName).toBe("flow-a");
-		expect(config.parentTaskPrefix).toBe("flow-a");
+		expect(config.parentTaskPrefix).toBeUndefined();
 		expect(config.asyncJobManager).toBe(ASYNC_JOBS);
 		expect(config.parentAgentId).toBe("Main");
 		expect(config.agentRegistry).toBe(AGENT_REGISTRY);
@@ -179,7 +179,7 @@ describe("deriveFissionConfig", () => {
 		const labeled = deriveFissionConfig(fixture({ label: "batch.0/flow" }).options).config;
 		expect(labeled.agentDisplayName).toBe("batch.0/flow");
 		expect(labeled.agentId).toBe("flow-a");
-		expect(labeled.parentTaskPrefix).toBe("flow-a");
+		expect(labeled.parentTaskPrefix).toBeUndefined();
 		expect(deriveFissionConfig(fixture({ label: "" }).options).config.agentDisplayName).toBe("flow-a");
 	});
 

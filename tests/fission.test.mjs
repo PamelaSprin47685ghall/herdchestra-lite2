@@ -104,6 +104,30 @@ describe("fission transcript consumption", () => {
 		expect(source[2].message.content).toContain("level 2");
 	});
 
+	test("keeps a tool call and its receipt adjacent across a nested batch boundary", () => {
+		const messages = handoffMessages([
+			{ id: "a1", type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "scope", arguments: {} }] } },
+			{ id: "a2", type: "custom", customType: "scope.begin", data: { batch: "inner" } },
+			{ id: "a3", type: "message", message: { role: "toolResult", toolCallId: "call-1", toolName: "scope", content: [] } },
+			{ id: "a4", type: "custom", customType: "scope.begin", data: { flow: "inner.0" } },
+		]);
+		expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult", "custom", "custom"]);
+		expect(messages[0].content[0].id).toBe("call-1");
+		expect(messages[1].toolCallId).toBe("call-1");
+		expect(JSON.parse(messages[2].content)).toEqual({ batch: "inner" });
+		expect(JSON.parse(messages[3].content)).toEqual({ flow: "inner.0" });
+	});
+
+	test("keeps every result of a multi-call turn ahead of a deferred boundary", () => {
+		const messages = handoffMessages([
+			{ id: "b1", type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "t1" }, { type: "toolCall", id: "t2" }] } },
+			{ id: "b2", type: "custom", customType: "scope.end", data: { end: true } },
+			{ id: "b3", type: "message", message: { role: "toolResult", toolCallId: "t1" } },
+			{ id: "b4", type: "message", message: { role: "toolResult", toolCallId: "t2" } },
+		]);
+		expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult", "toolResult", "custom"]);
+	});
+
 	test("keeps the compaction summary and only the retained window", async () => {
 		const sm = journal();
 		const tail = sm.appendMessage({ role: "user", content: "target" });

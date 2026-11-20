@@ -159,15 +159,57 @@ export function levelPattern(template) {
 	return new RegExp(`(${prefix})(\\d+)`, "g");
 }
 
-/** Convert entries that belong in model context, preserving their order. */
+function toolCallIds(message) {
+	if (message?.role !== "assistant" || !Array.isArray(message.content)) return [];
+	const ids = [];
+	for (const block of message.content) {
+		if (block?.type === "toolCall" && typeof block.id === "string") ids.push(block.id);
+	}
+	return ids;
+}
+
+/**
+ * Convert entries that belong in model context, preserving their order.
+ *
+ * A tool call and every result for it must stay adjacent: a provider rejects
+ * a custom boundary inserted between them. A nested batch writes its boundary
+ * as the receipt's disk parent, so journal order is call → boundary → result;
+ * the model must see call → result → boundary. Boundaries met while a tool
+ * call is unresolved are therefore deferred until its results land.
+ */
 export function handoffMessages(entries) {
 	const result = [];
+	const deferred = [];
+	let outstanding = new Set();
+	const flush = () => {
+		if (deferred.length > 0) result.push(...deferred.splice(0));
+	};
 	for (const entry of entries) {
-		if (entry.type === "message") result.push(entry.message);
-		else if (entry.type === "custom" && /^scope\.(begin|end)$/.test(entry.customType)) {
-			result.push({ role: "custom", customType: entry.customType, content: JSON.stringify(entry.data ?? {}), display: false, timestamp: Date.now() });
+		if (entry.type === "message") {
+			const message = entry.message;
+			if (message?.role === "toolResult") {
+				result.push(message);
+				outstanding.delete(message.toolCallId);
+				if (outstanding.size === 0) flush();
+				continue;
+			}
+			flush();
+			outstanding = new Set(toolCallIds(message));
+			result.push(message);
+			continue;
 		}
+		if (entry.type !== "custom" || !/^scope\.(begin|end)$/.test(entry.customType)) continue;
+		const boundary = {
+			role: "custom",
+			customType: entry.customType,
+			content: JSON.stringify(entry.data ?? {}),
+			display: false,
+			timestamp: Date.now(),
+		};
+		if (outstanding.size > 0) deferred.push(boundary);
+		else result.push(boundary);
 	}
+	flush();
 	return result;
 }
 

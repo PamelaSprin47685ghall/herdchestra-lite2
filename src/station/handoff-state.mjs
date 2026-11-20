@@ -74,7 +74,7 @@ function commitSelfHandoff(station, ctx, report) {
 	const compacted = appendHandoffCompaction(
 		manager,
 		opening,
-		station.lastTotalInput ?? 0,
+		station.usage.lastTotalInput ?? 0,
 	);
 	if (!compacted && manager) {
 		appendHistoryMessage(

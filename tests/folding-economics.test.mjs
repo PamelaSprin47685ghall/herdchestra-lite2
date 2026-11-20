@@ -519,7 +519,7 @@ describe("watermark response and measurement", () => {
 		expect(station.state.scopes[0].baseInputTokens).toBe(5000);
 		expect(station.state.scopes[1].baseInputTokens).toBe(4000);
 		expect(station.state.scopes[2].baseInputTokens).toBe(5000);
-		expect(station.lastTotalInput).toBe(5000);
+		expect(station.usage.lastTotalInput).toBe(5000);
 	});
 
 	function makeStation(manager) {

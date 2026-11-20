@@ -9,8 +9,10 @@
 import { wireExtension, installCapture } from "./activation/index.mjs";
 import { installStatus, loadPricingCatalog } from "./host/index.mjs";
 import { total as diagnosticsTotal } from "./host/diagnostics.mjs";
+import { preloadDocs } from "./prompts/index.mjs";
 
 export async function activate(pi) {
+	preloadDocs();
 	// Resolve the builtin at the extension entry so compiled omp can bind its
 	// embedded module rather than resolving from a transitive helper.
 	let builtinExecutor;

@@ -106,7 +106,9 @@ import {
 	SESSION_STATE_TYPE,
 } from "./restore.mjs";
 import { skillReceiptText } from "./texts.mjs";
-import { planDispatch } from "./dispatch.mjs";
+import { createDispatchTracker } from "./dispatch-tracker.mjs";
+import { createPersistenceAnchor } from "./persistence-anchor.mjs";
+import { createProcessedLedger } from "./processed-ledger.mjs";
 import { nudgeDecision } from "./nudge.mjs";
 
 export function receiptTextOf(message) {
@@ -126,26 +128,23 @@ export class SessionStation {
 		this.registry = registry;
 		this.pricingCatalog = pricingCatalog ?? createEmptyCatalog();
 		this.state = restoreState(manager);
-		// Only a replayable base on disk can anchor a delta. A fresh session,
-		// or a chain whose anchor fell outside the replay window, starts with a
+		// A replayable base on disk anchors a delta; a fresh session, or a
+		// chain whose anchor fell outside the replay window, starts with a
 		// checkpoint instead.
-		this.lastPersisted = hasPersistedBase(manager)
-			? serializeState(this.state)
-			: null;
-		// The entry that carries `lastPersisted`. A delta may only be written
-		// while that entry is still on the branch.
-		this.lastStateEntryId = this.lastPersisted === null ? null : persistedBaseId(manager);
-		this.stateWrites = 0;
-		this.handled = new Map();
-		this.processedCalls = new Set();
-		this.processedMessages = new Set();
-		this.callGroups = new Map();
-		this.preparingMessage = null;
-		this.dispatchMessage = null;
-		this.dispatchPositions = new Map();
-		this.dispatchHasScope = false;
+		const hasBase = hasPersistedBase(manager);
+		this.anchor = createPersistenceAnchor({
+			manager,
+			state: () => this.state,
+			initialState: hasBase ? serializeState(this.state) : null,
+			initialEntryId: hasBase ? persistedBaseId(manager) : null,
+			serialize: serializeState,
+			plan: planStateEntry,
+			type: SESSION_STATE_TYPE,
+			noteError: (domain, error) => this.noteError(domain, error),
+		});
+		this.processed = createProcessedLedger();
+		this.dispatch = createDispatchTracker();
 		this.nudged = new WeakSet();
-		this.needsRebase = false;
 		this.lastError = null;
 		this.hostBoundaryKey = null;
 		this.agentPolicy = null;
@@ -170,11 +169,9 @@ export class SessionStation {
 
 	// -- Usage ledger ---------------------------------------------------------
 
-	// The measured usage facts live in ../scope/usage-ledger.mjs, and the
-	// station keeps this surface on purpose: controls.mjs, models.mjs, and
-	// handoff-state.mjs read the watermark through the station, so the ledger
-	// stays the station's own secret. Do not move these readers onto
-	// `station.usage`; that would hand the ledger's internals to its siblings.
+	// The measured usage facts live in ../scope/usage-ledger.mjs. Siblings read
+	// the ledger's public fields through `station.usage`; there is no forwarding
+	// property layer, because a getter per field hides nothing.
 
 	onUsageMessage(message, ctx) {
 		this.usage.onMessage(message, ctx);
@@ -183,69 +180,7 @@ export class SessionStation {
 	// -- Persistence ---------------------------------------------------------
 
 	persist() {
-		const manager = this.manager;
-		if (!manager || typeof manager.appendCustomEntry !== "function") return;
-		try {
-			// Anything that rewrites the branch (a fold, an export, a future
-			// history tool) drops the entry that anchors `lastPersisted`. A
-			// delta written next would replay onto a truncated chain or onto
-			// none at all, so the anchor is re-checked here rather than
-			// trusted from whichever caller rewrote the branch.
-			if (this.lastPersisted !== null && !this.anchorOnBranch()) {
-				this.lastPersisted = null;
-				this.stateWrites = 0;
-				this.lastStateEntryId = null;
-			}
-			const next = serializeState(this.state);
-			const entry = planStateEntry(this.lastPersisted, next, this.stateWrites);
-			if (!entry) return;
-			const entryId = manager.appendCustomEntry(SESSION_STATE_TYPE, entry);
-			this.lastStateEntryId = typeof entryId === "string" ? entryId : null;
-			this.lastPersisted = next;
-			this.stateWrites = entry.kind === "checkpoint" ? 0 : this.stateWrites + 1;
-		} catch (error) {
-			this.noteError("persist", error);
-		}
-	}
-
-	/**
-	 * True when the entry carrying `lastPersisted` is still reachable from the
-	 * leaf. An unknowable answer forces a checkpoint: one extra full write
-	 * costs a state serialization, a lost base costs the whole session state.
-	 *
-	 * Every "cannot tell" below returns false on purpose. A host that returns
-	 * no id from `appendCustomEntry()`, cannot walk its branch, or answers
-	 * with something other than an array leaves the base unverifiable; a
-	 * delta written on faith is how a rewritten branch loses the session.
-	 */
-	anchorOnBranch() {
-		if (this.lastStateEntryId === null) return false;
-		const manager = this.manager;
-		if (typeof manager?.getBranch !== "function") return false;
-		try {
-			const branch = manager.getBranch();
-			if (!Array.isArray(branch)) return false;
-			for (let index = branch.length - 1; index >= 0; index -= 1) {
-				if (branch[index]?.id === this.lastStateEntryId) return true;
-			}
-			return false;
-		} catch {
-			return false;
-		}
-	}
-
-	/**
-	 * A fold rewrites the branch from an earlier entry, so every state entry
-	 * appended after that point leaves `getBranch()`. A delta written next
-	 * would replay onto a truncated chain or onto none at all, and a restart
-	 * would come back empty. Drop the baseline and write a checkpoint while
-	 * the rebased branch is the live one.
-	 */
-	rebasePersistedBase() {
-		this.lastPersisted = null;
-		this.stateWrites = 0;
-		this.lastStateEntryId = null;
-		this.persist();
+		this.anchor.persist();
 	}
 
 	/**
@@ -353,14 +288,6 @@ export class SessionStation {
 
 	// -- Internal helpers ----------------------------------------------------
 
-	setHandled(toolCallId, result) {
-		this.handled.set(toolCallId, result);
-		if (this.handled.size > 512) {
-			const oldest = this.handled.keys().next().value;
-			this.handled.delete(oldest);
-		}
-	}
-
 	deliverSteer(text) {
 		if (!text || !this.tickets.canSteer) return false;
 		this.tickets.steer(text);
@@ -391,33 +318,17 @@ export class SessionStation {
 	}
 
 	messageForToolCall(toolCallId) {
-		if (this.dispatchPositions.has(toolCallId)) {
-			return this.dispatchMessage;
-		}
-		if (toolCalls(this.preparingMessage).some((call) => call.id === toolCallId)) {
-			return this.preparingMessage;
-		}
-		return this.assistantForToolCall(toolCallId)?.message;
+		return this.dispatch.messageForToolCall(toolCallId) ??
+			this.assistantForToolCall(toolCallId)?.message;
 	}
 
 	prepareScopeDispatch(message, id, name) {
-		if (this.dispatchMessage !== message) {
-			this.dispatchMessage = message;
-			const plan = planDispatch(message);
-			this.dispatchPositions = plan.positions;
-			this.dispatchHasScope = plan.hasScope;
-			this.rememberCallGroups(message);
-		}
-		const position = this.dispatchPositions.get(id);
-		if (position) position.name = name;
-		return position?.afterScope && !CONTROL_TOOLS.has(name) && name !== "todo";
+		const afterScope = this.dispatch.prepare(message, id, name);
+		return afterScope && !CONTROL_TOOLS.has(name) && name !== "todo";
 	}
 
 	deferScopePreflight(id, name) {
-		const position = this.dispatchPositions.get(id);
-		return position?.name === name && (
-			position.afterScope || (name === "todo" && this.dispatchHasScope)
-		);
+		return this.dispatch.deferPreflight(id, name);
 	}
 
 	admitScopeDispatch(id, name, ctx, receipt = null) {
@@ -471,8 +382,7 @@ export class SessionStation {
 	foldElder(args) {
 		const folded = foldElderInBranch({ manager: this.manager, state: this.state, ...args });
 		if (folded.rebased) {
-			this.needsRebase = true;
-			this.rebasePersistedBase();
+			this.anchor.rebase();
 		}
 		return folded;
 	}
@@ -482,15 +392,33 @@ export class SessionStation {
 		const folded = foldBatchInBranch({
 			manager: this.manager,
 			state: this.state,
-			tokensPerChar: this.tokensPerCharFor(this.lastUsageModelKey),
+			tokensPerChar: this.tokensPerCharFor(this.usage.lastUsageModelKey),
 			...args,
 		});
 		if (folded.rebased) {
-			this.needsRebase = true;
-			if (this.sentContext) this.sentContext.frontier = Math.min(this.sentContext.frontier, folded.foldStartIdx ?? 0);
-			this.rebasePersistedBase();
+			this.pruneAmends();
+			const sent = this.usage.sentContext;
+			if (sent) sent.frontier = Math.min(sent.frontier, folded.foldStartIdx ?? 0);
+			this.anchor.rebase();
 		}
 		return folded;
+	}
+
+	/**
+	 * Drop amend keys whose assistant beat is no longer on the branch. A fold
+	 * removes whole beats, so a dead key would otherwise ride every checkpoint
+	 * for the rest of the session.
+	 */
+	pruneAmends() {
+		if (this.state.amends.length === 0) return 0;
+		const live = new Set();
+		for (const message of this.contextMessages()) {
+			if (message?.role === "assistant") live.add(beatKey(message));
+		}
+		const kept = this.state.amends.filter((key) => live.has(key));
+		const dropped = this.state.amends.length - kept.length;
+		if (dropped > 0) this.state.amends = kept;
+		return dropped;
 	}
 
 	/** Observed token density, clamped to a safe band. */
@@ -534,28 +462,14 @@ export class SessionStation {
 		return deferIntent(this.state, { toolCallId, intent });
 	}
 
-	rememberCallGroups(message) {
-		if (!message || message.role !== "assistant") return;
-		const key = beatKey(message);
-		for (const call of toolCalls(message)) {
-			if (!this.callGroups.has(call.id)) this.callGroups.set(call.id, key);
-		}
-		if (this.callGroups.size > 1024) {
-			for (const id of this.callGroups.keys()) {
-				this.callGroups.delete(id);
-				if (this.callGroups.size <= 512) break;
-			}
-		}
-	}
-
 	// -- Message processing ----------------------------------------------------
 
 	processAssistantMessage(message, { persisted = false } = {}) {
 		const controls = controlsIn(message);
 		if (controls.length === 0) return;
 		const key = processedKey(controls);
-		if (this.processedMessages.has(key)) return;
-		this.processedMessages.add(key);
+		if (this.processed.hasMessage(key)) return;
+		this.processed.markMessage(key);
 
 		const existing = this.contextMessages();
 		const firstIndex = findToolCallIndex(existing, controls[0].id);
@@ -569,24 +483,24 @@ export class SessionStation {
 		let changed = false;
 		for (const call of earlyControls) {
 			if (call.name !== "amend") continue;
-			if (this.processedCalls.has(call.id)) continue;
-			this.setHandled(call.id, handleAmendCall(this, call, base, currentIndex));
+			if (this.processed.hasCall(call.id)) continue;
+			this.processed.setHandled(call.id, handleAmendCall(this, call, base, currentIndex));
 			changed = true;
 		}
 
 		for (const call of earlyControls) {
 			if (call.name === "amend") continue;
-			if (this.processedCalls.has(call.id)) continue;
+			if (this.processed.hasCall(call.id)) continue;
 			if (call.name === "defer") {
-				this.setHandled(call.id, handleDeferCall(this, call));
-				this.processedCalls.add(call.id);
+				this.processed.setHandled(call.id, handleDeferCall(this, call));
+				this.processed.markCall(call.id);
 				changed = true;
 				continue;
 			}
 		}
 
 		for (const call of earlyControls) {
-			if (call.name === "amend") this.processedCalls.add(call.id);
+			if (call.name === "amend") this.processed.markCall(call.id);
 		}
 		if (changed) this.persist();
 	}
@@ -658,10 +572,10 @@ export class SessionStation {
 	// -- Rebase -----------------------------------------------------------------
 
 	maybeRebase(ctx, outbound) {
-		if (!this.needsRebase) return;
+		if (!this.anchor.needsRebase()) return;
 		const tree = this.contextMessages();
 		if (!sameTail(tree, outbound)) return;
-		if (setAgentMessages(ctx, tree)) this.needsRebase = false;
+		if (setAgentMessages(ctx, tree)) this.anchor.clearRebase();
 	}
 
 	// -- Context transform (sync) -----------------------------------------------
@@ -673,7 +587,7 @@ export class SessionStation {
 			const pricing = resolveModelPolicy(
 				this.pricingCatalog,
 				model ? { model } : ctx,
-				key === this.lastUsageModelKey ? this.usagePricingHint() : undefined,
+				key === this.usage.lastUsageModelKey ? this.usagePricingHint() : undefined,
 			);
 			const contextTokens = this.currentContextTokens(original, key);
 			const contextWindow = model?.contextWindow ?? pricing.contextWindow;
@@ -687,7 +601,7 @@ export class SessionStation {
 			messages = messages.map(rewriteVibeMessage);
 			this.maybeRebase(ctx, messages);
 			if (key) {
-				this.sentContext = {
+				this.usage.sentContext = {
 					key,
 					chars: sliceChars(messages),
 					frontier: messages.length,
@@ -786,32 +700,3 @@ export class SessionStation {
 	}
 }
 
-// The usage ledger stays the station's secret. One table replaces twelve
-// hand-written getters and setters, and the surface stays the same.
-const USAGE_FIELDS = [
-	"lastTotalInput",
-	"lastOutputTokens",
-	"lastUsageCost",
-	"lastCtxModel",
-	"lastUsageModelKey",
-	"sentContext",
-];
-
-Object.defineProperties(
-	SessionStation.prototype,
-	Object.fromEntries(
-		USAGE_FIELDS.map((field) => [
-			field,
-			{
-				configurable: true,
-				enumerable: false,
-				get() {
-					return this.usage[field];
-				},
-				set(value) {
-					this.usage[field] = value;
-				},
-			},
-		]),
-	),
-);

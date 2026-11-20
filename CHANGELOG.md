@@ -38,6 +38,26 @@ All notable changes to this extension. The format follows
 
 ### Changed
 
+- `SessionStation` no longer owns the dispatch positions, the processed-id
+  caches, or the persistence anchor. `DispatchTracker`, `ProcessedLedger`, and
+  `PersistenceAnchor` own them, and the station delegates. The `usage`
+  forwarding properties (`lastTotalInput`, `lastOutputTokens`, `lastUsageCost`,
+  `lastCtxModel`, `lastUsageModelKey`, `sentContext`) are gone: controls,
+  models, and handoff-state read the ledger's public fields through
+  `station.usage`. A fold now prunes amend keys whose beat left the branch, so
+  a dead key no longer rides every checkpoint for the rest of the session.
+  `activate()` preloads every prompt document, so a missing resource fails at
+  startup instead of mid-session.
+- The fold-pool key is now `JSON.stringify([parentId, boundary, epoch])`. The
+  old template string carried two literal NUL bytes as separators; they are
+  gone, and `scope-1`/23/4 can no longer collide with `scope-12`/3/4.
+- `deserializeState` no longer reads the pre-rename `regrets` field. A missing
+  `amends` field still migrates as an empty list; a snapshot that carries only
+  `regrets` loses its amend keys.
+- `bun run smoke:relay` passes a required `time` when it opens a scope. The
+  script predated the wall-clock requirement, so its begin was refused with
+  `INVALID_TIME` and the following end reported `NOT_IN_SCOPE`.
+
 - Task nature now selects the flow by default. The persistent rules, the stage
   prompt header, and the `todo` tool description say the same thing: a
   development task (a feature, a refactor, a design change) in principle

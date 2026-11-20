@@ -33,8 +33,8 @@ function onAssistantMessage(station, message, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
 		station.onUsageMessage(message, ctx);
-		station.preparingMessage = message;
-		station.rememberCallGroups(message);
+		station.dispatch.setPreparing(message);
+		station.dispatch.rememberGroups(message);
 		station.processAssistantMessage(message, { persisted: false });
 		if (!station.state.herdMode && !currentScope(station.state) &&
 			station.state.relay?.handoffPending && toolCalls(message).length === 0) {
@@ -57,7 +57,7 @@ function onMessageEnd(station, event, ctx) {
 	const message = event.message;
 	try {
 		station.onUsageMessage(message, ctx);
-		station.rememberCallGroups(message);
+		station.dispatch.rememberGroups(message);
 		const controls = controlsIn(message);
 		if (controls.length > 0) {
 			const found = station.assistantForToolCall(controls[0].id);
@@ -113,7 +113,7 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 			const args = parseArgs({
 				arguments: event.input ?? event.arguments ?? {},
 			});
-			if (!station.handled.has(toolCallId)) {
+			if (!station.processed.hasHandled(toolCallId)) {
 				if (toolName === "amend") {
 					station.directAmend(toolCallId, args);
 				} else if (toolName === "defer") {
@@ -142,9 +142,9 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 		}
 		if (toolName === "wait") return undefined;
 		const found = station.assistantForToolCall(toolCallId);
-		if (found) station.rememberCallGroups(found.message);
+		if (found) station.dispatch.rememberGroups(found.message);
 		const groupKey =
-			station.callGroups.get(toolCallId) ??
+			station.dispatch.groupKeyFor(toolCallId) ??
 			(found ? beatKey(found.message) : undefined);
 		const input = event.input ?? event.arguments ?? {};
 		const beatTools = toolCalls(found?.message ?? station.messageForToolCall(toolCallId))

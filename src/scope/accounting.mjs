@@ -337,7 +337,7 @@ export function findActivePools(state) {
     if ((record.epoch ?? 0) !== epoch) continue;
     const parentId = record.parentId ?? null;
     const boundary = record.boundary ?? 0;
-    const key = `${String(parentId)} ${boundary} ${epoch}`;
+    const key = JSON.stringify([parentId, boundary, epoch]);
     if (!levels.has(key)) levels.set(key, { parentId, boundary, epoch });
   }
   const groups = [];

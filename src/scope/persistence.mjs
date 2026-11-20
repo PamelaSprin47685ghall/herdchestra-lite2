@@ -472,9 +472,7 @@ export function deserializeState(input) {
       return createState();
     }
     if (!validCharges(data.charges)) return createState();
-    // `regrets` was this field's name before the tool became `amend`. Read it
-    // once for saved state written by an older build, then carry it forward.
-    const amends = Array.isArray(data.amends) ? data.amends : data.regrets;
+    const amends = Array.isArray(data.amends) ? data.amends : [];
     if (!Array.isArray(amends) || !amends.every((key) => typeof key === "string")) {
       return createState();
     }

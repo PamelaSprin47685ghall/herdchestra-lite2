@@ -93,3 +93,26 @@ export function render(template, vars = {}) {
 		return String(vars[key]);
 	});
 }
+
+/**
+ * Every prompt document the extension ships. Kept in one list so activation
+ * can load them all, instead of discovering a missing file mid-session on the
+ * first tool call that needs it.
+ */
+export const DOCUMENTS = [
+	"errors",
+	"labels",
+	"receipts/relay",
+	"receipts/scope",
+	"stages",
+	"system",
+	"tools/scope",
+	"tools/todo",
+	"vibe-mode",
+];
+
+/** Load every document now; a missing file throws here, at startup. */
+export function preloadDocs(names = DOCUMENTS) {
+	for (const name of names) loadDoc(name);
+	return names.length;
+}

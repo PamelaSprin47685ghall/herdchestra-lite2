@@ -160,7 +160,7 @@ describe("self handoff", () => {
 		const station = {
 			state,
 			manager,
-			lastTotalInput: 0,
+			usage: { lastTotalInput: 0 },
 			persist() {},
 			resetUsageWatermark() {},
 			registry: { clearPending() {} },

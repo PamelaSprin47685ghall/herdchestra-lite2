@@ -131,7 +131,7 @@ function expectLine(text, line, name) {
 	expect(text.includes(line), `${name}: missing ${JSON.stringify(line)} in:\n${text}`);
 }
 
-const S5 = { begin: { intent: "smoke", stage: "direct-execution", budget: { read: 1 }, permission: "rw" } };
+const S5 = { begin: { intent: "smoke", stage: "direct-execution", budget: { read: 1 }, time: 60, permission: "rw" } };
 
 await check("status names the flow before any ledger", async () => {
 	const view = await call("todo", { op: "view" });

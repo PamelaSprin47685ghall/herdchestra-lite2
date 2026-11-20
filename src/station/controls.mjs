@@ -271,7 +271,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
     attachModel(station, out.scope, target, outer, from);
     out.scope.preBeginInputTokens =
-      Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
+      Number.isFinite(station.usage.lastTotalInput) ? station.usage.lastTotalInput : null;
     return textResult(beginText(out.scope));
   }
 
@@ -315,14 +315,14 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     scope.beginToolCallId,
     call.id,
     state.amends,
-    station.tokensPerCharFor(station.lastUsageModelKey ?? from.key),
+    station.tokensPerCharFor(station.usage.lastUsageModelKey ?? from.key),
   );
   const baseTokens = Number.isFinite(scope.baseInputTokens) ? scope.baseInputTokens : null;
   const usageArrived = station.usageArrivedFor?.(currentMessage) ?? Boolean(currentMessage?.usage);
   let interiorTokens = null;
-  const endInputTokens = usageArrived && Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
+  const endInputTokens = usageArrived && Number.isFinite(station.usage.lastTotalInput) ? station.usage.lastTotalInput : null;
   const endPending = !usageArrived;
-  const measuredModelKey = usageArrived ? station.lastUsageModelKey : from.key;
+  const measuredModelKey = usageArrived ? station.usage.lastUsageModelKey : from.key;
   if (measuredModelKey && endInputTokens !== null && baseTokens !== null && scope.baseModelKey === measuredModelKey) {
     interiorTokens = Math.max(0, endInputTokens - baseTokens);
   } else {
@@ -409,7 +409,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
       attachModel(station, opened.scope, target, outer, from);
       opened.scope.preBeginInputTokens =
-        Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
+        Number.isFinite(station.usage.lastTotalInput) ? station.usage.lastTotalInput : null;
     }
   } else queueModelSwitch(station, target, from, remainingScope?.id ?? null);
   return textResult(text, {
@@ -472,20 +472,20 @@ function floodPools(station, { state, base, currentMessage, currentPersisted }) 
 function foldEligiblePool(station, { state, parentId, boundary, epoch, args, base, currentMessage, currentPersisted, target, ctx }) {
   const pool = findFoldablePool(state, parentId, boundary, epoch);
   if (pool.length === 0) return { foldedCount: 0 };
-  const lastIn = Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
+  const lastIn = Number.isFinite(station.usage.lastTotalInput) ? station.usage.lastTotalInput : null;
   const usageSnapshot =
     lastIn === null
       ? null
       : {
           lastTotalInput: lastIn,
-          lastOutput: Number.isFinite(station.lastOutputTokens) ? station.lastOutputTokens : 0,
-          cost: station.lastUsageCost ?? null,
-          modelKey: station.lastUsageModelKey,
+          lastOutput: Number.isFinite(station.usage.lastOutputTokens) ? station.usage.lastOutputTokens : 0,
+          cost: station.usage.lastUsageCost ?? null,
+          modelKey: station.usage.lastUsageModelKey,
         };
   const pricing = target.pricing ?? resolveModelPolicy(
     station.pricingCatalog,
-    target.key === station.lastUsageModelKey && station.lastCtxModel ? { model: station.lastCtxModel } : undefined,
-    target.key === station.lastUsageModelKey ? station.usagePricingHint() : undefined,
+    target.key === station.usage.lastUsageModelKey && station.usage.lastCtxModel ? { model: station.usage.lastCtxModel } : undefined,
+    target.key === station.usage.lastUsageModelKey ? station.usagePricingHint() : undefined,
   );
   const decision = shouldFoldPool({
     pool,

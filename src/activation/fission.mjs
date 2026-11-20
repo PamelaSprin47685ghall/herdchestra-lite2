@@ -296,7 +296,16 @@ export function installFissionInput(session, scheduler) {
 	function makePrompt() {
 		return async function prompt(...args) {
 			const [text] = args;
-			if (!active || !inBatchWindow()) return callOriginal("prompt", this, args);
+			if (!active || !inBatchWindow()) {
+				const result = await callOriginal("prompt", this, args);
+				// A batch may have opened during this turn. Keep the host from
+				// selecting the retired owner's abort as its final answer before
+				// the flows finish and the heir is adopted.
+				if (active && batchIsLive(scheduler)) {
+					await createDisposeBarrier({ scheduler }).wait();
+				}
+				return result;
+			}
 			if (!isFlowInput(text)) return callOriginal("prompt", this, args);
 			if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
 			broadcastText(scheduler, text);

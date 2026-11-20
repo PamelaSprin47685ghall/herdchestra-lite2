@@ -90,8 +90,9 @@ function makeAgent(id) {
 		reset() {
 			agent.state.messages.length = 0;
 		},
-		abort() {
+		abort(reason) {
 			agent.aborted = true;
+			agent.abortReason = reason;
 		},
 		steer(message) {
 			agent.steered.push(message);
@@ -661,6 +662,7 @@ describe("fission scheduler", () => {
 		});
 		expect(outcome).toEqual({ ok: true, abort: false });
 		expect(h.ownerAgent.aborted).toBe(true);
+		expect(h.ownerAgent.abortReason).toBe("Fission owner retired");
 		expect(contextAborted).toBe(false);
 	});
 

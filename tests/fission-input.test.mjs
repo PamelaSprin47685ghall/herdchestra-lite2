@@ -149,6 +149,25 @@ describe("fission owner input broadcast", () => {
 		expect(state.broadcasts).toEqual(["now broadcast"]);
 	});
 
+	test("an owner prompt waits for a batch opened during its turn", async () => {
+		const { session, scheduler, state } = harness({ live: false });
+		let finish;
+		const done = new Promise((resolve) => { finish = resolve; });
+		scheduler.status = () => ({ disposed: false, batches: [{ batchId: "b1", status: "running" }] });
+		scheduler.waitForBatch = () => done;
+		session.prompt = async () => { state.live = true; return true; };
+		installFissionInput(session, scheduler);
+		let returned = false;
+		const prompt = session.prompt("start").then(() => { returned = true; });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(returned).toBe(false);
+		state.live = false;
+		finish();
+		await prompt;
+		expect(returned).toBe(true);
+	});
+
 	test("a disposed scheduler is not live even with an open batch record", async () => {
 		const { session, scheduler, state } = harness({ leaves: FLOWS, disposed: true });
 		installFissionInput(session, scheduler);

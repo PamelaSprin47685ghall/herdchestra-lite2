@@ -1685,13 +1685,14 @@ export function createFissionScheduler(options = {}) {
 		//
 		// Prefer the owner agent's own abort(). ctx.abort() is a host-context
 		// operation that ends the run itself: in print mode (-p) the process
-		// exits before the flow sessions finish their prompts. Returning
-		// `abort: false` tells the hook the scheduler already used the narrow
-		// signal, so the hook does not call ctx.abort() on top of it.
+		// exits before the flow sessions finish their prompts.
+		// A bare abort looks like a dropped provider stream to the host and is
+		// retried. Give this deliberate retirement a reason so it stays terminal.
+		// `abort: false` keeps the hook from also calling ctx.abort().
 		const agent = batch.owner.agent;
 		let abort;
 		if (typeof agent?.abort === "function") {
-			abort = () => agent.abort();
+			abort = () => agent.abort("Fission owner retired");
 		} else if (typeof request.ctx?.abort === "function") {
 			abort = () => request.ctx.abort();
 		}

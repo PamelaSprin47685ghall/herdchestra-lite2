@@ -8,6 +8,15 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Fission owner retirement now gives the host an explicit abort reason. This
+  prevents the host from retrying a deliberately retired owner as a dropped
+  model stream while its flows are running.
+- An owner prompt that starts a fission batch now waits for its flows and heir
+  before returning, so print mode selects the adopted answer instead of the
+  retired owner's abort.
+
 ### Changed
 
 - `scope` beginnings now have one shape:

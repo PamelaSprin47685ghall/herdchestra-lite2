@@ -196,6 +196,63 @@ function runningLeaves(scheduler) {
 	}
 }
 
+/**
+ * The batch records the scheduler still owns and has not finished.
+ *
+ * `hasLiveBatches()` only answers yes or no. Leaving a live batch behind is
+ * not the same as leaving a batch the scheduler can describe: a record that
+ * can be named has a state to wait for, while a boolean alone can stay true
+ * forever with nothing to poll.
+ */
+function liveBatchRecords(scheduler) {
+	if (typeof scheduler?.status !== "function") return [];
+	try {
+		const listed = scheduler.status();
+		if (listed?.disposed === true) return [];
+		const batches = listed?.batches;
+		if (!Array.isArray(batches)) return [];
+		return batches.filter(
+			(batch) =>
+				typeof batch?.batchId === "string" &&
+				batch.batchId !== "" &&
+				!TERMINAL_BATCH_STATUSES.has(batch.status),
+		);
+	} catch {
+		return [];
+	}
+}
+
+const INPUT_SETTLE_POLL_MS = 25;
+const INPUT_SETTLE_MS = 10_000;
+
+/**
+ * Wait for a live batch to offer a recipient or to finish.
+ *
+ * Between the last flow's end and the heir's adoption the batch is still live
+ * while `activeLeaves()` is empty. Refusing input in that window drops text
+ * the heir would have received a moment later; the same holds while flows are
+ * still spawning. A batch whose state cannot be read is not waited on, so a
+ * scheduler that never names a live batch keeps the old, immediate refusal.
+ *
+ * Returns "leaf" when a flow can receive the text, "closed" when no batch is
+ * live any more, and "timeout" when the bound expired first. It changes no
+ * batch state.
+ */
+async function settleInputWindow(scheduler) {
+	const budget = envMilliseconds("HERDCHESTRA_FISSION_INPUT_SETTLE_MS", INPUT_SETTLE_MS);
+	const startedAt = Date.now();
+	// A scheduler that cannot list leaves can never show a recipient; polling
+	// it for the whole budget would only delay the same refusal.
+	if (typeof scheduler?.activeLeaves !== "function") return "timeout";
+	for (;;) {
+		if (!batchIsLive(scheduler)) return "closed";
+		if (liveBatchRecords(scheduler).length === 0) return "timeout";
+		if (runningLeaves(scheduler).length > 0) return "leaf";
+		if (Date.now() - startedAt >= budget) return "timeout";
+		await defaultSleep(INPUT_SETTLE_POLL_MS);
+	}
+}
+
 /** Slash commands are host operations; they are not turns for the flows. */
 function isFlowInput(value) {
 	return typeof value === "string" && value.trim() !== "" && !value.startsWith("/");
@@ -208,9 +265,31 @@ function broadcastText(scheduler, text) {
 	} catch (error) {
 		throw new Error(`fission input was not delivered: ${error?.message ?? error}`);
 	}
-	if (outcome?.ok === true) return outcome;
-	const detail = outcome?.detail ?? outcome?.code ?? "the scheduler refused the broadcast";
-	throw new Error(`fission input was not delivered: ${detail}`);
+	if (outcome?.ok !== true) {
+		const detail = outcome?.detail ?? outcome?.code ?? "the scheduler refused the broadcast";
+		throw new Error(`fission input was not delivered: ${detail}`);
+	}
+	const failures = Array.isArray(outcome.failures) ? outcome.failures : [];
+	if (failures.length > 0) {
+		// A broadcast is one instruction for every running flow. The flows that
+		// accepted it now read `(broadcast to N flows)`, so a silent miss would
+		// leave one flow working from stale instructions while its own context
+		// claims the user restated them. Report the gap instead of returning
+		// success for a partial delivery.
+		const missed = failures
+			.map((failure) => failure?.flowId ?? failure?.error ?? "an unnamed flow")
+			.join(", ");
+		const error = new Error(`fission input did not reach ${missed}`);
+		error.code = "FISSION_BROADCAST_PARTIAL";
+		record("fission", error, {
+			seam: "input.broadcast",
+			broadcastId: outcome.broadcastId ?? null,
+			delivered: Array.isArray(outcome.delivered) ? outcome.delivered : [],
+			failed: failures,
+		});
+		throw error;
+	}
+	return outcome;
 }
 
 function noRecipient(verb) {
@@ -307,7 +386,14 @@ export function installFissionInput(session, scheduler) {
 				return result;
 			}
 			if (!isFlowInput(text)) return callOriginal("prompt", this, args);
-			if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
+			if (runningLeaves(scheduler).length === 0) {
+				const settled = await settleInputWindow(scheduler);
+				// The batch finished while we waited: adoption has already moved
+				// the conversation to the heir, so the host's own prompt is now
+				// the correct recipient for this text.
+				if (settled === "closed") return callOriginal("prompt", this, args);
+				if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
+			}
 			broadcastText(scheduler, text);
 			// The owner produced no turn. The broadcast itself is displayed once
 			// by the multiplexer under its broadcastId.
@@ -320,7 +406,11 @@ export function installFissionInput(session, scheduler) {
 			const [text] = args;
 			if (!active || !inBatchWindow()) return callOriginal("steer", this, args);
 			if (!isFlowInput(text)) return callOriginal("steer", this, args);
-			if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
+			if (runningLeaves(scheduler).length === 0) {
+				const settled = await settleInputWindow(scheduler);
+				if (settled === "closed") return callOriginal("steer", this, args);
+				if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
+			}
 			broadcastText(scheduler, text);
 			return undefined;
 		};

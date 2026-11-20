@@ -292,7 +292,7 @@ describe("fission begin control", () => {
 });
 
 describe("fission flow scope control", () => {
-	test("a flow cannot open or close its own scope", () => {
+	test("a flow cannot open a normal scope and needs a scheduler to close", () => {
 		const scheduler = makeScheduler();
 		const station = makeStation({ state: createState(), scheduler });
 		station.fissionFlow = { id: "flow-a" };
@@ -303,7 +303,7 @@ describe("fission flow scope control", () => {
 		const end = call(station, "call-flow-end", { end: true });
 
 		expect(begin.details.code).toBe("SCOPE_UNAVAILABLE_IN_FISSION");
-		expect(end.details.code).toBe("SCOPE_UNAVAILABLE_IN_FISSION");
+		expect(end.details.code).toBe("FISSION_SCHEDULER_UNAVAILABLE");
 		expect(scheduler.registered).toHaveLength(0);
 	});
 

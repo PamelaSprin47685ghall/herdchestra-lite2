@@ -268,6 +268,116 @@ describe("fission transcript consumption", () => {
 		sm.getSessionFile = () => undefined;
 		await expect(recoverIncompleteHandoffs(sm, { durableAtomicWrites: true })).rejects.toThrow("persistent session");
 	});
+
+	test("aborts and rolls back when the host refuses a replicated entry", async () => {
+		const sm = journal();
+		const tail = sm.appendMessage({ role: "user", content: "target" });
+		const source = [
+			{ id: "a1", type: "message", message: { role: "user", content: "first" } },
+			{ id: "a2", type: "message", message: { role: "user", content: "second" } },
+		];
+		let writes = 0;
+		sm.ingestReplicatedEntry = (entry) => {
+			writes += 1;
+			return writes === 2 ? undefined : entry.id;
+		};
+		await expect(copyHandoff(sm, {
+			tail,
+			entries: source,
+			handoffId: 71,
+			sourceBeginId: "a1",
+			source: { from: "a1", to: "a2" },
+			vibeInactive: true,
+			durableAtomicWrites: true,
+		})).rejects.toThrow("was not committed");
+		expect(sm.getEntries().map((entry) => entry.id)).toEqual([tail]);
+		expect(sm.getBranch().at(-1).id).toBe(tail);
+		expect(incompleteHandoffs(sm.getEntries())).toEqual([]);
+	});
+
+	test("aborts when the host commits an entry under another id", async () => {
+		const sm = journal();
+		const tail = sm.appendMessage({ role: "user", content: "target" });
+		sm.ingestReplicatedEntry = (entry) => `${entry.id}0`;
+		await expect(copyHandoff(sm, {
+			tail,
+			entries: [{ id: "b1", type: "message", message: { role: "user", content: "x" } }],
+			handoffId: 72,
+			sourceBeginId: "b1",
+			source: { from: "b1", to: "b1" },
+			vibeInactive: true,
+			durableAtomicWrites: true,
+		})).rejects.toThrow("was committed as");
+		expect(sm.getBranch().at(-1).id).toBe(tail);
+	});
+
+	test("copies a compaction window that starts before the segment", async () => {
+		const sm = journal();
+		const tail = sm.appendMessage({ role: "user", content: "target" });
+		const template = readFileSync(new URL("../resources/prompts/receipts/scope.md", import.meta.url), "utf8");
+		const source = [
+			{ id: "a1", type: "custom", customType: "scope.begin", data: { intent: "source" } },
+			{ id: "a2", type: "message", message: { role: "user", content: "You are still inside scope level 2: work.", timestamp: 2 } },
+			{ id: "a3", type: "compaction", firstKeptEntryId: "a0", summary: "summary from before the scope" },
+		];
+		const result = await copyHandoff(sm, {
+			tail,
+			entries: source,
+			handoffId: 73,
+			sourceBeginId: "a1",
+			source: { from: "a1", to: "a3" },
+			shift: 1,
+			levelRegex: levelPattern(template),
+			vibeInactive: true,
+			durableAtomicWrites: true,
+		});
+		expect(result.messages.map((message) => message.content)).toEqual([
+			"summary from before the scope",
+			'{"intent":"source"}',
+			"You are still inside scope level 3: work.",
+		]);
+		expect(sm.getBranch().at(-1).id).toBe(result.tail);
+	});
+
+	test("copies context custom messages but no broadcast in either shape", async () => {
+		const sm = journal();
+		const tail = sm.appendMessage({ role: "user", content: "target" });
+		const template = readFileSync(new URL("../resources/prompts/receipts/scope.md", import.meta.url), "utf8");
+		const source = [
+			{ id: "a1", type: "custom_message", customType: "host.notice", content: "You are inside scope level 2: note.", display: true, timestamp: 3, details: { kind: "notice" } },
+			{ id: "a2", type: "custom_message", customType: "fission.broadcast", content: "broadcast text", details: { fissionBroadcast: { broadcastId: "b1" } } },
+			{ id: "a3", type: "custom_message", customType: "host.notice", content: "second broadcast", details: { fissionBroadcast: { broadcastId: "b2" } } },
+			{ id: "a4", type: "custom_message", customType: "eval-state-context", content: "snapshot" },
+		];
+		const result = await copyHandoff(sm, {
+			tail,
+			entries: source,
+			handoffId: 74,
+			sourceBeginId: "a1",
+			source: { from: "a1", to: "a4" },
+			shift: 1,
+			levelRegex: levelPattern(template),
+			vibeInactive: true,
+			durableAtomicWrites: true,
+		});
+		expect(result.entries.map((entry) => entry.customType)).toEqual(["host.notice"]);
+		expect(result.messages).toHaveLength(1);
+		expect(result.messages[0]).toMatchObject({
+			role: "custom",
+			customType: "host.notice",
+			content: "You are inside scope level 3: note.",
+			details: { kind: "notice" },
+		});
+	});
+
+	test("keeps a custom message after the tool results it interrupted", () => {
+		const messages = handoffMessages([
+			{ id: "d1", type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "t1" }] } },
+			{ id: "d2", type: "custom_message", customType: "host.notice", content: "steer" },
+			{ id: "d3", type: "message", message: { role: "toolResult", toolCallId: "t1" } },
+		]);
+		expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult", "custom"]);
+	});
 });
 
 const TEMPLATE = readFileSync(new URL("../resources/prompts/receipts/scope.md", import.meta.url), "utf8");

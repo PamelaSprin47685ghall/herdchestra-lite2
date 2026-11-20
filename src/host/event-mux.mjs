@@ -4,11 +4,15 @@ export function createEventMux(emit) {
 	let draining = false;
 	const queue = [];
 	const messages = new Map();
+	// An id is remembered only once a copy reaches the screen. Claiming it on
+	// arrival would let a copy that never displays (its flow is dropped first)
+	// consume the id and hide every surviving copy; the design remembers the
+	// ids that were rendered (8.1).
 	const broadcasts = new Set();
-	// A cancelled message is closed by a caller-supplied terminal event. The
-	// source that produced it stays subscribed, so the copy's own terminal
-	// events may still arrive; they belong to a closed message and are dropped
-	// instead of throwing into the emitter.
+	// A cancelled or dropped message is closed for good. The source that
+	// produced it may still deliver the same copy's terminal events; they
+	// belong to a closed message and are dropped instead of throwing into the
+	// emitter.
 	const cancelled = new Set();
 
 	function broadcastId(event) {
@@ -17,6 +21,33 @@ export function createEventMux(emit) {
 
 	function publish(event) {
 		emit(event);
+	}
+
+	// Decide display when the copy is about to be shown, never at arrival: a
+	// queued copy is re-checked when it is promoted, and a copy that loses the
+	// race is skipped without taking the lease, so drain moves on at once.
+	function show(record) {
+		if (record.skipped) return false;
+		const id = broadcastId(record.start);
+		if (id != null) {
+			if (broadcasts.has(id)) {
+				record.skipped = true;
+				return false;
+			}
+			broadcasts.add(id);
+		}
+		publish(record.start);
+		return true;
+	}
+
+	// Close a window whose source will never end it, using the last snapshot
+	// that source sent and the aborted label the host puts on a message it had
+	// to cut short. Nothing else is invented.
+	function close(record) {
+		const snapshot = record.update?.message ?? record.start.message;
+		if (snapshot && typeof snapshot === "object") {
+			publish({ type: "message_end", message: { ...snapshot, stopReason: "aborted" } });
+		}
 	}
 
 	function drain() {
@@ -30,8 +61,8 @@ export function createEventMux(emit) {
 					continue;
 				}
 				item.queued = false;
+				if (!show(item)) continue;
 				owner = item.flowId;
-				publish(item.start);
 				if (item.update) publish(item.update);
 				if (item.end) {
 					publish(item.end);
@@ -51,15 +82,11 @@ export function createEventMux(emit) {
 		if (type === "message_start") {
 			if (message) throw new Error("Flow already has an open message");
 			cancelled.delete(flowId);
-			const id = broadcastId(event);
-			const duplicate = id != null && broadcasts.has(id);
-			if (id != null) broadcasts.add(id);
-			message = { flowId, start: event, duplicate, queued: false };
+			message = { flowId, start: event, skipped: false, queued: false };
 			messages.set(flowId, message);
-			if (duplicate) return;
 			if (owner === null && queue.length === 0 && !draining) {
+				if (!show(message)) return;
 				owner = flowId;
-				publish(event);
 			} else {
 				message.queued = true;
 				queue.push(message);
@@ -73,11 +100,12 @@ export function createEventMux(emit) {
 				throw new Error("Flow has no open message");
 			}
 			if (type === "message_end") messages.delete(flowId);
-			if (message.duplicate) return;
+			if (message.skipped) return;
 			if (message.queued) {
 				if (type === "message_update") message.update = event;
 				else message.end = event;
 			} else {
+				if (type === "message_update") message.update = event;
 				publish(event);
 				if (type === "message_end") {
 					owner = null;
@@ -128,5 +156,27 @@ export function createEventMux(emit) {
 		accept(flowId, endEvent);
 	}
 
-	return { accept, cancel, drain };
+	// A detached flow is gone for good. Its unfinished message will never get
+	// the terminal event the mux waits for, so keeping it would hold the
+	// session's only open window forever and freeze every other flow. A copy
+	// that already ended while buffered stays in the FIFO and still displays;
+	// anything unsent is discarded, and any broadcast id it would have claimed
+	// stays free for a surviving copy.
+	function drop(flowId) {
+		const message = messages.get(flowId);
+		if (!message) return;
+		messages.delete(flowId);
+		cancelled.add(flowId);
+		if (message.queued) {
+			const index = queue.indexOf(message);
+			if (index !== -1) queue.splice(index, 1);
+			return;
+		}
+		if (owner !== flowId) return;
+		owner = null;
+		close(message);
+		drain();
+	}
+
+	return { accept, cancel, drop, drain };
 }

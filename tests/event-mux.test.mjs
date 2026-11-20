@@ -152,4 +152,117 @@ describe("event mux", () => {
 		expect(() => mux.accept("b", duplicate[1])).not.toThrow();
 		expect(output).toEqual(first);
 	});
+
+	test("dropping a dead lease holder closes its window and frees the queue", () => {
+		const output = [];
+		const mux = createEventMux((event) => output.push(event));
+		const aStart = message("message_start", "a");
+		const aUpdate = message("message_update", "aa");
+		const b = [
+			message("message_start", "b"),
+			message("message_update", "bb"),
+			message("message_end", "bbb"),
+		];
+		mux.accept("a", aStart);
+		mux.accept("a", aUpdate);
+		for (const event of b) mux.accept("b", event);
+
+		mux.drop("a");
+
+		// The window closes on the last snapshot the source itself sent.
+		expect(output).toEqual([
+			aStart,
+			aUpdate,
+			{ type: "message_end", message: { ...aUpdate.message, stopReason: "aborted" } },
+			...b,
+		]);
+		// The dead source may still deliver its own terminal events.
+		expect(() => mux.accept("a", message("message_end", "late"))).not.toThrow();
+		expect(() => mux.accept("a", message("message_update", "later"))).not.toThrow();
+		expect(output).toHaveLength(6);
+	});
+
+	test("dropping a buffered unfinished copy leaves the FIFO free", () => {
+		const output = [];
+		const mux = createEventMux((event) => output.push(event));
+		const open = message("message_start", "a");
+		const close = message("message_end", "a");
+		mux.accept("a", open);
+		mux.accept("b", message("message_start", "b"));
+		mux.accept("b", message("message_update", "bb"));
+
+		mux.drop("b");
+
+		const c = [
+			message("message_start", "c"),
+			message("message_update", "cc"),
+			message("message_end", "ccc"),
+		];
+		for (const event of c) mux.accept("c", event);
+		mux.accept("a", close);
+		expect(output).toEqual([open, close, ...c]);
+	});
+
+	test("a flow that already ended while buffered still displays after detach", () => {
+		const output = [];
+		const mux = createEventMux((event) => output.push(event));
+		const open = message("message_start", "a");
+		const close = message("message_end", "a");
+		const b = [
+			message("message_start", "b"),
+			message("message_update", "bb"),
+			message("message_end", "bbb"),
+		];
+		mux.accept("a", open);
+		for (const event of b) mux.accept("b", event);
+
+		mux.drop("b");
+
+		mux.accept("a", close);
+		expect(output).toEqual([open, close, ...b]);
+	});
+
+	test("a dropped broadcast copy does not consume its id", () => {
+		const output = [];
+		const mux = createEventMux((event) => output.push(event));
+		const broadcast = { details: { fissionBroadcast: { broadcastId: "broadcast-1", recipients: 2 } } };
+		const open = message("message_start", "busy");
+		const close = message("message_end", "busy");
+		const firstStart = message("message_start", "hello", broadcast);
+		const second = [
+			message("message_start", "hello", broadcast),
+			message("message_end", "hello", broadcast),
+		];
+		mux.accept("a", open);
+		mux.accept("b", firstStart);
+
+		mux.drop("b");
+
+		for (const event of second) mux.accept("c", event);
+		mux.accept("a", close);
+		// b never reached the screen, so c's copy is the first rendered one.
+		expect(output).toEqual([open, close, ...second]);
+	});
+
+	test("a displayed broadcast stays deduped after its flow is dropped", () => {
+		const output = [];
+		const mux = createEventMux((event) => output.push(event));
+		const broadcast = { details: { fissionBroadcast: { broadcastId: "broadcast-1", recipients: 2 } } };
+		const first = [
+			message("message_start", "hello", broadcast),
+			message("message_end", "hello", broadcast),
+		];
+		for (const event of first) mux.accept("a", event);
+		mux.drop("a");
+
+		const duplicate = [
+			message("message_start", "hello", broadcast),
+			message("message_end", "hello", broadcast),
+		];
+		for (const event of duplicate) mux.accept("b", event);
+		// A skipped copy must not take the lease from later real work.
+		const later = message("message_start", "next");
+		mux.accept("b", later);
+		expect(output).toEqual([...first, later]);
+	});
 });

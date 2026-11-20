@@ -241,3 +241,104 @@ describe("fission owner abort fan-out", () => {
 		expect(state.cancels).toEqual([]);
 	});
 });
+
+describe("fission input across the batch boundary", () => {
+	test("a prompt typed while the last flows finish is handed to the heir", async () => {
+		const { session, scheduler, state } = harness({ leaves: [], live: true });
+		// A real scheduler names its open batch; only then may the bridge wait.
+		scheduler.status = () => ({
+			disposed: false,
+			batches: state.live ? [{ batchId: "b1", status: "finalizing", flows: [] }] : [],
+		});
+		let leafChecks = 0;
+		scheduler.activeLeaves = () => {
+			// The first check is the wrapper's own precondition. The wait's
+			// check is where adoption completes, so close the batch there.
+			leafChecks += 1;
+			if (leafChecks > 1) state.live = false;
+			return [];
+		};
+		installFissionInput(session, scheduler);
+
+		await expect(session.prompt("late input")).resolves.toBe(true);
+		expect(session.prompts).toEqual(["late input"]);
+		expect(state.broadcasts).toEqual([]);
+	});
+
+	test("a steer typed while the last flows finish reaches the host", async () => {
+		const { session, scheduler, state } = harness({ leaves: [], live: true });
+		scheduler.status = () => ({
+			disposed: false,
+			batches: state.live ? [{ batchId: "b1", status: "finalizing", flows: [] }] : [],
+		});
+		let leafChecks = 0;
+		scheduler.activeLeaves = () => {
+			leafChecks += 1;
+			if (leafChecks > 1) state.live = false;
+			return [];
+		};
+		installFissionInput(session, scheduler);
+
+		await session.steer("late steer");
+
+		expect(session.steers).toEqual(["late steer"]);
+		expect(state.broadcasts).toEqual([]);
+	});
+
+	test("a prompt typed while flows are spawning is broadcast once a leaf appears", async () => {
+		const { session, scheduler, state } = harness({ leaves: [], live: true });
+		scheduler.status = () => ({
+			disposed: false,
+			batches: state.live
+				? [{ batchId: "b1", status: "starting", flows: [{ flowId: "f0", status: "spawning" }] }]
+				: [],
+		});
+		let leafChecks = 0;
+		scheduler.activeLeaves = () => {
+			leafChecks += 1;
+			// The precondition sees an empty batch; the wait sees the leaf.
+			return leafChecks > 1 ? FLOWS : [];
+		};
+		installFissionInput(session, scheduler);
+
+		await expect(session.prompt("start now")).resolves.toBe(false);
+		expect(state.broadcasts).toEqual(["start now"]);
+		expect(session.prompts).toEqual([]);
+	});
+
+	test("a partial broadcast names the flows that missed it", async () => {
+		const { session, scheduler, state } = harness({ leaves: FLOWS });
+		state.broadcastResult = {
+			ok: true,
+			broadcastId: "bc9",
+			recipients: FLOWS.map((flow) => flow.label),
+			delivered: ["batch.0"],
+			failures: [{ flowId: "f1", error: "agent is busy" }],
+		};
+		installFissionInput(session, scheduler);
+
+		const failure = await session.prompt("hello").then(
+			() => null,
+			(error) => error,
+		);
+
+		expect(failure?.code).toBe("FISSION_BROADCAST_PARTIAL");
+		expect(failure?.message).toContain("f1");
+		expect(session.prompts).toEqual([]);
+		expect(state.broadcasts).toEqual(["hello"]);
+	});
+
+	test("a live batch the scheduler cannot name is refused without waiting", async () => {
+		const { session, scheduler, state } = harness({ leaves: [], live: true });
+		// `status()` names no batch here, so there is nothing to poll; the
+		// settle budget must not delay the refusal.
+		installFissionInput(session, scheduler);
+		const startedAt = Date.now();
+
+		await expect(session.prompt("too early")).rejects.toThrow(/no active flow/);
+
+		expect(Date.now() - startedAt).toBeLessThan(1_000);
+		expect(state.broadcasts).toEqual([]);
+		expect(session.prompts).toEqual([]);
+	});
+});

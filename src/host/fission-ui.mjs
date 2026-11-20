@@ -93,6 +93,10 @@ export function installFissionUI(session) {
 			return () => {
 				if (flows.get(flow) !== unsubscribe) return;
 				flows.delete(flow);
+				// Detach is a flow's terminal edge. Release its open window
+				// before the source goes quiet: otherwise one dead flow holds
+				// the session's single lease and every other flow freezes.
+				mux.drop(flow);
 				unsubscribe();
 			};
 		},
@@ -108,7 +112,11 @@ export function installFissionUI(session) {
 			} catch {
 				// The owner callback is already gated by `active`.
 			}
-			for (const unsubscribe of [...flows.values()]) {
+			// Stop multiplexed delivery before dropping flows: a drop may close
+			// a window, and teardown must not publish into a dying stream.
+			listeners.clear();
+			for (const [flow, unsubscribe] of [...flows]) {
+				mux.drop(flow);
 				try {
 					unsubscribe();
 				} catch {
@@ -117,7 +125,6 @@ export function installFissionUI(session) {
 			}
 			flows.clear();
 			restoreSubscribe();
-			listeners.clear();
 		},
 	};
 	bridges.set(session, bridge);

@@ -194,4 +194,39 @@ describe("fission handoff retirement", () => {
 		// Only the abort marker was added: no guessed segment, no end marker.
 		expect(sm.getEntries().some((entry) => entry.customType === "fission.handoff.end")).toBe(false);
 	});
+
+	test("retire still wins when the host offers a bulk discard", async () => {
+		const sm = journal();
+		const target = sm.appendMessage({ role: "user", content: "target" });
+		const residue = halfCopy(sm, 26, target);
+		let discarded = null;
+		const result = await recoverIncompleteHandoffs(sm, {
+			durableAtomicWrites: true,
+			retire: true,
+			discardAll: (ids) => { discarded = ids; },
+		});
+		expect(discarded).toBeNull();
+		expect(result.dropped).toEqual([]);
+		expect(result.retired).toHaveLength(1);
+		expect(result.retired[0]).toMatchObject({ handoffId: 26, tail: target, entries: 3 });
+		for (const id of residue) expect(sm.getEntries().some((entry) => entry.id === id)).toBe(true);
+		expect(sm.getBranch().map((entry) => entry.id)).toEqual([target, result.retired[0].abortId]);
+	});
+
+	test("retire with a bulk discard still removes a lone begin marker", async () => {
+		const sm = journal();
+		const target = sm.appendMessage({ role: "user", content: "target" });
+		const begin = sm.appendCustomEntry("fission.handoff.begin", { handoffId: 27, sourceBeginId: "a1" });
+		let discarded = null;
+		const result = await recoverIncompleteHandoffs(sm, {
+			durableAtomicWrites: true,
+			retire: true,
+			discardAll: (ids) => { discarded = ids; },
+		});
+		expect(discarded).toBeNull();
+		expect(result.dropped).toEqual([begin]);
+		expect(result.retired).toEqual([]);
+		expect(sm.getEntries().some((entry) => entry.id === begin)).toBe(false);
+		expect(sm.getEntries().find((entry) => entry.id === target)).toBeDefined();
+	});
 });

@@ -68,11 +68,21 @@ export function handoffSegment(entries, from, to) {
 	return null;
 }
 
+// One broadcast can reach the journal in two shapes: a plain message whose
+// AgentMessage carries `details`, and a custom message whose `customType` and
+// `details` sit on the entry itself. Both are the same user instruction,
+// already delivered to every running flow, so neither may be copied.
 function broadcast(entry) {
-	return Boolean(entry.message?.details?.fissionBroadcast?.broadcastId);
+	if (entry.customType === "fission.broadcast") return true;
+	const details = entry.message?.details ?? entry.details;
+	return Boolean(details?.fissionBroadcast?.broadcastId);
 }
 
 const SCOPE_STATE_TYPE = "scope.state";
+// A host-level state snapshot. The session manager keeps it out of the
+// conversation tip, and no recipient may receive it as context.
+const EVAL_STATE_CONTEXT_TYPE = "eval-state-context";
+const FISSION_CUSTOM_PREFIX = "fission.";
 
 // Handoff journal markers. A completed copy writes begin ... end inside one
 // atomic batch. A recovery writes abort to close a segment that will never
@@ -85,13 +95,24 @@ function scopeState(entry) {
 	return entry.type === "custom" && entry.customType === SCOPE_STATE_TYPE;
 }
 
+// Custom messages carry model context, unlike the journal's `custom` ledger
+// entries. Ledger types (`fission.*`) and state snapshots never travel.
+function contextCustomMessage(entry) {
+	const customType = entry.customType;
+	return typeof customType === "string" &&
+		customType !== "" &&
+		!customType.startsWith(FISSION_CUSTOM_PREFIX) &&
+		customType !== EVAL_STATE_CONTEXT_TYPE;
+}
+
 // A copied segment carries structure for the recipient, never the source
 // flow's own state ledger. `scope.state` entries hold scopes, charges, pins,
 // seq/epoch, and JSON-patch deltas against the source flow's array indices.
 // Replaying them into the recipient mixes two budgets and two scope stacks.
 function copyable(entry) {
-	return (entry.type === "message" && !broadcast(entry)) ||
-		(entry.type === "custom" && !entry.customType?.startsWith("fission.") && !scopeState(entry)) ||
+	if (entry.type === "message") return !broadcast(entry);
+	if (entry.type === "custom_message") return !broadcast(entry) && contextCustomMessage(entry);
+	return (entry.type === "custom" && !entry.customType?.startsWith(FISSION_CUSTOM_PREFIX) && !scopeState(entry)) ||
 		["model_usage", "label", "thinking_level_change", "mode_change", "branch_summary"].includes(entry.type);
 }
 
@@ -102,8 +123,12 @@ export function handoffWindow(entries) {
 	for (const entry of entries) {
 		if (entry.type !== "compaction") continue;
 		const index = entries.findIndex((candidate) => candidate.id === entry.firstKeptEntryId);
-		if (index < 0) throw new Error("compaction keep entry is outside the handoff");
-		start = index;
+		// A compaction can keep a window that starts before this segment: the
+		// flow's own `scope.begin` is not the first entry on its branch. The
+		// segment cannot be widened, so the retained window is the whole segment
+		// and the summary still goes in front. Failing here would strand every
+		// flow that compacted across its own begin.
+		start = index < 0 ? 0 : index;
 		summary = entry.summary;
 	}
 	return { entries: entries.slice(start).filter(copyable), summary };
@@ -158,14 +183,30 @@ export function handoffPins(entries) {
 	return out;
 }
 
+function shiftText(text, shift, levelPattern) {
+	if (typeof text !== "string" || !shift || !levelPattern) return text;
+	return text.replace(levelPattern, (_, prefix, number) => `${prefix}${Number(number) + shift}`);
+}
+
+// Shift a detached content value. Custom messages and messages share the shape.
+function shiftContent(content, shift, levelPattern) {
+	if (!shift || !levelPattern) return structuredClone(content);
+	if (typeof content === "string") return shiftText(content, shift, levelPattern);
+	if (!Array.isArray(content)) return structuredClone(content);
+	const copy = structuredClone(content);
+	for (const block of copy) {
+		if (typeof block?.text === "string") block.text = shiftText(block.text, shift, levelPattern);
+	}
+	return copy;
+}
+
 function shiftMessage(message, shift, levelPattern) {
 	if (!shift || !levelPattern) return structuredClone(message);
 	const copy = structuredClone(message);
-	const replace = (text) => text.replace(levelPattern, (_, prefix, number) => `${prefix}${Number(number) + shift}`);
-	if (typeof copy.content === "string") copy.content = replace(copy.content);
+	if (typeof copy.content === "string") copy.content = shiftText(copy.content, shift, levelPattern);
 	else if (Array.isArray(copy.content)) {
 		for (const block of copy.content) {
-			if (typeof block.text === "string") block.text = replace(block.text);
+			if (typeof block?.text === "string") block.text = shiftText(block.text, shift, levelPattern);
 		}
 	}
 	return copy;
@@ -186,6 +227,20 @@ function toolCallIds(message) {
 		if (block?.type === "toolCall" && typeof block.id === "string") ids.push(block.id);
 	}
 	return ids;
+}
+
+/** Convert one persisted custom message to the AgentMessage a model reads. */
+function customMessage(entry) {
+	if (!contextCustomMessage(entry)) return null;
+	const message = {
+		role: "custom",
+		customType: entry.customType,
+		content: entry.content ?? "",
+		display: entry.display !== false,
+		timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now(),
+	};
+	if (entry.details !== undefined) message.details = entry.details;
+	return message;
 }
 
 /**
@@ -216,6 +271,15 @@ export function handoffMessages(entries) {
 			flush();
 			outstanding = new Set(toolCallIds(message));
 			result.push(message);
+			continue;
+		}
+		if (entry.type === "custom_message") {
+			const message = customMessage(entry);
+			if (message === null) continue;
+			// A custom message is not a tool result: never land between a tool
+			// call and its results.
+			if (outstanding.size > 0) deferred.push(message);
+			else result.push(message);
 			continue;
 		}
 		if (entry.type !== "custom" || !/^scope\.(begin|end)$/.test(entry.customType)) continue;
@@ -286,26 +350,35 @@ export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceB
 		}
 		selectLeaf(sm, tail);
 		let current = sm.appendCustomEntry(HANDOFF_BEGIN, record);
+		if (typeof current !== "string" || current === "") throw new Error("handoff aborted: the begin marker was not committed");
 		const copied = [];
 		if (window.summary !== undefined) {
-			const message = { role: "custom", customType: "fission.compaction-summary", content: window.summary, display: false, details: { fissionCarry: "compaction-summary" }, timestamp: Date.now() };
+			const message = { role: "custom", customType: "fission.compaction-summary", content: shiftText(window.summary, shift, levelRegex), display: false, details: { fissionCarry: "compaction-summary" }, timestamp: Date.now() };
 			current = sm.appendMessage(message);
+			if (typeof current !== "string" || current === "") throw new Error("handoff aborted: the compaction summary was not committed");
 			copied.push({ type: "message", message });
 		}
 		for (const entry of window.entries) {
 			const copy = { ...entry, id: ids.get(entry.id), parentId: current };
 			delete copy.activeLeafId;
 			if (entry.type === "message") copy.message = shiftMessage(entry.message, shift, levelRegex);
+			if (entry.type === "custom_message") copy.content = shiftContent(entry.content, shift, levelRegex);
 			if (entry.type === "label") copy.targetId = ids.get(entry.targetId) ?? entry.targetId;
 			if (entry.type === "branch_summary") copy.fromId = ids.get(entry.fromId) ?? entry.fromId;
 			if (entry.type === "custom" && entry.data?.beginToolCallId) {
 				copy.data = { ...entry.data, beginToolCallId: ids.get(entry.data.beginToolCallId) ?? entry.data.beginToolCallId };
 			}
-			sm.ingestReplicatedEntry(copy);
-			current = copy.id;
+			// Every write returns the id it committed. `undefined` is the host's
+			// refusal (session or parent mismatch); chaining the next entry onto a
+			// refused id would leave a half segment that looks committed.
+			const written = sm.ingestReplicatedEntry(copy);
+			if (typeof written !== "string" || written === "") throw new Error(`handoff aborted: entry ${String(copy.id)} was not committed`);
+			if (written !== copy.id) throw new Error(`handoff aborted: entry ${String(copy.id)} was committed as ${written}`);
+			current = written;
 			copied.push(copy);
 		}
 		current = sm.appendCustomEntry(HANDOFF_END, { handoffId, count: copied.length });
+		if (typeof current !== "string" || current === "") throw new Error("handoff aborted: the end marker was not committed");
 		if (leafId(sm) !== current) throw new Error("handoff leaf did not advance");
 		return { tail: current, entries: copied, messages: handoffMessages(copied) };
 	});
@@ -550,7 +623,11 @@ export async function recoverIncompleteHandoffs(sm, options = {}) {
 	if (!Array.isArray(entries)) throw recoveryFailure("FISSION_RECOVERY_UNSUPPORTED", "recovery needs the session entries");
 	const plan = planHandoffRecovery(entries);
 	if (plan.handoffs.length === 0) return { recovered: [], dropped: [], retired: [], replay: [], kept: plan.kept };
-	if (retire === true && typeof discardAll !== "function") {
+	// An explicit `retire: true` must never delete a record, even when the host
+	// also offers a bulk discard: deletion would drop the handoff without the
+	// rewrite that delivers it. Honor the request and refuse when it cannot be
+	// met in place.
+	if (retire === true) {
 		if (!plan.retirable) throw recoveryFailure("FISSION_RECOVERY_UNSAFE", plan.retireReason ?? "the residue cannot be retired in place");
 		return retireIncompleteHandoffs(sm, plan, options);
 	}

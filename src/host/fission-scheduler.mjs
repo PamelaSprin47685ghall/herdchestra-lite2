@@ -103,6 +103,7 @@ export const FISSION_SCHEDULER_CODES = Object.freeze({
 	NO_HEIR: "FISSION_NO_HEIR",
 	FLOW_NOT_FOUND: "FISSION_FLOW_NOT_FOUND",
 	FLOW_NOT_RUNNING: "FISSION_FLOW_NOT_RUNNING",
+	PARENT_CLOSED: "FISSION_PARENT_CLOSED",
 	NO_ACTIVE_FLOW: "FISSION_NO_ACTIVE_FLOW",
 	SCHEDULER_BUSY: "FISSION_SCHEDULER_BUSY",
 });
@@ -603,6 +604,18 @@ export function createFissionScheduler(options = {}) {
 		// A flow that opened a nested batch was aborted when that batch
 		// retired. Its status can still read "running" until the inner batch
 		// resolves, so the domain state decides: one live nested batch per flow.
+		if (
+			parentFlow &&
+			(parentFlow.nestedSealed === true ||
+				parentFlow.batch?.finalizing === true ||
+				parentFlow.batch?.done === true)
+		) {
+			throw refusal(
+				FISSION_SCHEDULER_CODES.PARENT_CLOSED,
+				`nested batch owner ${parentFlow.id} is closing and cannot accept a child batch`,
+				{ flowId: parentFlow.id, batchId: parentFlow.batch?.id ?? null },
+			);
+		}
 		const liveRetired = parentFlow?.nested?.find(
 			(child) => child.ownerRetired === true && child.done !== true,
 		);
@@ -692,6 +705,9 @@ export function createFissionScheduler(options = {}) {
 		if (!["ending", "closed", "cancelled", "crashed", "waiting-heir"].includes(flow.status)) {
 			return false;
 		}
+		// A flow that has not sealed its nested set could still accept a child
+		// after this check; never call it closed in that state.
+		if (flow.nestedSealed !== true) return false;
 		return flow.nested.every((batch) => batch.done === true);
 	}
 
@@ -1267,6 +1283,12 @@ export function createFissionScheduler(options = {}) {
 		if (flow.finishPromise) return flow.finishPromise;
 		const run = async () => {
 			if (flow.status === "running" || flow.status === "spawning") flow.status = "ending";
+			// The flow's turn is over. Its agent_end has already offered
+			// pending nested batches their start; anything registered after this
+			// point could never be spawned by this flow and must be refused.
+			if (flow.status === "ending" || flow.status === "waiting-heir") {
+				flow.nestedSealed = true;
+			}
 			if (flow.status !== "ending" && flow.status !== "waiting-heir") return;
 			await settleFlowSession(flow);
 			await scheduleFlush(flow.batch);
@@ -2072,6 +2094,7 @@ export function createFissionScheduler(options = {}) {
 				retired: false,
 				released: false,
 				nested: [],
+				nestedSealed: false,
 				unsubscribe: [],
 				finishPromise: null,
 				startedAt: null,
@@ -2281,6 +2304,10 @@ export function createFissionScheduler(options = {}) {
 
 	function settleFlow(flow, info = {}) {
 		if (isTerminal(flow)) return flow.finishPromise;
+		// A child registered before the parent's turn ended may not have had its
+		// own agent_end yet. Start it here so the parent waits on a live child
+		// instead of a descriptor nobody will advance.
+		pendingNested(flow);
 		if (!info.error && info.aborted !== true && !flow.cancelReason) {
 			const failure = lastAssistantStopError(flow);
 			if (failure) info = { ...info, error: failure };
@@ -2471,6 +2498,9 @@ export function createFissionScheduler(options = {}) {
 				);
 			}
 			flow.cancelReason = String(reason ?? "cancelled");
+			// Cancellation ends the flow's ability to own a new child even
+			// before finishFlow observes the aborted turn.
+			flow.nestedSealed = true;
 			if (cancelOptions.costCap !== true) flow.batch.cancelled = true;
 			if (cancelOptions.cascade !== false) {
 				cancelDescendants(flow, flow.cancelReason);

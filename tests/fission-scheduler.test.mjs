@@ -1015,6 +1015,91 @@ describe("fission scheduler", () => {
 		)).toBe(true);
 	});
 
+	test("a nested registration racing the parent finish is refused", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-race-parent");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-race-parent", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [parent, sibling] = h.scheduler.listFlows();
+		const beginsBefore = h.manager.getEntries().filter((entry) =>
+			entry.customType === "scope.begin" && entry.data?.fissionBatch === true,
+		).length;
+
+		// finishFlow seals the flow synchronously before its first await. A
+		// nested begin arriving in that window must be refused, never left
+		// dangling under a flow that is about to close.
+		const finishing = h.scheduler.flowEnded(parent.flowId);
+		let failure;
+		try {
+			await startNested(h, {
+				toolCallId: "call-race-child",
+				parentFlowId: parent.flowId,
+				fission: [{ intent: "late child", budget: { read: 1 }, permission: "ro" }],
+			});
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure?.code).toBe(FISSION_SCHEDULER_CODES.PARENT_CLOSED);
+		expect(h.manager.getEntries().filter((entry) =>
+			entry.customType === "scope.begin" && entry.data?.fissionBatch === true,
+		)).toHaveLength(beginsBefore);
+		await finishing;
+		expect(h.scheduler.listFlows().find((flow) => flow.flowId === parent.flowId).status).toBe("closed");
+		expect(h.scheduler.listFlows().find((flow) => flow.flowId === sibling.flowId).status).toBe("running");
+	});
+
+	test("a registered but unstarted nested batch keeps its parent open", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-hold-parent");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-hold-parent", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [parent, sibling] = h.scheduler.listFlows();
+		const binding = h.bindings.find((item) => item.flowId === parent.flowId);
+		const begin = {
+			stage: "architecture-design",
+			elder_report: null,
+			fission: [{ intent: "nested hold", budget: { read: 1, bash: 1 }, permission: "ro" }],
+		};
+		const nested = h.scheduler.registerBatch({
+			toolCallId: "call-hold-child",
+			sessionManager: h.manager,
+			station: binding.station,
+			ctx: { agent: { id: parent.flowId } },
+			identity: { id: parent.flowId },
+			begin,
+			flows: begin.fission,
+			totals: totalsOf(begin.fission),
+			stage: begin.stage,
+			mainAgent: true,
+			nested: true,
+		});
+		expect(nested.ok).toBe(true);
+		// The host persisted the child's tool result, but its agent_end has not
+		// started the spawn yet.
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-hold-child", content: "registered" });
+
+		await h.scheduler.flowEnded(parent.flowId);
+		expect(h.scheduler.listFlows().find((flow) => flow.flowId === parent.flowId).status).toBe("ending");
+		// settleFlow started the registered child; the parent cannot close until
+		// the whole nested subtree is done.
+		await waitFor(() => h.scheduler.listFlows().some((flow) => flow.batchId === nested.batchId));
+		const nestedFlow = h.scheduler.listFlows().find((flow) => flow.batchId === nested.batchId);
+		const nestedSession = h.spawned.find(({ plan }) => plan.flowId === nestedFlow.flowId).session;
+		nestedSession.finish.resolve();
+		await h.scheduler.flowEnded(nestedFlow.flowId);
+		await h.scheduler.waitForBatch(nested.batchId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === parent.flowId).status === "closed",
+		);
+
+		h.spawned[1].session.finish.resolve();
+		await h.scheduler.flowEnded(sibling.flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+		expect(done.status).toBe("closed");
+	});
+
 	test("broadcast reaches every leaf, including a sibling beside a nested batch", async () => {
 		const h = harness({ fission: twoFlows() });
 		const registered = register(h, "call-bc");

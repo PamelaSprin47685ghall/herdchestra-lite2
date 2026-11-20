@@ -141,7 +141,10 @@ describe("handoff boundaries", () => {
 
 describe("createState", () => {
   test("returns a fresh version 2 state with an empty relay", () => {
-    expect(createState()).toEqual({
+    const fresh = createState();
+    expect(typeof fresh.startedAt).toBe("number");
+    expect(fresh.startedAt).toBeGreaterThan(0);
+    expect(fresh).toMatchObject({
       baseModelSpec: null,
       baseModelKey: null,
       modelRecovery: null,

@@ -6,6 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import { activate } from "../src/main.mjs";
 import { stateFor } from "../src/station/index.mjs";
+import { createState } from "../src/scope/index.mjs";
+import { skillReceiptText } from "../src/station/texts.mjs";
 import { allStagesRan } from "./helpers/stage-flags.mjs";
 import { installVibeTools, rememberSession } from "../src/host/index.mjs";
 import { finishedReport } from "../src/transcript/index.mjs";
@@ -1195,6 +1197,15 @@ describe("herd mode", () => {
 		expect(sawSignal?.aborted).toBe(true);
 		expect(outcome).toBeInstanceOf(Error);
 		expect(String(outcome?.message ?? outcome)).toContain("OVERTIME");
+	});
+
+	test("the per-turn skill receipt carries the UTC clock", () => {
+		const state = createState();
+		state.startedAt = Date.now() - 90_000;
+		const text = skillReceiptText(state, false);
+		expect(text).toMatch(/UTC now \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/);
+		expect(text).toContain("since this session began");
+		expect(text).toMatch(/1m3\ds/);
 	});
 
 	test("herd mode allows a text-only turn to stop naturally", async () => {

@@ -122,6 +122,14 @@ function insideScopeNudge(state) {
 }
 
 /** Dynamic, persistent receipt. Appended to history only when text changes. */
+function clockLine(state, now = Date.now()) {
+	const started = Number.isFinite(state?.startedAt) ? state.startedAt : now;
+	const elapsed = Math.max(0, now - started);
+	const minutes = Math.floor(elapsed / 60000);
+	const seconds = Math.floor((elapsed % 60000) / 1000);
+	return `UTC now ${new Date(now).toISOString()}, ${minutes}m${String(seconds).padStart(2, "0")}s since this session began.`;
+}
+
 export function skillReceiptText(state, relayOn = true) {
 	const scope = currentScope(state);
 	const fullFlow = state.relay?.fullFlow === true;
@@ -140,6 +148,7 @@ export function skillReceiptText(state, relayOn = true) {
 	if (scope?.stage) {
 		lines.push(render(T["receipt.stage"], { stage: scope.stage }));
 	}
+	lines.push(clockLine(state));
 	if (state.herdMode) {
 		lines.push(T["receipt.herd-rules"]);
 	} else if (relayOn && fullFlow) {

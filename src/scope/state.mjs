@@ -103,6 +103,7 @@ function makeScope(state, toolCallId, intent, stage, budget, timeBudgetMs = null
 export function createState() {
   return {
     version: VERSION,
+    startedAt: Date.now(),
     seq: 0,
     epoch: 0,
     scopes: [],

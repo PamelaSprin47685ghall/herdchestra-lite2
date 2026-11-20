@@ -147,6 +147,7 @@ function copyModelRecovery(source) {
 export function serializeState(state) {
   return {
     version: VERSION,
+    startedAt: Number.isFinite(state.startedAt) ? state.startedAt : Date.now(),
     seq: state.seq ?? 0,
     scopes: (state.scopes ?? []).map((scope) => ({
       id: scope.id,
@@ -497,6 +498,7 @@ export function deserializeState(input) {
     }
     return {
       version: VERSION,
+      startedAt: Number.isFinite(data.startedAt) ? data.startedAt : Date.now(),
       seq: data.seq,
       epoch:
         Number.isInteger(data.epoch) && data.epoch >= 0 ? data.epoch : 0,

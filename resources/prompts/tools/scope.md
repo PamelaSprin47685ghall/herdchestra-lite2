@@ -36,7 +36,9 @@ Map each tool name to an integer budget of assistant turns. One assistant messag
 
 ## begin.time
 
-Wall-clock budget in seconds for this scope. Required: a positive number, never omitted. Every tool is capped at remaining normal time plus one second, so the hard limit is exactly the deadline plus 1s. When the deadline passes the scope enters chess-clock phase: each later tool gets 1 second, a tool that runs past its cap is killed, and its result is replaced by a scolding. Choose the number by economics: how long this outcome is worth waiting for, not how long the work might take. Set each tool's own timeout with the same arithmetic.
+Wall-clock budget in seconds for this scope. Required: a positive number, never omitted. Every tool is capped at remaining normal time plus one second, so the hard limit is exactly the deadline plus 1s. When the deadline passes the scope enters chess-clock phase: each later tool gets 1 second, a tool that runs past its cap is killed, and its result is replaced by a scolding.
+
+Derive the number from measured throughput, not from optimism. Every turn's receipt reports the current UTC time and the time elapsed since this session began. Compare that clock against the work already finished in this session: if T minutes produced W units of finished work (files read, edits applied, checks run), a task shaped like this one costs roughly T × (this task's units / W). Round up, then add one more beat for the verification you will still have to run. Treat the result as a guess with wide error bars and revise it as the session proceeds; the clock line exists to be used, not admired. Set each tool's own timeout with the same arithmetic, and never plan on a tool finishing after the deadline.
 
 ## begin.elder_report
 

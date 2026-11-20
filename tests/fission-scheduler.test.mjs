@@ -257,6 +257,7 @@ function harness({ fission, budget = { read: 10, bash: 4 }, hooks = {}, seed }) 
 		unbindFlow(flowId) {
 			hooks.unbindFlow?.(flowId);
 		},
+		prepareFlow: hooks.prepareFlow,
 		async spawnFlow(plan) {
 			if (hooks.spawnFlow) return hooks.spawnFlow(plan);
 			const session = makeFlowSession(plan);
@@ -404,6 +405,41 @@ describe("fission scheduler manager identity", () => {
 });
 
 describe("fission scheduler", () => {
+	test("installs request preparation before direct continue and removes it at cleanup", async () => {
+		const events = [];
+		const h = harness({
+			fission: twoFlows(),
+			hooks: {
+				prepareFlow(session, station) {
+					const id = session.getAgentId();
+					expect(h.bindings.some((binding) => binding.flowId === id && binding.station === station)).toBe(true);
+					expect(session.agent.state.messages.length).toBeGreaterThan(0);
+					events.push(`prepare:${id}`);
+					session.agent.continue = () => {
+						events.push(`continue:${id}`);
+						return new Promise(() => {});
+					};
+					return () => events.push(`remove:${id}`);
+				},
+			},
+		});
+		const registered = register(h, "call-prepared-flow");
+		reserve(h);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-prepared-flow", content: "registered" });
+		const result = await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		expect(result.ok).toBe(true);
+		const flows = h.scheduler.listFlows();
+		for (const { flowId } of flows) {
+			expect(events.indexOf(`prepare:${flowId}`)).toBeLessThan(events.indexOf(`continue:${flowId}`));
+			h.scheduler.requestFlowEnd(flowId);
+			h.scheduler.retireEndedFlow(flowId);
+			await h.scheduler.flowEnded(flowId);
+		}
+		for (const { flowId } of flows) {
+			expect(events.filter((event) => event === `remove:${flowId}`)).toHaveLength(1);
+		}
+	});
+
 	test("only an explicit scope end completes an ordinary flow", async () => {
 		const h = harness({ fission: twoFlows() });
 		const registered = register(h, "call-explicit-end");

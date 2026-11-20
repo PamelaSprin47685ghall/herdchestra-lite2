@@ -15,6 +15,7 @@
 import { hostView } from "../host/adapter.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { createFissionScheduler } from "../host/fission-scheduler.mjs";
+import { installContextPreparation } from "../host/context-preparation.mjs";
 import { installFissionUI } from "../host/fission-ui.mjs";
 import { registerOwnerUI, relayTokenRate } from "../host/fission-session.mjs";
 import { loadDoc } from "../prompts/index.mjs";
@@ -1178,6 +1179,11 @@ function attach(state, registry, ctx) {
 			bindFlow: (flowId, station, permission, meta) =>
 				registry.bindFlow(flowId, station, permission, meta),
 			unbindFlow: (flowId) => registry.unbindFlow(flowId),
+			prepareFlow: (flowSession, flowStation) =>
+				installContextPreparation(flowSession, {
+					station: flowStation,
+					ctx: flowSession.extensionRunner.createContext(),
+				}),
 			levelTemplate: loadDoc("receipts/scope")["inside-text"],
 			vibeActive: vibeProbe(session),
 			...(resolveModel ? { resolveModel } : {}),

@@ -5,7 +5,7 @@
 // stays the authority for binding a live session; this adapter only reads the
 // objects around it, so the dependency points one way.
 
-import { sessionFor } from "./capture.mjs";
+import { sessionFor, sessionMatchesContext } from "./capture.mjs";
 
 function read(target, key) {
 	if (!target || typeof target !== "object") return undefined;
@@ -23,39 +23,19 @@ function agentState(target) {
 /**
  * The live session bound to this context, or null. Never throws.
  *
- * `capture` keys sessions by manager too, because the extension context
- * exposes the manager and not the session. That mapping is ambiguous for a
- * fission flow: every flow shares the owner's manager, so a manager lookup
- * answers with the owner session and a flow's write lands in the owner's
- * transcript. The context's own agent id resolves it: a captured session whose
- * `getAgentId()` disagrees with `ctx.agent.id` is a different session and is
- * never returned.
+ * `capture` resolves explicit sessions before manager bindings. Shared
+ * managers require an agent id. Check the identity on every fallback too, so
+ * a stale `ctx.session` cannot send a flow's writes to its owner.
  */
 export function sessionOf(ctx) {
-	const expected = read(read(ctx, "agent"), "id");
 	try {
 		const session = sessionFor(ctx);
-		if (session) {
-			let actual = null;
-			try {
-				actual = typeof session.getAgentId === "function" ? session.getAgentId() : null;
-			} catch {
-				actual = null;
-			}
-			if (
-				typeof expected !== "string" ||
-				expected === "" ||
-				typeof actual !== "string" ||
-				actual === "" ||
-				actual === expected
-			) {
-				return session;
-			}
-		}
+		if (sessionMatchesContext(session, ctx)) return session;
 	} catch {
 		// A host that throws from its capture hook is treated as absent.
 	}
-	return read(ctx, "session") ?? null;
+	const session = read(ctx, "session");
+	return sessionMatchesContext(session, ctx) ? session : null;
 }
 
 export function managerOf(ctx) {
@@ -94,6 +74,24 @@ export function settingsOf(ctx) {
 export function messagesOf(ctx) {
 	const messages = read(agentState(sessionOf(ctx)), "messages");
 	return Array.isArray(messages) ? messages : null;
+}
+
+/** Serializable request header used to estimate a new model's fixed cost. */
+export function contextHeaderOf(ctx) {
+	const state = agentState(sessionOf(ctx));
+	const systemPrompt = read(state, "systemPrompt");
+	const tools = read(state, "tools");
+	if ((typeof systemPrompt !== "string" && !Array.isArray(systemPrompt)) || !Array.isArray(tools)) {
+		return null;
+	}
+	return {
+		systemPrompt,
+		tools: tools.map((tool) => ({
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
+		})),
+	};
 }
 
 /** One flat view of every host object the extension reads. */

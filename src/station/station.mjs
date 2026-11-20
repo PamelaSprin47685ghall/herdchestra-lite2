@@ -48,6 +48,7 @@ import {
 	READ_WRITE_SUBAGENT,
 } from "../host/policy.mjs";
 import { sessionFor, setAgentMessages } from "../host/capture.mjs";
+import { contextHeaderOf } from "../host/adapter.mjs";
 import { record } from "../host/diagnostics.mjs";
 import {
 	createEmptyCatalog,
@@ -90,6 +91,7 @@ import {
 	onSessionStop,
 	onSessionSwitch,
 	onToolCall,
+	prepareRequest,
 } from "./gates.mjs";
 import { CONTROL_TOOLS, controlsIn, processedKey, sameTail } from "./messages.mjs";
 import {
@@ -697,12 +699,13 @@ export class SessionStation {
 			messages = messages.map(rewriteVibeMessage);
 			this.maybeRebase(ctx, messages);
 			if (key) {
-				this.usage.sentContext = {
+				this.usage.noteSentContext({
 					key,
-					chars: sliceChars(messages),
+					messages,
+					header: contextHeaderOf(ctx),
 					frontier:
 						outboundFrontier >= 0 ? outboundFrontier + 1 : messages.length,
-				};
+				});
 			}
 			return { messages };
 		} catch (error) {
@@ -766,9 +769,8 @@ export class SessionStation {
 	}
 
 	/**
-	 * Build the dynamic skill message for this turn. The hack-context wrapper
-	 * persists it into session history, so the request and the history stay in
-	 * sync. Reuse an identical trailing receipt to stay idempotent within a turn.
+	 * Build one Skill for the next request. The before-model adapter commits it
+	 * before extension context handlers run. Earlier receipts remain unchanged.
 	 */
 	skillReceipt(ctx) {
 		const text = skillReceiptText(this.state, this.relayOn(ctx));
@@ -781,17 +783,8 @@ export class SessionStation {
 		};
 	}
 
-	withSkillReceipt(original, result, ctx) {
-		const messages = Array.isArray(result?.messages) ? result.messages : original;
-		const last = messages.at(-1);
-		// A trailing receipt means nothing has been said since the last one. The
-		// same turn can call the context handler twice, and the receipt's clock
-		// line changes across a second boundary; comparing text would then append
-		// a second Skill and hand the provider a prefix it never cached. Reuse the
-		// message as is, timestamp included.
-		if (last?.herdSkill === true) return result;
-		const skill = this.skillReceipt(ctx);
-		return { ...result, messages: [...messages, skill] };
+	prepareRequest(ctx, previous) {
+		return prepareRequest(this, ctx, previous);
 	}
 
 	onContext(messages, ctx) {

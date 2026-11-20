@@ -15,7 +15,7 @@ import {
   validateFission,
 } from "../scope/index.mjs";
 import { MAIN_AGENT } from "../host/policy.mjs";
-import { findBegin, toolCalls } from "../transcript/index.mjs";
+import { applyCollapses, filterAmends, findBegin, toolCalls } from "../transcript/index.mjs";
 import { invalidatePromotion } from "../relay/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
@@ -158,12 +158,21 @@ function fissionTargets(station, ctx, items, parentScope, state) {
  * open. The 82% mark only triggers the fold, which already ran; this check
  * judges the context the flows will actually send after that fold.
  */
-function windowOverflow(station, base, targets, savedTokens = 0) {
-  const reclaimed = Number.isFinite(savedTokens) ? Math.max(0, savedTokens) : 0;
+function windowOverflow(station, base, targets) {
+  const projectedMessages = applyCollapses(
+    filterAmends(base, station.state.amends ?? []),
+    station.state.collapses,
+    station.state.epoch,
+  );
   for (const target of Array.isArray(targets) ? targets : []) {
     if (!target?.key || !(target.window > 0)) continue;
-    const projected =
-      station.currentContextTokens(base, target.key) - reclaimed;
+    // Folding already rebases the usage watermark. Estimate the folded
+    // message list in each target's units; never subtract the same saved
+    // token count again, or subtract one tokenizer's savings from another.
+    const projected = typeof station.usage?.projectContextTokens === "function"
+      ? station.usage.projectContextTokens(projectedMessages, target.key)
+      : station.currentContextTokens(projectedMessages, target.key);
+    if (!Number.isFinite(projected)) return { target, unavailable: true };
     if (projected >= 0.95 * target.window) return { target, projected };
   }
   return null;
@@ -267,7 +276,7 @@ function handleFissionBegin(station, call, { args, ctx, base, currentMessage, cu
   // worth of rent, so the decision is made per flow and any one of them may
   // justify the fold.
   const targets = fissionTargets(station, ctx, validation.items, parentScope, state);
-  const folded = foldEligiblePool(station, {
+  foldEligiblePool(station, {
     state,
     parentId: parentScope?.id ?? null,
     boundary,
@@ -278,8 +287,14 @@ function handleFissionBegin(station, call, { args, ctx, base, currentMessage, cu
     targets,
     ctx,
   });
-  const overflow = windowOverflow(station, base, targets, folded.savedTokens ?? 0);
+  const overflow = windowOverflow(station, base, targets);
   if (overflow) {
+    if (overflow.unavailable) {
+      return errorResult("CONTEXT_ESTIMATE_UNAVAILABLE", E["context-estimate-unavailable"], {
+        model: overflow.target.key,
+        contextWindow: overflow.target.window,
+      });
+    }
     return errorResult("CONTEXT_EXCEEDED", E["context-exceeded"], {
       model: overflow.target.key,
       projectedTokens: Math.round(overflow.projected),

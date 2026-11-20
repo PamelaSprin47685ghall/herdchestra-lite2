@@ -74,6 +74,10 @@ A scope cannot begin and end in the same assistant message. Begin it in one mess
 
 The retained context is estimated at {{tokens}} tokens; {{model}} has a {{window}}-token window.
 
+## context-estimate-unavailable
+
+Cannot estimate the target model's complete request size because its system prompt and tool definitions are unavailable. Restore the request header before opening this flow.
+
 ## model-switch-warning
 
 WARNING: {{command}} failed: {{reason}}

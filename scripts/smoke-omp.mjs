@@ -2,10 +2,10 @@
 /**
  * Smoke test against a real omp checkout.
  *
- * The unit suite runs on stub sessions. It proves the extension's own logic,
- * not that the seam it patches still exists in the host. This script closes
- * that gap: it loads the host's real `AgentSession`, runs the real `activate`
- * entry against it, and reports one line per check.
+ * Load the host's real `AgentSession` and check the seams used by capture.
+ * Run the real `activate` entry through a test API that exposes that class.
+ * Other checks use local fixtures for construction inputs and persistence.
+ * This script does not send provider requests or measure cache reuse.
  *
  *   bun scripts/smoke-omp.mjs
  *   OMP_HOST=/path/to/oh-my-pi bun scripts/smoke-omp.mjs
@@ -287,13 +287,12 @@ await check("hooks bind to host events", () => {
 });
 
 /**
- * A2: the flow's request head must be byte-equal to the owner's. This runs the
- * real `deriveFissionConfig` against a host-shaped owner and compares the
- * three static frames by SHA-256. A one-byte difference is a permanent cache
- * miss on every begin and every adopted return, so any mismatch is a FAIL,
- * not a note.
+ * A2: check `deriveFissionConfig` with an owner fixture that has the host's
+ * shape. Compare tool names, system prompt input, and prompt cache key by
+ * SHA-256. This checks construction inputs; it does not compare full tool
+ * schemas or observe a provider payload. Any input mismatch fails the check.
  */
-await check("flow request head matches the owner", async () => {
+await check("flow construction inputs match the owner fixture", async () => {
 	const { deriveFissionConfig, compareFissionFrames } = await import(
 		"../src/host/fission-session.mjs"
 	);
@@ -329,9 +328,9 @@ await check("flow request head matches the owner", async () => {
 	const comparison = compareFissionFrames(owner, derived.config);
 	assert(
 		comparison.mismatches.length === 0,
-		`request-head mismatch: ${comparison.mismatches.join(", ")}`,
+		`construction-input mismatch: ${comparison.mismatches.join(", ")}`,
 	);
-	return "tools, systemPrompt, promptCacheKey";
+	return "tool names, systemPrompt input, promptCacheKey";
 });
 
 function memoryManager() {

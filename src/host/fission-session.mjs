@@ -38,23 +38,23 @@ import { createHash } from "node:crypto";
 
 function frameDigest(value) {
 	try {
-		return createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
+		const text = JSON.stringify(value);
+		if (typeof text !== "string") return null;
+		return createHash("sha256").update(text).digest("hex");
 	} catch {
-		return "unserializable";
+		return null;
 	}
 }
 
 /**
- * Compare the bytes a flow will send to the provider with the owner's.
+ * Compare the inputs used to construct a flow with the owner's inputs.
  *
- * A one-byte difference in `tools`, `systemPrompt`, or `promptCacheKey`
- * makes the provider treat the flow as a cold namespace: every `scope begin`
- * and every adopted return would pay the whole prefix again. The comparison
- * is deliberately a hash, not a text diff, because the requirement is
- * byte-equality of the request head, not human-readable similarity.
+ * This checks tool names, the supplied system prompt, and the selected cache
+ * key. It does not observe tool schemas or any later host/provider conversion.
+ * Use request-frames.mjs at the send boundary to compare provider requests.
  *
- * Returns `{ frames, mismatches }`; an empty `mismatches` is the only
- * acceptable production state, and a caller that sees one must record it.
+ * An empty mismatch list does not mean that the provider payloads match.
+ * Unreadable or unserializable inputs are reported separately and leave ok false.
  */
 export function compareFissionFrames(owner, config) {
 	const ownerPrompt =
@@ -64,11 +64,20 @@ export function compareFissionFrames(owner, config) {
 	const ownerMounted = call(owner, "getMountedXdevToolNames");
 	const ownerKey =
 		read(read(owner, "agent"), "promptCacheKey") ??
-		(config?.taskPromptCacheKey ?? null);
+		config?.taskPromptCacheKey ??
+		read(owner, "sessionId") ??
+		null;
+	const flowKey =
+		config?.providerPromptCacheKey ??
+		config?.taskPromptCacheKey ??
+		config?.providerSessionId ??
+		null;
 	const frames = {
 		tools: {
-			owner: frameDigest([ownerTools, ownerMounted]),
-			flow: frameDigest([config?.toolNames, config?.mountedToolNames]),
+			owner: Array.isArray(ownerTools) && Array.isArray(ownerMounted)
+				? frameDigest([ownerTools, ownerMounted]) : null,
+			flow: Array.isArray(config?.toolNames) && Array.isArray(config?.mountedToolNames)
+				? frameDigest([config.toolNames, config.mountedToolNames]) : null,
 		},
 		systemPrompt: {
 			owner: frameDigest(ownerPrompt),
@@ -76,33 +85,44 @@ export function compareFissionFrames(owner, config) {
 		},
 		promptCacheKey: {
 			owner: frameDigest(ownerKey),
-			flow: frameDigest(config?.providerPromptCacheKey ?? null),
+			flow: frameDigest(flowKey),
 		},
 	};
-	const mismatches = Object.keys(frames).filter(
-		(key) => frames[key].owner !== frames[key].flow,
+	const unavailable = Object.keys(frames).filter(
+		(key) => frames[key].owner === null || frames[key].flow === null,
 	);
-	return { frames, mismatches };
+	const mismatches = Object.keys(frames).filter(
+		(key) => !unavailable.includes(key) && frames[key].owner !== frames[key].flow,
+	);
+	return {
+		layer: "construction",
+		frames,
+		mismatches,
+		unavailable,
+		ok: unavailable.length === 0 && mismatches.length === 0,
+	};
 }
 
 /**
- * The fourth frame: the conversation prefix the flow will actually send.
+ * Compare an owner's prepared AgentMessage prefix with the flow's copy.
  *
- * `ownerPrefix` is the owner's live list with the bytes no flow may see
- * removed (its ack, trailing results, a retirement artifact). The flow's
- * first messages must start with exactly that list; anything else means the
- * flow's first request is not the request the owner just cached.
+ * The caller supplies the prefix after removing owner-only artifacts. This
+ * check runs before provider conversion and does not establish a cache hit.
  */
 export function compareMessagePrefix(ownerPrefix, flowMessages) {
+	const valid = Array.isArray(ownerPrefix) && Array.isArray(flowMessages);
 	const owner = Array.isArray(ownerPrefix) ? ownerPrefix : [];
 	const flow = Array.isArray(flowMessages) ? flowMessages : [];
 	const slice = flow.slice(0, owner.length);
 	const sameLength = slice.length === owner.length;
 	const ownerHash = frameDigest(owner);
 	const flowHash = frameDigest(slice);
+	const available = valid && ownerHash !== null && flowHash !== null;
 	return {
+		layer: "agent-messages",
 		frame: { owner: ownerHash, flow: flowHash, length: owner.length },
-		ok: sameLength && ownerHash === flowHash,
+		available,
+		ok: available && sameLength && ownerHash === flowHash,
 	};
 }
 
@@ -143,13 +163,13 @@ export const FISSION_SESSION_LIMITS = Object.freeze({
 	TOKEN_RATE_UNAVAILABLE: "TOKEN_RATE_UNAVAILABLE",
 });
 
-/** Flow ids feed file names and provider ids, so keep them label-safe. */
+/** Flow ids feed file names and agent ids, so keep them label-safe. */
 const FLOW_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 const DETAIL = Object.freeze({
 	[FISSION_SESSION_REASONS.NO_OWNER]: "The source session is absent or not an object.",
 	[FISSION_SESSION_REASONS.NO_FLOW_ID]:
-		"flowId must match /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/. It becomes the agent id, the task prefix, and part of the provider session id.",
+		"flowId must match /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/. It becomes the agent id and a local flow label.",
 	[FISSION_SESSION_REASONS.NO_SESSION_MANAGER]:
 		"The shared SessionManager is required. A flow must not create one, because a second manager writes a second transcript and holds a second lease.",
 	[FISSION_SESSION_REASONS.NO_ASYNC_JOB_MANAGER]:
@@ -433,8 +453,8 @@ export function deriveFissionConfig(options = {}) {
 
 	// The owner's live prompt already carries the managed block the extension
 	// injects; the raw session field can predate that injection. Deriving from
-	// the live array keeps the flow's first request byte-equal to the owner's
-	// last one. A host that keeps no live copy falls back to the session field,
+	// the live array preserves the prompt supplied to the flow factory.
+	// A host that keeps no live copy falls back to the session field,
 	// and the flow's own before_agent_start injection is idempotent either way.
 	const livePrompt = read(read(read(owner, "agent"), "state"), "systemPrompt");
 	const prompt =
@@ -490,11 +510,10 @@ export function deriveFissionConfig(options = {}) {
 	// describes. A truthy non-boolean switch still disables the feature, and a
 	// disabled feature must never go unreported.
 	//
-	// An absent option follows the owner. The provider cache is keyed on the
-	// whole request head, so a flow that quietly drops the owner's LSP or MCP
-	// tool set starts every batch at 0% hit and pays the entire prefix again.
-	// Reusing the owner's handles also avoids a second server; the flow only
-	// borrows the client.
+	// An absent option follows the owner. Dropping the owner's LSP or MCP
+	// tools changes the tool definitions and can reduce the shared cache prefix.
+	// Reusing the owner's handles avoids a second server; the flow borrows the
+	// client. The provider-bound request still needs a separate comparison.
 	const ownerMcpManager = options.mcpManager ?? read(owner, "mcpManager");
 	const ownerMcpTools = options.mcpTools ?? read(owner, "mcpTools");
 	const ownerMcpScope = options.mcpToolScope ?? read(owner, "mcpToolScope");
@@ -520,11 +539,8 @@ export function deriveFissionConfig(options = {}) {
 		toolNames: [...toolNames],
 		mountedToolNames: [...mountedToolNames],
 		advertiseHeadlessAsk: activeToolNames.includes("ask"),
-		// Every flow speaks to the provider as the owner's session. A per-flow
-		// id would be a separate cache namespace, so each flow's first request
-		// would pay the whole prefix again; the handoff and the heir's adoption
-		// would pay it a third time. One id keeps the provider cache warm across
-		// fission and return.
+		// Keep the owner's cache route when constructing a peer flow. A shared
+		// route helps reuse a matching prefix but does not guarantee cache hits.
 		providerSessionId: sessionId,
 		providerPromptCacheKey: promptCacheKey,
 		taskPromptCacheKey,

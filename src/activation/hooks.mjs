@@ -2,7 +2,8 @@
 
 import { sessionFor } from "../host/capture.mjs";
 import { record } from "../host/diagnostics.mjs";
-import { hackContext } from "../host/hack-context.mjs";
+import { installContextPreparation } from "../host/context-preparation.mjs";
+import { wireProviderObservation } from "../host/provider-observer.mjs";
 import { installScopeDispatch } from "../host/scope-dispatch.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 
@@ -137,14 +138,20 @@ function dispatchSession(ctx) {
 export function wireHooks(pi, registry) {
 	const bindDispatch = (ctx) => {
 		const station = registry.stationFor(ctx);
+		const session = dispatchSession(ctx);
 		installScopeDispatch(
-			dispatchSession(ctx),
+			session,
 			(message, id, name) => station.prepareScopeDispatch(message, id, name),
 			(id, name, toolCtx, receipt) =>
 				station.admitScopeDispatch(id, name, toolCtx, receipt),
 		);
+		if (session) installContextPreparation(session, { station, ctx });
 		return station;
 	};
+	wireProviderObservation(pi, registry);
+	pi.on("session_start", (_event, ctx) => {
+		bindDispatch(ctx);
+	});
 	let transitionsBound = false;
 	try {
 		pi.on("assistant_message", (event, ctx) =>
@@ -210,24 +217,12 @@ export function wireHooks(pi, registry) {
 	} catch (error) {
 		record("hooks", error, { missing: ["tool_result"], optional: true });
 	}
-	hackContext(
-		pi,
+	pi.on(
+		"context",
 		(event, ctx) => bindDispatch(ctx).onContext(event?.messages, ctx),
-		{
-			// The station's manager writes this session's own leaf. Falling back
-			// to `ctx.sessionManager` would let a flow append its receipt to the
-			// shared manager's current leaf, which belongs to another flow.
-			managerFor: (ctx) => {
-				try {
-					return registry.stationFor(ctx)?.manager ?? null;
-				} catch {
-					return null;
-				}
-			},
-		},
 	);
 	pi.on("before_agent_start", (event, ctx) => {
-		const station = registry.stationFor(ctx);
+		const station = bindDispatch(ctx);
 		return station.onBeforeAgentStart(event, ctx);
 	});
 	pi.on("session_stop", (_event, ctx) => {
@@ -310,9 +305,11 @@ export function wireHooks(pi, registry) {
 	} catch (error) {
 		record("hooks", error, { missing: ["agent_end"], optional: true });
 	}
-	pi.on("session_switch", (event, ctx) =>
-		registry.stationForStop(ctx).onSessionSwitch(event, ctx),
-	);
+	pi.on("session_switch", (event, ctx) => {
+		const result = registry.stationForStop(ctx).onSessionSwitch(event, ctx);
+		bindDispatch(ctx);
+		return result;
+	});
 	pi.on("session_compact", (_event, ctx) =>
 		registry.stationFor(ctx).onSessionCompact(ctx),
 	);

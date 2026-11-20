@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { hostname, userInfo } from "node:os";
 import { createStatusRuntime } from "../src/host/index.mjs";
 
 function makeUi() {
@@ -165,7 +166,8 @@ describe("one-line status widget", () => {
 		);
 
 		const line = herdLine(ui);
-		expect(line.startsWith("<accent>kunweiz@")).toBe(true);
+		const expectedHost = userInfo().username + "@" + hostname().split(".")[0];
+		expect(line.startsWith("<accent>" + expectedHost + "</>")).toBe(true);
 		expect(line).toContain("<dim>Herd 2A</>");
 		expect(line.split("<dim>  ---  </>").length - 1).toBe(2);
 		expect(line.indexOf("Δ:")).toBeLessThan(line.indexOf("Herd 2A"));

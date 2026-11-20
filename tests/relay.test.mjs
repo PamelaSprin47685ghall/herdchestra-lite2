@@ -341,9 +341,11 @@ describe("state version migration", () => {
 
 	test("rejects a version 2 state with a corrupt relay", () => {
 		const payload = serializeState(createState());
-		expect(deserializeState({ ...payload, relay: { generation: 0 } })).toEqual(
-			createState(),
-		);
-		expect(deserializeState({ ...payload, relay: null })).toEqual(createState());
+		const fallback = createState();
+		for (const relay of [{ generation: 0 }, null]) {
+			const restored = deserializeState({ ...payload, relay });
+			expect(Number.isFinite(restored.startedAt)).toBe(true);
+			expect({ ...restored, startedAt: fallback.startedAt }).toEqual(fallback);
+		}
 	});
 });

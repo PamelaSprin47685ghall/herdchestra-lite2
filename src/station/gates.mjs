@@ -298,19 +298,37 @@ function observeHostBoundary(station, messages) {
 	station.persist();
 }
 
-function onContext(station, messages, ctx) {
-	const original = Array.isArray(messages) ? messages : [];
-	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return { messages: original };
+function managesRequest(station, ctx) {
+	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return false;
 	if (!station.fissionFlow && (station.ownerRetirement?.(ctx) || station.pendingFission?.retired === true)) {
-		return { messages: original };
+		return false;
 	}
+	return true;
+}
+
+// Prepare state before the host copies the live loop for context extensions.
+// The host adapter commits the returned receipt to all three histories.
+function prepareRequest(station, ctx, previous) {
+	if (!managesRequest(station, ctx)) return null;
 	station.ensureTools(ctx);
-	observeHostBoundary(station, original);
+	observeHostBoundary(station, station.contextMessages());
 	station.observeActualModel(ctx);
 	const restore = station.tickets.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
-	if (req) return restore(station, ctx, req, original, (messages) => station.withSkillReceipt(original, station.transformContext(messages, ctx), ctx));
-	return station.withSkillReceipt(original, station.transformContext(original, ctx), ctx);
+	if (req) {
+		return restore(station, ctx, req, previous, (message) =>
+			message?.herdSkill === true ? message : station.skillReceipt(ctx),
+		);
+	}
+	return previous?.herdSkill === true ? previous : station.skillReceipt(ctx);
+}
+
+function onContext(station, messages, ctx) {
+	const original = Array.isArray(messages) ? messages : [];
+	if (!managesRequest(station, ctx)) return { messages: original };
+	// Context handlers receive a clone. Adding a Skill here would make it
+	// temporary and leave the running tool loop without it on the next call.
+	return station.transformContext(original, ctx);
 }
 
 function onSessionStop(station, ctx) {
@@ -401,6 +419,7 @@ export {
 	onMessageEnd,
 	onToolCall,
 	onHerdCommand,
+	prepareRequest,
 	onContext,
 	onSessionStop,
 	onSessionSwitch,

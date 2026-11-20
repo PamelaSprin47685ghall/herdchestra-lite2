@@ -16,10 +16,28 @@ import { modelCacheFor, touchModelCache } from "./state.mjs";
 import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
 import { charsToTokens } from "../host/pricing.mjs";
 import { toolCalls } from "../transcript/index.mjs";
+import { createHash } from "node:crypto";
 
 const FALLBACK_TOKENS_PER_CHAR = 0.3;
 const MIN_TOKENS_PER_CHAR = 0.15;
 const MAX_TOKENS_PER_CHAR = 0.8;
+
+function digest(value) {
+	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function headerSummary(header) {
+	if (!header || !Array.isArray(header.tools) || header.systemPrompt === undefined) {
+		return null;
+	}
+	const text = JSON.stringify(header);
+	return { key: digest(header), bytes: Buffer.byteLength(text, "utf8") };
+}
+
+function extendsMessages(previous, next) {
+	if (!Array.isArray(previous) || !Array.isArray(next) || next.length < previous.length) return false;
+	return previous.every((hash, index) => hash === next[index]);
+}
 
 /**
  * Build one ledger.
@@ -60,10 +78,12 @@ export function createUsageLedger(options) {
 		lastUsageModelKey: null,
 		received: new WeakSet(),
 		sentContext: null,
-		// Previous outbound sample for the incremental density estimate:
-		// { key, chars, totalInput, sent }. The difference between two
-		// samples cancels the system prompt and tool schemas exactly, which
-		// is the only way to measure the dialogue's own density.
+		contextRevision: 0,
+		lastHeader: null,
+		fixedHeaderKeys: new Map(),
+		// A slope sample is usable only while the message prefix and complete
+		// request header remain unchanged. Length growth alone is not proof:
+		// an amend or a rewritten prefix can still leave a longer transcript.
 		lastSample: null,
 		// Models whose density already came from a slope sample. The first
 		// slope replaces the ratio-based guess outright; averaging a clean
@@ -71,6 +91,24 @@ export function createUsageLedger(options) {
 		// error, so smoothing starts with the second sample.
 		slopeKeys: new Set(),
 	};
+
+	/** Record one prepared request without retaining its message bodies. */
+	function noteSentContext({ key, messages, frontier, header }) {
+		ledger.sentContext = null;
+		ledger.lastHeader = null;
+		const source = Array.isArray(messages) ? messages : [];
+		const head = headerSummary(header);
+		ledger.lastHeader = head;
+		ledger.sentContext = {
+			key,
+			chars: sliceChars(source),
+			frontier: Number.isInteger(frontier) ? frontier : source.length,
+			revision: ledger.contextRevision,
+			epoch: state.epoch ?? 0,
+			headerKey: head?.key ?? null,
+			messageHashes: source.map(digest),
+		};
+	}
 
 	/** Recover the most recent usage from the persisted branch tail. */
 	function restoreFromBranch(manager) {
@@ -138,10 +176,12 @@ export function createUsageLedger(options) {
 				);
 				const sent = ledger.sentContext;
 				const frontier = index < 0 ? messages.length : index;
-				// `chars` is the dialogue weight of the payload this usage
-				// answers. A sent record with the same key names it exactly;
-				// otherwise the message prefix is the best available estimate.
-				const measured = sent?.key === key ? sent.chars : null;
+				// These are local request estimates. They do not prove which
+				// tokens the provider retained or read from its own cache.
+				const aligned = sent?.key === key &&
+					(sent.revision === undefined || sent.revision === ledger.contextRevision) &&
+					(sent.epoch === undefined || sent.epoch === (state.epoch ?? 0));
+				const measured = aligned && Number.isFinite(sent.chars) ? sent.chars : null;
 				const chars =
 					measured ??
 					sliceChars(index < 0 ? messages : messages.slice(0, index));
@@ -149,16 +189,20 @@ export function createUsageLedger(options) {
 				const previous = modelCacheFor(state, key);
 				const prior = ledger.lastSample;
 				let density = previous?.tokensPerChar;
-				// Incremental slope: system prompt and tool schemas are the
-				// same in both payloads, so their tokens cancel in the
-				// difference and only dialogue text remains. Both samples must
-				// be same-model, sent-context aligned, and monotone: a fold or
-				// an amend shrinks the outbound list and voids the sample.
+				// A stable header and an unchanged prior message prefix are
+				// required before input growth can estimate dialogue density.
+				// Missing header evidence disables this sample; it is not an
+				// implicit assertion that the header stayed the same.
 				if (
 					prior &&
 					prior.key === key &&
 					prior.sent === true &&
 					measured !== null &&
+					typeof sent.headerKey === "string" &&
+					prior.headerKey === sent.headerKey &&
+					prior.revision === sent.revision &&
+					prior.epoch === sent.epoch &&
+					extendsMessages(prior.messageHashes, sent.messageHashes) &&
 					measured > prior.chars &&
 					tIn > prior.totalInput
 				) {
@@ -194,18 +238,23 @@ export function createUsageLedger(options) {
 					chars,
 					totalInput: tIn,
 					sent: measured !== null,
+					headerKey: sent?.headerKey ?? null,
+					revision: sent?.revision,
+					epoch: sent?.epoch,
+					messageHashes: sent?.messageHashes,
 				};
+				if (measured !== null && sent.headerKey) {
+					ledger.fixedHeaderKeys.set(key, sent.headerKey);
+				}
 				touchModelCache(state, key, {
 					cachedUntilPos:
-						sent?.key === key ? Math.min(frontier, sent.frontier) : frontier,
+						aligned ? Math.min(frontier, sent.frontier) : frontier,
 					lastUsedAt: Date.now(),
 					tokensPerChar: density,
-					// Everything the payload paid that no dialogue character
-					// explains: the system prompt and tool schemas. Recorded
-					// per model so a later model switch can project the same
-					// fixed cost instead of pretending it vanished.
+					// Estimate the fixed portion only from an aligned request.
+					// Its accuracy still depends on the sampled token density.
 					fixedOverheadTokens:
-						chars > 0 && tIn > 0
+						measured !== null && chars > 0 && tIn > 0
 							? Math.max(0, tIn - chars * density)
 							: (previous?.fixedOverheadTokens ?? null),
 				});
@@ -284,6 +333,29 @@ export function createUsageLedger(options) {
 			: tokensPerChar();
 	}
 
+	/** Estimate a complete projection without using a pre-rewrite watermark. */
+	function projectContextTokens(messages, key = ledger.lastUsageModelKey) {
+		const source = Array.isArray(messages) ? messages : contextMessages();
+		const cached = modelCacheFor(state, key);
+		const header = ledger.lastHeader;
+		let fixed;
+		if (
+			Number.isFinite(cached?.fixedOverheadTokens) &&
+			(!header || ledger.fixedHeaderKeys.get(key) === header.key)
+		) {
+			fixed = Math.max(0, cached.fixedOverheadTokens);
+		} else if (header) {
+			// Without a sample for this tokenizer, charge the observed header's
+			// UTF-8 byte count instead of inventing a token constant or charging
+			// zero. This is a conservative text estimate, not an exact tokenizer.
+			fixed = header.bytes;
+		} else {
+			// The caller must treat an unknown complete request as unmeasured.
+			return Number.POSITIVE_INFINITY;
+		}
+		return fixed + charsToTokens(sliceChars(source), tokensPerCharFor(key));
+	}
+
 	/** Live outbound watermark from the last usage plus pending messages. */
 	function currentContextTokens(messages, key = ledger.lastUsageModelKey) {
 		const source = Array.isArray(messages) ? messages : contextMessages();
@@ -292,13 +364,7 @@ export function createUsageLedger(options) {
 			!Number.isFinite(ledger.lastTotalInput) ||
 			(key && key !== ledger.lastUsageModelKey)
 		) {
-			// A model switch has no measured payload for this transcript. The
-			// projection must still pay the constant prefix (system prompt and
-			// tool schemas), which is per model and never zero in practice.
-			const fixed = Number.isFinite(modelCacheFor(state, key)?.fixedOverheadTokens)
-				? Math.max(0, modelCacheFor(state, key).fixedOverheadTokens)
-				: 0;
-			return fixed + charsToTokens(sliceChars(source), tpc);
+			return projectContextTokens(source, key);
 		}
 		let pendingChars = 0;
 		let usageIndex = -1;
@@ -334,19 +400,28 @@ export function createUsageLedger(options) {
 	function resetWatermark() {
 		ledger.lastTotalInput = null;
 		ledger.lastOutputTokens = 0;
-		if (ledger.sentContext) ledger.sentContext.frontier = 0;
+		ledger.contextRevision += 1;
+		ledger.sentContext = null;
+		ledger.lastSample = null;
 	}
 
 	/** After a fold, shift younger baselines down by the reclaimed tokens. */
 	function rebase(folded) {
+		if (!folded) return;
+		ledger.contextRevision += 1;
+		ledger.sentContext = null;
+		ledger.lastSample = null;
 		if (
-			!folded ||
 			typeof folded.savedTokens !== "number" ||
 			folded.savedTokens <= 0
 		) {
 			return;
 		}
-		const saved = folded.savedTokens;
+		// A batch can contain records measured by several tokenizers. Rebase
+		// this ledger in its own model's units when the removed text is known.
+		const saved = Number.isFinite(folded.savedChars)
+			? charsToTokens(Math.max(0, folded.savedChars), tokensPerCharFor(ledger.lastUsageModelKey))
+			: folded.savedTokens;
 		for (const scope of state.scopes ?? []) {
 			const orderMatch = /^scope-(\d+)$/.exec(String(scope.id ?? ""));
 			const order = orderMatch ? Number(orderMatch[1]) : 0;
@@ -390,7 +465,10 @@ export function createUsageLedger(options) {
 					);
 				}
 			}
-			if (Number.isFinite(record.endInputTokens)) {
+			if (
+				(record.measuredModelKey ?? record.baseModelKey) === ledger.lastUsageModelKey &&
+				Number.isFinite(record.endInputTokens)
+			) {
 				record.endInputTokens = Math.max(0, record.endInputTokens - saved);
 			}
 		}
@@ -447,11 +525,13 @@ export function createUsageLedger(options) {
 	}
 
 	return Object.assign(ledger, {
+		noteSentContext,
 		restoreFromBranch,
 		onMessage,
 		tokensPerChar,
 		tokensPerCharFor,
 		currentContextTokens,
+		projectContextTokens,
 		usageArrivedFor,
 		pricingHint,
 		resetWatermark,

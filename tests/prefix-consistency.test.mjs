@@ -1,10 +1,9 @@
 /**
- * The prefix contract between the owner, a flow, and the adopted heir.
+ * Replay and adoption checks for the extension's AgentMessage history.
  *
- * A provider caches on bytes: the system prompt, the tool definitions, and the
- * message list up to the last turn. Anything the extension rebuilds on replay
- * must be byte-identical, or the next request silently pays the whole prefix
- * again.
+ * These tests check stable replay, adopted messages, and model cache
+ * bookkeeping. They do not observe provider payloads or measure cache reuse.
+ * Equal serialized messages here do not establish equal provider requests.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -72,8 +71,8 @@ describe("adopted context", () => {
 	});
 });
 
-describe("cache merge", () => {
-	test("keeps the heir's warmer position after adoption", () => {
+describe("model cache bookkeeping", () => {
+	test("keeps the heir's later cachedUntilPos after adoption", () => {
 		const merged = mergeModelCaches(
 			{ "p/m": { cachedUntilPos: 3, lastUsedAt: 1000 } },
 			{ "p/m": { cachedUntilPos: 40, lastUsedAt: 2000 } },

@@ -44,6 +44,8 @@ function state() {
 	const existing = globalThis[STATE_KEY];
 	if (existing) {
 		if (!existing.seams) existing.seams = freshSeams();
+		if (!existing.managerSessions) existing.managerSessions = new WeakMap();
+		if (!existing.sessionRefs) existing.sessionRefs = new WeakMap();
 		return existing;
 	}
 	const created = {
@@ -52,6 +54,8 @@ function state() {
 		prototype: null,
 		descriptor: null,
 		sessions: new WeakMap(),
+		managerSessions: new WeakMap(),
+		sessionRefs: new WeakMap(),
 		builtinSlashExecutor: null,
 		seams: freshSeams(),
 	};
@@ -90,37 +94,111 @@ export function captureDiagnosis() {
 	};
 }
 
-function remember(session) {
-	if (!session) return;
-	const captured = state();
-	captured.sessions.set(session, session);
+function isObject(value) {
+	return value !== null && (typeof value === "object" || typeof value === "function");
+}
+
+function read(target, key) {
+	if (!isObject(target)) return undefined;
 	try {
-		const manager = session.sessionManager;
-		if (manager) captured.sessions.set(manager, session);
+		return target[key];
 	} catch {
-		// A throwing host getter is not a usable capture point.
+		return undefined;
 	}
 }
 
-/** Test and host seam: bind a live AgentSession to its session manager. */
-export function rememberSession(session) {
-	remember(session);
+function agentId(session) {
+	try {
+		const getId = read(session, "getAgentId");
+		const id = typeof getId === "function" ? getId.call(session) : null;
+		if (typeof id === "string" && id !== "") return id;
+	} catch {
+		// Older hosts can expose the id on the agent instead.
+	}
+	const id = read(read(session, "agent"), "id");
+	return typeof id === "string" && id !== "" ? id : null;
+}
+
+/** Reject a known identity conflict. Hosts without agent ids remain supported. */
+export function sessionMatchesContext(session, context) {
+	if (!isObject(session)) return false;
+	const expected = agentId(context);
+	const actual = agentId(session);
+	return expected === null || actual === null || actual === expected;
+}
+
+function bindManager(captured, manager, reference) {
+	if (!isObject(manager)) return;
+	let sessions = captured.managerSessions.get(manager);
+	if (!sessions) {
+		sessions = new Set();
+		captured.managerSessions.set(manager, sessions);
+	}
+	sessions.add(reference);
+}
+
+function remember(session, sharedManager) {
+	if (!isObject(session)) return;
+	const captured = state();
+	captured.sessions.set(session, session);
+	const manager = read(session, "sessionManager");
+	let reference = captured.sessionRefs.get(session);
+	if (!reference || reference.manager !== manager) {
+		reference = { session: new WeakRef(session), manager };
+		captured.sessionRefs.set(session, reference);
+	}
+	bindManager(captured, manager, reference);
+	bindManager(captured, sharedManager, reference);
+	// Remove the old one-session-per-manager alias when the module is reloaded.
+	if (isObject(manager) && manager !== session) captured.sessions.delete(manager);
+}
+
+/** Bind a live session, plus a raw manager when the host exposes a flow proxy. */
+export function rememberSession(session, sharedManager) {
+	remember(session, sharedManager);
+}
+
+function sessionByManager(manager, expected) {
+	if (!isObject(manager)) return null;
+	const captured = state();
+	let references = captured.managerSessions.get(manager);
+	if (!references) {
+		const previous = captured.sessions.get(manager);
+		if (previous && previous !== manager) remember(previous);
+		references = captured.managerSessions.get(manager);
+	}
+	if (!references) return null;
+	const sessions = [];
+	const matches = [];
+	for (const reference of references) {
+		const session = reference.session.deref();
+		if (
+			!session ||
+			read(session, "sessionManager") !== reference.manager ||
+			captured.sessionRefs.get(session) !== reference
+		) {
+			references.delete(reference);
+			continue;
+		}
+		sessions.push(session);
+		if (expected !== null && agentId(session) === expected) matches.push(session);
+	}
+	if (matches.length === 1) return matches[0];
+	if (matches.length > 1 || sessions.length !== 1) return null;
+	const session = sessions[0];
+	// A single legacy session can have no id. Several sessions cannot be guessed.
+	return expected === null || agentId(session) === null ? session : null;
 }
 
 /** The live AgentSession bound to this extension context or session, or null. */
 export function sessionFor(context) {
-	if (!context || typeof context !== "object") return null;
-	const captured = state().sessions;
-	try {
-		const manager = context.sessionManager;
-		if (manager) {
-			const byManager = captured.get(manager);
-			if (byManager) return byManager;
-		}
-	} catch {
-		// Fall through to the context object itself.
-	}
-	return captured.get(context) ?? null;
+	if (!isObject(context)) return null;
+	const direct = state().sessions.get(context);
+	if (direct === context) return direct;
+	const explicit = read(context, "session");
+	if (sessionMatchesContext(explicit, context)) return explicit;
+	const manager = read(context, "sessionManager") ?? context;
+	return sessionByManager(manager, agentId(context));
 }
 
 /** Keep registered scope tools in the host's atomic vibe-mode activation. */

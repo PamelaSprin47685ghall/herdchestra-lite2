@@ -677,16 +677,20 @@ export function createFissionScheduler(options = {}) {
 				{ flowId: plan.flowId, reason: created.reason },
 			);
 		}
-		// A flow whose request head differs from the owner's by even one byte
-		// starts in a cold provider-cache namespace: the batch would pay the
-		// whole prefix again on every begin and every adopted return. The
-		// frames are hashes of the exact values the host will send, so the
-		// comparison is a fact, not an estimate.
+		// These frames compare session construction. Provider conversion runs
+		// later; this check cannot establish a cache hit or a final wire prefix.
 		const frames = created.frames ?? null;
 		if (frames?.mismatches?.length > 0) {
 			recordLimit(
-				"FISSION_PREFIX_MISMATCH",
-				`flow ${plan.flowId} request head differs from the owner: ${frames.mismatches.join(", ")}`,
+				"FISSION_CONFIG_MISMATCH",
+				`flow ${plan.flowId} session configuration differs from the owner: ${frames.mismatches.join(", ")}`,
+				{ flowId: plan.flowId, frames },
+			);
+		}
+		if (frames?.unavailable?.length > 0) {
+			recordLimit(
+				"FISSION_CONFIG_UNAVAILABLE",
+				`flow ${plan.flowId} configuration could not be compared: ${frames.unavailable.join(", ")}`,
 				{ flowId: plan.flowId, frames },
 			);
 		}
@@ -3027,7 +3031,7 @@ export function createFissionScheduler(options = {}) {
 			// one. Capturing the session under these monotonically required keys
 			// is what lets `sessionOf(ctx)` return the flow instead of the owner;
 			// its manager mapping is keyed per flow proxy, so it stays unambiguous.
-			rememberSession(session);
+			rememberSession(session, manager);
 			batch.flows.push(flow);
 			flow.station = newFlowStation(batch.station, flow);
 			for (const limit of spawned[index].limitations ?? []) {
@@ -3150,9 +3154,8 @@ export function createFissionScheduler(options = {}) {
 				...batchBoundary,
 				...boundaryMessages(flow.beginId),
 			);
-			// The flow's first request begins with exactly the owner prefix
-			// (minus the bytes no flow may see). A mismatch here means the
-			// provider will not hit the cache the owner just filled.
+			// Check the copied agent-message prefix before provider conversion.
+			// Provider observation separately compares each flow's later payloads.
 			const prefix = compareMessagePrefix(history, flow.agent.state.messages);
 			if (!prefix.ok) {
 				recordLimit(
@@ -3172,6 +3175,10 @@ export function createFissionScheduler(options = {}) {
 					label: flow.label,
 					manager: flow.session.sessionManager ?? manager,
 				});
+				// continue() skips before_agent_start. Install request preparation
+				// now so the first flow request also retains its Skill in the loop.
+				const removePreparation = options.prepareFlow?.(flow.session, flow.station);
+				if (typeof removePreparation === "function") flow.unsubscribe.push(removePreparation);
 			} catch (error) {
 				throw refusal(
 					FISSION_SCHEDULER_CODES.UNSUPPORTED,

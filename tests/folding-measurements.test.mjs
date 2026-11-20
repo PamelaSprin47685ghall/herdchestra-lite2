@@ -10,6 +10,7 @@ import { mergeModelCaches } from "../src/host/fission-scheduler.mjs";
 import { netRemovableTokens, sliceChars } from "../src/station/fold.mjs";
 
 const KEY = "prov/model";
+const HEADER = { systemPrompt: "fixed instructions", tools: [] };
 
 function ledgerFor(state, messages) {
 	return createUsageLedger({
@@ -41,7 +42,7 @@ describe("dialogue density", () => {
 		const state = emptyState();
 		const messages = [assistant({ content: "a".repeat(4000) })];
 		const ledger = ledgerFor(state, messages);
-		ledger.sentContext = { key: KEY, chars: 4000, frontier: 1 };
+		ledger.noteSentContext({ key: KEY, messages, frontier: 1, header: HEADER });
 		ledger.onMessage(
 			assistant({ content: "a".repeat(4000), usage: { input: 20000 } }),
 			null,
@@ -51,7 +52,7 @@ describe("dialogue density", () => {
 
 		// 2,000 more characters cost 700 more input tokens: 0.35 tokens/char.
 		messages.push(assistant({ content: "b".repeat(2000) }));
-		ledger.sentContext = { key: KEY, chars: 6000, frontier: 2 };
+		ledger.noteSentContext({ key: KEY, messages, frontier: 2, header: HEADER });
 		ledger.onMessage(
 			assistant({ content: "b".repeat(2000), usage: { input: 20700 } }),
 			null,
@@ -65,7 +66,7 @@ describe("dialogue density", () => {
 		const state = emptyState();
 		const messages = [assistant({ content: "a".repeat(4000) })];
 		const ledger = ledgerFor(state, messages);
-		ledger.sentContext = { key: KEY, chars: 4000, frontier: 1 };
+		ledger.noteSentContext({ key: KEY, messages, frontier: 1, header: HEADER });
 		ledger.onMessage(
 			assistant({ content: "a".repeat(4000), usage: { input: 20000 } }),
 			null,
@@ -73,7 +74,7 @@ describe("dialogue density", () => {
 		const before = state.modelCaches[KEY].tokensPerChar;
 
 		messages.push(assistant({ content: "b".repeat(10) }));
-		ledger.sentContext = { key: KEY, chars: 10, frontier: 2 };
+		ledger.noteSentContext({ key: KEY, messages: [messages.at(-1)], frontier: 2, header: HEADER });
 		ledger.onMessage(
 			assistant({ content: "b".repeat(10), usage: { input: 30000 } }),
 			null,

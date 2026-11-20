@@ -34,6 +34,7 @@ import {
 	createFlowTailResolver,
 	retainFissionManager,
 } from "./fission-manager.mjs";
+import { createFissionAgentRegistry } from "./fission-registry.mjs";
 import { createHash } from "node:crypto";
 
 function frameDigest(value) {
@@ -389,17 +390,32 @@ export function relayTokenRate({ ownerSession, flowSession, label = null } = {})
 	};
 }
 
-let factoryPromise;
+let sdkModulePromise;
+
+function loadSdkModule() {
+	sdkModulePromise ??= import("@oh-my-pi/pi-coding-agent").catch(() => null);
+	return sdkModulePromise;
+}
 
 /**
  * Load the host factory once. A failed import stays failed: the module set is
  * fixed for the life of the process, and retrying only repeats side effects.
  */
 export function loadCreateAgentSession() {
-	factoryPromise ??= import("@oh-my-pi/pi-coding-agent")
-		.then((module) => (typeof module?.createAgentSession === "function" ? module.createAgentSession : null))
-		.catch(() => null);
-	return factoryPromise;
+	return loadSdkModule().then((module) =>
+		typeof module?.createAgentSession === "function" ? module.createAgentSession : null,
+	);
+}
+
+async function loadHostAgentRegistry() {
+	const module = await loadSdkModule();
+	const AgentRegistry = module?.AgentRegistry;
+	if (typeof AgentRegistry?.global !== "function") return null;
+	try {
+		return AgentRegistry.global();
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -503,7 +519,16 @@ export function deriveFissionConfig(options = {}) {
 	const parentMnemopiSessionState = call(owner, "getMnemopiSessionState");
 	if (!parentMnemopiSessionState) limitations.push(limitation(FISSION_SESSION_LIMITS.MNEMOPI_ABSENT));
 
-	const agentRegistry = options.agentRegistry;
+	const ownerAgentId = call(owner, "getAgentId") ?? read(read(owner, "agent"), "agentId") ?? "Main";
+	const agentRegistry =
+		options.agentRegistry ??
+		(options.baseAgentRegistry !== undefined
+			? createFissionAgentRegistry({
+					baseRegistry: options.baseAgentRegistry,
+					flowId,
+					ownerAgentId,
+				})
+			: undefined);
 	if (!agentRegistry) limitations.push(limitation(FISSION_SESSION_LIMITS.GLOBAL_AGENT_REGISTRY));
 
 	// Normalize once, so the limitation list always matches the config it
@@ -579,7 +604,15 @@ export function deriveFissionConfig(options = {}) {
  * SHARED_MANAGER_DISPOSE_FORBIDDEN limitation).
  */
 export async function createFissionSession(options = {}) {
-	const derived = deriveFissionConfig(options);
+	const baseAgentRegistry =
+		options.agentRegistry === undefined && options.baseAgentRegistry === undefined
+			? await loadHostAgentRegistry()
+			: options.baseAgentRegistry;
+	const derived = deriveFissionConfig(
+		options.agentRegistry === undefined
+			? { ...options, baseAgentRegistry }
+			: options,
+	);
 	if (!derived.ok) return derived;
 
 	// A real SessionManager exposes the leaf contract, so the flow gets a proxy

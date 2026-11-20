@@ -113,7 +113,8 @@ function leaveFramingText(scope) {
 function insideScopeNudge(state) {
 	const scope = currentScope(state);
 	if (!scope) return "";
-	return render(T["inside-nudge"], {
+	const fullFlow = state.relay?.fullFlow === true;
+	return render(fullFlow ? T["inside-nudge"] : T["inside-nudge.simple"], {
 		level: state.scopes.length,
 		intent: JSON.stringify(scope.intent),
 		leave_framing: leaveFramingText(scope),
@@ -123,6 +124,7 @@ function insideScopeNudge(state) {
 /** Dynamic, persistent receipt. Appended to history only when text changes. */
 export function skillReceiptText(state, relayOn = true) {
 	const scope = currentScope(state);
+	const fullFlow = state.relay?.fullFlow === true;
 	const lines = scope
 		? [
 			render(T["receipt.inside"], {
@@ -138,12 +140,12 @@ export function skillReceiptText(state, relayOn = true) {
 	if (scope?.stage) {
 		lines.push(render(T["receipt.stage"], { stage: scope.stage }));
 	}
-	if (relayOn && state.relay && state.relay.firstEvaluation === null) {
-		lines.push(T["receipt.no-ledger"]);
-	}
 	if (state.herdMode) {
 		lines.push(T["receipt.herd-rules"]);
-	} else if (relayOn) {
+	} else if (relayOn && fullFlow) {
+		if (state.relay?.firstEvaluation === null) {
+			lines.push(T["receipt.no-ledger"]);
+		}
 		if (scope?.stage === DECISION_FRAMING) {
 			lines.push(T["receipt.close-framing"]);
 		}
@@ -156,6 +158,8 @@ export function skillReceiptText(state, relayOn = true) {
 		} else {
 			lines.push(T["receipt.todo"]);
 		}
+	} else if (relayOn) {
+		lines.push(scope ? T["receipt.simple-inside"] : T["receipt.simple-outside"]);
 	} else if (!scope) {
 		lines.push(T["receipt.finish"]);
 	}
@@ -165,7 +169,8 @@ export function skillReceiptText(state, relayOn = true) {
 function insideScopeText(state) {
 	const scope = currentScope(state);
 	if (!scope) return "";
-	return render(T["inside-text"], {
+	const fullFlow = state.relay?.fullFlow === true;
+	return render(fullFlow ? T["inside-text"] : T["inside-text.simple"], {
 		level: state.scopes.length,
 		intent: JSON.stringify(scope.intent),
 		leave_framing: leaveFramingText(scope),

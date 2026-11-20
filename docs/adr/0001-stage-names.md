@@ -22,7 +22,7 @@ Runtime surfaces carry the descriptive two-word name only. The values of
 | S2 | `acceptance-cases` | User-experience acceptance: case design, hand-run tests, a 0-100 rubric | `herdMode === false` only |
 | S3 | `architecture-design` | Module boundaries, data flow, the development guide | `herdMode === false` only |
 | S4 | `orchestration-plan` | Literate pseudocode, invariants, worker choreography | `herdMode === false` only |
-| S5 | `direct-execution` | Implement, run the real checks, accept, deliver | `herdMode === false` only |
+| S5 | `direct-execution` | Implement, run the real checks, accept, deliver | `herdMode === false` only; in the full flow, only after `acceptance-cases`, `architecture-design`, and `orchestration-plan` have each run once |
 
 The mapping above is history. It exists so old conversations and old sessions
 can be read. No runtime enumeration, schema, prompt, or tool contract may use

@@ -50,6 +50,7 @@ function replayPhases(ctx) {
 function relayDetails(relay) {
 	return {
 		generation: relay.generation,
+		fullFlow: relay.fullFlow,
 		firstEvaluation: relay.firstEvaluation,
 		canStop: relay.canStop,
 		handoffPending: relay.handoffPending,

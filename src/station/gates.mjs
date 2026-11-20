@@ -193,6 +193,9 @@ function onSessionStop(station, ctx) {
 	if (scope) return continueFeedback(insideScopeText(station.state));
 	const relay = station.state.relay;
 	if (!relay) return continueFeedback(firstEvaluationNudge());
+	// A task that never opened a todo ledger is not in the full flow: no
+	// handoff, no first-evaluation debt, no ledger debt.
+	if (relay.fullFlow !== true) return undefined;
 	if (relay.canStop) return undefined;
 	if (relay.handoffPending) {
 		if (station.handoffReport) {

@@ -36,7 +36,9 @@
 	},
 	"scripts": {
 		"test": "bun test tests",
-		"lint": "eslint ."
+		"lint": "eslint .",
+		"sync:plugin": "bun scripts/sync-plugin.mjs",
+		"smoke:relay": "bun scripts/smoke-relay.mjs"
 	},
 	"devDependencies": {
 		"eslint": "^9.0.0"

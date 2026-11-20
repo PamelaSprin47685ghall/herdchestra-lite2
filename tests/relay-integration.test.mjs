@@ -429,6 +429,7 @@ describe("relay integration", () => {
 				tools: ["read", "write", "bash"],
 			},
 		});
+		stateFor(ctx).state.relay.fullFlow = true;
 		host.activeTools.splice(0, host.activeTools.length, "read", "write", "todo");
 		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
 		expect(JSON.stringify(context.messages)).toContain("evaluate the ledger");
@@ -582,7 +583,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([call("e1", "scope", { end: true })]),
 		);
-		expect(ended[0].output.content[0].text).toContain("Call todo now");
+		expect(ended[0].output.content[0].text).toContain("You are outside all scopes.");
 
 		const outsideTodo = await runAssistant(
 			host,
@@ -604,6 +605,7 @@ describe("relay integration", () => {
 
 	test("scope barriers preserve todo order when the host prepares the entire batch first", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		const open = call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } });
 		const [before, outsideRead, opened, insideRead, inside] = await runAssistant(host, ctx, assistant([
 			call("t1", "todo", {
@@ -660,6 +662,7 @@ describe("relay integration", () => {
 		expect(output.details.phases).toEqual(native.phases);
 		expect(output.details.relay.generation).toBe(0);
 		expect(output.details.relay.firstEvaluation).toBe("nonempty");
+		expect(output.details.relay.fullFlow).toBe(true);
 		expect(output.details.relay.canStop).toBe(false);
 		expect(output.details.relay.lastLedger.open).toBe(1);
 		expect(output.details.relay.promotionInvalidated).toBe(false);
@@ -755,6 +758,7 @@ describe("relay integration", () => {
 		);
 		expect(promoted[0].output.details.relay.canStop).toBe(true);
 		expect(promoted[0].output.details.relay.handoffPending).toBe(false);
+		expect(promoted[0].output.details.relay.fullFlow).toBe(false);
 
 		const repeated = await runAssistant(
 			host,
@@ -763,6 +767,7 @@ describe("relay integration", () => {
 		);
 		expect(repeated[0].output.details.relay.canStop).toBe(true);
 		expect(repeated[0].output.details.relay.handoffPending).toBe(false);
+		expect(repeated[0].output.details.relay.fullFlow).toBe(true);
 	});
 
 	test("after handoff, a stop before the successor evaluates nudges instead of handing off again", async () => {
@@ -869,6 +874,7 @@ describe("relay integration", () => {
 			promotionInvalidated: false,
 			lastLedger: null,
 			handoffError: null,
+			fullFlow: true,
 		};
 		const unevaluated = await emitStop(noEvaluation.host, noEvaluation.ctx);
 		expect(unevaluated.continue).toBe(true);
@@ -1416,6 +1422,39 @@ describe("handoff transaction recovery", () => {
 	});
 });
 
+describe("simple mode", () => {
+	test("direct-execution opens without stage flags and rw needs no ledger", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.stageFlags = createStageFlags();
+		const [opened] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", {
+					begin: {
+						intent: "quick fix",
+						stage: "direct-execution",
+						budget: { edit: 1 },
+						elder_report: null,
+						permission: "rw",
+					},
+				}),
+			]),
+		);
+		expect(opened.result.isError).toBeFalsy();
+		expect(opened.result.content[0].text).toContain("Stage: direct-execution");
+		expect(stateFor(ctx).state.relay.fullFlow).toBe(false);
+
+		const [closed] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("e1", "scope", { end: true })]),
+		);
+		expect(closed.result.content[0].text).toContain("Finishing is not a tool call");
+		expect(await emitStop(host, ctx)).toBeUndefined();
+	});
+});
+
 describe("scope begin permission", () => {
 	test("the schema requires permission ro|rw", () => {
 		const begin = scopeParameters.properties.begin;
@@ -1435,6 +1474,7 @@ describe("scope begin permission", () => {
 
 	test("permission rw is refused before the first ledger submission", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		const [refused] = await runAssistant(host, ctx, assistant([
 			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: "rw" } }),
 		]));
@@ -1456,6 +1496,7 @@ describe("scope begin permission", () => {
 
 	test("permission rw opens after the first ledger submission", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		await runAssistant(host, ctx, assistant([
 			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["write the change"] }] }),
 		]));
@@ -1479,6 +1520,7 @@ describe("scope begin permission", () => {
 
 	test("a todo view does not lift the rw gate", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		await runAssistant(host, ctx, assistant([
 			call("t1", "todo", { op: "view" }),
 		]));
@@ -1506,6 +1548,7 @@ describe("scope begin permission", () => {
 
 	test("an omitted permission is treated as rw and refused before the first ledger", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		const [refused] = await runAssistant(host, ctx, assistant([
 			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null } }),
 		]));
@@ -1516,6 +1559,7 @@ describe("scope begin permission", () => {
 
 	test("a null permission is treated like an omitted one", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		const [refused] = await runAssistant(host, ctx, assistant([
 			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: null } }),
 		]));
@@ -1537,6 +1581,7 @@ describe("scope begin permission", () => {
 
 	test("an omitted permission opens after the first ledger submission", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		await runAssistant(host, ctx, assistant([
 			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["write the change"] }] }),
 		]));
@@ -1686,6 +1731,7 @@ describe("stage gates by session identity", () => {
 
 	test("the main session still needs all three stages before execution", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		stateFor(ctx).state.stageFlags = createStageFlags();
 		const [refused] = await runAssistant(
 			host,

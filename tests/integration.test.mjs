@@ -313,7 +313,8 @@ describe("scope lifecycle", () => {
 		expect(joined).not.toContain("read:config-two");
 		expect(joined).toContain("read:config-three");
 		expect(joined).toContain("You are outside all scopes.");
-		expect(joined).toContain("Before stopping, call todo to evaluate the ledger");
+		expect(joined).toContain("Simple mode: this task runs without a ledger");
+		expect(joined).not.toContain("no todo ledger");
 	});
 
 	test("collapses one scope behind across three scopes", async () => {
@@ -392,7 +393,7 @@ describe("scope lifecycle", () => {
 		);
 	});
 
-	test("nudges a final answer outside all scopes before any todo evaluation", async () => {
+	test("does not nudge a final answer outside all scopes in simple mode", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		await runAssistant(
@@ -400,11 +401,7 @@ describe("scope lifecycle", () => {
 			ctx,
 			assistant([{ type: "text", text: "Final answer." }]),
 		);
-		expect(host.steers.length).toBe(1);
-		expect(host.steers[0].text).toContain("evaluate the ledger with todo");
-		expect(host.steers[0].text).toContain(
-			"A natural stop is allowed only in one sequence",
-		);
+		expect(host.steers.length).toBe(0);
 	});
 
 	test("closing a parent collapses its elder sibling, not its child", async () => {
@@ -1131,8 +1128,8 @@ describe("herd mode", () => {
 	test("herd mode allows a text-only turn to stop naturally", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		const nudged = await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx);
-		expect(nudged).not.toBeUndefined();
+		const simpleStop = await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx);
+		expect(simpleStop).toBeUndefined();
 
 		await host.commands.get("herd").handler("", ctx);
 		const before = host.steers.length;

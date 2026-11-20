@@ -169,6 +169,7 @@ describe("createState", () => {
         handoffError: null,
         lastLedger: null,
         lastHandoff: null,
+        fullFlow: false,
       },
     });
   });

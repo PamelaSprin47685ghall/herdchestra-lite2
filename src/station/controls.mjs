@@ -151,7 +151,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
         { field: "permission", stage: args.begin?.stage },
       );
     }
-    if (declared === "rw" && station.relayOn(ctx) && state.relay?.firstEvaluation === null) {
+    if (declared === "rw" && station.relayOn(ctx) && state.relay?.fullFlow === true && state.relay?.firstEvaluation === null) {
       return errorResult(
         "RW_BEFORE_LEDGER",
         E["rw-before-ledger"],
@@ -185,7 +185,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
         render(E["normal-stage"], { stages: NORMAL_STAGES.join(" | ") }),
       );
     }
-    if (mainAgent && stage === "direct-execution") {
+    if (mainAgent && state.relay?.fullFlow === true && stage === "direct-execution") {
       const missing = missingStages(state.stageFlags);
       if (missing.length > 0) {
         return errorResult(
@@ -390,7 +390,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     steerSent,
     hasBegin,
     remainingScope,
-    station.relayReady() && !state.herdMode,
+    station.relayReady() && !state.herdMode && state.relay?.fullFlow === true,
     state.herdMode,
   );
   if (hasBegin) {

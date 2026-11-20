@@ -93,14 +93,18 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 	const lastLedger = { ...stats, at };
 	const first = current.firstEvaluation === null;
 	if (stats.empty) {
-		// A holder that is already promoted remains allowed to stop. A repeated
-		// empty evaluation must not force another handoff: the promoted holder is
-		// the one that writes the final answer.
+		// The successor's FIRST empty evaluation ends the chain and returns the
+		// session to simple mode. A later empty write by that promoted holder is
+		// a new ledger submission: it must not force another handoff, but it
+		// turns the full flow back on. The holder keeps `canStop`, so it may
+		// still write the final answer; a new scope invalidates the promotion
+		// and the stage gate applies again.
 		const promoted =
 			current.generation > 0 &&
 			!current.promotionInvalidated &&
 			(first || current.canStop === true);
 		if (promoted) {
+			const terminating = first;
 			return {
 				relay: {
 					...current,
@@ -110,9 +114,10 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 					promotionInvalidated: false,
 					handoffError: null,
 					lastLedger,
+					fullFlow: !terminating,
 				},
 				stats,
-				action: "promoted",
+				action: terminating ? "promoted" : "reopened",
 				changed: true,
 			};
 		}
@@ -123,6 +128,7 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 				canStop: false,
 				handoffPending: true,
 				lastLedger,
+				fullFlow: true,
 			},
 			stats,
 			action: "handoff",
@@ -138,6 +144,7 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 			promotionInvalidated:
 				current.promotionInvalidated || current.canStop === true,
 			lastLedger,
+			fullFlow: true,
 		},
 		stats,
 		action: first ? "rework" : "continue",

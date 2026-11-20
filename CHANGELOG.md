@@ -8,6 +8,34 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `bun run smoke:relay` drives the `todo` and `scope` tools that `activate()`
+  registers, against the real station in a fresh process, and asserts what a
+  session actually reads: both `Flow:` lines, the empty ledger's relay handoff,
+  the promoted successor's return to simple mode, and both directions of the
+  `direct-execution` gate. A build that emits no `Flow:` line exits non-zero.
+  This closes the gap the sync script left open: the installed copy can match
+  the working tree file for file while a running session still serves the
+  modules it loaded at process start, and writing a probe with a reused
+  tool-call id reads the cached refusal instead of the live gate.
+- `bun run sync:plugin` copies `src/` and `resources/` into the installed
+  plugin, reports every drifting file, and exits non-zero while the copy lacks
+  the current build fingerprints (`status.flow`, the `reopened` branch, the two
+  `fullFlow` gates). omp loads the installed copy rather than this working
+  tree, so live checks made before this change ran an older build: no `Flow:`
+  line, and `direct-execution` refused before the `RW_BEFORE_LEDGER` check.
+  The README now states the copy-then-restart requirement, and a `todo` result
+  without a `Flow:` line marks the session as stale.
+- The full flow is now optional. A session starts simple: a clear, small task
+  opens `direct-execution` with `"rw"` and no stage flags. The first submitted
+  `todo` ledger, empty or not, turns the full flow on: the stage flags, the
+  five-stage protocol, and the relay apply, and stay on across handoffs until
+  the promoted second empty evaluation ends it. A later task is simple again
+  until another ledger is submitted; a later submission, empty included, turns
+  the flow back on without arming another handoff. `todo` views never turn the
+  flow on.
+
 ### Changed
 
 - The no-ledger nudge names both lawful ledger shapes. A model that had nothing

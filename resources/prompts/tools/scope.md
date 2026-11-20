@@ -20,7 +20,7 @@ Provide begin, end: true, or both. begin.model optionally names a model spec for
 
 ## begin
 
-Open a new innermost scope with a task of moderate scope (use sqrt(n), where n is the estimated tool call count for the whole request, only as a heuristic for how much work one scope should hold, never as the required number of calls) and a per-tool integer budget of assistant turns. permission declares ro|rw; rw is refused until this generation submits its first todo ledger. elder_report archives the previous scope at this level: a non-empty summary when one is pending, otherwise null. For a heavy task, budget task too so parallel subagent workers can take independent slices.
+Open a new innermost scope with a task of moderate scope (use sqrt(n), where n is the estimated tool call count for the whole request, only as a heuristic for how much work one scope should hold, never as the required number of calls) and a per-tool integer budget of assistant turns. permission declares ro|rw; rw is refused in decision-framing, and in the full flow until this generation submits its first todo ledger; in simple mode it is allowed. elder_report archives the previous scope at this level: a non-empty summary when one is pending, otherwise null. For a heavy task, budget task too so parallel subagent workers can take independent slices.
 
 ## begin.intent
 
@@ -28,7 +28,7 @@ A task of moderate scope: one outcome that can be completed and reviewed in a bo
 
 ## begin.stage
 
-Required workflow stage for this scope.
+Required workflow stage for this scope. In the full flow, "direct-execution" also requires one run of each earlier stage; in simple mode it opens directly.
 
 ## begin.budget
 
@@ -40,7 +40,7 @@ The summary of the previous scope at this level. Record its outcomes and remaini
 
 ## begin.permission
 
-Declare the scope's write intent. "ro" is a read-only declaration and is trusted: the harness never enforces it. "rw" is refused in stage "decision-framing" and while this generation has not submitted its first todo ledger (a todo view does not count); submit the ledger first, or choose a later stage. An omitted or null value is treated as "rw", so forgetting the declaration never bypasses the gate.
+Declare the scope's write intent. "ro" is a read-only declaration and is trusted: the harness never enforces it. "rw" is refused in stage "decision-framing", and in the full flow while this generation has not submitted its first todo ledger (a todo view does not count); submit the ledger first, or choose a later stage. In simple mode "rw" is allowed. An omitted or null value is treated as "rw", so forgetting the declaration never bypasses the gate.
 
 ## begin.model
 

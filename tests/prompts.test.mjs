@@ -82,6 +82,10 @@ describe("tool contracts map to their documents", () => {
 		expect(todoTools.TODO_PHASE_DESCRIPTION).toBe(doc.phase);
 		expect(todoTools.TODO_ITEMS_DESCRIPTION).toBe(doc.items);
 		expect(todoTools.TODO_REASON_DESCRIPTION).toBe(doc.reason);
+		expect(doc.tool).toContain("An empty list counts as a submission too.");
+		expect(doc.tool).toContain(
+			"A later todo write after that (an empty list included) turns the full flow on again.",
+		);
 	});
 
 	test("schemas carry the mapped text", () => {
@@ -127,6 +131,26 @@ describe("stage and system prompts map to their documents", () => {
 			expect(stagePromptsBlock).toContain(doc[key]);
 		}
 		expect(stagePromptsBlock).not.toContain("[Stage: direct-execution]");
+	});
+
+	test("the header and the persistent rules state the full-flow execution gate", () => {
+		const doc = loadDoc("stages");
+		const gate =
+			"In the full flow, `direct-execution` opens only after `acceptance-cases`, `architecture-design`, and `orchestration-plan` have each run once";
+		expect(doc.header).not.toContain(
+			"The four working stages may open in any order, and no stage gates another",
+		);
+		expect(doc.header).toContain("In simple mode");
+		expect(doc.header).toContain(gate);
+		expect(persistentOperatingSkill).toContain(
+			"In the full flow, direct-execution opens only after acceptance-cases, architecture-design, and orchestration-plan have each run once; simple mode skips that gate.",
+		);
+		expect(doc.header).toContain(
+			"A later todo write after that turns the full flow on again.",
+		);
+		expect(persistentOperatingSkill).toContain(
+			"after that, another todo write (empty included) turns the full flow back on",
+		);
 	});
 
 	test("system pieces", () => {

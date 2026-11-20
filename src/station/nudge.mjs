@@ -21,6 +21,9 @@ export function nudgeDecision(state, { hasToolCalls, hasHandoffReport }) {
 	}
 	const relay = state.relay;
 	if (!relay) return { kind: "steer", text: firstEvaluationNudge() };
+	// Outside the full flow there is no ledger obligation: a finished scope may
+	// be followed by the final answer.
+	if (relay.fullFlow !== true) return { kind: "none" };
 	if (relay.canStop) return { kind: "none" };
 	if (relay.handoffPending) {
 		return hasHandoffReport

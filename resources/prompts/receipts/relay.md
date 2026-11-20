@@ -1,6 +1,10 @@
 ## next.promoted
 
-The successor's first todo evaluation is an empty ledger. This promotion is the only state that allows a natural stop. Write the final user-facing answer as ordinary assistant text now.
+The successor's first todo evaluation is an empty ledger. This promotion is the only state that allows a natural stop. Write the final user-facing answer as ordinary assistant text now. This promotion also ends the full flow: until another todo ledger is submitted, a new task may run as a simple direct-execution scope without a ledger.
+
+## next.reopened
+
+The ledger is empty again after your promotion. This submission turns the full flow back on: five stages and the relay apply to the next task, until two consecutive empty evaluations end it. You may still write the final answer now.
 
 ## next.handoff
 
@@ -69,6 +73,14 @@ This call did not advance the relay: {{error}}
 ## status.next
 
 Next: {{next}}
+
+## status.flow
+
+Flow: {{flow}}.
+
+## next.simple
+
+Simple mode: this task runs without a ledger, so no relay applies. Close every scope and write the final answer. A todo write, even an empty list, turns on the full flow.
 
 ## stop-rule
 

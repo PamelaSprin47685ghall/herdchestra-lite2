@@ -11,6 +11,18 @@ import { installStatus, loadPricingCatalog } from "./host/index.mjs";
 import { total as diagnosticsTotal } from "./host/diagnostics.mjs";
 
 export async function activate(pi) {
+	// Broadcasts are custom messages; register before startup so transcript
+	// replay and live streams use the same readable presentation.
+	if (typeof pi.registerMessageRenderer === "function") {
+		pi.registerMessageRenderer("fission.broadcast", (message) => {
+			const Text = pi.pi?.Text;
+			if (typeof Text !== "function") return undefined;
+			const content = typeof message.content === "string"
+				? message.content
+				: (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n");
+			return new Text(content, 1, 0);
+		});
+	}
 	// Resolve the builtin at the extension entry so compiled omp can bind its
 	// embedded module rather than resolving from a transitive helper.
 	let builtinExecutor;

@@ -116,6 +116,19 @@ function makeRuntime(manager) {
 	return { host, ctx };
 }
 
+test("broadcast renderer displays the complete message", async () => {
+	const host = makeHost();
+	let renderer;
+	host.pi.pi = { Text: class { constructor(text) { this.text = text; } } };
+	host.pi.registerMessageRenderer = (type, render) => {
+		if (type === "fission.broadcast") renderer = render;
+	};
+	await activate(host.pi);
+	const message = { content: "(broadcast to 2 flows)\n\noperator note" };
+	expect(renderer(message).text).toBe(message.content);
+	expect(renderer({ content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] }).text).toBe("first\nsecond");
+});
+
 async function start(manager) {
 	const host = makeHost();
 	await activate(host.pi);

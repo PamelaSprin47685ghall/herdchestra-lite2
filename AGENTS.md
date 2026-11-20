@@ -138,102 +138,130 @@
 
 ---
 
-## 8 参考骨架（TypeScript）
+## 核心结论（TL;DR）
 
-```ts
-// 1. 服务台：纯同步普通函数，禁止 async/await
-export class SessionStation {
-  private epoch = 0;
-  private aborted = false;
+你抓住了 Ticket Station Method 落地时最关键的设计命门：
 
-  // Gatekeeper（有返回值）：同步完成状态处理后，在尾部开单并做 Promise Manipulation
-  onBeforeTool(
-    input: ToolInput,
-    runPolicy: (snap: SessionSnapshot, input: ToolInput) => Promise<PolicyResult>,
-    auditLog: (snap: SessionSnapshot, input: ToolInput) => Promise<void>,
-  ): Promise<PolicyResult> {
-    const snap: SessionSnapshot = { epoch: this.epoch, aborted: this.aborted };
-    // 先改完自身状态，最后尾调用开单，不等待工单
-    void auditLog(snap, input); // 无返回值工单已在接线层挂载 catch-all
-    return runPolicy(snap, input);
-  }
+> **Station 是“充血聚合根（Rich Aggregate）”，不是“贫血状态袋（Store / Map）”**；
+> **Ticket 是“瘦应用编排协程（Thin Process / Saga）”，不是“业务逻辑垃圾桶”**。
 
-  // Gatekeeper（无返回值）：改变领域状态，让在途工单协程自检退出
-  onCancel(notifyCancel: (epoch: number) => void): void {
-    this.aborted = true;
-    this.epoch += 1;
-    notifyCancel(this.epoch);
-  }
+如果把复杂但轻 CPU 的业务规则写进 Ticket，系统会立刻退化为**贫血服务台 + 臃肿工单**，不仅破坏面向对象封装，还会直接破坏 Ticket Station Method 最核心的**原子互斥优势**（产生大量跨 `await` 的 TOCTOU 竞态与重复校验）。
 
-  // 供工单在各异步阶段之间同步自检
-  isValidEpoch(epoch: number): boolean {
-    return !this.aborted && this.epoch === epoch;
-  }
-}
+---
 
-// 2. 工单：async 协程，唯一允许 await 的地方，自检取消
-export async function runPolicyTicket(
-  station: SessionStation,
-  auditStation: AuditStation,
-  snap: SessionSnapshot,
-  input: ToolInput,
-  childNotifyTicket: () => Promise<void>, // 仅感知直接子工单
-): Promise<PolicyResult> {
-  // 跨台探测：若另一台状态不满足，直接早退
-  if (!auditStation.isEnabled()) return { allow: true };
+## 1. 正本清源：为什么很多人会写贫血？
 
-  // 耗时 I/O
-  const decision = await fetchRemotePolicy(input);
+阅读 `AGENTS.md` 时最容易产生一个误解：
 
-  // 协程恢复后自检状态，失效则自我取消，不污染新状态
-  if (!station.isValidEpoch(snap.epoch)) {
-    return { allow: false, reason: 'stale' };
-  }
+> 误解：文档里说“服务台只做轻量级处理，工单承担全部真实工作”，所以服务台只能写简单的读写状态，复杂代码全放工单。
 
-  if (!decision.allow) {
-    await childNotifyTicket();
-  }
-  return decision;
-}
+这是把**运行耗时（Runtime Latency）**和**逻辑复杂度（Domain Complexity）**混为一谈了：
 
-// 3. 接线层（Wiring）：纯机械组装，单跳绑定 + catch-all 兜底
-export function wireExtension(host: HostApi, logger: Logger) {
-  const session = new SessionStation();
-  const audit = new AuditStation();
+- **“轻量”指的是耗时轻、零 I/O、零等待、不阻塞事件循环**（详见 §6 轻计算假设）；
+- 哪怕一段规则内部有 500 行状态机、图遍历、配额算法或冲突裁决，只要它是**纯内存、同步确定性、微秒至几毫秒内完成**，它依然属于“轻量处理”，完全属于 Station 的天然领地。
 
-  // 无返回值工单统一包装安全壳
-  const fireAndForget = <Args extends unknown[]>(
-    fn: (...args: Args) => Promise<void>,
-  ) => (...args: Args): void => {
-    Promise.resolve().then(() => fn(...args)).catch((err) => logger.error(err));
-  };
+### Ticket Station Method 与 DDD 充血模型的精确映射
 
-  // 单跳组装（子工单自带孙工单，上层无感知）
-  const notifyGrandchild = () => sendTelemetryTicket(host);
-  const childNotify = () => notifyUserTicket(host, notifyGrandchild);
-  const runPolicy = (snap: SessionSnapshot, input: ToolInput) =>
-    runPolicyTicket(session, audit, snap, input, childNotify);
-  const auditLog = (snap: SessionSnapshot, input: ToolInput) =>
-    writeAuditTicket(audit, snap, input);
-  const safeNotifyCancel = fireAndForget((epoch: number) =>
-    notifyCancelTicket(host, epoch),
-  );
+| Ticket Station 概念 | DDD / 架构等价物 | 核心职责 |
+| :--- | :--- | :--- |
+| **Station（服务台）** | **聚合根（Aggregate Root）+ 状态互斥边界 + 事件入口** | 持有状态、守护不变式、执行复杂同步领域决策、决定开 0/1/N 张工单 |
+| **Station 内部纯领域模块** | **实体 / 值对象 / 状态机 / 策略引擎** | 承接 Station 内部高度复杂的同步计算，避免 Station 类本身臃肿 |
+| **跨台纯领域函数** | **无状态领域服务（Pure Domain Service）** | 融合多台快照或异步 I/O 产物的复杂纯算法（不引入服务台间耦合） |
+| **Ticket（工单）** | **应用服务 / 用例协程（Application Service / Saga）** | 承载全部 `await`、串接外部 I/O 与多台协作、处理超时/重试/自检取消 |
+| **Wiring（接线层）** | **组合根（Composition Root）** | 纯机械依赖注入与事件绑定，零业务判断 |
 
-  // 机械绑定外部事件到 Gatekeeper
-  const offBefore = host.onBeforeTool((input) =>
-    session.onBeforeTool(input, runPolicy, (s, i) => {
-      fireAndForget(auditLog)(s, i);
-      return Promise.resolve();
-    }),
-  );
-  const offCancel = host.onCancel(() => session.onCancel(safeNotifyCancel));
+---
 
-  return () => {
-    offBefore();
-    offCancel();
-  };
-}
-```
-```
+## 2. 归属决策矩阵：复杂的轻 CPU 逻辑到底放哪？
 
-*(注：骨架里 `onBeforeTool` 的 `auditLog` 参数你也可以在真实项目里直接用 `() => void` 类型来表达 Fire-and-forget 能力，这样连 `return Promise.resolve()` 都不需要，代码会更直观。)*
+遇到一段“轻 CPU、但内部极其复杂”的代码时，按下面 4 档逐一归类：
+
+| 逻辑特征 | 归属位置 | 原因 |
+| :--- | :--- | :--- |
+| **A. 单台状态内聚型**<br>依赖某台内部状态、涉及状态不变式、准入裁决、状态跃迁、计算开单参数 | **Station 内部**<br>（拆分为 Station 私有/模块内纯领域对象） | 保证“读取—决策—变更”在同一 Run-to-Completion 原子块内完成，守住不变式，杜绝贫血 |
+| **B. 跨台 / 融合异步产物型**<br>需要同时读取 Station A + Station B 的状态，或结合刚 `await` 回来的外部数据做复杂纯计算 | **独立纯领域函数（Pure Domain Service）**<br>由 Ticket 取快照后同步调用 | 遵守规则 3（服务台之间互不 `import`），同时不污染 Ticket 的流程可读性、极易单测 |
+| **C. 时序编排型**<br>复杂度来自“先 A 后 B、失败降级、并发扇出汇聚、指数退避重试、跨台补偿” | **Ticket** | 这是流程复杂度而非状态复杂度，且天然跨越 `await` 间隙 |
+
+---
+
+## 3. 避免贫血模型的 5 条核心设计指南
+
+### 指南 1：Tell, Don't Ask（意图命令 + 判别联合，封杀 Getter/Setter）
+
+Station 对外暴露的永远应该是**带完整业务语义的领域方法**，而不是暴露内部数据结构让 Ticket 自己算。
+
+---
+
+### 指南 2：充血 ≠ 上帝类——Station 内部采用“门面 + 纯领域核”分层
+
+担心“把复杂逻辑都放 Station，Station 类会膨胀到 2000 行”？解法不是把逻辑赶进 Ticket，而是**在 Station 的模块边界内部做纯领域拆解**：
+
+这样同时得到三重收益：
+1. **对外部看**：Station 是高内聚的充血聚合根，不变式无一漏网；
+2. **对内部看**：复杂算法全是纯函数 / 值对象（`Input + CurrentState -> NextState + Decision`），可读可测，没有 `this` 乱飞；
+3. **对性能看**：纯同步调用零异步开销。
+
+---
+
+### 指南 3：复杂 Station 方法强制采用“三段式结构”（守住尾位置开单与异常原子性）
+
+`AGENTS.md` §2.1 有一条铁律：**尾位置开单**（因为 JS `async` 函数在第一个 `await` 前会同步执行，若先开单再改状态，工单同步前缀会观测到半更新状态）。
+
+当 Station 内部逻辑很复杂时，最容易写着写着在某个 `if` 分支里顺手调用了工单，后面又继续改状态或抛异常。
+
+**强制范式：Compute（纯计算） → Commit（原子提交） → Dispatch（尾部开单）**
+
+这套三段式把**复杂逻辑**完全隔离在 Phase 1，同时顺手获得了**强异常安全（不会留下半残状态）**和**严格尾位置开单**。
+
+---
+
+### 指南 4：跨异步间隙的“三明治模式”（Pre-Check → Async I/O → Reconcile）
+
+现实中的复杂业务经常被异步 I/O 劈成两半（例如：先做复杂准入规划 → 调远端模型/工具 → 再根据返回结果做复杂的冲突解决与状态推进）。
+
+千万不要把“前段规划 + I/O + 后段核销”全揉在 Ticket 里，应当做成**三明治结构**：
+
+1. **上层（Station 预裁决）**：同步完成复杂预检、预留资源、递增/捕获 `epoch`，产出不可变执行指令 `spec`，尾位置开出 Ticket；
+2. **夹心（Ticket 跑 I/O）**：只拿 `spec` 去 `await` 外部异步操作，期间不做核心状态判断；
+3. **下层（Station 核销合入）**：Ticket 将原始异步结果与 `epoch` 交回 Station 的普通领域方法（注意：遵守规则 3，**绝不调用 `onXxx` 事件入口**）。Station 内部同步校验 `epoch`，执行复杂的合入/回滚/下一步推演，返回一个判别联合给 Ticket，由 Ticket 决定结束或触发下一步子工单。
+
+---
+
+### 指南 5：跨台复杂计算用“只读快照 + 纯领域函数 + 带 Epoch 写回”
+
+如果一段轻 CPU 复杂逻辑同时依赖 **Station A** 和 **Station B** 的状态（例如：结合“会话预算台”的额度与“工作区依赖台”的文件锁图，计算出一套最优执行计划）：
+
+- ❌ 不要让 Station A `import` Station B（违反规则 3，破坏零耦合）；
+- ❌ 不要把两个不相关聚合硬合并成一个巨型 Station；
+- ❌ 不要把 200 行规划算法直接散写在 Ticket 的 `async` 函数体内。
+
+**✅ 标准解法：**
+1. Ticket 同步向 Station A、Station B 各自获取**不可变只读快照**（含各自的 `epoch`）；
+2. Ticket 调用独立的**无状态纯领域函数** `synthesizeExecutionPlan(budgetSnap, workspaceSnap, remoteHint)` 完成全部复杂推导；
+3. Ticket 将推导结果连同 `epoch` 提交回目标 Station 的原子写入方法；若期间另一事件导致 `epoch` 失效，目标 Station 明确返回 `{ kind: 'stale' }`，由 Ticket 决定早退或重试。
+
+---
+
+## 4. Code Review 自查清单（一眼识别坏味道）
+
+### 贫血 Station 的坏味道（逻辑放错进 Ticket 了）
+- Station 存在大量 `getXxx()` / `setXxx()` / `updateField()` 方法，且这些方法没有任何领域校验。
+- Ticket 里出现“从 Station 读 3 个字段 → 跑几十行 `if/else` 算新值 → 再 `set` 回去”的 Read-Modify-Write 模式。
+- 多个 Ticket 重复写着同一套前置判断逻辑（说明不变式已泄漏出 Station）。
+- Gatekeeper（`onEvent`）什么判断都不做，永远机械地把所有参数原样甩给 Ticket 去判断能不能做。
+
+### 过胖 / 越界 Station 的坏味道（充血充过头了）
+- Station 内部为了算一个逻辑去 `import` 了另一个 Station，或引入了全局单例。
+- Station 同步方法里存在对无界大输入的重计算（可能阻塞事件循环 > 16ms）。
+- Station 方法先调用工单函数、后面还在改 `this` 状态（破坏尾位置开单）。
+- Station 单个文件超过几百行且没有将纯算法拆到内部 `domain/` 纯函数模块中。
+
+### 越权 / 臃肿 Ticket 的坏味道
+- 去掉 `await` 后，Ticket 里还残留大量复杂纯计算代码（应下沉到 Station 领域核或独立纯领域函数）。
+- Ticket 在拿到异步结果后，自己拼装状态塞回 Station，而不是把原始结果交由 Station 的 `reconcile/commit` 方法裁决。
+- Ticket 试图调用 Station 的 `onXxx` 事件入口（应改为调用普通领域方法）。
+
+---
+
+**一句话收尾**：
+> **状态不变式归 Station（内部拆纯领域核），跨台纯推导归无状态 Domain Function，异步编排归 Ticket。** 守住这条线，你的系统既完全符合 Ticket Station Method 的零锁零竞态哲学，又拥有教科书级的充血领域模型。

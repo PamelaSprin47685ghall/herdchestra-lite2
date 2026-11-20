@@ -35,7 +35,8 @@
 //   * Missing SessionManager methods stop construction.
 //   * Atomic handoff needs appendEntriesAtomically(), ingestReplicatedEntry()
 //     and a persistent session file; otherwise the batch is refused.
-//   * Incomplete handoffs from a crash are refused, never reused.
+//   * Incomplete handoffs from a crash are retired; a record that names its
+//     source range, recipient tail, and depth shift is rewritten from it.
 //   * levelTemplate is required so copied "scope level N" text is shifted.
 //   * A missing setModel() is reported and the batch ends failed with outcome
 //     closed-with-adoption-failure instead of claiming a clean succession.
@@ -1042,6 +1043,8 @@ export function createFissionScheduler(options = {}) {
 			entries,
 			handoffId: record.handoffId,
 			sourceBeginId: record.sourceBeginId,
+			source: { from: record.from, to: record.to },
+			target: { flowId: target.id, label: target.label },
 			shift: targetDepth + 1 - sourceBase,
 			levelRegex,
 			vibeInactive: true,
@@ -1868,11 +1871,14 @@ export function createFissionScheduler(options = {}) {
 	}
 
 	// Startup recovery is deliberately conservative: it runs before the next
-	// batch writes its begin, only with durable writes, and only when every
-	// planned tail is outside the residue. It retires the residue instead of
-	// replaying it. The source flow did not survive the restart, so the segment
-	// cannot be copied again even when a recorded tail is intact; the audit
-	// therefore never reports the handoff as delivered.
+	// batch writes its begin, only with durable writes, only when the vibe
+	// runtime is idle, and only when every planned tail is outside the residue.
+	// It retires each residue and, when the begin marker recorded the source
+	// range, the recipient tail, and the depth shift, rewrites the segment in
+	// the same atomic batch. The recipient agent did not survive the restart, so
+	// the rewrite can only restore the journal the next session rebuilds from;
+	// no live agent.state.messages exists to inject into. A legacy marker that
+	// records none of these fields is retired only, and the audit says so.
 	function ensureStartupHandoffRecovery() {
 		if (handoffRecoveryStarted) return;
 		if (options.allowIncompleteHandoffs === true) {
@@ -1921,12 +1927,16 @@ export function createFissionScheduler(options = {}) {
 		const promise = recoverIncompleteHandoffs(manager, {
 			durableAtomicWrites: true,
 			retire: true,
+			vibeInactive: true,
+			levelRegex,
 		});
 		// The chained-node retirement path is synchronous; a lone begin may
 		// still be awaiting the host's discard. A new begin must not be written
 		// inside the residue while that is in flight.
 		handoffRecoveryPending = pendingHandoffs().length > 0;
 		promise.then((result) => {
+			const copied = result.replay.filter((entry) => entry.status === "copied");
+			const retried = result.replay.filter((entry) => entry.status !== "copied");
 			handoffRecoveryLog.push({
 				at: Date.now(),
 				ok: true,
@@ -1934,9 +1944,17 @@ export function createFissionScheduler(options = {}) {
 				handoffs,
 				retired: result.retired,
 				dropped: result.dropped,
-				delivered: false,
-				replayable: false,
-				note: "this closes a half handoff; the source flow did not survive, so the segment cannot be re-copied and the handoff is not completed",
+				replay: result.replay,
+				delivered: copied.length > 0,
+				replayable: copied.length > 0,
+				rewritten: copied.length,
+				// A rewrite restores journal structure only: there is no live
+				// recipient agent after a restart, so nothing is injected.
+				note: copied.length > 0
+					? `rewrote ${copied.length} recorded segment${copied.length === 1 ? "" : "s"} into the journal; the next session reads them from the branch, not from a live agent`
+					: retried.length > 0
+						? "closed every half handoff; no record held a complete source range, so none was rewritten and the handoffs are not completed"
+						: "closed every half handoff",
 			});
 			handoffRecoveryNote = null;
 		}).catch((error) => {
@@ -2698,10 +2716,14 @@ export function createFissionScheduler(options = {}) {
 					discardable: handoff?.discardable ?? false,
 					retryable: handoff?.retryable ?? false,
 					retirable: handoff?.retirable ?? false,
+					replayable: handoff?.replayable ?? false,
+					replayReason: handoff?.replayReason ?? null,
 					recoverable: safe,
 					reason,
 					detail: safe
-						? "retirement closes the half segment; the source cannot be replayed and the handoff is not completed"
+						? handoff?.replayable === true
+							? "retirement closes the half segment and rewrites it from the recorded source range in one atomic batch"
+							: `retirement closes the half segment without rewriting it: ${handoff?.replayReason ?? "the record has no replayable source range"}`
 						: "refused: the scheduler will not start over this residue",
 					delivered: false,
 				};

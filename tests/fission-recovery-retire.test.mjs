@@ -179,4 +179,19 @@ describe("fission handoff retirement", () => {
 		expect(abort.customType).toBe("fission.handoff.abort");
 		expect(abort.data).toMatchObject({ handoffId: 24, retired: 3 });
 	});
+
+	test("plans a legacy residue for retirement and never invents a rewrite", async () => {
+		const sm = journal();
+		const target = sm.appendMessage({ role: "user", content: "target" });
+		halfCopy(sm, 25, target);
+		const plan = planHandoffRecovery(sm.getEntries());
+		expect(plan.handoffs[0].replayable).toBe(false);
+		expect(plan.handoffs[0].replayReason).toContain("legacy");
+		const result = await recoverIncompleteHandoffs(sm, { durableAtomicWrites: true, retire: true });
+		expect(result.replay).toEqual([{ handoffId: 25, status: "skipped", reason: plan.handoffs[0].replayReason }]);
+		expect(result.retired).toHaveLength(1);
+		expect(incompleteHandoffs(sm.getEntries())).toEqual([]);
+		// Only the abort marker was added: no guessed segment, no end marker.
+		expect(sm.getEntries().some((entry) => entry.customType === "fission.handoff.end")).toBe(false);
+	});
 });

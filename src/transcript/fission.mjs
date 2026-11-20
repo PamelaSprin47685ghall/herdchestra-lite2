@@ -48,6 +48,26 @@ export function mapId(oldId, handoffId, used) {
 	return id;
 }
 
+/**
+ * Walk the journal from `to` back to `from`; null when they are not connected.
+ *
+ * The copy records a source range, not a list of entries. Recovery rebuilds the
+ * segment from the journal with this walk, so the recorded range must still
+ * exist and still describe the window the original copy would have used.
+ */
+export function handoffSegment(entries, from, to) {
+	if (typeof from !== "string" || from === "" || typeof to !== "string" || to === "") return null;
+	const byId = new Map(entries.map((entry) => [entry.id, entry]));
+	const segment = [];
+	let current = byId.get(to);
+	for (let guard = 0; current !== undefined && guard <= entries.length; guard += 1) {
+		segment.push(current);
+		if (current.id === from) return segment.reverse();
+		current = current.parentId != null ? byId.get(current.parentId) : undefined;
+	}
+	return null;
+}
+
 function broadcast(entry) {
 	return Boolean(entry.message?.details?.fissionBroadcast?.broadcastId);
 }
@@ -213,21 +233,50 @@ export function handoffMessages(entries) {
 	return result;
 }
 
-/** The caller must verify durable rollback and exclude vibe for the entire transaction. */
-export async function copyHandoff(sm, { tail, entries, handoffId, sourceBeginId, shift = 0, levelRegex, vibeInactive, durableAtomicWrites, adoptPins }) {
+/**
+ * Copy one source segment onto a recipient tail in a single atomic batch.
+ *
+ * The begin marker records the source range, the recipient tail, and the depth
+ * shift, so a crash can retire the half copy and rewrite it from the journal
+ * instead of guessing what it was. The caller must verify durable rollback and
+ * exclude vibe for the entire transaction.
+ *
+ * `beforeWrite` runs inside the same batch, before the segment starts. Recovery
+ * uses it to close the abandoned half copy with an abort marker, so retirement
+ * and rewrite either both commit or neither does.
+ */
+export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceBeginId, source, target = null, shift = 0, levelRegex, vibeInactive, durableAtomicWrites, adoptPins, beforeWrite }) {
 	if (vibeInactive !== true) throw new Error("handoff requires confirmed inactive vibe runtime");
 	if (durableAtomicWrites !== true || typeof sm.appendEntriesAtomically !== "function" || typeof sm.getSessionFile !== "function" || !sm.getSessionFile()) {
 		throw new Error("handoff requires a persistent session with atomic writes");
 	}
-	const window = handoffWindow(entries);
 	if (!Number.isSafeInteger(handoffId) || handoffId < 0) throw new Error("invalid handoff id");
+	if (!Number.isSafeInteger(shift)) throw new Error("invalid handoff shift");
+	// A half copy is only rewritable when the record names what it copied, and
+	// the range must describe exactly these entries: a mismatched range would
+	// let recovery copy a different segment than the one the source produced.
+	if (typeof source?.from !== "string" || source.from === "" || typeof source?.to !== "string" || source.to === "") {
+		throw new Error("handoff requires its source range");
+	}
+	if (!Array.isArray(entries) || entries.length === 0) throw new Error("handoff requires its source segment");
+	if (entries[0]?.id !== source.from || entries.at(-1)?.id !== source.to) {
+		throw new Error("handoff source range does not match the copied entries");
+	}
+	const window = handoffWindow(entries);
 	if (new Set(window.entries.map((entry) => entry.id)).size !== window.entries.length) throw new Error("duplicate handoff entry id");
 	for (const entry of window.entries) mapId(entry.id, handoffId, new Set());
 	// Read the source pins before the transaction. They travel outside the
 	// journal segment: the source `scope.state` entries are never copied, and
 	// the recipient's own state must stay its own.
 	const pins = handoffPins(entries);
+	const record = { handoffId, sourceBeginId, source: { from: source.from, to: source.to }, target: { tail }, context: { shift } };
+	if (typeof target?.flowId === "string") record.target.flowId = target.flowId;
+	if (typeof target?.label === "string") record.target.label = target.label;
 	const result = await sm.appendEntriesAtomically(() => {
+		if (typeof beforeWrite === "function") {
+			const prelude = beforeWrite();
+			if (prelude && typeof prelude.then === "function") throw new TypeError("beforeWrite requires a synchronous write");
+		}
 		const used = new Set(sm.getEntries().map((entry) => entry.id));
 		const ids = new Map();
 		for (const entry of window.entries) {
@@ -236,7 +285,7 @@ export async function copyHandoff(sm, { tail, entries, handoffId, sourceBeginId,
 			ids.set(entry.id, id);
 		}
 		selectLeaf(sm, tail);
-		let current = sm.appendCustomEntry(HANDOFF_BEGIN, { handoffId, sourceBeginId });
+		let current = sm.appendCustomEntry(HANDOFF_BEGIN, record);
 		const copied = [];
 		if (window.summary !== undefined) {
 			const message = { role: "custom", customType: "fission.compaction-summary", content: window.summary, display: false, details: { fissionCarry: "compaction-summary" }, timestamp: Date.now() };
@@ -328,6 +377,54 @@ function openHandoffs(entries) {
 }
 
 /**
+ * Decide whether a half handoff can be rewritten from its own record.
+ *
+ * A record is replayable only when it names a source range, a recipient tail,
+ * and a depth shift, and when the journal still agrees: the range must still be
+ * connected, the tail must be where the half copy was written, and neither may
+ * be part of the residue itself. A legacy marker stores none of this, and no
+ * field is inferred for it: a guessed range would copy a segment the source
+ * flow never produced.
+ */
+function assessReplay(handoff, entries, keptIds, drop) {
+	const source = handoff.source;
+	if (
+		!source ||
+		typeof source !== "object" ||
+		typeof source.from !== "string" ||
+		source.from === "" ||
+		typeof source.to !== "string" ||
+		source.to === ""
+	) {
+		return { replayable: false, replayReason: "the begin marker records no source range (legacy handoff)" };
+	}
+	const target = handoff.target;
+	if (!target || typeof target !== "object" || !("tail" in target)) {
+		return { replayable: false, replayReason: "the begin marker records no recipient tail (legacy handoff)" };
+	}
+	if ((target.tail ?? null) !== handoff.tail) {
+		return { replayable: false, replayReason: "the recorded recipient tail is not where the half copy was written" };
+	}
+	if (target.tail !== null && !keptIds.has(target.tail)) {
+		return { replayable: false, replayReason: "the recipient tail is itself uncommitted residue" };
+	}
+	if (!Number.isSafeInteger(handoff.shift)) {
+		return { replayable: false, replayReason: "the begin marker records no depth shift (legacy handoff)" };
+	}
+	if (handoff.oneTail !== true) {
+		return { replayable: false, replayReason: "the residue was written at more than one tail; retire it instead of rewriting" };
+	}
+	const segment = handoffSegment(entries, source.from, source.to);
+	if (segment === null) {
+		return { replayable: false, replayReason: "the recorded source range is no longer connected in the journal" };
+	}
+	if (segment.some((entry) => drop.has(entry.id))) {
+		return { replayable: false, replayReason: "the recorded source range overlaps the residue" };
+	}
+	return { replayable: true, replayReason: null, segment };
+}
+
+/**
  * Plan a durable recovery: which entries of an uncommitted handoff must be
  * discarded, and which handoffs can be copied again to the same tail.
  *
@@ -361,6 +458,11 @@ export function planHandoffRecovery(entries) {
 			// lone begin marker is the one discard it can actually perform.
 			discardable: dropIds.size === 1,
 			oneTail: begins.every((begin) => (begin.parentId ?? null) === tail),
+			// Only the newest begin describes this attempt. Mixing fields across
+			// retries would invent a record no copy ever wrote.
+			source: last.data?.source ?? null,
+			target: last.data?.target ?? null,
+			shift: last.data?.context?.shift,
 		};
 	});
 	const kept = entries.filter((entry) => !drop.has(entry.id));
@@ -389,6 +491,10 @@ export function planHandoffRecovery(entries) {
 				? "the recipient tail is itself uncommitted residue"
 				: "one handoff left begin markers at more than one tail";
 		}
+		const assessment = assessReplay(handoff, entries, keptIds, drop);
+		handoff.replayable = assessment.replayable;
+		handoff.replayReason = assessment.replayReason;
+		if (assessment.segment !== undefined) handoff.segment = assessment.segment;
 	}
 	const blocked = handoffs.find((handoff) => !handoff.retirable);
 	const retirable = blocked === undefined;
@@ -422,6 +528,13 @@ export function planHandoffRecovery(entries) {
  * last physical journal entry with the tail as parent, so the durable reload
  * leaf lands on the tail in one write.
  *
+ * When the begin marker recorded its source range, recipient tail, and depth
+ * shift, `retire: true` also rewrites the segment in the same atomic batch and
+ * reports one `replay` entry per handoff (`copied`, `skipped`, or `failed`).
+ * A legacy marker is retired only: its missing fields are never inferred. The
+ * rewrite restores the journal, not a live recipient's messages, because no
+ * flow agent survives the restart that requires this recovery.
+ *
  * `discard(id)` remains an explicit per-entry override for a host whose
  * removal adds no marker. A crash leaves whatever the host already committed;
  * rerunning recomputes the residue and is safe.
@@ -436,10 +549,10 @@ export async function recoverIncompleteHandoffs(sm, options = {}) {
 	}
 	if (!Array.isArray(entries)) throw recoveryFailure("FISSION_RECOVERY_UNSUPPORTED", "recovery needs the session entries");
 	const plan = planHandoffRecovery(entries);
-	if (plan.handoffs.length === 0) return { recovered: [], dropped: [], retired: [], kept: plan.kept };
+	if (plan.handoffs.length === 0) return { recovered: [], dropped: [], retired: [], replay: [], kept: plan.kept };
 	if (retire === true && typeof discardAll !== "function") {
 		if (!plan.retirable) throw recoveryFailure("FISSION_RECOVERY_UNSAFE", plan.retireReason ?? "the residue cannot be retired in place");
-		return retireIncompleteHandoffs(sm, plan);
+		return retireIncompleteHandoffs(sm, plan, options);
 	}
 	if (!plan.recoverable) throw recoveryFailure("FISSION_RECOVERY_UNSAFE", plan.reason);
 	const expected = [...plan.dropIds];
@@ -487,24 +600,101 @@ export async function recoverIncompleteHandoffs(sm, options = {}) {
 		recovered: plan.handoffs.map(({ handoffId, sourceBeginId, tail, retryable }) => ({ handoffId, sourceBeginId, tail, retryable })),
 		dropped,
 		retired: [],
+		// The discard path removes the half copy through host calls that are not
+		// part of one atomic batch, so a rewrite here could crash between the
+		// removal and the copy and lose the record. Retire mode exists for that.
+		replay: plan.handoffs
+			.filter((handoff) => handoff.replayable)
+			.map((handoff) => ({
+				handoffId: handoff.handoffId,
+				status: "skipped",
+				reason: "the bulk discard path cannot rewrite a segment atomically; retire: true does both in one batch",
+			})),
 		kept: plan.kept,
 	};
 }
 
 /**
- * Close every residue in place without removing a single entry.
+ * Close every residue in place without removing a single entry, and rewrite the
+ * ones whose record still names a complete source range.
  *
  * A lone begin marker is still handed to the host's discard, which removes it
  * cleanly. A larger residue is retired with an abort marker at its tail: the
  * copied entries stay in the journal, but the active branch no longer contains
- * them, so no context carries half a handoff. Every write is an append, so a
- * crash between handoffs leaves the journal consistent and rerunning is safe.
+ * them, so no context carries half a handoff. When the begin marker recorded its
+ * source range, recipient tail, and depth shift, the same atomic batch that
+ * writes the abort also writes the segment again, so retirement and rewrite
+ * commit together. A record missing any of those fields describes a half copy
+ * that cannot be rebuilt without inventing it: that one is retired only.
+ *
+ * A failed rewrite leaves the atomic batch uncommitted, and the residue is then
+ * closed by the ordinary retirement path below. The failure is reported, not
+ * hidden, and the next run can try again from the same record.
  */
-async function retireIncompleteHandoffs(sm, plan) {
+function replayBlocker(sm, handoff, options) {
+	if (handoff.replayable !== true) return handoff.replayReason ?? "the record cannot be replayed";
+	if (options.vibeInactive !== true) return "the vibe runtime may own the atomic batch";
+	if (typeof sm.appendEntriesAtomically !== "function" || typeof sm.ingestReplicatedEntry !== "function") {
+		return "the host cannot rewrite a segment atomically";
+	}
+	if (handoff.shift !== 0 && options.levelRegex == null) return "the rewrite needs the level anchor to shift copied history";
+	return null;
+}
+
+async function rewriteHandoff(sm, handoff, options) {
+	try {
+		const result = await copyHandoff(sm, {
+			tail: handoff.tail,
+			entries: handoff.segment,
+			handoffId: handoff.handoffId,
+			sourceBeginId: handoff.sourceBeginId,
+			source: { from: handoff.source.from, to: handoff.source.to },
+			target: handoff.target,
+			shift: handoff.shift,
+			levelRegex: options.levelRegex,
+			vibeInactive: true,
+			durableAtomicWrites: true,
+			// The abort and the new segment share one batch: a crash cannot leave
+			// a closed residue that nobody remembers how to rewrite.
+			beforeWrite: () => {
+				selectLeaf(sm, handoff.tail);
+				const abortId = sm.appendCustomEntry(HANDOFF_ABORT, {
+					handoffId: handoff.handoffId,
+					beginIds: handoff.beginIds,
+					retired: handoff.dropIds.length,
+					replayed: true,
+				});
+				if (typeof abortId !== "string" || abortId === "") {
+					throw recoveryFailure("FISSION_RECOVERY_INCOMPLETE", `handoff ${handoff.handoffId}: the host did not return an abort entry id`);
+				}
+			},
+		});
+		if (!result || typeof result.tail !== "string" || result.tail === "") {
+			return { ok: false, reason: "the rewrite committed no segment" };
+		}
+		return { ok: true, tail: result.tail, entries: result.entries.length };
+	} catch (error) {
+		return { ok: false, reason: String(error?.message ?? error) };
+	}
+}
+
+async function retireIncompleteHandoffs(sm, plan, options) {
 	const dropped = [];
 	const retired = [];
+	const replay = [];
 	const remove = typeof sm.discardEntryDurably === "function" ? (id) => sm.discardEntryDurably(id) : null;
 	for (const handoff of plan.handoffs) {
+		const blocker = replayBlocker(sm, handoff, options);
+		if (blocker === null) {
+			const rewritten = await rewriteHandoff(sm, handoff, options);
+			if (rewritten.ok) {
+				replay.push({ handoffId: handoff.handoffId, status: "copied", tail: rewritten.tail, entries: rewritten.entries });
+				continue;
+			}
+			replay.push({ handoffId: handoff.handoffId, status: "failed", reason: rewritten.reason });
+		} else {
+			replay.push({ handoffId: handoff.handoffId, status: "skipped", reason: blocker });
+		}
 		if (handoff.discardable && remove !== null) {
 			await remove(handoff.beginId);
 			dropped.push(handoff.beginId);
@@ -558,6 +748,7 @@ async function retireIncompleteHandoffs(sm, plan) {
 		recovered: plan.handoffs.map(({ handoffId, sourceBeginId, tail, retryable }) => ({ handoffId, sourceBeginId, tail, retryable })),
 		dropped,
 		retired,
+		replay,
 		kept: remaining,
 	};
 }

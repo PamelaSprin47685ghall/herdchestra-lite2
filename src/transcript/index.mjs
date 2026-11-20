@@ -19,6 +19,7 @@ export { rewriteVibeMessage } from "./tail.mjs";
 export {
 	appendAt,
 	mapId,
+	handoffSegment,
 	handoffWindow,
 	levelPattern,
 	handoffMessages,

@@ -92,7 +92,7 @@ describe("fission transcript consumption", () => {
 			{ id: "a4", type: "custom", customType: "scope.end", data: {} },
 		];
 		const template = readFileSync(new URL("../resources/prompts/receipts/scope.md", import.meta.url), "utf8");
-		const result = await copyHandoff(sm, { tail: target, entries: source, handoffId: 1, sourceBeginId: "a1", shift: 1, levelRegex: levelPattern(template), vibeInactive: true, durableAtomicWrites: true });
+		const result = await copyHandoff(sm, { tail: target, entries: source, handoffId: 1, sourceBeginId: "a1", source: { from: "a1", to: "a4" }, shift: 1, levelRegex: levelPattern(template), vibeInactive: true, durableAtomicWrites: true });
 		const branch = sm.getBranch();
 		expect(branch.at(-1).id).toBe(result.tail);
 		expect(branch.map((entry) => entry.type)).toEqual(["message", "custom", "custom", "message", "custom", "custom"]);
@@ -136,7 +136,7 @@ describe("fission transcript consumption", () => {
 			{ id: "a2", type: "message", message: { role: "user", content: "kept" } },
 			{ id: "a3", type: "compaction", firstKeptEntryId: "a2", summary: "earlier context" },
 		];
-		const result = await copyHandoff(sm, { tail, entries, handoffId: 2, sourceBeginId: "a1", vibeInactive: true, durableAtomicWrites: true });
+		const result = await copyHandoff(sm, { tail, entries, handoffId: 2, sourceBeginId: "a1", source: { from: "a1", to: "a3" }, vibeInactive: true, durableAtomicWrites: true });
 		expect(result.messages.map((message) => message.content)).toEqual(["earlier context", "kept"]);
 		expect(sm.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
 	});
@@ -145,7 +145,7 @@ describe("fission transcript consumption", () => {
 		const sm = journal();
 		const tail = sm.appendMessage({ role: "user", content: "target" });
 		sm.ingestReplicatedEntry = () => { throw new Error("write failed"); };
-		await expect(copyHandoff(sm, { tail, entries: [{ id: "a1", type: "message", message: { role: "user", content: "x" } }], handoffId: 3, sourceBeginId: "a1", vibeInactive: true, durableAtomicWrites: true })).rejects.toThrow("write failed");
+		await expect(copyHandoff(sm, { tail, entries: [{ id: "a1", type: "message", message: { role: "user", content: "x" } }], handoffId: 3, sourceBeginId: "a1", source: { from: "a1", to: "a1" }, vibeInactive: true, durableAtomicWrites: true })).rejects.toThrow("write failed");
 		expect(incompleteHandoffs(sm.getEntries())).toEqual([]);
 		expect(sm.getBranch().at(-1).id).toBe(tail);
 	});
@@ -188,6 +188,7 @@ describe("fission transcript consumption", () => {
 			entries: source,
 			handoffId: 5,
 			sourceBeginId: "a1",
+			source: { from: "a1", to: "a2" },
 			vibeInactive: true,
 			durableAtomicWrites: true,
 			adoptPins: (pins) => { adopted = pins; },
@@ -266,5 +267,167 @@ describe("fission transcript consumption", () => {
 		await expect(recoverIncompleteHandoffs(sm)).rejects.toThrow("persistent session");
 		sm.getSessionFile = () => undefined;
 		await expect(recoverIncompleteHandoffs(sm, { durableAtomicWrites: true })).rejects.toThrow("persistent session");
+	});
+});
+
+const TEMPLATE = readFileSync(new URL("../resources/prompts/receipts/scope.md", import.meta.url), "utf8");
+
+// A committed source segment plus a half copy that crashed after its begin
+// marker. The marker carries the record the copy would have written.
+function seedHalfCopy(sm, handoffId) {
+	const target = sm.appendMessage({ role: "user", content: "recipient", timestamp: 1 });
+	sm.branch(target);
+	const from = sm.appendCustomEntry("scope.begin", { intent: "source" });
+	sm.appendMessage({ role: "user", content: "You are still inside scope level 2: work.", timestamp: 2 });
+	const to = sm.appendCustomEntry("scope.end", {});
+	sm.branch(target);
+	sm.appendCustomEntry("fission.handoff.begin", {
+		handoffId,
+		sourceBeginId: from,
+		source: { from, to },
+		target: { tail: target },
+		context: { shift: 1 },
+	});
+	const half = sm.appendMessage({ role: "user", content: "half copy", timestamp: 3 });
+	return { target, from, to, half };
+}
+
+describe("fission handoff replay", () => {
+	test("records the source range, recipient tail, and shift on the begin marker", async () => {
+		const sm = journal();
+		const tail = sm.appendMessage({ role: "user", content: "target" });
+		const entries = [
+			{ id: "c1", type: "custom", customType: "scope.begin", data: {} },
+			{ id: "c2", type: "message", message: { role: "user", content: "x" } },
+			{ id: "c3", type: "custom", customType: "scope.end", data: {} },
+		];
+		await copyHandoff(sm, {
+			tail,
+			entries,
+			handoffId: 61,
+			sourceBeginId: "c1",
+			source: { from: "c1", to: "c3" },
+			target: { flowId: "b1x1.1", label: "b1x1/b1x1.1" },
+			shift: 2,
+			vibeInactive: true,
+			durableAtomicWrites: true,
+		});
+		const begin = sm.getEntries().find((entry) => entry.customType === "fission.handoff.begin");
+		expect(begin.data).toEqual({
+			handoffId: 61,
+			sourceBeginId: "c1",
+			source: { from: "c1", to: "c3" },
+			target: { tail, flowId: "b1x1.1", label: "b1x1/b1x1.1" },
+			context: { shift: 2 },
+		});
+		expect(sm.getEntries().find((entry) => entry.customType === "fission.handoff.end").data).toEqual({ handoffId: 61, count: 3 });
+		// A record that does not describe the copied entries is refused before
+		// any write, so recovery can never rewrite a different segment.
+		const before = sm.getEntries();
+		await expect(copyHandoff(sm, {
+			tail,
+			entries,
+			handoffId: 62,
+			sourceBeginId: "c1",
+			source: { from: "c2", to: "c3" },
+			vibeInactive: true,
+			durableAtomicWrites: true,
+		})).rejects.toThrow("does not match");
+		expect(sm.getEntries()).toEqual(before);
+	});
+
+	test("rewrites a retired half handoff from its recorded range, tail, and shift", async () => {
+		const sm = journal();
+		const { target, from, to, half } = seedHalfCopy(sm, 41);
+		const result = await recoverIncompleteHandoffs(sm, {
+			durableAtomicWrites: true,
+			retire: true,
+			vibeInactive: true,
+			levelRegex: levelPattern(TEMPLATE),
+		});
+		expect(result.replay).toEqual([{ handoffId: 41, status: "copied", tail: expect.any(String), entries: 3 }]);
+		expect(result.retired).toEqual([]);
+		expect(result.dropped).toEqual([]);
+		expect(incompleteHandoffs(sm.getEntries())).toEqual([]);
+		const branch = sm.getBranch();
+		expect(branch[0].id).toBe(target);
+		expect(branch.map((entry) => entry.customType ?? entry.type)).toEqual([
+			"message",
+			"fission.handoff.begin",
+			"scope.begin",
+			"message",
+			"scope.end",
+			"fission.handoff.end",
+		]);
+		expect(branch[1].data).toEqual({
+			handoffId: 41,
+			sourceBeginId: from,
+			source: { from, to },
+			target: { tail: target },
+			context: { shift: 1 },
+		});
+		// 12.5: the rewritten window keeps the source's entry count and types,
+		// and its level text moves by the recorded shift.
+		expect(handoffMessages(branch.slice(2, -1)).map((message) => message.content)).toEqual([
+			'{"intent":"source"}',
+			"You are still inside scope level 3: work.",
+			"{}",
+		]);
+		// The abandoned half copy stays in the journal, off the active branch.
+		const residueBegin = sm.getEntries().find((entry) => entry.customType === "fission.handoff.begin" && entry.id !== branch[1].id);
+		expect(residueBegin).toBeDefined();
+		expect(branch.some((entry) => entry.id === residueBegin.id || entry.id === half)).toBe(false);
+		const abort = sm.getEntries().find((entry) => entry.customType === "fission.handoff.abort");
+		expect(abort.data).toMatchObject({ handoffId: 41, replayed: true });
+		// A second recovery finds nothing to do.
+		const again = await recoverIncompleteHandoffs(sm, {
+			durableAtomicWrites: true,
+			retire: true,
+			vibeInactive: true,
+			levelRegex: levelPattern(TEMPLATE),
+		});
+		expect(again.replay).toEqual([]);
+		expect(sm.getEntries().filter((entry) => entry.customType === "fission.handoff.end")).toHaveLength(1);
+	});
+
+	test("retires a legacy marker without inventing a source range", async () => {
+		const sm = journal();
+		const target = sm.appendMessage({ role: "user", content: "recipient" });
+		sm.appendCustomEntry("fission.handoff.begin", { handoffId: 51, sourceBeginId: "a1" });
+		sm.appendMessage({ role: "user", content: "half copy" });
+		const result = await recoverIncompleteHandoffs(sm, {
+			durableAtomicWrites: true,
+			retire: true,
+			vibeInactive: true,
+			levelRegex: levelPattern(TEMPLATE),
+		});
+		expect(result.replay).toHaveLength(1);
+		expect(result.replay[0].status).toBe("skipped");
+		expect(result.replay[0].reason).toContain("legacy");
+		expect(result.retired).toHaveLength(1);
+		expect(result.retired[0]).toMatchObject({ handoffId: 51, tail: target });
+		expect(sm.getEntries().some((entry) => entry.customType === "fission.handoff.end")).toBe(false);
+		expect(incompleteHandoffs(sm.getEntries())).toEqual([]);
+		expect(sm.getBranch().at(-1).customType).toBe("fission.handoff.abort");
+	});
+
+	test("refuses to rewrite a record whose range is no longer connected", async () => {
+		const sm = journal();
+		const target = sm.appendMessage({ role: "user", content: "recipient" });
+		sm.appendCustomEntry("fission.handoff.begin", {
+			handoffId: 52,
+			sourceBeginId: "a1",
+			source: { from: "a1", to: "a9" },
+			target: { tail: target },
+			context: { shift: 1 },
+		});
+		sm.appendMessage({ role: "user", content: "half copy" });
+		const plan = planHandoffRecovery(sm.getEntries());
+		expect(plan.handoffs[0].replayable).toBe(false);
+		expect(plan.handoffs[0].replayReason).toContain("no longer connected");
+		const result = await recoverIncompleteHandoffs(sm, { durableAtomicWrites: true, retire: true, vibeInactive: true });
+		expect(result.replay[0]).toMatchObject({ handoffId: 52, status: "skipped" });
+		expect(result.retired).toHaveLength(1);
+		expect(incompleteHandoffs(sm.getEntries())).toEqual([]);
 	});
 });

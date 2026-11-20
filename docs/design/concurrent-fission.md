@@ -305,7 +305,13 @@ function mapId(oldId, ctx) {
 
 ```js
 sm.branch(target.tail);                       // 段首放叶一次
-target.tail = sm.appendCustomEntry("fission.handoff.begin", { handoffId, sourceBeginId });
+target.tail = sm.appendCustomEntry("fission.handoff.begin", {
+  handoffId,
+  sourceBeginId,
+  source: { from, to },   // 源段在日志里的首尾 id
+  target: { tail },       // 接收方锚点；flowId / label 仅作审计
+  context: { shift },     // 历史文本的深度平移量
+});
 // …逐条抄写，每条 target.tail = 新 id…
 target.tail = sm.appendCustomEntry("fission.handoff.end", { handoffId, count });
 ```
@@ -315,6 +321,10 @@ target.tail = sm.appendCustomEntry("fission.handoff.end", { handoffId, count });
 重载时：有 `begin` 无 `end` 的 `handoffId`，其全部 entry（id 带同一标记）视为未提交，丢弃后重抄。丢弃走一次 `rewriteEntries()`，只在恢复路径上发生。
 
 这样重试是幂等的：同一 `handoffId` 的残留先被清掉，再完整写一遍。
+
+**记录是重抄的唯一依据。** `begin` 标记必须写全源段范围、接收方锚点与平移量：重载时先用一条 `fission.handoff.abort` 关闭残段，再用同一份记录把源段重抄到记录的 `tail`，退役与重抄在同一个原子批里提交，所以崩溃只会留下「残段未关闭」，下一次重载重试。**只恢复日志结构**：重启后不存在存活的接收方 Agent，`agent.state.messages` 的注入无从发生，下一次会话按分支重建上下文。
+
+**旧记录不虚构。** 老版本写下的 `begin` 只有 `handoffId` 与 `sourceBeginId`，没有源段范围、锚点与平移量。这类记录只退役、不重抄：缺失的字段无法从残段反推，残段本身只是被截断的副本，猜出来的范围会抄一段源流从未产生的历史。恢复结果按条记录 `copied` / `skipped` / `failed` 及原因，审计不把退役当成投递。
 
 ### 5.5 进入模型上下文
 

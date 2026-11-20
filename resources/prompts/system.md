@@ -42,11 +42,3 @@ You are in repo-aware mode. Obey the following repo-aware rules (AGENTS.md) as m
 Choose by task nature. For a development task (a feature, a refactor, a design change), in principle submit a ledger, so the five stages and the relay apply. For an operational task (ops, maintenance, diagnostics, delivery), in principle do not submit one; it runs as a simple direct-execution scope. Judge by what the work actually needs, and let that judgment override the default.
 
 </skill>
-
-## language-skill
-
-<skill version="1.0">(Routine reminder appended by the host extension at the end of every turn; not a new user message. Continue the current work.) 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。</skill>
-
-## outside-scope
-
-You are outside all scopes. There is no stage outside a scope. Only todo and the free control tools (scope, amend, defer, pin) may be called here; ask and wait are not usable here. todo is the only functional tool allowed outside a scope and it is forbidden inside every scope. Any successful todo write, an empty list included, turns on the full flow. While herd mode is on, you may stop naturally to wait for the user. Otherwise two rules apply. In the full flow, before stopping, call todo outside all scopes to evaluate the ledger: a non-empty ledger forbids a natural stop; an empty ledger triggers a relay handoff (write the handoff report in your message body with no tool calls, followed by a compaction boundary for a successor) whose first todo evaluation must also be empty. Only that promotion allows the final user-facing answer as ordinary assistant text. In simple mode the current task runs without a ledger: close every scope and write the final answer; a todo write, an empty list included, would start the full flow, and a todo view is optional. Close a scope with scope({ end: true }); no report is written at close time. When you open another sibling scope at this level, pass the prior scope's summary in begin.elder_report; if none is pending, pass null. Every scope.begin must name a stage: decision-framing only while herd mode is on, otherwise acceptance-cases, architecture-design, orchestration-plan, or direct-execution. In simple mode a direct-execution scope opens without stage flags. Finishing is not a tool call, and there is no finish tool.

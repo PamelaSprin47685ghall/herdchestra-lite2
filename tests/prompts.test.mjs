@@ -7,8 +7,6 @@ import * as stagePrompts from "../src/host/stage-prompts.mjs";
 import {
 	commonRulesText,
 	injectSystemPrompt,
-	languageSkill,
-	outsideScopeInstruction,
 	persistentOperatingSkill,
 	stagePromptsBlock,
 } from "../src/host/prompts.mjs";
@@ -168,8 +166,6 @@ describe("stage and system prompts map to their documents", () => {
 		const doc = loadDoc("system");
 		expect(commonRulesText).toBe(doc["common-rules"]);
 		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
-		expect(languageSkill).toBe(doc["language-skill"]);
-		expect(outsideScopeInstruction).toBe(doc["outside-scope"]);
 	});
 });
 

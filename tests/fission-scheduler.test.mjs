@@ -1100,6 +1100,68 @@ describe("fission scheduler", () => {
 		expect(done.status).toBe("closed");
 	});
 
+	test("the last-ended sibling owns the batch after a nested child", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-order");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-order", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+		const nested = await startNested(h, {
+			toolCallId: "call-order-child",
+			parentFlowId: first.flowId,
+			fission: [{ intent: "nested order", budget: { read: 1, bash: 1 }, permission: "ro" }],
+		});
+		const nestedFlow = h.scheduler.listFlows().find((flow) => flow.batchId === nested.batchId);
+
+		// The parent's turn ends first and waits on the nested child.
+		await h.scheduler.flowEnded(first.flowId);
+		expect(h.scheduler.listFlows().find((flow) => flow.flowId === first.flowId).status).toBe("ending");
+
+		// The sibling ends while the nested child is still running. It must
+		// write its own end and queue its segment, not finalize the batch.
+		h.spawned.find(({ plan }) => plan.flowId === second.flowId).session.finish.resolve();
+		await h.scheduler.flowEnded(second.flowId);
+		expect(h.scheduler.listFlows().find((flow) => flow.flowId === second.flowId).status).toBe("closed");
+		expect(h.scheduler.batchStatus(registered.batchId).status).not.toBe("closed");
+
+		// Finish the nested child; its completion re-runs the parent, which now
+		// receives the sibling segment and becomes the heir.
+		const nestedSession = h.spawned.find(({ plan }) => plan.flowId === nestedFlow.flowId).session;
+		nestedSession.finish.resolve();
+		await h.scheduler.flowEnded(nestedFlow.flowId);
+		await h.scheduler.waitForBatch(nested.batchId);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === first.flowId).status === "closed",
+		);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+		expect(done.status).toBe("closed");
+		expect(done.heir).toBe(first.label);
+
+		const entries = h.manager.getEntries();
+		const position = (id) => entries.findIndex((entry) => entry.id === id);
+		const firstEnd = entries.find((entry) =>
+			entry.customType === "scope.end" && entry.data?.flow === first.label,
+		);
+		const secondEnd = entries.find((entry) =>
+			entry.customType === "scope.end" && entry.data?.flow === second.label,
+		);
+		const batchEnd = entries.find((entry) =>
+			entry.customType === "scope.end" &&
+			entry.data?.batchId === registered.batchId &&
+			Array.isArray(entry.data?.flows),
+		);
+		expect(firstEnd).toBeDefined();
+		expect(secondEnd).toBeDefined();
+		expect(batchEnd).toBeDefined();
+		expect(position(secondEnd.id)).toBeLessThan(position(firstEnd.id));
+		expect(position(firstEnd.id)).toBeLessThan(position(batchEnd.id));
+		// The sibling's segment reached the parent before the parent closed.
+		expect(h.spawned.find(({ plan }) => plan.flowId === first.flowId).session.agent.state.messages.some(
+			(message) => typeof message.content === "string" && message.content.includes(second.label),
+		)).toBe(true);
+	});
+
 	test("broadcast reaches every leaf, including a sibling beside a nested batch", async () => {
 		const h = harness({ fission: twoFlows() });
 		const registered = register(h, "call-bc");

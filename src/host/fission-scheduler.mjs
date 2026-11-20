@@ -1332,7 +1332,14 @@ export function createFissionScheduler(options = {}) {
 				return;
 			}
 			const successor = nextOpenFlow(flow.batch, flow.index);
-			if (successor) {
+			// A flow with an open nested child cannot receive a segment, but it
+			// is still active. Closing this flow and queueing its segment is
+			// correct; becoming the heir would finalize the batch while that
+			// flow still owns a live subtree and has no flow end.
+			const otherActive = flow.batch.flows.some(
+				(candidate) => candidate !== flow && !isTerminal(candidate),
+			);
+			if (successor || otherActive) {
 				let endId;
 				try {
 					endId = writeEnd(flow, "completed");

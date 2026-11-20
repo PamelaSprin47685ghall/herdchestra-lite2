@@ -16,3 +16,4 @@ export {
 	finishedReport,
 } from "./collapse.mjs";
 export { rewriteVibeMessage } from "./tail.mjs";
+export { appendAt, mapId, handoffWindow, levelPattern, handoffMessages, copyHandoff, incompleteHandoffs } from "./fission.mjs";

@@ -122,6 +122,26 @@ export function createState() {
   };
 }
 
+/** Make a flow-local view while keeping session fields shared with its owner. */
+export function createFlowState(base) {
+  const flow = createState();
+  const shared = new Set(["herdMode", "relay", "stageFlags", "pins"]);
+  for (const key of Object.keys(base)) {
+    if (shared.has(key)) {
+      Object.defineProperty(flow, key, {
+        enumerable: true,
+        configurable: true,
+        get: () => base[key],
+        set: (value) => { base[key] = value; },
+      });
+    } else {
+      put(flow, key, structuredClone(base[key]));
+    }
+  }
+  flow.pinSeen = new Set(base.pinSeen ?? []);
+  return flow;
+}
+
 // -- Model cache helpers (pure; state.modelCaches is a plain object) -------
 
 function validKey(key) {

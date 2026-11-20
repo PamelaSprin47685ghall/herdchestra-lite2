@@ -2,6 +2,7 @@
 
 export {
   createState,
+  createFlowState,
   currentScope,
   scopeOrder,
   CACHE_TTL_MS,
@@ -20,6 +21,8 @@ export {
 } from "./budget.mjs";
 export {
   beginScope,
+  validateFission,
+  splitFissionBudget,
   closeScope,
   chargeTool,
   deferIntent,

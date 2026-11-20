@@ -35,28 +35,32 @@ export const scopeParameters = {
 			required: ["intent", "stage", "budget", "elder_report", "permission"],
 			properties: {
 				intent: { type: "string", minLength: 1, description: BEGIN_INTENT_DESCRIPTION },
+				budget: { type: "object", additionalProperties: { type: "integer", minimum: 0 }, description: BUDGET_DESCRIPTION },
+				permission: { type: "string", enum: ["ro", "rw"], description: PERMISSION_DESCRIPTION },
+				model: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }], description: scope["begin.model"] },
 				stage: {
 					type: "string",
 					enum: [...WORKFLOW_STAGES],
 					description: scope["begin.stage"],
 				},
-				budget: {
-					type: "object",
-					additionalProperties: { type: "integer", minimum: 0 },
-					description: BUDGET_DESCRIPTION,
+				fission: {
+					type: "array",
+					minItems: 1,
+					items: {
+						type: "object",
+						additionalProperties: false,
+						required: ["intent", "budget", "permission"],
+						properties: {
+							intent: { type: "string", minLength: 1, description: BEGIN_INTENT_DESCRIPTION },
+							budget: { type: "object", additionalProperties: { type: "integer", minimum: 0 }, description: BUDGET_DESCRIPTION },
+							permission: { type: "string", enum: ["ro", "rw"], description: PERMISSION_DESCRIPTION },
+							model: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }], description: scope["begin.model"] },
+						},
+					},
 				},
 				elder_report: {
 					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
 					description: ELDER_REPORT_DESCRIPTION,
-				},
-				permission: {
-					type: "string",
-					enum: ["ro", "rw"],
-					description: PERMISSION_DESCRIPTION,
-				},
-				model: {
-					anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
-					description: scope["begin.model"],
 				},
 			},
 			description: scope.begin,

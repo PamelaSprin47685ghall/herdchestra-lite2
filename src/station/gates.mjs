@@ -29,7 +29,7 @@ import {
 import { insideScopeText } from "./texts.mjs";
 
 function onAssistantMessage(station, message, ctx) {
-	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
+	if (!station.fissionFlow && station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
 		station.onUsageMessage(message, ctx);
 		station.preparingMessage = message;
@@ -52,7 +52,7 @@ function onAssistantMessage(station, message, ctx) {
 
 function onMessageEnd(station, event, ctx) {
 	if (event?.message?.role !== "assistant") return undefined;
-	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
+	if (!station.fissionFlow && station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	const message = event.message;
 	try {
 		station.onUsageMessage(message, ctx);
@@ -79,7 +79,14 @@ function onMessageEnd(station, event, ctx) {
 
 function onToolCall(station, event, ctx, atDispatch = false) {
 	const { toolName, toolCallId } = event;
-	if (station.policy(ctx) === READ_ONLY_SUBAGENT && toolName !== "ask" && toolName !== "wait") {
+	if (station.fissionFlow && toolName === "amend") {
+		return { block: true, reason: "AMEND_UNAVAILABLE_IN_FISSION: amend can overwrite another flow's shared history." };
+	}
+	if (station.fissionFlow?.permission === "ro" &&
+		(toolName === "edit" || toolName === "write" || toolName === "bash" || toolName === "ast_edit")) {
+		return { block: true, reason: "READ_ONLY_FLOW: this tool can change files and is unavailable in a read-only flow." };
+	}
+	if (!station.fissionFlow && station.policy(ctx) === READ_ONLY_SUBAGENT && toolName !== "ask" && toolName !== "wait") {
 		return undefined;
 	}
 	try {

@@ -52,7 +52,7 @@ function normalizeBudget(budget) {
   for (const key of Reflect.ownKeys(budget)) {
     if (typeof key !== "string") continue;
     const normalizedKey = key === "apply_patch" ? "edit" : key;
-    const currentValue = normalized[normalizedKey] ?? 0;
+    const currentValue = Object.hasOwn(normalized, normalizedKey) ? normalized[normalizedKey] : 0;
     put(normalized, normalizedKey, currentValue + budget[key]);
   }
   return normalized;

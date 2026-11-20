@@ -20,7 +20,8 @@ import {
   roundAmount,
   validBudget,
 } from "./budget.mjs";
-import { WORKFLOW_STAGES } from "./stages.mjs";
+import { DECISION_FRAMING, NORMAL_STAGES, WORKFLOW_STAGES } from "./stages.mjs";
+import { EXECUTION_STAGE, missingStages } from "./stage-flags.mjs";
 
 const STEER_HEADER =
   "You deferred the following findings in this scope. Address them now:";
@@ -52,6 +53,83 @@ function withdrawDefer(scope, toolCallId) {
     toolCallId: item.toolCallId,
     intent: item.intent,
   });
+}
+
+/** Validate the whole batch without changing state. */
+export function validateFission(state, begin, options = {}) {
+  if (!Array.isArray(begin?.fission) || begin.fission.length === 0) {
+    return failure("INVALID_FISSION", "fission must be a non-empty array.");
+  }
+  if (!Object.hasOwn(begin, "elder_report") ||
+      (begin.elder_report !== null && typeof begin.elder_report !== "string")) {
+    return failure("INVALID_ARGUMENT", "elder_report must be a string or null.");
+  }
+  const items = [];
+  const totals = {};
+  for (const item of begin.fission) {
+    if (!isPlainObject(item) || !isNonEmptyString(item.intent) ||
+        !Object.hasOwn(item, "budget") || !Object.hasOwn(item, "permission")) {
+      return failure("INVALID_FISSION_ITEM", "Each flow requires intent, budget, and permission.");
+    }
+    if (!validBudget(item.budget)) {
+      return failure("INVALID_BUDGET", "Budget must be a plain object of non-negative integer tool budgets.");
+    }
+    const budget = normalizeBudget(item.budget);
+    if (!validBudget(budget)) {
+      return failure("INVALID_BUDGET", "Normalized budget is invalid.");
+    }
+    if (item.permission !== "ro" && item.permission !== "rw") {
+      return failure("INVALID_ARGUMENT", "permission must be ro or rw.");
+    }
+    if (item.model !== undefined && item.model !== null && !isNonEmptyString(item.model)) {
+      return failure("INVALID_ARGUMENT", "model must be a non-empty string or null.");
+    }
+    if (item.permission === "rw" && begin.stage === DECISION_FRAMING) {
+      return failure("RW_IN_DECISION_FRAMING", "Write permission is unavailable in decision-framing.");
+    }
+    if (item.permission === "rw" && options.relayOn && state.relay?.firstEvaluation === null) {
+      return failure("RW_BEFORE_LEDGER", "Write permission requires the first ledger evaluation.");
+    }
+    for (const tool of Object.keys(budget)) {
+      const total = (Object.hasOwn(totals, tool) ? totals[tool] : 0) + budget[tool];
+      if (!Number.isSafeInteger(total)) return failure("INVALID_BUDGET", "Combined budget is too large.");
+      put(totals, tool, total);
+    }
+    items.push({ ...item, intent: item.intent.trim(), budget });
+  }
+  if (!WORKFLOW_STAGES.includes(begin.stage) ||
+      (state.herdMode ? begin.stage !== DECISION_FRAMING : !NORMAL_STAGES.includes(begin.stage))) {
+    return failure("INVALID_STAGE", "The stage is not available in this mode.");
+  }
+  if (options.mainAgent && begin.stage === EXECUTION_STAGE && missingStages(state.stageFlags).length > 0) {
+    return failure("STAGE_FLAGS_UNMET", "Required workflow stages have not been opened.");
+  }
+  const parent = currentScope(state);
+  if (parent) {
+    for (const tool of Object.keys(totals)) {
+      const remaining = Object.hasOwn(parent.remaining, tool) ? parent.remaining[tool] : 0;
+      if (!Number.isFinite(remaining) || totals[tool] > remaining) {
+        return failure("INVALID_BUDGET", `Insufficient parent budget for ${tool}.`);
+      }
+    }
+  }
+  return { ok: true, items, totals };
+}
+
+/** Reserve all child budgets together; unused reservations never return. */
+export function splitFissionBudget(state, begin, options = {}) {
+  const result = validateFission(state, begin, options);
+  if (!result.ok) return result;
+  const parent = currentScope(state);
+  if (parent) {
+    for (const tool of Object.keys(result.totals)) {
+      const amount = result.totals[tool];
+      if (amount === 0) continue;
+      put(parent.remaining, tool, roundAmount(parent.remaining[tool] - amount));
+      put(parent.spent, tool, roundAmount((parent.spent[tool] ?? 0) + amount));
+    }
+  }
+  return result;
 }
 
 export function beginScope(state, params) {

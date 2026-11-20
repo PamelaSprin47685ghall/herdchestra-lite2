@@ -13,6 +13,7 @@ import {
   findPendingReportElder,
   sealClosedParentChildren,
   scopeOrder,
+  validateFission,
 } from "../scope/index.mjs";
 import { DECISION_FRAMING, NORMAL_STAGES } from "../scope/stages.mjs";
 import { MAIN_AGENT } from "../host/policy.mjs";
@@ -40,6 +41,9 @@ const L = loadDoc("labels");
 
 function handleAmendCall(station, call, base, currentIndex) {
   const state = station.state;
+  if (station.fissionFlow) {
+    return errorResult("AMEND_UNAVAILABLE_IN_FISSION", "Amend is unavailable in fission because rewriting shared history can overwrite another flow's entries.");
+  }
   const args = parseArgs(call);
   const reflection = trimText(args.reflection);
   if (!reflection) {
@@ -94,6 +98,16 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   const hasBegin = args.begin !== undefined && args.begin !== null;
   const endPresent = args.end !== undefined && args.end !== null;
   const hasEnd = args.end === true;
+  if (hasBegin && Object.hasOwn(args.begin, "fission")) {
+    const validation = validateFission(state, args.begin, {
+      mainAgent: station.policy(ctx) === MAIN_AGENT,
+      relayOn: station.relayOn(ctx),
+    });
+    if (!validation.ok) return errorResult(validation.code, validation.reason);
+    // Until the host can start and adopt every flow, do not open or close
+    // any scope, reserve budget, or claim that the batch has started.
+    return errorResult("FISSION_UNAVAILABLE", "Fission cannot start: the host scheduler is not fully connected.");
+  }
   const rawModel = hasBegin ? args.begin?.model : null;
   if (rawModel != null && (typeof rawModel !== "string" || !rawModel.trim())) {
     return errorResult("INVALID_ARGUMENT", E["scope-model"], { field: "model" });

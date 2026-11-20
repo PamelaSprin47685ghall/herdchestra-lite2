@@ -11,6 +11,7 @@ const nullTickets = {
 
 export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog) {
 	const stations = new WeakMap();
+	const flows = new WeakMap();
 	let orphanStation = null;
 	let pendingStation = null;
 
@@ -30,7 +31,23 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog)
 	}
 
 	const registry = {
+		// The host must explicitly bind each agent; a shared manager is not a
+		// flow identity. Unbound callers retain the existing session path.
+		bindFlow(agent, station, permission) {
+			if (!agent || (typeof agent !== "object" && typeof agent !== "function")) throw new TypeError("Flow agent is required");
+			if (!station || (permission !== "ro" && permission !== "rw")) throw new TypeError("Flow station and permission are required");
+			if (flows.has(agent) || station.fissionFlow) throw new Error("Flow is already bound");
+			station.fissionFlow = { agent, permission };
+			flows.set(agent, station);
+		},
+		unbindFlow(agent) {
+			const station = flows.get(agent);
+			if (station?.fissionFlow?.agent === agent) delete station.fissionFlow;
+			flows.delete(agent);
+		},
 		stationFor(ctx) {
+			const agent = ctx?.agent;
+			if (agent && flows.has(agent)) return flows.get(agent);
 			const key = ctx?.sessionManager ?? ctx;
 			if (!key || (typeof key !== "object" && typeof key !== "function")) {
 				if (!orphanStation) {

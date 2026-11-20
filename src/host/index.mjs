@@ -11,6 +11,7 @@ export {
 	installBuiltinSlashExecutor,
 } from "./capture.mjs";
 export { createHeadlessTuiContext } from "./headless-tui.mjs";
+export { installFissionEvents } from "./fission-events.mjs";
 export {
 	MAIN_AGENT,
 	READ_ONLY_SUBAGENT,

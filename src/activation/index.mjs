@@ -6,6 +6,7 @@
 import { createStationRegistry, setActiveRegistry } from "../station/index.mjs";
 import { wireCommands } from "./commands.mjs";
 import { wireHostDiagnosis } from "./diagnosis.mjs";
+import { wireFission } from "./fission.mjs";
 import { buildTickets } from "./tickets.mjs";
 import { installCapture } from "./capture.mjs";
 import { wireHooks } from "./hooks.mjs";
@@ -20,5 +21,7 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null) {
 	const hooks = wireHooks(pi, registry);
 	wireTools(pi, registry);
 	wireCommands(pi, registry);
+	const fission = wireFission(pi, registry);
 	wireHostDiagnosis(pi, diagnosis, hooks);
+	return { hooks, fission };
 }

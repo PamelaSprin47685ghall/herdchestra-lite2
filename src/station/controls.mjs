@@ -13,6 +13,7 @@ import {
   findPendingReportElder,
   sealClosedParentChildren,
   scopeOrder,
+  splitFissionBudget,
   validateFission,
 } from "../scope/index.mjs";
 import { DECISION_FRAMING, NORMAL_STAGES } from "../scope/stages.mjs";
@@ -92,33 +93,131 @@ function handlePinCall(station, call) {
   return textResult("OK");
 }
 
+/**
+ * Register one effective fission batch with the injected scheduler and reserve
+ * its budgets. Validation is complete before the first mutation. The owner
+ * retires from the `tool_result` hook, which runs inside the tool execute
+ * before the receipt is emitted; the loop still commits this tool's result
+ * afterwards, so this handler never claims the flows started.
+ */
+function handleFissionBegin(station, call, { args, ctx }) {
+  const state = station.state;
+  if (args.end === true) {
+    return errorResult("INVALID_ARGUMENT", "A fission begin cannot also close a scope.");
+  }
+  if (station.pendingFission && station.pendingFission.retired !== true) {
+    return errorResult("FISSION_BATCH_PENDING", "A fission batch from this agent has not retired yet; wait for its receipt.");
+  }
+  const begin = args.begin;
+  const options = {
+    mainAgent: station.policy(ctx) === MAIN_AGENT,
+    relayOn: station.relayOn(ctx),
+  };
+  const validation = validateFission(state, begin, options);
+  if (!validation.ok) return errorResult(validation.code, validation.reason);
+
+  // Retirement has two halves: the scheduler must know the batch, and the
+  // host context must expose the abort that ends this agent's run. `ctx.agent`
+  // is only an identity object, so the abort is the context's own operation.
+  if (!ctx || typeof ctx.abort !== "function") {
+    return errorResult("FISSION_UNAVAILABLE", "Fission cannot start: the host context exposes no abort() for owner retirement.");
+  }
+  const scheduler = station.registry?.fissionScheduler?.();
+  if (!scheduler || typeof scheduler.registerBatch !== "function" || typeof scheduler.retireOwner !== "function") {
+    return errorResult("FISSION_UNAVAILABLE", "Fission cannot start: no fission scheduler is attached to the station registry.");
+  }
+
+  const stage = begin.stage;
+  let registered;
+  try {
+    registered = scheduler.registerBatch({
+      toolCallId: call.id,
+      sessionManager: station.manager,
+      identity: ctx.agent ?? null,
+      station,
+      ctx,
+      begin,
+      flows: validation.items,
+      totals: validation.totals,
+      stage,
+      elderReport: typeof begin.elder_report === "string" ? trimText(begin.elder_report) : null,
+      mainAgent: options.mainAgent,
+      nested: Boolean(station.fissionFlow),
+    });
+  } catch (error) {
+    return errorResult(error?.code ?? "FISSION_UNAVAILABLE", `Fission could not be registered: ${error?.message ?? error}`);
+  }
+  if (!registered || registered.ok !== true) {
+    return errorResult(registered?.code ?? "FISSION_UNAVAILABLE", registered?.reason ?? "The fission scheduler refused the batch.");
+  }
+
+  // Reserving after registration keeps the scheduler able to cancel a batch
+  // that never reserved a unit. A split failure here is a bug, not a path.
+  const split = splitFissionBudget(state, begin, options);
+  if (!split.ok) {
+    try {
+      scheduler.cancelBatch?.(registered.batchId);
+    } catch {
+      // The split refusal is the answer; a cancel failure adds nothing.
+    }
+    return errorResult(split.code, split.reason);
+  }
+  if (options.mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
+  if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
+  station.pendingFission = {
+    batchId: registered.batchId,
+    toolCallId: call.id,
+    stage,
+    flows: split.items,
+    retired: false,
+  };
+  // The caller persists after this handler returns, before the tool_result hook
+  // retires the owner, so the reserved budgets are on disk either way.
+  return textResult(fissionBeginText(registered, split.items, stage), {
+    batchId: registered.batchId,
+    flows: split.items.length,
+  });
+}
+
+function fissionBeginText(registered, flows, stage) {
+  const lines = [
+    `Fission batch ${registered.batchId} registered with ${flows.length} flow(s) in ${stage}.`,
+  ];
+  for (const [index, flow] of flows.entries()) {
+    lines.push(`- flow ${index}: ${flow.intent}`);
+  }
+  lines.push(
+    "The owner retires after this receipt. Each flow will open its own scope beneath the receipt, and the batch ends when every flow has closed.",
+  );
+  return lines.join("\n");
+}
+
 function handleScopeCall(station, call, { base, currentMessage, currentPersisted, sameMessageBeginIds, ctx }) {
   const state = station.state;
   const args = parseArgs(call);
   const hasBegin = args.begin !== undefined && args.begin !== null;
   const endPresent = args.end !== undefined && args.end !== null;
   const hasEnd = args.end === true;
-  if (hasBegin && Object.hasOwn(args.begin, "fission")) {
-    const validation = validateFission(state, args.begin, {
-      mainAgent: station.policy(ctx) === MAIN_AGENT,
-      relayOn: station.relayOn(ctx),
-    });
-    if (!validation.ok) return errorResult(validation.code, validation.reason);
-    // Until the host can start and adopt every flow, do not open or close
-    // any scope, reserve budget, or claim that the batch has started.
-    return errorResult("FISSION_UNAVAILABLE", "Fission cannot start: the host scheduler is not fully connected.");
+  // Only a non-boolean end is illegal. `end: false` means "do not close" and
+  // is valid alongside begin; without begin it simply does nothing. This runs
+  // before the fission branch so a malformed end cannot skip the guard.
+  if (endPresent && typeof args.end !== "boolean") {
+    return errorResult("INVALID_ARGUMENT", E["scope-end-type"]);
+  }
+  const fissionBegin = hasBegin && Object.hasOwn(args.begin, "fission");
+  if (fissionBegin) return handleFissionBegin(station, call, { args, ctx });
+  // A flow's own begin and end are written by the scheduler; the flow only
+  // runs turns. An inner fission batch is the one scope call it may make, and
+  // that path returned above.
+  if (station.fissionFlow) {
+    return errorResult(
+      "SCOPE_UNAVAILABLE_IN_FISSION",
+      "A fission flow does not open or close its own scope; the scheduler owns its begin and end.",
+    );
   }
   const rawModel = hasBegin ? args.begin?.model : null;
   if (rawModel != null && (typeof rawModel !== "string" || !rawModel.trim())) {
     return errorResult("INVALID_ARGUMENT", E["scope-model"], { field: "model" });
-  }
-  // Only a non-boolean end is illegal. `end: false` means "do not close" and
-  // is valid alongside begin; without begin it simply does nothing.
-  if (endPresent && typeof args.end !== "boolean") {
-    return errorResult(
-      "INVALID_ARGUMENT",
-      E["scope-end-type"],
-    );
   }
   if (!hasBegin && !hasEnd) {
     return errorResult(

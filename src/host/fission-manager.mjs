@@ -310,6 +310,18 @@ function assertWritable(state) {
 }
 
 /**
+ * Every append returns the new entry id, and the flow tail must advance with
+ * it. A missing id would leave the tail where it was, so the next write would
+ * become a sibling of the entry just written instead of its child.
+ */
+function committedId(value, operation) {
+	if (typeof value !== "string" || value === "") {
+		throw new FissionManagerError("FISSION_UNSUPPORTED", `${operation}() did not return an entry id`);
+	}
+	return value;
+}
+
+/**
  * Hold the shared manager open without owning a flow leaf. The batch owner keeps
  * one of these for the whole session so an individual flow's dispose cannot
  * close the manager out from under its siblings.
@@ -340,7 +352,9 @@ export function createFissionManager(shared, options = {}) {
 	// Before the flow's begin entry exists a resolver has nothing to point at.
 	// Anchor such construction-time writes at the owner's leaf instead of
 	// guessing a flow branch; the first resolved tail replaces the anchor.
-	const tail = options.tail ?? (resolveTail ? shared.getLeafId() : null);
+	// getLeafId() may report undefined for an empty journal; it is an anchor,
+	// not an entry, so normalize it to the root before the entry check.
+	const tail = options.tail ?? (resolveTail ? shared.getLeafId() : null) ?? null;
 	if (tail !== null) {
 		if (typeof tail !== "string" || !hasEntry(shared, tail)) {
 			throw new FissionManagerError("FISSION_UNSUPPORTED", `flow tail ${String(tail)} is not an entry of the shared manager`);
@@ -365,8 +379,8 @@ export function createFissionManager(shared, options = {}) {
 	function writeAtTail(name, args) {
 		assertWritable(state);
 		requireMethod(shared, name);
-		const id = appendAt(shared, currentTail(), () => shared[name](...args));
-		if (typeof id === "string") state.tail = id;
+		const id = committedId(appendAt(shared, currentTail(), () => shared[name](...args)), name);
+		state.tail = id;
 		return id;
 	}
 
@@ -374,12 +388,12 @@ export function createFissionManager(shared, options = {}) {
 		assertWritable(state);
 		const tail = currentTail();
 		if (typeof shared.appendMessageToBranch === "function") {
-			const id = shared.appendMessageToBranch(message, tail, { preserveActiveLeaf: true });
+			const id = committedId(shared.appendMessageToBranch(message, tail, { preserveActiveLeaf: true }), "appendMessageToBranch");
 			state.tail = id;
 			return id;
 		}
 		requireMethod(shared, "appendMessage");
-		const id = appendAt(shared, tail, () => shared.appendMessage(message));
+		const id = committedId(appendAt(shared, tail, () => shared.appendMessage(message)), "appendMessage");
 		state.tail = id;
 		return id;
 	};
@@ -389,7 +403,7 @@ export function createFissionManager(shared, options = {}) {
 		requireMethod(shared, "appendMessageToBranch");
 		const tail = currentTail();
 		const parent = parentId === undefined ? tail : parentId;
-		const id = shared.appendMessageToBranch(message, parent, branchOptions);
+		const id = committedId(shared.appendMessageToBranch(message, parent, branchOptions), "appendMessageToBranch");
 		if (branchOptions?.preserveActiveLeaf === false && parent === tail) state.tail = id;
 		return id;
 	};
@@ -406,8 +420,8 @@ export function createFissionManager(shared, options = {}) {
 		// The host advances the leaf when the owner is the active leaf. Selecting
 		// the owner first makes that path explicit; appendAt restores the shared
 		// leaf regardless.
-		const id = appendAt(shared, parentId, () => shared.appendModelUsage(usage, { sessionId, parentId }));
-		if (id !== undefined && parentId === tail) state.tail = id;
+		const id = committedId(appendAt(shared, parentId, () => shared.appendModelUsage(usage, { sessionId, parentId })), "appendModelUsage");
+		if (parentId === tail) state.tail = id;
 		return id;
 	};
 
@@ -417,7 +431,7 @@ export function createFissionManager(shared, options = {}) {
 		assertWritable(state);
 		requireMethod(shared, "branchWithSummary");
 		const parent = branchFromId === undefined ? currentTail() : branchFromId;
-		const id = appendAt(shared, parent, () => shared.branchWithSummary(parent, summary, details, fromExtension));
+		const id = committedId(appendAt(shared, parent, () => shared.branchWithSummary(parent, summary, details, fromExtension)), "branchWithSummary");
 		state.tail = id;
 		return id;
 	};
@@ -519,6 +533,18 @@ export function createFissionManager(shared, options = {}) {
 		throw new FissionManagerError(
 			"FISSION_UNSUPPORTED",
 			"discardEntryDurably() is the amend path and rewrites the shared journal; amend is unavailable in fission",
+		);
+	};
+	operations.discardEntriesDurably = () => {
+		throw new FissionManagerError(
+			"FISSION_UNSUPPORTED",
+			"discardEntriesDurably() removes journal entries across every flow and is the amend path; amend is unavailable in fission",
+		);
+	};
+	operations.ingestReplicatedEntry = () => {
+		throw new FissionManagerError(
+			"FISSION_UNSUPPORTED",
+			"ingestReplicatedEntry() writes at the shared journal's global leaf; a flow writes through its own tail",
 		);
 	};
 

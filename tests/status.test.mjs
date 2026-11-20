@@ -157,7 +157,7 @@ describe("one-line status widget", () => {
 });
 
 describe("subagents and degraded hosts", () => {
-	test("a subagent never writes the main widget but supplies the active delta", () => {
+	test("a subagent never writes the main widget and the latest usage supplies the delta", () => {
 		const { pi, handlers } = makeHost();
 		const runtime = createStatusRuntime();
 		runtime.install(pi);
@@ -178,7 +178,7 @@ describe("subagents and degraded hosts", () => {
 		emit(handlers, "session_start", {}, mainCtx);
 		emit(handlers, "message_end", { message: { role: "assistant", usage: usage(10, 5, 0) } }, mainCtx);
 		const line = herdLine(ui);
-		expect(line).toContain("Δ: 1.5k × 0.0% → 0.1k [¥𝟬.𝟭𝟬𝟬];");
+		expect(line).toContain("Δ: 0.0k × 0.0% → 0.0k [¥𝟬.𝟬𝟬𝟬];");
 		expect(line).toContain("Herd 2A");
 		expect(line).toContain("@");
 	});

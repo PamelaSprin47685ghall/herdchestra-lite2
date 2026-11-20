@@ -16,6 +16,7 @@ import { hostView } from "../host/adapter.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { createFissionScheduler } from "../host/fission-scheduler.mjs";
 import { installFissionUI } from "../host/fission-ui.mjs";
+import { registerOwnerUI, relayTokenRate } from "../host/fission-session.mjs";
 import { loadDoc } from "../prompts/index.mjs";
 
 const STATE_KEY = Symbol.for("herdchestra-lite2.fission-activation.v1");
@@ -131,6 +132,70 @@ function liveBatchElsewhere(state, manager) {
 		if (entry.scheduler.hasLiveBatches?.() === true) return entry;
 	}
 	return null;
+}
+
+/**
+ * Forward each flow's generation rate to the meter the status bar reads.
+ *
+ * A flow owns its own AgentSession and therefore its own TokenRateMeter; the
+ * interface reads the owner session's meter. The scheduler reports every flow
+ * event, so a sample is taken at that edge: the flow that wrote last is the
+ * one shown. A relay stops as soon as its flow is no longer an active leaf,
+ * and stopping keeps the last reading, exactly what the status bar shows
+ * between turns. A flow whose rate cannot be read is reported once, not on
+ * every event.
+ */
+function tokenRateRelays(scheduler, ownerSession) {
+	const entries = new Map();
+	const reported = new Set();
+
+	function reportGap(flowId, reason, detail) {
+		const key = `${flowId}:${reason}`;
+		if (reported.has(key)) return;
+		reported.add(key);
+		const error = new Error(`token rate relay unavailable: ${detail ?? reason}`);
+		error.code = reason;
+		record("fission", error, { seam: "tokenRate", flowId, optional: true });
+	}
+
+	/** Stop relays of flows that are no longer active leaves. */
+	function prune() {
+		const active = new Set(runningLeaves(scheduler).map((flow) => flow?.id).filter(Boolean));
+		for (const [flowId, entry] of entries) {
+			if (active.has(flowId)) continue;
+			entry.relay.stop();
+			entries.delete(flowId);
+		}
+	}
+
+	function sample(flowId) {
+		if (typeof flowId !== "string" || flowId === "") return;
+		const existing = entries.get(flowId);
+		if (existing) {
+			existing.relay.sample();
+			return;
+		}
+		const flow = runningLeaves(scheduler).find((candidate) => candidate?.id === flowId);
+		if (!flow?.session) return;
+		const relay = relayTokenRate({
+			ownerSession,
+			flowSession: flow.session,
+			label: typeof flow.label === "string" ? flow.label : flowId,
+		});
+		if (!relay.ok) {
+			reportGap(flowId, relay.reason, relay.detail);
+			return;
+		}
+		entries.set(flowId, { relay });
+		relay.sample();
+	}
+
+	function stopAll() {
+		for (const entry of entries.values()) entry.relay.stop();
+		entries.clear();
+	}
+
+	return { sample, prune, stopAll, size: () => entries.size };
 }
 
 // -- Owner input and abort bridge -----------------------------------------
@@ -953,6 +1018,9 @@ export function announceFlowWarning(event, options = {}) {
 /** Build the scheduler for this manager, or refuse with the exact gap. */
 function attach(state, registry, ctx) {
 	const view = hostView(ctx);
+	// Registered before any batch opens: a flow factory reads this context to
+	// label its own tool approvals. A session without UI simply stays absent.
+	registerOwnerUI(view.session, ctx?.ui);
 	const manager = view.manager;
 	if (!manager || (typeof manager !== "object" && typeof manager !== "function")) {
 		return refuse(
@@ -1044,6 +1112,7 @@ function attach(state, registry, ctx) {
 	}
 
 	const resolveModel = modelResolver(session);
+	let relays = null;
 	let scheduler;
 	try {
 		scheduler = createFissionScheduler({
@@ -1063,7 +1132,20 @@ function attach(state, registry, ctx) {
 					record("fission", error, { persist: true });
 				}
 			},
-			onBatchEvent: (event) => announceFlowWarning(event, { notify: sessionNotice(ctx) }),
+			onBatchEvent: (event) => {
+				announceFlowWarning(event, { notify: sessionNotice(ctx) });
+				// Flow and batch terminal events are the low-frequency edges on
+				// which a relay stops. Doing this per streamed event would make
+				// every token pay for an active-leaf scan.
+				if (
+					event?.type === "flow.ended" ||
+					event?.type === "batch.closed" ||
+					event?.type === "batch.failed"
+				) {
+					relays?.prune();
+				}
+			},
+			onFlowEvent: (flowId) => relays?.sample(flowId),
 			...(bridge ? { bridge } : {}),
 		});
 	} catch (error) {
@@ -1079,9 +1161,13 @@ function attach(state, registry, ctx) {
 		);
 	}
 
+	// The scheduler exists, so its flow events can now feed the owner's meter.
+	relays = tokenRateRelays(scheduler, session);
+
 	try {
 		installPort(registry, scheduler);
 	} catch (error) {
+		relays?.stopAll();
 		try {
 			scheduler.dispose({ force: true });
 		} catch {
@@ -1109,6 +1195,7 @@ function attach(state, registry, ctx) {
 		scheduler,
 		bridge,
 		input,
+		relays,
 		ownerSession: session,
 		ownerLabel: identityId(ctx?.agent) ?? "unknown",
 	};

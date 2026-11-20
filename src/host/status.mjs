@@ -20,6 +20,7 @@ import {
 	zeroUsage,
 } from "./usage.mjs";
 import { record } from "./diagnostics.mjs";
+import { findFissionManager, isFissionManager } from "./fission-manager.mjs";
 
 function freshSession() {
 	return {
@@ -32,9 +33,41 @@ function freshSession() {
 	};
 }
 
+/**
+ * The fission proxy a context writes through, or null.
+ *
+ * A flow owns a per-flow proxy over the batch's one shared manager, and the
+ * host may expose either the proxy it was handed or only the raw manager.
+ * Both forms are resolved here by the flow identity the scheduler assigns.
+ */
+function fissionProxyFor(ctx) {
+	const declared = ctx?.sessionManager ?? null;
+	if (!declared) return null;
+	if (isFissionManager(declared)) return declared;
+	const agent = ctx?.agent;
+	const identities = [
+		agent?.id,
+		agent?.agentId,
+		ctx?.agentId,
+		ctx?.flowId,
+		agent?.label,
+		agent?.displayName,
+		ctx?.label,
+	];
+	for (const identity of identities) {
+		const proxy = findFissionManager(declared, identity);
+		if (proxy) return proxy;
+	}
+	return null;
+}
+
 function isSubagent(ctx) {
 	const agent = ctx?.agent;
 	if (!agent) return false;
+	// A fission flow is a parallel worker of this session, not a sub agent.
+	// The host marks it from `parentAgentId`, which is exactly the mark that
+	// would silence the status line; the proxy is what says otherwise.
+	if (fissionProxyFor(ctx)) return false;
 	if (agent.kind === "sub" || agent.kind === "subagent") return true;
 	return typeof agent.depth === "number" && agent.depth > 0;
 }
@@ -64,15 +97,27 @@ export function createStatusRuntime(options = {}) {
 	const totals = new Map();
 	const orphanKey = {};
 	let activeUsageKey = null;
+	let displayHost = null;
+
+	// Flows run with `hasUI: false`, so their own context cannot host the
+	// widget even though they drive the one session record. Remember the last
+	// context that could and write the line there.
+	function rememberDisplayHost(ctx) {
+		if (canUseWidget(ctx)) displayHost = ctx;
+	}
 
 	function keyFor(ctx) {
-		const key = ctx?.sessionManager ?? ctx;
+		// One record per session, not per flow. Every fission flow writes
+		// through its own proxy, but all of them share one manager and one
+		// journal; keying on the proxy would split the accumulated totals N
+		// ways and give every flow a private `last`.
+		const proxy = fissionProxyFor(ctx);
+		const key = proxy?.shared ?? ctx?.sessionManager ?? ctx;
 		return key && (typeof key === "object" || typeof key === "function") ? key : orphanKey;
 	}
 
-	function readBranchUsage(ctx, session) {
+	function readBranchUsage(manager, session) {
 		try {
-			const manager = ctx?.sessionManager;
 			const branch = manager?.getBranchView?.() ?? manager?.getBranch?.() ?? [];
 			for (const entry of Array.isArray(branch) ? branch : []) {
 				const usage = entryUsage(entry);
@@ -91,11 +136,12 @@ export function createStatusRuntime(options = {}) {
 		const session = freshSession();
 		sessions.set(key, session);
 		totals.set(key, session.totals);
-		readBranchUsage(ctx, session);
+		readBranchUsage(key, session);
 		return session;
 	}
 
 	function ensureInitialized(ctx) {
+		rememberDisplayHost(ctx);
 		const key = keyFor(ctx);
 		const existing = sessions.get(key);
 		if (existing) return { key, session: existing, created: false };
@@ -147,16 +193,18 @@ export function createStatusRuntime(options = {}) {
 	}
 
 	function flushWidget(ctx, session) {
+		const host = canUseWidget(ctx) ? ctx : displayHost;
+		if (!host) return;
 		const parts = [];
-		if (session.host) parts.push(stylePart(ctx, "accent", session.host));
-		if (session.usageText) parts.push(styleUsage(ctx, session.usageText));
-		if (session.prefix) parts.push(stylePart(ctx, "dim", session.prefix));
+		if (session.host) parts.push(stylePart(host, "accent", session.host));
+		if (session.usageText) parts.push(styleUsage(host, session.usageText));
+		if (session.prefix) parts.push(stylePart(host, "dim", session.prefix));
 		const issues = diagnostics ? diagnostics.total() : 0;
-		if (issues > 0) parts.push(stylePart(ctx, "dim", `⚠ ${issues}`));
+		if (issues > 0) parts.push(stylePart(host, "dim", `⚠ ${issues}`));
 		if (parts.length === 0) return;
-		const line = parts.join(stylePart(ctx, "dim", "  ---  "));
+		const line = parts.join(stylePart(host, "dim", "  ---  "));
 		if (line === session.widgetLine) return;
-		if (writeWidget(ctx, line)) session.widgetLine = line;
+		if (writeWidget(host, line)) session.widgetLine = line;
 	}
 
 	function flushUsage(ctx, session) {
@@ -206,7 +254,10 @@ export function createStatusRuntime(options = {}) {
 				const snapshot = usageSnapshot(usage);
 				accumulateUsage(session.totals, snapshot);
 				session.last = snapshot;
-				if (isSubagent(ctx)) activeUsageKey = keyFor(ctx);
+				// Single-value fields show the most recent writer, whichever
+				// flow or side request it was. Recording the writer only for
+				// sub agents froze the line on the last sub agent's numbers.
+				activeUsageKey = keyFor(ctx);
 			}
 		}
 		showSessionPrefix(ctx);
@@ -239,7 +290,17 @@ export function createStatusRuntime(options = {}) {
 		on(
 			"session_start",
 			safe((_event, ctx) => {
-				initSessionUsage(ctx);
+				// A second start on the same manager must not erase the
+				// accumulated totals: the session, not the flow, owns them.
+				const { key, session, created } = ensureInitialized(ctx);
+				// A genuinely new session starts a new ledger: the old
+				// manager's totals and its last writer must not leak into
+				// this line.
+				if (created) {
+					totals.clear();
+					totals.set(key, session.totals);
+					activeUsageKey = null;
+				}
 				showSessionPrefix(ctx);
 				showHost(ctx);
 				showUsage(ctx);

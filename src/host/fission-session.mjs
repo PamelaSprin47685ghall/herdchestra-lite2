@@ -14,10 +14,18 @@
  *   - costGate: `owner.costGate` by reference, so the dollar cap stays one
  *     gate for the whole tree.
  *
- * The factory installs no UI bridge, event bridge, extension hook, or
- * session_init entry. The caller owns event forwarding. The caller must also
- * never call `dispose()` on a flow session: the host dispose path seals and
- * closes the shared SessionManager, which stops every other flow from writing.
+ * The factory installs no event bridge, extension hook, or session_init entry.
+ * The caller owns event forwarding. Tool approval is the one UI seam it does
+ * claim: when the host result exposes setToolUIContext() and the owner context
+ * was registered, the flow's tools receive a labelled delegate of that
+ * context, so an approval prompt names the requesting flow. Without either
+ * fact the flow keeps the host's headless tool UI and the limitation list says
+ * so. A generation rate is never installed implicitly: relayTokenRate() is an
+ * explicit export for the caller that owns the sampling edge.
+ *
+ * The caller must also never call `dispose()` on a flow session: the host
+ * dispose path seals and closes the shared SessionManager, which stops every
+ * other flow from writing.
  */
 
 import {
@@ -59,6 +67,9 @@ export const FISSION_SESSION_LIMITS = Object.freeze({
 	MNEMOPI_ABSENT: "MNEMOPI_ABSENT",
 	SHARED_MANAGER_DISPOSE_FORBIDDEN: "SHARED_MANAGER_DISPOSE_FORBIDDEN",
 	SHARED_MANAGER_NOT_PROXIED: "SHARED_MANAGER_NOT_PROXIED",
+	TOOL_UI_UNSUPPORTED: "TOOL_UI_UNSUPPORTED",
+	OWNER_UI_ABSENT: "OWNER_UI_ABSENT",
+	TOKEN_RATE_UNAVAILABLE: "TOKEN_RATE_UNAVAILABLE",
 });
 
 /** Flow ids feed file names and provider ids, so keep them label-safe. */
@@ -109,6 +120,12 @@ const LIMIT_DETAIL = Object.freeze({
 		"Never call dispose() on a flow session. The host dispose path seals and closes the shared SessionManager, which stops every other flow from writing. The flow proxy reference-counts seal/close, so one flow's disposal cannot seal the journal while a sibling still holds it.",
 	[FISSION_SESSION_LIMITS.SHARED_MANAGER_NOT_PROXIED]:
 		"The shared manager does not expose the leaf contract (getLeafId/getBranch/branch/resetLeaf/seal/close and getEntry/getEntries), so this flow keeps the raw manager. A real SessionManager always supports the proxy.",
+	[FISSION_SESSION_LIMITS.TOOL_UI_UNSUPPORTED]:
+		"The host factory result exposes no setToolUIContext(), so a flow's tool approval cannot be routed to the owner interface. The flow keeps the host's headless tool UI.",
+	[FISSION_SESSION_LIMITS.OWNER_UI_ABSENT]:
+		"No owner interface context was registered for this session. The flow keeps the host's headless tool UI, so an approval prompt cannot name the requesting flow.",
+	[FISSION_SESSION_LIMITS.TOKEN_RATE_UNAVAILABLE]:
+		"Either the owner session or the flow session exposes no TokenRateMeter with the expected methods, so a flow's generation rate cannot be forwarded to the session the status bar reads.",
 });
 
 function read(target, key) {
@@ -153,6 +170,132 @@ function retainSessionLease(shared) {
 	if (sessionLeases.has(shared)) return;
 	retainFissionManager(shared);
 	sessionLeases.add(shared);
+}
+
+// The owner's interface context, keyed by the owner session. The activation
+// layer registers it before any batch opens; a flow factory cannot read the
+// host's private tool UI store, and it must not invent one.
+const ownerUIContexts = new WeakMap();
+
+/**
+ * Register the interface context of one owner session.
+ *
+ * Returns false when either value cannot serve as a context. A later flow
+ * factory for this session then reports OWNER_UI_ABSENT instead of installing
+ * a half-built approval path.
+ */
+export function registerOwnerUI(ownerSession, ui) {
+	if (!ownerSession || (typeof ownerSession !== "object" && typeof ownerSession !== "function")) {
+		return false;
+	}
+	if (!ui || typeof ui !== "object") return false;
+	ownerUIContexts.set(ownerSession, ui);
+	return true;
+}
+
+/** Prompt methods whose first argument is plain text shown to the user. */
+const LABELLED_PROMPT_METHODS = Object.freeze(["select", "confirm", "input", "editor", "notify"]);
+
+function labelText(text, label) {
+	if (typeof text !== "string" || text === "") return `Fission flow ${label}`;
+	return `Fission flow ${label}\n${text}`;
+}
+
+/**
+ * Wrap one interface context so every prompt names the requesting flow.
+ *
+ * The approval dialog receives `full` and `compact` prompts; both get the
+ * label line, while the answer is returned unchanged. Methods this wrapper
+ * does not know stay delegated with their own receiver. Returns null for an
+ * absent context, so the caller reports the gap rather than showing an
+ * unlabelled prompt.
+ */
+export function labelledUIContext(ui, label) {
+	if (!ui || typeof ui !== "object") return null;
+	const name = typeof label === "string" && label !== "" ? label : "unnamed";
+	return new Proxy(ui, {
+		get(target, property) {
+			const value = Reflect.get(target, property, target);
+			if (typeof value !== "function") return value;
+			if (property === "approve") {
+				return (prompt, options) => {
+					if (!prompt || typeof prompt !== "object") return value.call(target, prompt, options);
+					const decorated = { ...prompt };
+					if (typeof decorated.full === "string") decorated.full = labelText(decorated.full, name);
+					if (typeof decorated.compact === "string") decorated.compact = labelText(decorated.compact, name);
+					return value.call(target, decorated, options);
+				};
+			}
+			if (LABELLED_PROMPT_METHODS.includes(property)) {
+				return (first, ...rest) => {
+					const shown = typeof first === "string" ? labelText(first, name) : first;
+					return value.call(target, shown, ...rest);
+				};
+			}
+			return value.bind(target);
+		},
+	});
+}
+
+/**
+ * Forward one flow's generation rate to the meter the status bar reads.
+ *
+ * A flow owns its own AgentSession and therefore its own TokenRateMeter, while
+ * the interface reads the owner session's meter. `seed` is the meter's public
+ * way to publish a reading from another source: seeding `rate` over one second
+ * makes the owner's `rate()` return exactly that value. The caller samples at
+ * its own event edge, so the flow that wrote last is the one displayed.
+ *
+ * A flow never overwrites a live owner reading: if the owner agent is streaming,
+ * its own meter is the writer. `stop()` samples once more, so the status bar
+ * keeps the last reading between turns instead of going blank.
+ */
+export function relayTokenRate({ ownerSession, flowSession, label = null } = {}) {
+	const ownerMeter = read(ownerSession, "tokenRate");
+	const flowMeter = read(flowSession, "tokenRate");
+	if (typeof ownerMeter?.seed !== "function" || typeof flowMeter?.rate !== "function") {
+		return {
+			ok: false,
+			reason: FISSION_SESSION_LIMITS.TOKEN_RATE_UNAVAILABLE,
+			detail: LIMIT_DETAIL[FISSION_SESSION_LIMITS.TOKEN_RATE_UNAVAILABLE],
+		};
+	}
+	let last = null;
+	let stopped = false;
+
+	function sample() {
+		if (stopped) return last;
+		let rate = null;
+		try {
+			rate = flowMeter.rate();
+		} catch {
+			return last;
+		}
+		if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) return last;
+		if (read(ownerSession, "isStreaming") === true) return last;
+		try {
+			ownerMeter.seed(rate, 1000);
+		} catch {
+			return last;
+		}
+		last = rate;
+		return last;
+	}
+
+	function stop() {
+		if (stopped) return last;
+		sample();
+		stopped = true;
+		return last;
+	}
+
+	return {
+		ok: true,
+		label,
+		sample,
+		stop,
+		state: () => ({ label, last, stopped }),
+	};
 }
 
 let factoryPromise;
@@ -376,11 +519,34 @@ export async function createFissionSession(options = {}) {
 		return fail(FISSION_SESSION_REASONS.CREATE_RETURNED_NOTHING);
 	}
 
+	// Route this flow's tool approvals to the owner interface under the flow's
+	// label. The result's setToolUIContext is the host's public seam; a flow is
+	// built headless, so without this call an approval prompt cannot name the
+	// requesting flow. The raw context is also registered on the flow session,
+	// so a nested batch opened by this flow labels itself with its full path.
+	const ownerUI = options.ui ?? ownerUIContexts.get(options.session) ?? null;
+	let toolUI = null;
+	if (typeof created.setToolUIContext !== "function") {
+		limitations = [...limitations, limitation(FISSION_SESSION_LIMITS.TOOL_UI_UNSUPPORTED)];
+	} else if (!ownerUI) {
+		limitations = [...limitations, limitation(FISSION_SESSION_LIMITS.OWNER_UI_ABSENT)];
+	} else {
+		try {
+			created.setToolUIContext(labelledUIContext(ownerUI, config.agentDisplayName), true);
+			toolUI = Object.freeze({ installed: true, label: config.agentDisplayName });
+			registerOwnerUI(created.session, ownerUI);
+		} catch {
+			limitations = [...limitations, limitation(FISSION_SESSION_LIMITS.TOOL_UI_UNSUPPORTED)];
+		}
+	}
+
 	return {
 		ok: true,
 		session: created.session,
 		config,
 		limitations,
+		toolUI,
+		setToolUIContext: typeof created.setToolUIContext === "function" ? created.setToolUIContext : null,
 		eventBus: created.eventBus,
 		extensionsResult: created.extensionsResult,
 	};

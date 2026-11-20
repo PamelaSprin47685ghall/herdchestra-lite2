@@ -38,8 +38,10 @@
 //   * Incomplete handoffs from a crash are retired; a record that names its
 //     source range, recipient tail, and depth shift is rewritten from it.
 //   * levelTemplate is required so copied "scope level N" text is shifted.
-//   * A missing setModel() is reported and the batch ends failed with outcome
-//     closed-with-adoption-failure instead of claiming a clean succession.
+//   * setModel() is asynchronous and is awaited before the owner's leaf moves.
+//     A refused or missing switch is reported and the batch ends failed with
+//     outcome closed-with-adoption-failure instead of claiming a clean
+//     succession.
 //   * Flow AgentSessions are never disposed: the host dispose path seals the
 //     shared SessionManager.
 //
@@ -78,6 +80,7 @@ import {
 	handoffMessages,
 	incompleteHandoffs,
 	levelPattern,
+	mergePins,
 	planHandoffRecovery,
 	recoverIncompleteHandoffs,
 } from "../transcript/fission.mjs";
@@ -1656,6 +1659,7 @@ export function createFissionScheduler(options = {}) {
 		record.status = "copying";
 		try {
 			const result = await performCopy(record, target);
+			mergePins(batch.station.state.pins, result.pins);
 			inject(target, result.messages);
 			record.status = "done";
 			record.copiedTo = target.id;
@@ -1737,7 +1741,17 @@ export function createFissionScheduler(options = {}) {
 
 	// -- Adoption and release -------------------------------------------------
 
-	function adopt(batch, heir) {
+	// Adoption is one ordered cutover: clear the owner's context, splice the
+	// heir's context in, switch the session model, then move the global leaf.
+	//
+	// The host's setModel() is asynchronous, so the switch is awaited. Starting
+	// the owner's next turn on the old model while the new one is still being
+	// installed would report a succession the session does not have, and a
+	// rejection nobody awaits would surface as an unhandled rejection instead
+	// of a failure the batch reports. The reset and the splice stay in one
+	// synchronous block: once the owner's messages are cleared, the heir's
+	// messages must land before any await can interleave.
+	async function adopt(batch, heir) {
 		const failures = [];
 		const owner = batch.owner;
 		const heirMessages = heir.agent?.state?.messages;
@@ -1761,11 +1775,11 @@ export function createFissionScheduler(options = {}) {
 		if (model) {
 			if (typeof owner.session?.setModel === "function") {
 				try {
-					owner.session.setModel(model);
+					await owner.session.setModel(model);
 				} catch (error) {
 					failures.push({
 						code: "OWNER_MODEL_NOT_SWITCHED",
-						detail: `setModel() threw: ${error?.message ?? error}`,
+						detail: `setModel() failed: ${error?.message ?? error}`,
 					});
 				}
 			} else if (owner.session?.model !== model) {
@@ -1775,7 +1789,22 @@ export function createFissionScheduler(options = {}) {
 				});
 			}
 		}
-		manager.branch(tailOf(heir));
+		// The leaf move is what makes the next user turn attach to the heir's
+		// branch. It runs after the switch and is reported, not thrown: the
+		// owner's context already belongs to the heir, so abandoning promotion
+		// would leave one owner carrying the heir's messages and the previous
+		// flow's state.
+		let heirTail = null;
+		try {
+			heirTail = tailOf(heir);
+			manager.branch(heirTail);
+		} catch (error) {
+			failures.push({
+				code: "OWNER_LEAF_NOT_MOVED",
+				detail: `the owner leaf stayed on its old branch: ${error?.message ?? error}`,
+				tail: heirTail,
+			});
+		}
 		return failures;
 	}
 
@@ -2068,15 +2097,17 @@ export function createFissionScheduler(options = {}) {
 				});
 			}
 
+			const boundaryFailed = batch.status === "failed" && !failed && usable && !batch.costCapped;
 			if (takeover) {
+				batch.status = "finalizing";
 				try {
-					const failures = adopt(batch, anchor);
+					const failures = await adopt(batch, anchor);
 					for (const failure of failures) {
 						recordLimit(failure.code, failure.detail, { flowId: anchor.id });
 						batch.limits.push({ ...failure, flowId: anchor.id });
 					}
 					promote(batch, anchor);
-					batch.status = failed
+					batch.status = failed || boundaryFailed
 						? "failed"
 						: batch.costCapped
 							? "cost-capped"
@@ -2085,7 +2116,7 @@ export function createFissionScheduler(options = {}) {
 								: usable
 									? "closed"
 									: "failed";
-					batch.outcome = failed
+					batch.outcome = failed || boundaryFailed
 						? (failures.length > 0
 							? "failed-with-adoption-failure"
 							: usable
@@ -2100,6 +2131,7 @@ export function createFissionScheduler(options = {}) {
 					});
 				} catch (error) {
 					batch.status = "failed";
+					batch.outcome = "failed";
 					batchWarning(batch, "ADOPTION_FAILED", error, anchor);
 				}
 			} else if (anchor) {
@@ -2124,6 +2156,7 @@ export function createFissionScheduler(options = {}) {
 		};
 		batch.finalizePromise = run().catch((error) => {
 			batch.status = "failed";
+			batch.outcome = "failed";
 			batchWarning(batch, "BATCH_FINALIZE_FAILED", error, null);
 			closeBatchScope(batch);
 			for (const flow of batch.flows) releaseFlow(flow);
@@ -2358,6 +2391,7 @@ export function createFissionScheduler(options = {}) {
 			} catch (error) {
 				batch.status = "failed";
 				batch.error = error;
+				batch.outcome = "failed";
 				// Cleanup is best effort and must never replace the start error
 				// the caller needs to see.
 				try {
@@ -2820,7 +2854,7 @@ export function createFissionScheduler(options = {}) {
 			Promise.resolve(pending).then(
 				() => settleFlow(flow, { aborted: false }),
 				(error) => crashFlow(flow, error),
-			);
+			).catch((error) => crashFlow(flow, error));
 		}
 
 		if (!batch.done && !batch.finalizing) batch.status = "running";

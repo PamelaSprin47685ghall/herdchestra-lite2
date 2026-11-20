@@ -2,7 +2,7 @@
 
 > 更正：流的成功完成必须由模型调用 `scope({ end: true })` 明确声明。`agent_end` 仅表示运行停止，不能作为成功凭据；下文中与此矛盾的旧设计描述不再适用。开启嵌套批次的流把完成责任交给该批次。
 
-> 状态：设计定稿。仅设计，未实现。落地约束见 1.2，验收判据见 12。
+> 状态：设计定稿；扩展层已有实现。落地约束见 1.2，验收判据见 12，人工经验用例见 `docs/acceptance/concurrent-fission.md`。
 
 ## 1. 目标与非目标
 
@@ -34,7 +34,7 @@
 机制只有一条路径：N 条流、一个租约、一个 FIFO。`N = 1` 时没有专门的代码路径——不是靠分支，而是靠状态：
 
 - 租约无人争用，第一次 `message_start` 就拿到；FIFO 恒空，没有接任、没有缓冲。
-- 唯一流的 `begin` 以 `begin` 的回执为父；工作因此是一个子 scope，而不是所有者自己的链。
+- 唯一流的 `begin` 以它自己那份 `begin` 回执为父；回执挂在批次的 `scope.begin` 下。工作因此是一个子 scope，而不是所有者自己的链。
 - N 条流一律由新起的 Agent 执行，所有者不承担任何一条；索引只用于编号，不授予特权。
 - 结构上唯一的差别是工作发生在子 scope 里。UI 复用器把它藏起来（8.1），所以屏幕上没有差别。
 - 所有者退场后由最后结束的那条流继续；N=1 时就是同一条线换了一个驱动者。
@@ -76,7 +76,7 @@ scope({ begin: {
 `begin.intent`、`begin.budget`、`begin.permission` 不再存在。`begin.fission` 是必填数组，`minItems: 1`：
 
 ```js
-required: ["stage", "fission", "elder_report", "permission"],
+required: ["stage", "fission", "elder_report"],
 properties: {
   fission: {
     type: "array",
@@ -133,17 +133,20 @@ properties: {
 
 ### 4.2 装配
 
-批次是**内存对象**，不写额外的 ledger entry（没有 `fission.batch.begin` 这种标记）：它的 `begin`/`end` 就是普通的 scope entry，由调度器代写。所有流的 `begin` 以 `batch.ackId` 为父，互为兄弟。
+批次是**内存对象**，不写额外的 ledger entry（没有 `fission.batch.begin` 这种标记）：它的 `begin`/`end` 是普通的 scope entry。各流的 `begin` 不共享直接父节点：每条流在批次的 `scope.begin` 下各有自己的 `toolResult` 回执，`begin` 再挂在各自的回执下。各流回执互为兄弟，各流 begin 则是这些兄弟节点各自的子节点。所有者的 `toolResult` 不在流的父链上。
+
+每条流有自己的回执，标明流的身份和任务。磁盘父链是 `toolCall → 批次 scope.begin → 流回执 → 流 scope.begin`；所有者回执留在另一分支。模型上下文中，工具调用紧接该流自己的工具结果，批次边界随后注入，避免将边界插入工具调用与结果之间。
 
 ```js
 // 接线层
-const batch = { id: batchId, parentId: P, ackId: beginToolResultId, flows: [] };
+const batch = { id: batchId, parentId: P, beginId: batchBeginId, flows: [] };
 batch.flows = begin.fission.map((item, index) => ({
   index,
   label: `${batchId}.${index}`,
   state: createFlowState(base, item),            // 独立 scopes/budget/charges/stage 快照
   agent: spawnAgent(item),                       // N 条流一律新起，索引不授予特权
-  tail: batch.ackId,                             // 本流当前叶：begin 的回执之后
+  receiptId: appendFlowReceipt(batch.beginId, item, index), // 本流独有的 toolResult
+  tail: null,                                    // 由调度器写 flow begin 后设置
   status: "running",
 }));
 ```
@@ -152,11 +155,11 @@ batch.flows = begin.fission.map((item, index) => ({
 
 `index` 从 0 到 `fission.length - 1` 平等循环：同一个构造函数、同一份装配、同一个 `tail`。索引只出现在 label 与日志里，不改变行为。
 
-**每条流必须带前缀上下文。** `initialState.messages: []` 只是空壳，流不知道自己从哪来、之前谈过什么。装配时要把 `sm.getBranch(batch.ackId)` 转成 `AgentMessage[]` 作为 `initialState.messages`，再追加一条携带本流 `intent` 的 `CustomMessage`。转换规则与 5.5 相同：`message` 与 scope 的 `begin`/`end` 进，`fission.*` 与其余账本不进。
+**每条流必须带前缀上下文。** `initialState.messages: []` 只是空壳，流不知道自己从哪来、之前谈过什么。装配时取批次 begin 的父链作为公共前缀，包含原 `toolCall` 和更早的对话；随后注入本流自己的回执，再注入批次与流的 scope 边界及本流 intent。其他流的回执不进上下文。转换规则与 5.5 相同：`message` 与 scope 的 `begin`/`end` 进，`fission.*` 与其余账本不进。
 
-内层批次同理：前缀取到内层回执，天然包含父流的全部上下文。继承者不需要重建——它本来就是按这个前缀装配的，运行中又接收了前驱的注入。
+内层批次同理：前缀取到内层批次的 `scope.begin`，天然包含父流的全部上下文。继承者不需要重建——它本来就是按这个前缀装配的，运行中又接收了前驱的注入。
 
-**所有流都不调用 `scope` 工具。** 它们的 scope 状态在装配时就已打开；`scope.begin` / `scope.end` 两条 custom entry 由调度器代写——`begin` 以 `batch.ackId` 为父，`end` 写在自己的 tail 上。`batch.ackId` 是所有者那次 `begin` 调用的工具回执：`afterToolCall` 时回执消息尚未落盘，因此只能登记 `pending-spawn` 并触发退场；等回执的 `toolResult` 落盘且所有者 `agent_end` 落地后，再装配并启动 N 条流。N 条流都挂在回执下面，所以所有者的分支天然经过所有流。
+**流的初始 scope 由调度器打开，成功完成须显式调用 `scope({ end: true })`；流也可以开启嵌套批次并将完成责任交给它。** `scope.begin` 与 `scope.end` 两条 custom entry 都由调度器代写——`begin` 以本流自己的回执为父，`end` 写在完成声明之后的 tail 上。`agent_end` 只说明运行停止，不能替代显式完成声明；既未声明完成也未交由嵌套批次完成的流按失败收尾。回执与 begin 都在批次的 `scope.begin` 之下。等所有者的工具结果持久化且所有者停止后，再装配并启动 N 条流；所有者回执不在流的父链上。
 
 ### 4.3 写入纪律
 
@@ -216,7 +219,7 @@ sm.appendCustomEntry(type, data);
 
 ### 5.1 触发
 
-流 K 正常结束时，把整段登记为待抄写。所有流走同一条路径：它们都不调用 `scope` 工具，由调度器在 Agent 跑完最后一个 turn（`agent_end`）且未被取消时，代写 `scope.end` 并登记。没有按编号区分的触发点。
+流 K 显式调用 `scope({ end: true })` 且未被取消时，把整段登记为待抄写。所有流走同一条路径：调度器收到完成声明后等待其 `agent_end`，代写 `scope.end` 并登记；`agent_end` 单独到达而没有完成声明的流不是成功完成。没有按编号区分的触发点。
 
 ```js
 { handoffId, sourceBeginId, sourceLabel, from: firstEntryId, to: lastEntryId, targetIndex: nextRunning(K) }
@@ -279,14 +282,14 @@ function mapId(oldId, ctx) {
   if (!ctx.segmentIds.has(oldId)) return oldId;
   const base = `${oldId}f${ctx.handoffId.toString(16)}`;
   let id = base;
-  for (let salt = 1; ctx.index.has(id); salt += 1) id = `${base}s${salt.toString(16)}`;
+  for (let salt = 1; ctx.index.has(id); salt += 1) id = `${base}f${salt.toString(16)}`;
   return id;
 }
 ```
 
 **分隔符只能取 id 字符集里的字符。** 自然 id 全在 `[0-9a-f]`：`generateId()` 的正常路径是 `crypto.randomUUID().slice(-8)`（8 位十六进制），回退路径是 `Snowflake.next()`（16 位小写十六进制，`Snowflake.PATTERN` 就是 `/^[0-9a-f]{16}$/`）。所以映射只用 `[0-9a-f]`：前缀原样保留，后接标记 `f` 与 `handoffId` 的十六进制。`\u0000`、`@`、`.` 一律不用——它们会污染 jsonl 之外的消费方（`agent://`、`local://`、文件名）。
 
-**碰撞要检测，不能靠长度赌。** 8 位自然 id 撞不上（长度不同），但 16 位 Snowflake 可能恰好等于「8 位旧 id + `f` + 7 位 handoff 十六进制」。所以映射带盐：从 0 开始，命中已有 id 就在末尾追加 `s` 加盐的十六进制，直到空闲；构造是纯确定性的，不采样。抄写前逐条断言 `^[0-9a-f]+$` 且 `!index.has(newId)`。
+**碰撞要检测，不能靠长度赌。** 8 位自然 id 撞不上（长度不同），但 16 位 Snowflake 可能恰好等于「8 位旧 id + `f` + 7 位 handoff 十六进制」。所以映射带盐：从 0 开始，命中已有 id 就在末尾追加 `f` 加盐的十六进制，直到空闲；构造是纯确定性的，不采样。抄写前逐条断言 `^[0-9a-f]+$` 且 `!index.has(newId)`。
 
 **幂等。** 同一 `(oldId, handoffId, index)` 得到同一结果；残段被丢弃后重抄，盐从 0 重扫，通常落在同一个 id 上。即使因索引变化取了不同盐，段内每条 id 都含「`f` + handoff 十六进制」标记，5.4 的残段识别按标记匹配，不按精确 id 比较。
 
@@ -395,17 +398,17 @@ text.replace(LEVEL_RE, (_, prefix, n) => `${prefix}${Number(n) + shift}`);
 
 **开启者不承担任何一条流。** 调用 `begin` 的 Agent 只做三件事：校验、登记批次、写回执。然后它永久退场，不再产生 provider 请求；N 条流由同一个循环新起，彼此对称。
 
-回执先落盘，`batch.ackId` 就是它。N 条流的 `begin` 都挂在这个 id 下，所以所有者的分支是 `… → toolCall(begin) → toolResult(begin) → 各流的链`。工具协议因此始终合法：回执紧跟在调用之后，工作发生在回执之后。
+批次 `scope.begin` 接在开启调用之后，是各流回执的共同父节点。磁盘结构是 `… → toolCall(begin) → 批次 begin → [flow0 回执 → flow0 begin → …, flow1 回执 → flow1 begin → …]`；所有者的回执不在这些流的父链上。模型上下文另外保证每条流看到工具调用与自己的结果相邻。
 
 **所有者永久退场。** 回执写完后，所有者这一轮就结束，而且**不再恢复**：不产生后续 provider 请求，也不再接收用户输入。它不是被暂停，是退场。
 
-**怎么做到（已核实）。** 在 `afterToolCall` 里把批次标为 `pending-spawn` 并对 scope-begin 这次调用执行 `agent.abort()`。`afterToolCall` 在 `emitToolResult` **之前**被 `await`（`agent-loop.ts:3785`），而工具结果在其后无条件提交，所以回执照常落盘；随后下一轮模型调用随信号一起取消。Agent 的 catch 里 `stoppedForAbort = loopSignal.aborted`、`shouldEmitVisibleError = !stoppedForAbort`，因此不会弹出可见错误。等所有者 `agent_end` 触发时，回执 `toolResult` 已落盘（其 entry id 即 `batch.ackId`），调度器此时启动 N 条流，把它们挂在 `batch.ackId` 下——即使随后落下一条 `aborted` 的 assistant 消息，它也只是回执下的旁支，不在任何一条流的父链上。
+**退场与启动。** 工具结果事件登记退场并中止所有者，等所有者停止且结果持久化后启动各流。所有者回执用于确认工具调用已经返回，不作为流的父节点；各流以批次 begin 下自己的回执为锚点。中止可能留下所有者分支上的 `aborted` assistant 消息，它不属于任何流的父链。
 
 **代价：会留一条 `aborted` 的 assistant 消息。** 它不是错误提示，但会进 transcript。接线层要么把它标成不可见，要么接受它作为「这一轮到此为止」的显式标记——后者更诚实，也更省事。
 
 **结束顺序不作假定。** 任何一条都可能先结束。K 结束后，整段抄给按编号往后第一个仍在运行的流；不重新编号，也不假定第 0 条或第 N-1 条收尾。最后结束的那条没有后继，它就是最终的那条线——它的编号可能是 `1..N-1` 中的任何一个，也可能是 0。
 
-**继承者是最后结束的那条流。** 全部流结束后，最后结束的流接管会话：它的 messages 成为主动上下文，它的叶成为活动叶（本来就在所有者分支的延长线上），它的 flow state（`scopes` / `budget` / `charges` / `pins` / `todo`）提升为 session 状态。此后用户输入、状态条、审批都归它。N=1 时继承者就是唯一那条流——批次前后是同一条连续的线，只是驱动它的 Agent 换了一个。
+**继承者是最后结束的那条流。** 全部流结束后，最后结束的流接管会话：它的 messages 成为主动上下文，它的叶成为活动叶；该分支与所有者回执分支共享开启调用，但不经过所有者回执。它的 flow state（`scopes` / `budget` / `charges` / `pins` / `todo`）提升为 session 状态。此后用户输入、状态条、审批都归它。N=1 时继承者就是唯一那条流——批次前后是同一条连续的工作线，只是驱动它的 Agent 换了一个。
 
 **怎么做到（已核实）：状态收养，不换对象。** `AgentSession.agent` 只在类型上是 `readonly`，运行时是构造器赋的普通属性；但整体替换会让 `tokenRate` 等按旧 agent 绑定的字段失配。更稳的做法是把继承者的状态搬进现有 agent：`agent.reset()` 清空消息与队列，把 `heir.agent.state.messages` 原样 splice 进 `agent.state.messages`，再 `session.setModel(heir.model)`。会话对象、hooks、UI、审批、todo 全都不动，换掉的只是它承载的上下文。`get state()` 返回活引用（`agent.ts:910`），`initialState.messages` 也在构造时被 `slice()` 接受（576），这两点让收养成立。
 
@@ -421,7 +424,7 @@ text.replace(LEVEL_RE, (_, prefix, n) => `${prefix}${Number(n) + shift}`);
 5. 把继承者的 flow state 提升为 session 状态；
 6. 释放其余非继承者 Agent（不关闭 `sm`）。
 
-**没有流的 `end` 调用。** 所有流的开始与结束都由调度器代写，流本身只跑自己的 turn。批次完成的条件是「没有 `running` 的流」，不是某个编号调用了 `end`。
+**流的初始 `begin` 边界由调度器代写。** 流可以显式声明 `scope({ end: true })`，也可以开启嵌套批次并将完成责任交给它；对应的 `scope.end` entry 由调度器写入。批次完成取决于整棵子树的状态，不由某个编号单独决定。
 
 **流结束后不立即释放 Agent。** 它可能仍是某个待抄写段的接收方，`agent.state.messages` 必须活着才能注入。状态从 `running` 变为 `closed`，Agent 挂起。
 
@@ -431,7 +434,7 @@ text.replace(LEVEL_RE, (_, prefix, n) => `${prefix}${Number(n) + shift}`);
 
 流本身也是一个 Agent，所以它可以再调用 `scope({ begin, fission })`。这不需要新规则——它只是同一套机制在更深的节点上再跑一遍：
 
-- 这条流成为内层批次的开启者：它退场，内层 N 条流挂在它的 `begin` 回执下；全部结束后，最后由结束者继承，并在它的 tail 上代写内层批次的 `scope.end`。
+- 这条流成为内层批次的开启者：它退场，内层批次写在它的分支上；内层 N 条流各自挂在内层批次的 `scope.begin` 下的独立回执之后。全部结束后，最后由结束者继承，并在它的 tail 上代写内层批次的 `scope.end`。
 - 内层批次不写额外标记；内层的 `scope.begin` 就是那条流调用 `begin` 时写下的普通 entry。
 - 深度自动正确：内层 `begin` 落在父流的分支上，结构推导自然多一层。
 
@@ -442,7 +445,7 @@ closed(f)     = f.agent 已退场 且 f 开启的每个内层批次都已 closed
 closed(batch) = 该批次的全部流都已 closed
 ```
 
-两条定义在树上递归，基底是「没有内层批次的流」：它退场即关闭。
+两条定义在树上递归，基底是「没有内层批次的流」：它停止后即关闭，但只有显式声明完成且未被取消才算成功。
 
 **环只在自己这一层。** `targetIndex` 在兄弟之间计算，不跨层。外层一条流的结束触发父层的抄写；它的内层与自己的兄弟无关。
 
@@ -584,7 +587,7 @@ UI 看到的仍是一次正常的「开始 → 更新 → 结束」，只是更�
 |---|---|---|---|
 | 数据 | 任一流 dispose 封死共享 manager | `seal()` 置 `#released`，后续 append 丢弃 | 引用计数 |
 | 结构 | 全局叶被踩 | 多数 `append*` 走 `#freshEntryFields()` | `appendAt` + 三条纪律 + 断言 |
-| 结构 | `atomicEntryBatch` 互相污染 | 只有 `appendEntriesAtomically` 会置位 | fission 禁止调用它；vibe runtime 活动时拒绝 fission |
+| 结构 | `atomicEntryBatch` 互相污染 | 只有 `appendEntriesAtomically` 会置位 | flow 代理硬禁止原子批；scheduler 抄写与启动恢复在确认 vibe 空闲后独占调用，回调内不 `await`，错误码为 `FISSION_HANDOFF_VIBE_ACTIVE` |
 | 上下文 | 压缩取错链 | 压缩用 `getBranch()`，只看主线 | 压缩绑定到流 |
 | 性能 | `#branchCache` 反复失效 | 多流交替写不满足 O(1) 延长条件 | 接受；必要时每流自缓存 |
 | 功能 | 审批 / 中断 / cost 默认只认主 agent | 绑定 `this.agent`；事件流已由 8.1 的复用器接管 | 接线层按流聚合 |
@@ -612,22 +615,24 @@ UI 看到的仍是一次正常的「开始 → 更新 → 结束」，只是更�
 
 这两条曾经只是机制描述，现在都有具体调用点与代价。
 
-- **退场**：`agent.abort()` 是公开方法（`agent.ts:1690`）；`afterToolCall` 在 `emitToolResult` 之前执行（`agent-loop.ts:3785`），工具结果随后无条件提交，所以回执先落盘。abort 之后下一轮模型调用被取消，`shouldEmitVisibleError` 为 false，不弹错误。**代价**：会落一条 `aborted` 的 assistant 消息。
+- **退场**：`agent.abort()` 可用于终止所有者；等待工具结果持久化和所有者停止，再启动各流。所有者回执与流分支的父链是不同的问题，不应将它设为流的父节点。**代价**：可能留下一条 `aborted` 的 assistant 消息。
 - **接管**：`InteractiveMode.session` 是可写字段（`interactive-mode.ts:1409`、构造器 `2303`）；`AgentSession.agent` 只是 TS `readonly`，运行时是普通属性。**但整对象替换会让 `tokenRate` 等构造期绑定失配**。所以选状态收养：`agent.reset()` → splice 继承者的 `state.messages` → `session.setModel(heir.model)`（`agent-session.ts:13085`）。会话对象与 UI 完全不动。
 - **前缀上下文**：`Agent` 接受 `initialState`（`agent.ts:117`），构造器对 `messages` 做 `slice()`（576）。
 - **广播**：`agent.steer(message)` 是公开投递口（`agent.ts:1477`），下一次模型调用前出队。
 
 剩下的风险只有一条：`aborted` 消息是否会被既有 UI 渲染成「用户中断」。若会，接线层需要按 `details.fissionRetired` 把它过滤掉；这属于接线层的显示策略，不影响协议。
 
-### 10.4 `#atomicEntryBatch` 只有一个入口，且不在正常路径上
+### 10.4 `#atomicEntryBatch` 的单一入口与抄写独占
 
 `#atomicEntryBatch` 只由 `appendEntriesAtomically(append)` 设置。它的回调必须同步，成功时整文件原子替换，失败时回滚并只移除本批 entry。
 
-正常会话路径不调用它；全仓唯一的非测试调用者是 `vibe/runtime.ts`。所以：
+正常会话路径不调用它；宿主里另一个已知调用者是 `vibe/runtime.ts`。但宿主公开的跨 entry 原子提交只有这一个原语，而 5.4 要求「退役残段与重抄」在同一批提交；完全禁止 fission 使用它会让崩溃恢复不可实现。所以定案分两层：
 
-- fission 自身禁止调用 `appendEntriesAtomically`。
-- 若检测到 vibe runtime 活动，fission 直接拒绝，返回 `FISSION_UNAVAILABLE_WITH_VIBE`。
-- 不需要「运行时关闭 batch」这类补丁：双方都不调用，`#atomicEntryBatch` 恒为 `undefined`。
+- flow 代理（`createFissionManager`）继续硬禁止 `appendEntriesAtomically` / `ingestReplicatedEntry` / `discardEntriesDurably`。普通流写入不进入原子批。
+- 只有 scheduler 在抄写（`copyHandoff`）与启动恢复（`recoverIncompleteHandoffs`）里调用它。调用前必须在同一个同步段先用 `vibeIsActive()` 检查；确认空闲后才进入同步回调，回调内不 `await`。
+- 探测由 `activateVibeTools()` 包装与声明式标记提供。检测到 vibe runtime 活动时，在抄写入口拒绝并返回 `FISSION_HANDOFF_VIBE_ACTIVE`（字符串值相同）。这是原 `FISSION_UNAVAILABLE_WITH_VIBE` 的实现命名，文档与公共错误码以此为准。
+
+这不是「运行时关闭 batch」补丁：双方仍遵守一个入口；区别在调用权归 scheduler 的所有者握持路径，flow 代理永远拿不到它。
 
 ---
 
@@ -651,7 +656,7 @@ UI 看到的仍是一次正常的「开始 → 更新 → 结束」，只是更�
 
 这份设计能不能成立，看下面几条能不能被真实现象确认，而不是看代码是否编译通过：
 
-1. **分叉是真的。** 两条流同时跑，`getTree()` 里 `begin` 的回执有两个 child，各自 tail 不同；重载后两条 tail 都还在。
+1. **分叉是真的。** 两条流同时跑，`getTree()` 里批次的 `scope.begin` 有两个孩子，分别是流 0 与流 1 的回执；每条回执下各有一条 `flow begin`，各自 tail 不同；重载后两条 tail 都还在。所有者的回执不出现在任何一条流的分支上。
 2. **抄写是主线。** 哥哥结束后，接收方从 `target.tail` 沿父链回溯，必须依次经过 `handoff.end`、哥哥的 `begin…end`、`handoff.begin`；不能出现「抄写段挂在旁支」。
 3. **深度是平移的。** 哥哥内部开过子 scope 时，抄写段的深度序列与源段逐项相等加 `shift`；不是一条平线。
 4. **文本数值平移了。** 抄写段里 `scope level <n>` 的 `n` 都加了 `shift`；`Remaining budget` 的数字一个没变。
@@ -667,7 +672,7 @@ UI 看到的仍是一次正常的「开始 → 更新 → 结束」，只是更�
 14. **单流恒等。** N=1 时复用器的输入与输出逐事件相同（类型、顺序、时序抖动内）；把复用器拔掉重跑，屏幕一致。
 15. **租约按就绪顺序转移。** 持有者结束后，等待者缓冲的内容回放成一段完整的短流，随后继续流式追加；出现顺序等于就绪顺序，不是开始顺序。
 16. **继承者真的接管。** 全部流结束后，活动叶是最后结束那条的 tail；它的 `todo` / `pins` / `budget` 成为 session 状态；下一条用户输入由它接收；所有者没有再产生 provider 请求。
-17. **递归不吃亏。** 一条流内再开一批，最终叶落在继承者链上；`getTree()` 里内层 `begin` 挂在父流的回执下，深度比父流多一层。
+17. **递归不吃亏。** 一条流内再开一批，最终叶落在继承者链上；`getTree()` 里内层的 `scope.begin` 挂在父流的分支上，深度比父流多一层，内层各流的回执挂在内层 `scope.begin` 下。
 18. **完成条件是子树。** 内层仍有 running 流时，外层不触发该流的抄写；内层全部结束后，外层只触发一次，且段内包含内层全部入口。
 19. **嵌套下 UI 仍只看见一条流。** 内外层同时流式时，任意时刻至多一条 message 处于 open；状态条与审批里的 label 带路径。
 20. **广播被标注且只显示一次。** 两条流同时跑时输入一句话：两边的上下文都出现它，且带 `(broadcast to N flows)` 与同一 `broadcastId`；屏幕上只出现一次。

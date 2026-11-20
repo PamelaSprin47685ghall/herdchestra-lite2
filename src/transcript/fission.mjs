@@ -43,9 +43,23 @@ export function mapId(oldId, handoffId, used) {
 	if (!Number.isSafeInteger(handoffId) || handoffId < 0) throw new Error("invalid handoff id");
 	const base = `${oldId}f${handoffId.toString(16)}`;
 	if (!/^[0-9a-f]+$/.test(base)) throw new Error("invalid handoff id");
+	const taken = used instanceof Set ? used : new Set(used ?? []);
 	let id = base;
-	for (let salt = 1; used.has(id); salt += 1) id = `${base}f${salt.toString(16)}`;
+	// The salt separator is `f`, matching the handoff marker: every copied id
+	// must stay inside the journal alphabet `^[0-9a-f]+$`. A non-hex separator
+	// would leak into agent:// and local:// paths.
+	for (let salt = 1; taken.has(id); salt += 1) id = `${base}f${salt.toString(16)}`;
+	if (!/^[0-9a-f]+$/.test(id)) throw new Error("invalid handoff id");
 	return id;
+}
+
+// Owner records on a model_usage entry point at the entry whose request spent
+// the tokens. A reference inside the segment must follow the rename; a
+// reference outside it stays as it was, because the source entries still exist.
+function remapOwner(owner, ids) {
+	if (!owner || typeof owner !== "object") return owner;
+	if (typeof owner.parentId !== "string" || !ids.has(owner.parentId)) return owner;
+	return { ...owner, parentId: ids.get(owner.parentId) };
 }
 
 /**
@@ -353,7 +367,10 @@ export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceB
 		if (typeof current !== "string" || current === "") throw new Error("handoff aborted: the begin marker was not committed");
 		const copied = [];
 		if (window.summary !== undefined) {
-			const message = { role: "custom", customType: "fission.compaction-summary", content: shiftText(window.summary, shift, levelRegex), display: false, details: { fissionCarry: "compaction-summary" }, timestamp: Date.now() };
+			// The summary is a message the model must see, not a `fission.*`
+			// ledger entry. Its custom type stays outside that namespace; the
+			// carry marker lives in `details`, as 5.2 specifies.
+			const message = { role: "custom", customType: "compaction-summary", content: shiftText(window.summary, shift, levelRegex), display: false, details: { fissionCarry: "compaction-summary" }, timestamp: Date.now() };
 			current = sm.appendMessage(message);
 			if (typeof current !== "string" || current === "") throw new Error("handoff aborted: the compaction summary was not committed");
 			copied.push({ type: "message", message });
@@ -368,11 +385,27 @@ export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceB
 			if (entry.type === "custom" && entry.data?.beginToolCallId) {
 				copy.data = { ...entry.data, beginToolCallId: ids.get(entry.data.beginToolCallId) ?? entry.data.beginToolCallId };
 			}
+			// The usage owner names the entry whose request spent the tokens.
+			// Left unrenamed it would credit the source flow's entry.
+			if (entry.type === "model_usage") {
+				if (entry.owner !== undefined) copy.owner = remapOwner(entry.owner, ids);
+				if (entry.data?.owner !== undefined) copy.data = { ...entry.data, owner: remapOwner(entry.data.owner, ids) };
+			}
 			// The host returns void; check the branch instead of the return value.
 			sm.ingestReplicatedEntry(copy);
 			if (leafId(sm) !== copy.id) throw new Error(`handoff aborted: entry ${String(copy.id)} was not committed`);
 			current = copy.id;
 			copied.push(copy);
+		}
+		// 5.2: apart from the two markers, the copied count and type sequence
+		// must equal the copy window. A host that rewrites the type on ingest
+		// would otherwise leave a segment the source never produced.
+		const expectedTypes = [
+			...(window.summary !== undefined ? ["message"] : []),
+			...window.entries.map((entry) => entry.type),
+		];
+		if (copied.length !== expectedTypes.length || copied.some((entry, index) => entry.type !== expectedTypes[index])) {
+			throw new Error("handoff aborted: the copied entries do not match the source window");
 		}
 		current = sm.appendCustomEntry(HANDOFF_END, { handoffId, count: copied.length });
 		if (typeof current !== "string" || current === "") throw new Error("handoff aborted: the end marker was not committed");

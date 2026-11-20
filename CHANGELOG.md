@@ -10,6 +10,19 @@ All notable changes to this extension. The format follows
 
 ### Changed
 
+- `scope` beginnings now have one shape:
+  `{ stage, elder_report, fission: [{ intent, budget, permission, model? }] }`.
+  `fission` is a non-empty array, `elder_report` is required (a string or
+  `null`), and every item must declare `permission: "ro" | "rw"`; an omitted
+  or null permission rejects the whole batch instead of defaulting to `"rw"`.
+  There is no single-flow begin shape, so one flow is a one-item array, and the
+  batch is validated atomically before any flow starts. `"ro"` now blocks
+  `edit`, `write`, `bash`, and `ast_edit` inside that flow. A fission begin
+  cannot also close a scope: `end: true` with `begin` is refused before any
+  state change, so a caller closes the current scope with a plain `end: true`
+  call and opens the batch in a following call. The scope tool reference, the
+  persistent rules, the not-in-a-scope error, and `README.md` now describe this
+  shape and the limitation.
 - The no-ledger nudge names both lawful ledger shapes. A model that had nothing
   to do saw only `todo({op:"init", list:[{phase,items}]})` and "The ledger must
   state what the user still needs", and invented work to satisfy it. The

@@ -9,6 +9,7 @@ import { stateFor } from "../src/station/index.mjs";
 import { allStagesRan } from "./helpers/stage-flags.mjs";
 import { installVibeTools, rememberSession } from "../src/host/index.mjs";
 import { finishedReport } from "../src/transcript/index.mjs";
+import { beginScope } from "../src/scope/index.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -173,25 +174,37 @@ function texts(messages) {
 	);
 }
 
+// The only live begin is a fission batch, which the scheduler opens in flow
+// sessions. These fake-host tests cover what happens to a scope that is already
+// open, so a historical scope is seeded directly: its state entry, its
+// persisted boundary, and its begin call on the branch.
+function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { read: 1 } }) {
+	const opened = beginScope(stateFor(ctx).state, { toolCallId: id, intent, stage, budget });
+	expect(opened.ok).toBe(true);
+	const manager = ctx.sessionManager;
+	manager.appendCustomEntry("scope.begin", { intent, stage, budget: { ...budget } });
+	const message = assistant([call(id, "scope", { begin: {} })]);
+	const result = toolResult(id, "scope", "Scope opened.");
+	manager.appendMessage(message);
+	manager.appendMessage(result);
+	ctx.agentMessages.push(message, result);
+	return opened.scope;
+}
+
 describe("scope lifecycle", () => {
 	test("transitions between scopes and retains elder work as a hot workbench", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(host, ctx, assistant([call("b1", "scope", { begin: { intent: "first", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
+		seedScope(ctx, { id: "b1", intent: "first", stage: "acceptance-cases" });
 		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "first" })]));
-		const transition = await runAssistant(host, ctx, assistant([call("t1", "scope", {
-			end: true, begin: { intent: "second", stage: "architecture-design", budget: { read: 1 }, elder_report: "first done", permission: "ro" },
-		})]));
-		expect(transition[0].output.content[0].text).toContain("Scope closed.");
-		expect(transition[0].output.content[0].text).toContain("You are now inside this scope.");
-		expect(transition[0].output.content[0].text).not.toContain(
-			"Scope closed. You are outside all scopes.",
-		);
+		const firstEnd = await runAssistant(host, ctx, assistant([call("t1", "scope", { end: true })]));
+		expect(firstEnd[0].output.content[0].text).toContain("Scope closed.");
+		expect(firstEnd[0].output.content[0].text).toContain("outside all scopes");
+		seedScope(ctx, { id: "b2", intent: "second", stage: "architecture-design" });
 		const read = await runAssistant(host, ctx, assistant([call("r2", "read", { path: "second" })]));
 		expect(read[0].blocked).toBe(false);
-		await runAssistant(host, ctx, assistant([call("t2", "scope", {
-			end: true, begin: { intent: "third", stage: "orchestration-plan", budget: { read: 1 }, elder_report: "second done", permission: "ro" },
-		})]));
+		await runAssistant(host, ctx, assistant([call("t2", "scope", { end: true })]));
+		seedScope(ctx, { id: "b3", intent: "third", stage: "orchestration-plan" });
 		let joined = texts(await outbound(host, ctx)).join("\n");
 		// No cost/watermark pressure in this fake host: no fold happens, so the
 		// archived elder keeps its full interior instead of a receipt.
@@ -212,14 +225,15 @@ describe("scope lifecycle", () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		const outside = await runAssistant(host, ctx, assistant([call("t0", "scope", {
-			end: true, begin: { intent: "first", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" },
+			end: true,
 		})]));
 		expect(outside[0].output.content[0].text).toContain("NOT_IN_SCOPE");
-		await runAssistant(host, ctx, assistant([call("b1", "scope", { begin: { intent: "first", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]));
+		seedScope(ctx, { id: "b1", intent: "first" });
 		const invalid = await runAssistant(host, ctx, assistant([call("t1", "scope", {
-			end: true, begin: { intent: "", stage: "direct-execution", budget: { read: 1 }, elder_report: "first done", permission: "ro" },
+			end: "yes",
 		})]));
 		expect(invalid[0].output.isError).toBe(true);
+		expect(invalid[0].output.content[0].text).toContain("INVALID_ARGUMENT");
 		const read = await runAssistant(host, ctx, assistant([call("r1", "read", { path: "still first" })]));
 		expect(read[0].blocked).toBe(false);
 	});
@@ -228,16 +242,15 @@ describe("scope lifecycle", () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 
+		seedScope(ctx, { id: "c1", intent: "inspect config" });
 		const first = await runAssistant(
 			host,
 			ctx,
 			assistant([
-				call("c1", "scope", { begin: { intent: "inspect config", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
 				call("c2", "read", { path: "config-one" }),
 			]),
 		);
-		expect(first[0].output.content[0].text).toContain("You are now inside this scope.");
-		expect(first[1].blocked).toBe(false);
+		expect(first[0].blocked).toBe(false);
 
 		const second = await runAssistant(host, ctx, assistant([call("c3", "read", { path: "config-two" })]));
 		expect(second[0].blocked).toBe(true);
@@ -273,11 +286,7 @@ describe("scope lifecycle", () => {
 		expect(joinedAfterFirstEnd).toContain('Tool "read" has no budget left');
 
 		// The next scope end collapses the previous scope, not itself.
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("d1", "scope", { begin: { intent: "second pass", stage: "direct-execution", budget: { read: 1 }, elder_report: "done: config inspected", permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "d1", intent: "second pass" });
 		await runAssistant(host, ctx, assistant([call("d2", "read", { path: "config-three" })]));
 		const finalEnd = await runAssistant(
 			host,
@@ -322,18 +331,10 @@ describe("scope lifecycle", () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "one", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "one" });
 		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "one" })]));
 		await runAssistant(host, ctx, assistant([call("e1", "scope", { end: true })]));
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b2", "scope", { begin: { intent: "two", stage: "direct-execution", budget: { read: 1 }, elder_report: "scope one done", permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b2", intent: "two" });
 		await runAssistant(host, ctx, assistant([call("r2", "read", { path: "two" })]));
 		await runAssistant(host, ctx, assistant([call("e2", "scope", { end: true })]));
 
@@ -343,11 +344,7 @@ describe("scope lifecycle", () => {
 		expect(joined).not.toContain(finishedReport("scope one done"));
 		expect(joined).not.toContain(finishedReport("scope two done"));
 
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b3", "scope", { begin: { intent: "three", stage: "direct-execution", budget: { read: 1 }, elder_report: "scope two done", permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b3", intent: "three" });
 		await runAssistant(host, ctx, assistant([call("r3", "read", { path: "three" })]));
 		await runAssistant(host, ctx, assistant([call("e3", "scope", { end: true })]));
 
@@ -374,11 +371,7 @@ describe("scope lifecycle", () => {
 	test("nudges a natural stop inside a scope", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "work" });
 		const stop = await runAssistant(
 			host,
 			ctx,
@@ -410,16 +403,8 @@ describe("scope lifecycle", () => {
 	test("closing a parent collapses its elder sibling, not its child", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "outer", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b2", "scope", { begin: { intent: "inner", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "outer" });
+		seedScope(ctx, { id: "b2", intent: "inner" });
 		await runAssistant(
 			host,
 			ctx,
@@ -450,16 +435,8 @@ describe("scope lifecycle", () => {
 	test("collapses the elder sibling inside an enclosing scope", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("a1", "scope", { begin: { intent: "parent", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "elder", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "a1", intent: "parent" });
+		seedScope(ctx, { id: "b1", intent: "elder" });
 		await runAssistant(
 			host,
 			ctx,
@@ -470,11 +447,7 @@ describe("scope lifecycle", () => {
 			ctx,
 			assistant([call("e1", "scope", { end: true })]),
 		);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("c1", "scope", { begin: { intent: "younger", stage: "direct-execution", budget: { read: 1 }, elder_report: "elder done", permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "c1", intent: "younger" });
 		await runAssistant(
 			host,
 			ctx,
@@ -497,11 +470,7 @@ describe("scope lifecycle", () => {
 	test("same-tool calls in one assistant message share one budget unit", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "batch", stage: "direct-execution", budget: { read: 1 }, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "batch" });
 		const batch = await runAssistant(
 			host,
 			ctx,
@@ -527,11 +496,7 @@ describe("scope lifecycle", () => {
 	test("different tools in one assistant message share one budget unit", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "split", stage: "direct-execution", budget: { read: 1, bash: 1 }, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "split", budget: { read: 1, bash: 1 } });
 		const batch = await runAssistant(
 			host,
 			ctx,
@@ -566,22 +531,14 @@ describe("scope lifecycle", () => {
 	test("closes when the elder sibling's begin left the branch", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "elder", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "elder" });
 		await runAssistant(host, ctx, assistant([call("r1", "read", { path: "elder" })]));
 		await runAssistant(host, ctx, assistant([call("e1", "scope", { end: true })]));
 
 		// Compaction keeps the collapse record but removes the begin message.
 		dropBeginEntry(manager, "b1");
 
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b2", "scope", { begin: { intent: "younger", stage: "direct-execution", budget: { read: 1 }, elder_report: "elder done", permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b2", intent: "younger" });
 		const ended = await runAssistant(
 			host,
 			ctx,
@@ -595,11 +552,7 @@ describe("scope lifecycle", () => {
 	test("closes when its own begin left the branch", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "work" });
 		dropBeginEntry(manager, "b1");
 
 		const ended = await runAssistant(
@@ -617,11 +570,11 @@ describe("amend", () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 
+		seedScope(ctx, { id: "b1", intent: "read twice", budget: { read: 2 } });
 		await runAssistant(
 			host,
 			ctx,
 			assistant([
-				call("b1", "scope", { begin: { intent: "read twice", stage: "direct-execution", budget: { read: 2 }, elder_report: null, permission: "ro" } }),
 				call("r1", "read", { path: "one" }),
 			]),
 		);
@@ -649,11 +602,7 @@ describe("amend", () => {
 	test("cannot amend across the scope begin", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 2 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "work", budget: { read: 2 } });
 		const result = await runAssistant(
 			host,
 			ctx,
@@ -667,11 +616,11 @@ describe("defer", () => {
 	test("delivers deferred findings as a steering prompt and keeps residual defers", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
+		seedScope(ctx, { id: "b1", intent: "limited work" });
 		await runAssistant(
 			host,
 			ctx,
 			assistant([
-				call("b1", "scope", { begin: { intent: "limited work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
 				call("d1", "defer", { intent: "fix the docs later" }),
 			]),
 		);
@@ -719,11 +668,7 @@ describe("pin", () => {
 		expect(outside[0].output.content[0].text).toBe("OK");
 		expect(outside[1].output.content[0].text).toBe("OK");
 
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "work" });
 		const inside = await runAssistant(
 			host,
 			ctx,
@@ -746,11 +691,7 @@ describe("pin", () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "one", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "one" });
 		await runAssistant(
 			host,
 			ctx,
@@ -769,11 +710,7 @@ describe("pin", () => {
 			ctx,
 			assistant([call("e1", "scope", { end: true })]),
 		);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b2", "scope", { begin: { intent: "two", stage: "direct-execution", budget: { read: 1 }, elder_report: "one done", permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b2", intent: "two" });
 		await runAssistant(host, ctx, assistant([call("r2", "read", { path: "two" })]));
 		await runAssistant(
 			host,
@@ -810,12 +747,12 @@ describe("nested scopes", () => {
 	test("only the innermost budget is consumed", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
+		seedScope(ctx, { id: "b1", intent: "outer", budget: { read: 0, bash: 1 } });
+		seedScope(ctx, { id: "b2", intent: "inner", budget: { read: 1 } });
 		await runAssistant(
 			host,
 			ctx,
 			assistant([
-				call("b1", "scope", { begin: { intent: "outer", stage: "direct-execution", budget: { read: 0, bash: 1 }, elder_report: null, permission: "ro" } }),
-				call("b2", "scope", { begin: { intent: "inner", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
 				call("r1", "read", { path: "inner" }),
 			]),
 		);
@@ -914,46 +851,10 @@ describe("same-message scope and command co-dispatch", () => {
 		return results;
 	}
 
-	test("scope(begin) + functional command in one message works when tool_call precedes persistence", async () => {
-		const manager = makeManager();
-		const { host, ctx } = await start(manager);
-		const results = await runHostPrepareOrder(
-			host,
-			ctx,
-			assistant([
-				call("s1", "scope", { begin: { intent: "inspect", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
-				call("r1", "read", { path: "a.mjs" }),
-			]),
-		);
-		expect(results[0].blocked).toBe(false);
-		expect(results[0].output.content[0].text).toContain("You are now inside this scope.");
-		expect(results[1].blocked).toBe(false);
-		expect(results[1].result.content[0].text).toBe("read ok");
-
-		// Budget should be exhausted after that 1 read, and no duplicate scope should be open.
-		const secondRead = await runHostPrepareOrder(
-			host,
-			ctx,
-			assistant([call("r2", "read", { path: "b.mjs" })]),
-		);
-		expect(secondRead[0].blocked).toBe(true);
-		expect(secondRead[0].result.content[0].text).toContain("no budget left");
-
-		const closed = await runHostPrepareOrder(
-			host,
-			ctx,
-			assistant([call("s2", "scope", { end: true })]),
-		);
-		expect(closed[0].blocked).toBe(false);
-		expect(closed[0].output.content[0].text).toContain("Scope closed. You are outside all scopes.");
-	});
-
 	test("functional command + scope(end) in one message runs the command before closing scope", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runAssistant(host, ctx, assistant([
-			call("s1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
-		]));
+		seedScope(ctx, { id: "s1", intent: "work" });
 		const results = await runAssistant(host, ctx, assistant([
 			call("r1", "read", { path: "a.mjs" }),
 			call("s2", "scope", { end: true }),
@@ -966,11 +867,7 @@ describe("same-message scope and command co-dispatch", () => {
 	test("amend + functional command in one message refunds before tool_call budget check", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		await runHostPrepareOrder(
-			host,
-			ctx,
-			assistant([call("s1", "scope", { begin: { intent: "retry", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "s1", intent: "retry" });
 		const first = await runHostPrepareOrder(
 			host,
 			ctx,
@@ -1006,16 +903,13 @@ describe("herd mode", () => {
 		expect(host.steers.length).toBe(before);
 
 		const rejected = await runAssistant(host, ctx, assistant([
-			call("h1", "scope", { begin: { intent: "wrong", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
+			call("h1", "scope", { begin: { stage: "acceptance-cases", elder_report: null, fission: [{ intent: "wrong", budget: { read: 1 }, permission: "ro" }] } }),
 		]));
 		expect(rejected[0].output.isError).toBe(true);
 		expect(rejected[0].output.content[0].text).toContain("INVALID_STAGE");
 
-		const opened = await runAssistant(host, ctx, assistant([
-			call("h2", "scope", { begin: { intent: "frame the work", stage: "decision-framing", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
-		]));
-		expect(opened[0].output.isError).not.toBe(true);
-		expect(opened[0].output.content[0].text).toContain("Stage: decision-framing");
+		const opened = seedScope(ctx, { id: "h2", intent: "frame the work", stage: "decision-framing" });
+		expect(opened.stage).toBe("decision-framing");
 
 		const asked = await runAssistant(host, ctx, assistant([
 			call("a1", "ask", { question: "Which outcome matters most?" }),
@@ -1033,7 +927,7 @@ describe("herd mode", () => {
 		expect(askedOff[0].result.content[0].text).toContain("decision-framing");
 
 		const framedAgain = await runAssistant(host, ctx, assistant([
-			call("h3", "scope", { begin: { intent: "frame again", stage: "decision-framing", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
+			call("h3", "scope", { begin: { stage: "decision-framing", elder_report: null, fission: [{ intent: "frame again", budget: { read: 1 }, permission: "ro" }] } }),
 		]));
 		expect(framedAgain[0].output.isError).toBe(true);
 		expect(framedAgain[0].output.content[0].text).toContain("INVALID_STAGE");
@@ -1053,10 +947,8 @@ describe("herd mode", () => {
 			options: undefined,
 		});
 
-		const framed = await runAssistant(host, ctx, assistant([
-			call("t1", "scope", { begin: { intent: "frame release", stage: "decision-framing", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
-		]));
-		expect(framed[0].output.isError).not.toBe(true);
+		const framed = seedScope(ctx, { id: "t1", intent: "frame release", stage: "decision-framing" });
+		expect(framed.stage).toBe("decision-framing");
 	});
 
 	test("a bare /herd reaches the model through the next context receipt", async () => {
@@ -1088,15 +980,13 @@ describe("herd mode", () => {
 		expect(outside[0].result.content[0].text).toContain("/herd");
 
 		const framing = await runAssistant(host, ctx, assistant([
-			call("s0", "scope", { begin: { intent: "framing", stage: "decision-framing", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
+			call("s0", "scope", { begin: { stage: "decision-framing", elder_report: null, fission: [{ intent: "framing", budget: { read: 1 }, permission: "ro" }] } }),
 		]));
 		expect(framing[0].output.isError).toBe(true);
 		expect(framing[0].output.content[0].text).toContain("INVALID_STAGE");
 		expect(framing[0].output.content[0].text).toContain("acceptance-cases");
 
-		await runAssistant(host, ctx, assistant([
-			call("s1", "scope", { begin: { intent: "build", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
-		]));
+		seedScope(ctx, { id: "s1", intent: "build" });
 		const inside = await runAssistant(host, ctx, assistant([
 			call("a1", "ask", { question: "Proceed?" }),
 		]));
@@ -1111,9 +1001,7 @@ describe("herd mode", () => {
 		]));
 		expect(outside[0].blocked).toBe(true);
 
-		await runAssistant(host, ctx, assistant([
-			call("s1", "scope", { begin: { intent: "free wait", stage: "direct-execution", budget: { wait: 1 }, elder_report: null, permission: "ro" } }),
-		]));
+		seedScope(ctx, { id: "s1", intent: "free wait", budget: { wait: 1 } });
 		const waited = await runAssistant(host, ctx, assistant([
 			call("w1", "wait", {}),
 			call("w2", "wait", {}),

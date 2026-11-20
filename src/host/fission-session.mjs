@@ -20,6 +20,13 @@
  * closes the shared SessionManager, which stops every other flow from writing.
  */
 
+import {
+	canProxyFissionManager,
+	createFissionManager,
+	createFlowTailResolver,
+	retainFissionManager,
+} from "./fission-manager.mjs";
+
 /** Stable reason codes for a refused construction. */
 export const FISSION_SESSION_REASONS = Object.freeze({
 	NO_OWNER: "NO_OWNER",
@@ -51,6 +58,7 @@ export const FISSION_SESSION_LIMITS = Object.freeze({
 	GLOBAL_AGENT_REGISTRY: "GLOBAL_AGENT_REGISTRY",
 	MNEMOPI_ABSENT: "MNEMOPI_ABSENT",
 	SHARED_MANAGER_DISPOSE_FORBIDDEN: "SHARED_MANAGER_DISPOSE_FORBIDDEN",
+	SHARED_MANAGER_NOT_PROXIED: "SHARED_MANAGER_NOT_PROXIED",
 });
 
 /** Flow ids feed file names and provider ids, so keep them label-safe. */
@@ -98,7 +106,9 @@ const LIMIT_DETAIL = Object.freeze({
 	[FISSION_SESSION_LIMITS.MNEMOPI_ABSENT]:
 		"The owner exposes no getMnemopiSessionState(). The flow starts without inherited memory recall.",
 	[FISSION_SESSION_LIMITS.SHARED_MANAGER_DISPOSE_FORBIDDEN]:
-		"Never call dispose() on a flow session. The host dispose path seals and closes the shared SessionManager, which stops every other flow from writing.",
+		"Never call dispose() on a flow session. The host dispose path seals and closes the shared SessionManager, which stops every other flow from writing. The flow proxy reference-counts seal/close, so one flow's disposal cannot seal the journal while a sibling still holds it.",
+	[FISSION_SESSION_LIMITS.SHARED_MANAGER_NOT_PROXIED]:
+		"The shared manager does not expose the leaf contract (getLeafId/getBranch/branch/resetLeaf/seal/close and getEntry/getEntries), so this flow keeps the raw manager. A real SessionManager always supports the proxy.",
 });
 
 function read(target, key) {
@@ -132,6 +142,17 @@ function refusal(reason, extra = {}) {
 
 function isNonEmptyString(value) {
 	return typeof value === "string" && value.length > 0;
+}
+
+// One session-scoped lease per shared manager. It is never released: the owner
+// session owns the manager's lifetime, so a flow's dispose drops only that
+// flow's lease and can never seal the journal out from under its siblings.
+const sessionLeases = new WeakSet();
+
+function retainSessionLease(shared) {
+	if (sessionLeases.has(shared)) return;
+	retainFissionManager(shared);
+	sessionLeases.add(shared);
 }
 
 let factoryPromise;
@@ -309,37 +330,57 @@ export async function createFissionSession(options = {}) {
 	const derived = deriveFissionConfig(options);
 	if (!derived.ok) return derived;
 
-	const factory = options.createAgentSession ?? (await loadCreateAgentSession());
-	if (typeof factory !== "function") {
-		return refusal(FISSION_SESSION_REASONS.NO_SDK, {
-			config: derived.config,
-			limitations: derived.limitations,
+	// A real SessionManager exposes the leaf contract, so the flow gets a proxy
+	// that writes its own branch and reference-counts seal/close. A manager
+	// without a leaf at all cannot cross-write branches; that gap is reported
+	// instead of guessed at.
+	let config = derived.config;
+	let limitations = derived.limitations;
+	let flowManager = null;
+	if (canProxyFissionManager(derived.config.sessionManager)) {
+		const shared = derived.config.sessionManager;
+		const label = derived.config.agentDisplayName;
+		retainSessionLease(shared);
+		flowManager = createFissionManager(shared, {
+			flowId: options.flowId,
+			label,
+			resolveTail: createFlowTailResolver(shared, { flowId: options.flowId, label }),
 		});
+		config = { ...derived.config, sessionManager: flowManager };
+	} else {
+		limitations = [...limitations, limitation(FISSION_SESSION_LIMITS.SHARED_MANAGER_NOT_PROXIED)];
 	}
+
+	async function fail(reason, extra = {}) {
+		if (flowManager) {
+			try {
+				await flowManager.close();
+			} catch {
+				// The refusal is the answer; a release failure adds nothing.
+			}
+		}
+		return refusal(reason, { config, limitations, ...extra });
+	}
+
+	const factory = options.createAgentSession ?? (await loadCreateAgentSession());
+	if (typeof factory !== "function") return fail(FISSION_SESSION_REASONS.NO_SDK);
 
 	let created;
 	try {
-		created = await factory(derived.config);
+		created = await factory(config);
 	} catch (error) {
-		return refusal(FISSION_SESSION_REASONS.CREATE_FAILED, {
-			error,
-			config: derived.config,
-			limitations: derived.limitations,
-		});
+		return fail(FISSION_SESSION_REASONS.CREATE_FAILED, { error });
 	}
 
 	if (!created || typeof created.session !== "object" || created.session === null) {
-		return refusal(FISSION_SESSION_REASONS.CREATE_RETURNED_NOTHING, {
-			config: derived.config,
-			limitations: derived.limitations,
-		});
+		return fail(FISSION_SESSION_REASONS.CREATE_RETURNED_NOTHING);
 	}
 
 	return {
 		ok: true,
 		session: created.session,
-		config: derived.config,
-		limitations: derived.limitations,
+		config,
+		limitations,
 		eventBus: created.eventBus,
 		extensionsResult: created.extensionsResult,
 	};

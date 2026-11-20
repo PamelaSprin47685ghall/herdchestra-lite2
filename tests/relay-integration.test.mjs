@@ -17,9 +17,8 @@ import {
 } from "../src/host/index.mjs";
 import { createStationRegistry, stateFor } from "../src/station/index.mjs";
 import { scopeParameters } from "../src/tools/descriptions.mjs";
-import { beginGenerationAfterHandoff } from "../src/relay/index.mjs";
 import { allStagesRan } from "./helpers/stage-flags.mjs";
-import { createStageFlags } from "../src/scope/index.mjs";
+import { beginScope, createStageFlags } from "../src/scope/index.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -395,6 +394,23 @@ async function emitStop(host, ctx) {
 	return result;
 }
 
+// Fission is the only live begin, and it opens scopes inside flow sessions.
+// The tests below cover what relay and the scope machinery do to a scope that
+// is already open, so their historical scope is seeded directly: state entry,
+// persisted boundary, and begin call on the branch.
+function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { read: 1 } }) {
+	const opened = beginScope(stateFor(ctx).state, { toolCallId: id, intent, stage, budget });
+	expect(opened.ok).toBe(true);
+	const manager = ctx.sessionManager;
+	manager.appendCustomEntry("scope.begin", { intent, stage, budget: { ...budget } });
+	const message = assistant([call(id, "scope", { begin: {} })]);
+	const result = toolResult(id, "scope", "Scope opened.");
+	manager.appendMessage(message);
+	manager.appendMessage(result);
+	if (Array.isArray(ctx.agentMessages)) ctx.agentMessages.push(message, result);
+	return opened.scope;
+}
+
 describe("relay integration", () => {
 	test("a host that filters todo out keeps a read-write subagent relay-off", async () => {
 		const { host, ctx } = await start({
@@ -564,11 +580,7 @@ describe("relay integration", () => {
 
 	test("todo is blocked inside a scope and free outside; other tools stay gated", async () => {
 		const { host, ctx } = await start();
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b1", intent: "work" });
 		const blocked = await runAssistant(
 			host,
 			ctx,
@@ -604,20 +616,19 @@ describe("relay integration", () => {
 
 	test("scope barriers preserve todo order when the host prepares the entire batch first", async () => {
 		const { host, ctx } = await start();
-		const open = call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } });
-		const [before, outsideRead, opened, insideRead, inside] = await runAssistant(host, ctx, assistant([
+		const [before] = await runAssistant(host, ctx, assistant([
 			call("t1", "todo", {
 				op: "init",
 				list: [{ phase: "P", items: ["finish the request"] }],
 			}),
-			call("r1", "read", { path: "outside" }),
-			open,
+		]), { prepareAll: true });
+		expect(before.output.details.relay.firstEvaluation).toBe("nonempty");
+
+		seedScope(ctx, { id: "b1", intent: "work" });
+		const [insideRead, inside] = await runAssistant(host, ctx, assistant([
 			call("r2", "read", { path: "inside" }),
 			call("t2", "todo", { op: "view" }),
 		]), { prepareAll: true });
-		expect(before.output.details.relay.firstEvaluation).toBe("nonempty");
-		expect(outsideRead.result.content[0].text).toContain("Not in a scope");
-		expect(opened.result.content[0].text).toContain("You are now inside this scope.");
 		expect(insideRead.result.content[0].text).toBe("read ok");
 		expect(inside.result.content[0].text).toContain("TODO_OUTSIDE_SCOPE_ONLY");
 
@@ -635,7 +646,7 @@ describe("relay integration", () => {
 		const { host, ctx } = await start();
 		const [todo, scope, read] = await runAssistant(host, ctx, assistant([
 			call("t1", "todo", { op: "init", list: [] }),
-			call("b1", "scope", { begin: { intent: "later", stage: "architecture-design", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
+			call("b1", "scope", { begin: { stage: "architecture-design", elder_report: null, fission: [{ intent: "later", budget: { read: 1 }, permission: "ro" }] } }),
 			call("r1", "read", { path: "must-not-run" }),
 		]), { prepareAll: true });
 		expect(todo.output.details.relay.handoffPending).toBe(true);
@@ -711,7 +722,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([
 				call("t_view", "todo", { op: "view" }),
-				call("s_begin", "scope", { begin: { intent: "sneak", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
+				call("s_begin", "scope", { begin: { stage: "direct-execution", elder_report: null, fission: [{ intent: "sneak", budget: { read: 1 }, permission: "ro" }] } }),
 				call("r_read", "read", { path: "a" }),
 			]),
 		);
@@ -890,24 +901,20 @@ describe("relay integration", () => {
 		expect(open.additionalContext).toContain("ledger is not empty");
 
 		const inScope = await start({ mode: "print" });
-		await runAssistant(
-			inScope.host,
-			inScope.ctx,
-			assistant([call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(inScope.ctx, { id: "b1", intent: "work" });
 		const scoped = await emitStop(inScope.host, inScope.ctx);
 		expect(scoped.continue).toBe(true);
 		expect(scoped.additionalContext).toContain("still inside scope level 1");
 	});
 
-	test("scope begin is blocked while pending, then allowed for the successor", async () => {
+	test("scope begin stays gated while a handoff is pending and is admitted for the successor", async () => {
 		const { host, ctx } = await start({ mode: "rpc" });
 		const rec = stateFor(ctx);
 		rec.state.relay = { ...rec.state.relay, handoffPending: true };
 		const blocked = await runAssistant(
 			host,
 			ctx,
-			assistant([call("b1", "scope", { begin: { intent: "early", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
+			assistant([call("b1", "scope", { begin: { stage: "direct-execution", elder_report: null, fission: [{ intent: "early", budget: { read: 1 }, permission: "ro" }] } })]),
 		);
 		expect(blocked[0].blocked).toBe(true);
 		expect(blocked[0].result.content[0].text).toContain("RELAY_HANDOFF_PENDING");
@@ -925,9 +932,10 @@ describe("relay integration", () => {
 		const allowed = await runAssistant(
 			fresh.host,
 			fresh.ctx,
-			assistant([call("b2", "scope", { begin: { intent: "audit", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
+			assistant([call("b2", "scope", { begin: { stage: "acceptance-cases", elder_report: null, fission: [{ intent: "audit", budget: { read: 1 }, permission: "ro" }] } })]),
 		);
 		expect(allowed[0].blocked).toBe(false);
+		expect(allowed[0].result.content[0].text).not.toContain("RELAY_HANDOFF_PENDING");
 	});
 
 	test("vibe mode keeps the todo override registered", async () => {
@@ -993,11 +1001,7 @@ describe("handoff integration", () => {
 	});
 });
 
-describe("scope model switching", () => {
-	const large = { provider: "fixture", id: "large", contextWindow: 100_000 };
-	const small = { provider: "fixture", id: "small", contextWindow: 50_000 };
-	const tiny = { provider: "fixture", id: "tiny", contextWindow: 10 };
-
+describe("slash-only prompt fallback", () => {
 	test("slash-only cannot fall through when a host executor declines or returns residual text", async () => {
 		const { sendSlashPrompt } = await import("../src/host/capture.mjs");
 		const deliveries = [];
@@ -1012,188 +1016,13 @@ describe("scope model switching", () => {
 		}
 		expect(deliveries).toEqual([]);
 	});
-
-	async function fixture() {
-		const { host, ctx, session } = await start({ mode: "print" });
-		const switches = [];
-		const models = [large, small, tiny];
-		session.model = large;
-		session.modelRegistry = {
-			getAll: () => models,
-			find: (provider, id) => models.find((model) => model.provider === provider && model.id === id),
-		};
-		ctx.modelRegistry = session.modelRegistry;
-		for (const name of ["setModel", "setModelTemporary"]) {
-			session[name] = async (model) => {
-				const target = typeof model === "string"
-					? models.find((candidate) => `${candidate.provider}/${candidate.id}` === model)
-					: model;
-				if (!target) throw new Error("model not found");
-				switches.push(target.id);
-				session.model = target;
-			};
-		}
-		const scope = async (id, args) => {
-			const [entry] = await runAssistant(host, ctx, assistant([call(id, "scope", args)]));
-			return entry.result;
-		};
-		const begin = (model, elder_report = null) => ({ intent: "model check", stage: "direct-execution", budget: { read: 1 }, model, elder_report, permission: "ro" });
-		return { host, ctx, session, switches, scope, begin };
-	}
-
-	test("combined end/begin inherits the parent, not the closed sibling", async () => {
-		const { ctx, session, switches, scope, begin } = await fixture();
-		await scope("outer", { begin: begin(null) });
-		const child = await scope("child", { begin: begin("fixture/small") });
-		expect(child.details?.modelSwitch ?? null).toBeNull();
-		expect(session.model).toBe(small);
-		await scope("sibling", { end: true, begin: begin(null, "child completed") });
-		expect(switches).toEqual(["small", "large"]);
-		expect(session.model).toBe(large);
-		expect(stateFor(ctx).state.scopes.at(-1).modelKey).toBe("fixture/large");
-	});
-
-	test("rejects an overfull combined begin without closing the active scope", async () => {
-		const { ctx, switches, scope, begin } = await fixture();
-		await scope("outer", { begin: begin(null) });
-		const refused = await scope("overfull", { end: true, begin: begin("fixture/tiny", "done") });
-		expect(refused.content.map((part) => part.text).join(" ")).toContain("MODEL_CONTEXT_EXCEEDED");
-		expect(stateFor(ctx).state.scopes.map((active) => active.beginToolCallId)).toEqual(["outer"]);
-		expect(switches).toEqual([]);
-	});
-
-	test("host truncation restores the surviving scope model", async () => {
-		const { host, ctx, session, switches, scope, begin } = await fixture();
-		await scope("outer", { begin: begin(null) });
-		await scope("child", { begin: begin("fixture/small") });
-		await emit(host.handlers, "session_compact", {}, ctx);
-		expect(session.model).toBe(large);
-		expect(switches).toEqual(["small", "large"]);
-		expect(stateFor(ctx).state.scopes).toHaveLength(1);
-	});
-
-	test("before_agent_start restores the model when the handoff is only visible in history", async () => {
-		const { host, ctx, session, switches, scope, begin } = await fixture();
-		await scope("outer", { begin: begin(null) });
-		await scope("child", { begin: begin("fixture/small") });
-		ctx.sessionManager.appendMessage({ role: "custom", customType: "handoff", content: "handoff summary", timestamp: 42 });
-		await emit(host.handlers, "before_agent_start", { systemPrompt: "base" }, ctx);
-		expect(session.model).toBe(large);
-		expect(switches).toEqual(["small", "large"]);
-		expect(stateFor(ctx).state.scopes.map((active) => active.beginToolCallId)).toEqual(["outer"]);
-	});
-
-	test("return to a smaller parent floods older siblings but keeps the closing workbench", async () => {
-		const { host, ctx, session, scope, begin } = await fixture();
-		await scope("outer", { begin: begin("fixture/small") });
-		await scope("old", { begin: begin(null) });
-		await runAssistant(host, ctx, assistant([{ type: "text", text: "old interior to remove" }]));
-		await scope("middle", { end: true, begin: begin(null, "archive ".repeat(100)) });
-		await scope("wide", { end: true, begin: begin("fixture/large", "middle complete") });
-		const records = () => stateFor(ctx).state.collapses;
-		expect(records().find((record) => record.beginToolCallId === "old").collapsed).toBe(false);
-		const workbench = "wide workbench " + "x".repeat(140_000);
-		await runAssistant(host, ctx, assistant([{ type: "text", text: workbench }]));
-		await scope("wide-end", { end: true });
-		expect(session.model).toBe(small);
-		const messages = ctx.sessionManager.buildSessionContext().messages;
-		expect(messages.some((message) => message.content?.[0]?.text === "old interior to remove")).toBe(false);
-		expect(messages.some((message) => message.content?.[0]?.text === workbench)).toBe(true);
-		expect(records().find((record) => record.beginToolCallId === "wide").collapsed).toBe(false);
-	});
-
-	test("an unmatched selector never becomes a nested prompt", async () => {
-		const { ctx, session, switches, scope, begin } = await fixture();
-		let prompts = 0;
-		session.prompt = async () => { prompts += 1; };
-		const result = await scope("unknown", { begin: begin("unrecognized-fixture-selector") });
-		expect(result.content.map((part) => part.text).join(" ")).toContain("WARNING:");
-		expect(stateFor(ctx).state.scopes.at(-1).modelKey).toBe("fixture/large");
-		expect(switches).toEqual([]);
-		expect(prompts).toBe(0);
-	});
-
-	test("a host-resolved role is not compared with a fuzzy model match", async () => {
-		const { ctx, session, scope, begin } = await fixture();
-		installBuiltinSlashExecutor(async (text, runtime) => {
-			const match = /^\/switch\s+(.+)$/.exec(String(text).trim());
-			if (!match) return false;
-			const spec = match[1].trim();
-			await runtime.ctx.onSwitchModel(spec === "task" ? "fixture/small" : spec);
-			return true;
-		});
-		session.modelRegistry.getAll = () => [
-			large,
-			small,
-			tiny,
-			{ provider: "gateway", id: "lazy/task", contextWindow: 1_000_000 },
-		];
-		const result = await scope("role", { begin: begin("task") });
-		const text = result.content.map((part) => part.text).join(" ");
-		expect(text).not.toContain("WARNING:");
-		expect(session.model).toBe(small);
-		expect(stateFor(ctx).state.scopes.at(-1).modelKey).toBe("fixture/small");
-	});
-
-	test("a scope closed under another tokenizer uses its interior characters", async () => {
-		const { host, ctx, session, scope, begin } = await fixture();
-		await scope("measured", { begin: begin(null) });
-		const largeUsage = { ...assistant([{ type: "text", text: "a".repeat(500) }], 11),
-			model: "large", provider: "fixture", usage: { input: 30_000, output: 10 } };
-		await runAssistant(host, ctx, largeUsage);
-		await scope("nested", { begin: begin("fixture/small") });
-		const close = { ...assistant([call("nested-end", "scope", { end: true })], 12),
-			model: "small", provider: "fixture", usage: { input: 900, output: 10 } };
-		await runAssistant(host, ctx, close);
-		session.model = small;
-		await runAssistant(host, ctx, { ...assistant([call("measured-end", "scope", { end: true })], 13),
-			model: "small", provider: "fixture", usage: { input: 1_000, output: 10 } });
-		const { state } = stateFor(ctx);
-		const record = state.collapses.find((item) => item.beginToolCallId === "measured");
-		expect(record.baseModelKey).toBe("fixture/large");
-		expect(record.measuredModelKey).toBe("fixture/small");
-		expect(record.interiorTokens).toBe(Math.ceil(record.interiorChars * state.modelCaches["fixture/small"].tokensPerChar));
-		expect(record.interiorTokens).toBeGreaterThan(0);
-		expect(state.modelCaches["fixture/large"].cachedUntilPos).toBeLessThan(state.modelCaches["fixture/small"].cachedUntilPos);
-	});
-
-	for (const delayed of [false, true]) {
-		test(`unidentified usage uses a character estimate (${delayed ? "late" : "immediate"})`, async () => {
-			const { host, ctx, session, scope, begin } = await fixture();
-			session.model = undefined;
-			await scope("unidentified", { begin: begin(null) });
-			await runAssistant(host, ctx, { ...assistant([{ type: "text", text: "interior ".repeat(80) }], 71), usage: { input: 20_000 } });
-			const closing = assistant([call("unidentified-end", "scope", { end: true })], 72);
-			const usage = { input: 10 };
-			await runAssistant(host, ctx, delayed ? closing : { ...closing, usage });
-			if (delayed) await emit(host.handlers, "message_end", { message: { ...closing, usage } }, ctx);
-			const record = stateFor(ctx).state.collapses.find((item) => item.beginToolCallId === "unidentified");
-			expect(record.baseInputTokens).toBe(20_000);
-			expect(record.endInputTokens).toBe(10);
-			expect(record.baseModelKey).toBeNull();
-			expect(record.measuredModelKey).toBeNull();
-			expect(record.interiorTokens).toBeGreaterThan(0);
-		});
-	}
 });
 
 describe("host truncation", () => {
 	async function openNestedScopes() {
 		const started = await start({ mode: "print" });
-		await runAssistant(
-			started.host,
-			started.ctx,
-			assistant([
-				call("b1", "scope", { begin: { intent: "outer", stage: "direct-execution", budget: { read: 2 }, elder_report: null, permission: "ro" } }),
-			]),
-		);
-		await runAssistant(
-			started.host,
-			started.ctx,
-			assistant([
-				call("b2", "scope", { begin: { intent: "inner", stage: "orchestration-plan", budget: { read: 2 }, elder_report: null, permission: "ro" } }),
-			]),
-		);
+		seedScope(started.ctx, { id: "b1", intent: "outer", budget: { read: 2 } });
+		seedScope(started.ctx, { id: "b2", intent: "inner", stage: "orchestration-plan", budget: { read: 2 } });
 		expect(stateFor(started.ctx).state.scopes.length).toBe(2);
 		return started;
 	}
@@ -1354,11 +1183,7 @@ describe("handoff transaction recovery", () => {
 	test("successor opening audit scopes before first todo still promotes and never sees predecessor elders or messages", async () => {
 		const { host, ctx, manager, session } = await start({ mode: "print" });
 		// Predecessor opens and closes an unarchived scope in generation 0.
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("b_pre", "scope", { begin: { intent: "predecessor work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
+		seedScope(ctx, { id: "b_pre", intent: "predecessor work" });
 		await runAssistant(
 			host,
 			ctx,
@@ -1388,16 +1213,10 @@ describe("handoff transaction recovery", () => {
 		expect(rebuilt[0].content[0].text).toContain("Predecessor handoff report");
 		expect(session.agent.state.messages).toHaveLength(1);
 
-		// Successor opens an audit scope with elder_report: null — must NOT require predecessor's elder report.
-		// The handoff reset every gated stage flag, so execution is gated again;
-		// the first stage is the stage a successor can always open.
-		const auditBegin = await runAssistant(
-			host,
-			ctx,
-			assistant([call("b_audit", "scope", { begin: { intent: "audit", stage: "acceptance-cases", budget: { read: 1 }, elder_report: null, permission: "ro" } })]),
-		);
-		expect(auditBegin[0].blocked).toBe(false);
-		expect(auditBegin[0].result.isError).toBe(false);
+		// Successor opens an audit scope beneath the handoff boundary. The
+		// predecessor elder was cut away, so no report is owed for it.
+		seedScope(ctx, { id: "b_audit", intent: "audit", stage: "acceptance-cases" });
+		expect(stateFor(ctx).state.scopes).toHaveLength(1);
 		await runAssistant(
 			host,
 			ctx,
@@ -1424,138 +1243,12 @@ describe("scope begin permission", () => {
 		expect(item.required).toContain("permission");
 		expect(item.properties.permission.enum).toEqual(["ro", "rw"]);
 	});
-
-	test("permission ro opens before the first ledger submission", async () => {
-		const { host, ctx } = await start();
-		const [opened] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "inspect", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
-		]));
-		expect(opened.result.isError).toBeFalsy();
-		expect(opened.result.content[0].text).toContain("You are now inside this scope.");
-		expect(stateFor(ctx).state.scopes).toHaveLength(1);
-	});
-
-	test("permission rw is refused before the first ledger submission", async () => {
-		const { host, ctx } = await start();
-		const [refused] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: "rw" } }),
-		]));
-		expect(refused.result.isError).toBe(true);
-		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
-		expect(stateFor(ctx).state.scopes).toHaveLength(0);
-	});
-
-	test("permission rw is refused in decision-framing even after a ledger exists", async () => {
-		const { host, ctx } = await start();
-		stateFor(ctx).state.relay.firstEvaluation = "nonempty";
-		const [refused] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "frame", stage: "decision-framing", budget: { read: 1 }, elder_report: null, permission: "rw" } }),
-		]));
-		expect(refused.result.isError).toBe(true);
-		expect(refused.result.content[0].text).toContain("RW_IN_DECISION_FRAMING");
-		expect(stateFor(ctx).state.scopes).toHaveLength(0);
-	});
-
-	test("permission rw opens after the first ledger submission", async () => {
-		const { host, ctx } = await start();
-		await runAssistant(host, ctx, assistant([
-			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["write the change"] }] }),
-		]));
-		expect(stateFor(ctx).state.relay.firstEvaluation).toBe("nonempty");
-		const [opened] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: "rw" } }),
-		]));
-		expect(opened.result.isError).toBeFalsy();
-		expect(stateFor(ctx).state.scopes).toHaveLength(1);
-	});
-
-	test("an invalid permission value is rejected", async () => {
-		const { host, ctx } = await start();
-		const [refused] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "write" } }),
-		]));
-		expect(refused.result.content[0].text).toContain("INVALID_ARGUMENT");
-		expect(refused.result.content[0].text).toContain("permission");
-		expect(stateFor(ctx).state.scopes).toHaveLength(0);
-	});
-
-	test("a todo view does not lift the rw gate", async () => {
-		const { host, ctx } = await start();
-		await runAssistant(host, ctx, assistant([
-			call("t1", "todo", { op: "view" }),
-		]));
-		expect(stateFor(ctx).state.relay.firstEvaluation).toBeNull();
-		const [refused] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: "rw" } }),
-		]));
-		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
-		expect(stateFor(ctx).state.scopes).toHaveLength(0);
-	});
-
-	test("a handoff resets the rw gate for the successor", async () => {
-		const { host, ctx } = await start();
-		await runAssistant(host, ctx, assistant([
-			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["ship it"] }] }),
-		]));
-		const station = stateFor(ctx);
-		station.state.relay = beginGenerationAfterHandoff(station.state.relay, { fromGeneration: 0 });
-		const [refused] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "audit", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "rw" } }),
-		]));
-		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
-		expect(station.state.scopes).toHaveLength(0);
-	});
-
-	test("an omitted permission is treated as rw and refused before the first ledger", async () => {
-		const { host, ctx } = await start();
-		const [refused] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null } }),
-		]));
-		expect(refused.result.isError).toBe(true);
-		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
-		expect(stateFor(ctx).state.scopes).toHaveLength(0);
-	});
-
-	test("a null permission is treated like an omitted one", async () => {
-		const { host, ctx } = await start();
-		const [refused] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null, permission: null } }),
-		]));
-		expect(refused.result.isError).toBe(true);
-		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
-		expect(stateFor(ctx).state.scopes).toHaveLength(0);
-	});
-
-	test("an omitted permission is refused in decision-framing even after a ledger exists", async () => {
-		const { host, ctx } = await start();
-		stateFor(ctx).state.relay.firstEvaluation = "nonempty";
-		const [refused] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "frame", stage: "decision-framing", budget: { read: 1 }, elder_report: null } }),
-		]));
-		expect(refused.result.isError).toBe(true);
-		expect(refused.result.content[0].text).toContain("RW_IN_DECISION_FRAMING");
-		expect(stateFor(ctx).state.scopes).toHaveLength(0);
-	});
-
-	test("an omitted permission opens after the first ledger submission", async () => {
-		const { host, ctx } = await start();
-		await runAssistant(host, ctx, assistant([
-			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["write the change"] }] }),
-		]));
-		const [opened] = await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "write", stage: "direct-execution", budget: { edit: 1 }, elder_report: null } }),
-		]));
-		expect(opened.result.isError).toBeFalsy();
-		expect(stateFor(ctx).state.scopes).toHaveLength(1);
-	});
 });
 
 describe("free resolution write", () => {
 	test("a write to xd://resolve needs no write budget", async () => {
 		const { host, ctx } = await start();
-		await runAssistant(host, ctx, assistant([
-			call("b1", "scope", { begin: { intent: "work", stage: "direct-execution", budget: { read: 1 }, elder_report: null, permission: "ro" } }),
-		]));
+		seedScope(ctx, { id: "b1", intent: "work" });
 		const [resolved] = await runAssistant(host, ctx, assistant([
 			call("w1", "write", { path: "xd://resolve", content: "apply" }),
 		]));
@@ -1575,35 +1268,32 @@ describe("stage gates by session identity", () => {
 		tools: ["read", "write", "bash", "edit"],
 	};
 
-	test("a read-write subagent opens direct-execution without the three stages", async () => {
+	function beginCall(id, intent, stage = "direct-execution") {
+		return call(id, "scope", {
+			begin: {
+				stage,
+				elder_report: null,
+				fission: [{ intent, budget: { read: 1 }, permission: "ro" }],
+			},
+		});
+	}
+
+	test("a read-write subagent's fission begin is admitted without the three stages", async () => {
 		const { host, ctx } = await start({ sessionInit: subagentInit });
 		stateFor(ctx).state.stageFlags = createStageFlags();
 		const [opened] = await runAssistant(
 			host,
 			ctx,
-			assistant([
-				call("b1", "scope", {
-					begin: {
-						intent: "slice",
-						stage: "direct-execution",
-						budget: { read: 1 },
-						elder_report: null,
-						permission: "ro",
-					},
-				}),
-			]),
+			assistant([beginCall("b1", "slice")]),
 		);
-		expect(opened.result.isError).toBeFalsy();
-		expect(opened.result.content[0].text).toContain("Stage: direct-execution");
+		expect(opened.blocked).toBe(false);
+		expect(opened.result.content[0].text).not.toContain("STAGE_FLAGS_UNMET");
 		// The exemption must not hand the subagent a ledger it never earned:
 		// stage flags stay untouched for a non-main session.
 		expect(stateFor(ctx).state.stageFlags).toEqual(createStageFlags());
 	});
 
-	test("a read-only subagent opens direct-execution without the three stages", async () => {
-		// The read-only policy short-circuits the tool-call gate, so the scope
-		// tool runs without station interception. It still reaches
-		// handleScopeCall, where the same session-identity exemption applies.
+	test("a read-only subagent's fission begin is admitted without the three stages", async () => {
 		const { host, ctx } = await start({
 			sessionInit: { agent: "scout", readOnly: true, tools: ["read", "grep", "glob"] },
 		});
@@ -1611,78 +1301,10 @@ describe("stage gates by session identity", () => {
 		const [opened] = await runAssistant(
 			host,
 			ctx,
-			assistant([
-				call("b1", "scope", {
-					begin: {
-						intent: "audit",
-						stage: "direct-execution",
-						budget: { read: 1 },
-						elder_report: null,
-						permission: "ro",
-					},
-				}),
-			]),
+			assistant([beginCall("b1", "audit")]),
 		);
-		expect(opened.result.isError).toBeFalsy();
-		expect(opened.result.content[0].text).toContain("Stage: direct-execution");
-		expect(stateFor(ctx).state.stageFlags).toEqual(createStageFlags());
-	});
-
-	test("a read-write subagent may move backward between stages and repeat execution", async () => {
-		const { host, ctx } = await start({ sessionInit: subagentInit });
-		stateFor(ctx).state.stageFlags = createStageFlags();
-		const [run] = await runAssistant(
-			host,
-			ctx,
-			assistant([
-				call("b1", "scope", {
-					begin: {
-						intent: "run",
-						stage: "direct-execution",
-						budget: { read: 1 },
-						elder_report: null,
-						permission: "ro",
-					},
-				}),
-			]),
-		);
-		expect(run.result.isError).toBeFalsy();
-		const [back] = await runAssistant(
-			host,
-			ctx,
-			assistant([
-				call("b2", "scope", {
-					end: true,
-					begin: {
-						intent: "replan",
-						stage: "orchestration-plan",
-						budget: { read: 1 },
-						elder_report: "run done",
-						permission: "ro",
-					},
-				}),
-			]),
-		);
-		expect(back.result.isError).toBeFalsy();
-		expect(back.result.content[0].text).toContain("Stage: orchestration-plan");
-		const [again] = await runAssistant(
-			host,
-			ctx,
-			assistant([
-				call("b3", "scope", {
-					end: true,
-					begin: {
-						intent: "run again",
-						stage: "direct-execution",
-						budget: { read: 1 },
-						elder_report: "plan done",
-						permission: "ro",
-					},
-				}),
-			]),
-		);
-		expect(again.result.isError).toBeFalsy();
-		expect(again.result.content[0].text).toContain("Stage: direct-execution");
+		expect(opened.blocked).toBe(false);
+		expect(opened.result.content[0].text).not.toContain("STAGE_FLAGS_UNMET");
 		expect(stateFor(ctx).state.stageFlags).toEqual(createStageFlags());
 	});
 
@@ -1692,39 +1314,12 @@ describe("stage gates by session identity", () => {
 		const [refused] = await runAssistant(
 			host,
 			ctx,
-			assistant([
-				call("b1", "scope", {
-					begin: {
-						intent: "early",
-						stage: "direct-execution",
-						budget: { read: 1 },
-						elder_report: null,
-						permission: "ro",
-					},
-				}),
-			]),
+			assistant([beginCall("b1", "early")]),
 		);
 		expect(refused.result.isError).toBe(true);
 		expect(refused.result.content[0].text).toContain("STAGE_FLAGS_UNMET");
 		expect(refused.result.content[0].text).toContain("acceptance-cases");
 		expect(stateFor(ctx).state.scopes).toHaveLength(0);
-		// A refused begin damages no state: the first gated stage still opens.
-		const [stage] = await runAssistant(
-			host,
-			ctx,
-			assistant([
-				call("b2", "scope", {
-					begin: {
-						intent: "cases",
-						stage: "acceptance-cases",
-						budget: { read: 1 },
-						elder_report: null,
-						permission: "ro",
-					},
-				}),
-			]),
-		);
-		expect(stage.result.isError).toBeFalsy();
-		expect(stateFor(ctx).state.stageFlags["acceptance-cases"]).toBe(true);
+		expect(stateFor(ctx).state.stageFlags).toEqual(createStageFlags());
 	});
 });

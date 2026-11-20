@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	createFissionManager,
+	createFlowTailResolver,
 	FissionManagerError,
+	findFissionManager,
+	isFissionManager,
 	retainFissionManager,
 } from "../src/host/fission-manager.mjs";
 
@@ -403,5 +406,70 @@ describe("fission manager", () => {
 		expect(() => {
 			a.label = "other";
 		}).toThrow();
+	});
+});
+
+describe("fission manager live flow tails", () => {
+	function beginFlow(shared, label, parent) {
+		shared.branch(parent);
+		return shared.appendCustomEntry("scope.begin", { flow: label });
+	}
+
+	test("resolves a flow's live leaf and ignores its siblings", () => {
+		const shared = makeShared();
+		const root = seed(shared);
+		const aBegin = beginFlow(shared, "b1.0", root);
+		const bBegin = beginFlow(shared, "b1.1", root);
+		shared.branch(aBegin);
+		const aWrite = shared.appendCustomEntry("scope.state", { seq: 1 });
+		shared.branch(bBegin);
+		const bWrite = shared.appendCustomEntry("scope.state", { seq: 2 });
+
+		const resolveA = createFlowTailResolver(shared, { label: "b1.0" });
+		const resolveB = createFlowTailResolver(shared, { flowId: "b1.1" });
+		expect(resolveA()).toBe(aWrite);
+		expect(resolveB()).toBe(bWrite);
+		expect(resolveA()).not.toBe(bWrite);
+	});
+
+	test("a resolver-driven proxy follows raw scheduler writes", () => {
+		const shared = makeShared();
+		const root = seed(shared);
+		const begin = beginFlow(shared, "b1.0", root);
+		const proxy = createFissionManager(shared, {
+			label: "b1.0",
+			resolveTail: createFlowTailResolver(shared, { label: "b1.0" }),
+		});
+		expect(proxy.getLeafId()).toBe(begin);
+		// The scheduler writes the flow's closing boundary through the raw
+		// manager; the proxy's next write must continue from it, not from its
+		// own stale tail.
+		const end = shared.appendCustomEntry("scope.end", {});
+		const message = proxy.appendMessage({ role: "assistant", content: "after" });
+		expect(shared.getLeafId()).toBe(end);
+		expect(shared.getEntry(message).parentId).toBe(end);
+		expect(ids(proxy.getBranch()).slice(-2)).toEqual([end, message]);
+	});
+
+	test("one flow's disposal never seals the manager for its siblings", async () => {
+		const shared = makeShared();
+		const root = seed(shared);
+		beginFlow(shared, "b1.0", root);
+		beginFlow(shared, "b1.1", root);
+		const a = createFissionManager(shared, {
+			label: "b1.0",
+			resolveTail: createFlowTailResolver(shared, { label: "b1.0" }),
+		});
+		const b = createFissionManager(shared, {
+			label: "b1.1",
+			resolveTail: createFlowTailResolver(shared, { label: "b1.1" }),
+		});
+		expect(isFissionManager(a)).toBe(true);
+		expect(findFissionManager(shared, "b1.0")).toBe(a);
+		await a.close();
+		expect(shared.calls.seal).toBe(0);
+		expect(shared.calls.close).toBe(0);
+		const written = b.appendMessage({ role: "assistant", content: "alive" });
+		expect(shared.getEntry(written).parentId).not.toBeNull();
 	});
 });

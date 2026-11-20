@@ -52,6 +52,22 @@
 // Flow tails are derived from the journal. The host appends through the shared
 // manager directly, so a cached tail goes stale after the first turn. tailOf()
 // returns the newest entry whose parent chain reaches the flow's begin entry.
+//
+// Session continuity. Every boundary the scheduler writes around a flow or a
+// batch also enters the heir's messages, in journal order: the flow's begin
+// when it starts, then the heir's own scope.end, then the batch scope.end.
+// The heir's own scope closes before promotion, so the batch scope is on top
+// when finalization closes it and the owner's depth returns to its parent.
+// A cost-cap rejection is a cancellation with a different cause, never a crash:
+// only the capped flow stops, its siblings keep running, and the batch reports
+// cost-capped once the last flow stops.
+//
+// Per-flow receipts. Every flow sees the same scope-begin tool call; each
+// branch then carries its own toolResult naming that flow's intent, budget,
+// permission, and model. The disk chain is toolCall -> batch begin -> receipt
+// -> flow begin, and the owner's ack stays off every flow branch. In model
+// context the receipt directly follows the call and the batch boundary follows
+// the receipt, so the provider's call/result pairing stays adjacent.
 
 import { beginScope, closeScope, splitFissionBudget, validateFission } from "../scope/accounting.mjs";
 import { createFlowState } from "../scope/state.mjs";
@@ -106,6 +122,12 @@ const MANAGER_METHODS = [
 ];
 const HANDOFF_METHODS = ["appendEntriesAtomically", "getSessionFile", "ingestReplicatedEntry"];
 const TERMINAL = new Set(["closed", "cancelled", "crashed"]);
+const COST_CAP_CODES = new Set([
+	"COST_CAP",
+	"COST_CAP_EXCEEDED",
+	"COST_LIMIT_EXCEEDED",
+	"MAX_COST_EXCEEDED",
+]);
 const SHARED_STATE_FIELDS = new Set(["herdMode", "relay", "stageFlags", "pins"]);
 const TOOL_RESULT_ROLES = new Set(["toolResult", "tool_result", "tool"]);
 
@@ -115,6 +137,16 @@ function isObject(value) {
 
 function isNonEmptyString(value) {
 	return typeof value === "string" && value.length > 0;
+}
+
+// The host raises a CostCapError when the shared gate refuses a request. Match
+// the class name and the conventional codes, and follow a wrapped cause; a
+// message substring is not a classification.
+function isCostCapError(error) {
+	if (!isObject(error)) return false;
+	if (error.name === "CostCapError") return true;
+	if (typeof error.code === "string" && COST_CAP_CODES.has(error.code)) return true;
+	return error.cause && error.cause !== error ? isCostCapError(error.cause) : false;
 }
 
 function missingMethods(target, names) {
@@ -165,6 +197,9 @@ function findToolResultId(manager, toolCallId) {
 		const entry = entries[index];
 		const message = entry?.type === "message" ? entry.message : undefined;
 		if (!message || !TOOL_RESULT_ROLES.has(message.role)) continue;
+		// A per-flow receipt shares the batch's toolCallId. The owner's ack is
+		// the result the control path persisted, never a flow receipt.
+		if (message.details?.fissionReceipt) continue;
 		if (message.toolCallId === toolCallId || message.toolCallID === toolCallId) return entry.id;
 	}
 	return null;
@@ -285,6 +320,17 @@ export function createFissionScheduler(options = {}) {
 			throw refusal(FISSION_SCHEDULER_CODES.UNSUPPORTED, "vibeActive() must return a boolean");
 		}
 		return active;
+	}
+
+	function costCapError(error) {
+		if (typeof options.isCostCapError === "function") {
+			try {
+				return options.isCostCapError(error) === true;
+			} catch {
+				// A classifier that throws is not a match.
+			}
+		}
+		return isCostCapError(error);
 	}
 
 	function gateOptions(request = {}) {
@@ -687,6 +733,57 @@ export function createFissionScheduler(options = {}) {
 		return appendAt(manager, anchorId, () => manager.appendCustomEntry(type, data));
 	}
 
+	function appendMessageAt(anchorId, message) {
+		if (!anchorId) {
+			throw refusal(
+				FISSION_SCHEDULER_CODES.UNSUPPORTED,
+				"cannot write a tool receipt: no persisted batch boundary",
+			);
+		}
+		return appendAt(manager, anchorId, () => manager.appendMessage(message));
+	}
+
+	function modelLabel(model) {
+		if (typeof model === "string") return model;
+		if (!isObject(model)) return String(model ?? "unknown");
+		const id = model.id ?? model.name ?? model.model ?? model.spec;
+		return typeof id === "string" ? id : String(id ?? "unknown");
+	}
+
+	// Every flow sees the same begin tool call but its own tool result. The
+	// receipt, not the later prompt, must state what this flow owns, and it
+	// keeps the host's call/result pairing by carrying the same toolCallId.
+	function receiptMessage(flow) {
+		const budget = Object.entries(flow.item.budget)
+			.map(([tool, amount]) => `${tool} ${amount}`)
+			.join(", ");
+		return {
+			role: "toolResult",
+			toolName: "scope",
+			toolCallId: flow.batch.toolCallId,
+			isError: false,
+			content: [
+				{
+					type: "text",
+					text: [
+						`Fission flow ${flow.label} (batch ${flow.batch.id}, index ${flow.index}, stage ${flow.batch.stage}).`,
+						`Intent: ${flow.item.intent}`,
+						`Budget: ${budget || "none"}. Permission: ${flow.item.permission}. Model: ${modelLabel(flow.model)}.`,
+						"This receipt assigns this flow only; sibling receipts assign the other flows.",
+					].join("\n"),
+				},
+			],
+			details: {
+				fissionReceipt: {
+					batchId: flow.batch.id,
+					flowId: flow.id,
+					index: flow.index,
+				},
+			},
+			timestamp: Date.now(),
+		};
+	}
+
 	function beginData(flow) {
 		return {
 			intent: flow.item.intent,
@@ -759,6 +856,27 @@ export function createFissionScheduler(options = {}) {
 	function closeBatchScope(batch) {
 		const state = batch.owner.state;
 		if (!Array.isArray(state.scopes) || !batch.scopeId) return;
+		const index = state.scopes.findIndex((scope) => scope?.id === batch.scopeId);
+		// A stack without the batch scope is already closed. Closing is
+		// idempotent, so a retried finalizer may call this twice.
+		if (index < 0) return;
+		// A scope above the batch scope is a leak: close it and say so instead of
+		// leaving the owner permanently one level too deep.
+		while (state.scopes.length > index + 1) {
+			const open = state.scopes.at(-1);
+			batchWarning(
+				batch,
+				"BATCH_SCOPE_DESCENDANT_OPEN",
+				new Error(`scope ${String(open?.id)} is still open inside batch ${batch.id}`),
+				null,
+			);
+			try {
+				if (!closeScope(state)?.ok) return;
+			} catch (error) {
+				batchWarning(batch, "BATCH_SCOPE_CLOSE_FAILED", error, null);
+				return;
+			}
+		}
 		if (state.scopes.at(-1)?.id !== batch.scopeId) return;
 		try {
 			closeScope(state);
@@ -797,6 +915,22 @@ export function createFissionScheduler(options = {}) {
 			);
 		}
 		state.messages.push(...messages);
+	}
+
+	// A boundary the scheduler wrote is structure the model must see. Convert
+	// the journal entries to AgentMessages; a missing entry is not invented.
+	function boundaryMessages(...entryIds) {
+		const entries = [];
+		for (const entryId of entryIds) {
+			if (!entryId) continue;
+			const entry = manager.getEntry(entryId);
+			if (entry) entries.push(entry);
+		}
+		return handoffMessages(entries);
+	}
+
+	function injectBoundaries(flow, entryIds) {
+		inject(flow, boundaryMessages(...entryIds));
 	}
 
 	async function performCopy(record, target) {
@@ -1083,7 +1217,9 @@ export function createFissionScheduler(options = {}) {
 					batchWarning(flow.batch, "ABORT_ENTRY_FAILED", error, flow);
 				}
 				flow.status = "cancelled";
-				flow.batch.cancelled = true;
+				// A cost cap stops one flow by design, not the batch: siblings
+				// keep running and only the batch status reports the cap.
+				if (!flow.costCapped) flow.batch.cancelled = true;
 				onFlowTerminal(flow);
 				return;
 			}
@@ -1108,6 +1244,7 @@ export function createFissionScheduler(options = {}) {
 					onFlowTerminal(flow);
 					return;
 				}
+				flow.endId = endId;
 				flow.status = "closed";
 				onFlowTerminal(flow);
 				enqueueHandoff(flow.batch, flow, endId);
@@ -1137,8 +1274,12 @@ export function createFissionScheduler(options = {}) {
 
 			if (anchor && anchor.status === "waiting-heir") {
 				await drainToAnchor(batch, anchor);
+				// The heir's own flow scope closes here, before promotion, so the
+				// batch scope is on top when closeBatchScope() runs. finishFlow()
+				// returns early on this path, so this is its only close.
+				closeFlowScope(anchor);
 				try {
-					writeEnd(anchor, batch.costCapped ? "cost-capped" : "completed");
+					anchor.endId = writeEnd(anchor, batch.costCapped ? "cost-capped" : "completed");
 					anchor.status = "closed";
 					anchor.endedOrder = ++batch.endSeq;
 					anchor.endedAt = Date.now();
@@ -1167,14 +1308,49 @@ export function createFissionScheduler(options = {}) {
 			const usable = Boolean(
 				anchor && anchor.status === "closed" && !anchor.cancelReason && !anchor.error,
 			);
-			if (anchor) {
-				batch.status = usable
-					? (batch.costCapped ? "cost-capped" : "closed")
-					: anchor.cancelReason
-						? (batch.costCapped ? "cost-capped" : "cancelled")
-						: "failed";
+			// A terminal heir still takes over after a crash: the last-ended flow
+			// owns the conversation even when its own turn failed. Only a
+			// cancelled flow leaves the owner's context untouched.
+			const takeover = Boolean(
+				anchor &&
+				!anchor.cancelReason &&
+				(anchor.status === "closed" || anchor.status === "crashed"),
+			);
+			if (takeover && anchor.status === "crashed" && !anchor.endId) {
+				// A crashed flow never wrote its own boundary. Record one now so
+				// the adopted context and the journal close at the same depth.
+				closeFlowScope(anchor);
 				try {
-					writeBatchEnd(batch, anchor);
+					anchor.endId = writeEnd(anchor, "failed");
+				} catch (error) {
+					batchWarning(batch, "HEIR_END_FAILED", error, anchor);
+				}
+			}
+			// A crash anywhere in the batch fails the batch summary, even when
+			// the surviving anchor is closed and usable. A cost cap is a
+			// cancellation, not a crash, so it stays out of this flag.
+			const failed = batch.flows.some(
+				(flow) =>
+					flow.status === "crashed" ||
+					(flow.error && !flow.costCapped && !flow.cancelReason),
+			);
+			if (anchor) {
+				batch.status = failed
+					? "failed"
+					: batch.costCapped
+						? "cost-capped"
+						: usable
+							? "closed"
+							: anchor.cancelReason
+								? "cancelled"
+								: "failed";
+				try {
+					// The model sees the boundaries the scheduler wrote on the
+					// heir's behalf, in journal order: its own scope.end, then the
+					// batch scope.end. Adoption splices this context into the owner.
+					if (takeover && anchor.endId) injectBoundaries(anchor, [anchor.endId]);
+					const batchEndId = writeBatchEnd(batch, anchor);
+					if (takeover) injectBoundaries(anchor, [batchEndId]);
 				} catch (error) {
 					batchWarning(batch, "BATCH_END_FAILED", error, anchor);
 					batch.status = "failed";
@@ -1187,7 +1363,7 @@ export function createFissionScheduler(options = {}) {
 				});
 			}
 
-			if (usable) {
+			if (takeover) {
 				try {
 					const failures = adopt(batch, anchor);
 					for (const failure of failures) {
@@ -1195,14 +1371,24 @@ export function createFissionScheduler(options = {}) {
 						batch.limits.push({ ...failure, flowId: anchor.id });
 					}
 					promote(batch, anchor);
-					batch.status = batch.costCapped
-						? "cost-capped"
-						: failures.length > 0
-							? "failed"
-							: "closed";
-					batch.outcome = failures.length > 0
-						? "closed-with-adoption-failure"
-						: "closed";
+					batch.status = failed
+						? "failed"
+						: batch.costCapped
+							? "cost-capped"
+							: failures.length > 0
+								? "failed"
+								: usable
+									? "closed"
+									: "failed";
+					batch.outcome = failed
+						? (failures.length > 0
+							? "failed-with-adoption-failure"
+							: usable
+								? "failed"
+								: "failed-with-takeover")
+						: usable
+							? (failures.length > 0 ? "closed-with-adoption-failure" : "closed")
+							: (failures.length > 0 ? "failed-with-adoption-failure" : "failed-with-takeover");
 					emit(batch, "batch.adopted", {
 						heir: anchor.label,
 						limitations: failures.map((failure) => failure.code),
@@ -1654,6 +1840,9 @@ export function createFissionScheduler(options = {}) {
 				agent,
 				scopeId: opened.scope.id,
 				beginId: null,
+				receiptId: null,
+				endId: null,
+				costCapped: false,
 				status: "spawning",
 				cancelReason: null,
 				error: null,
@@ -1694,10 +1883,27 @@ export function createFissionScheduler(options = {}) {
 			}
 		}
 
-		const prefix = handoffMessages(manager.getBranch(batch.ackId));
+		// The original tool call is the batch begin's parent and is shared by
+		// every flow. The owner's ack is not: each flow gets its own receipt
+		// under the batch begin, so the disk chain is
+		// toolCall -> batch begin -> receipt -> flow begin.
+		const batchBegin = manager.getEntry(batch.batchBeginId);
+		const historyParent = batchBegin?.parentId ?? null;
+		const history = historyParent ? handoffMessages(manager.getBranch(historyParent)) : [];
+		const batchBoundary = boundaryMessages(batch.batchBeginId);
 		for (const flow of batch.flows) {
-			flow.beginId = writeAt(batch.ackId, "scope.begin", beginData(flow));
-			flow.agent.state.messages.push(...prefix);
+			flow.receiptId = appendMessageAt(batch.batchBeginId, receiptMessage(flow));
+			flow.beginId = writeAt(flow.receiptId, "scope.begin", beginData(flow));
+			// The model needs the call and its own result adjacent. The batch
+			// boundary is the receipt's disk parent, but injecting it between
+			// the call and the result would break the provider's tool protocol,
+			// so the boundary follows the receipt in the model context.
+			flow.agent.state.messages.push(
+				...history,
+				...boundaryMessages(flow.receiptId),
+				...batchBoundary,
+				...boundaryMessages(flow.beginId),
+			);
 			try {
 				options.bindFlow(flow.id, flow.station, flow.permission, {
 					batchId: batch.id,
@@ -1807,20 +2013,67 @@ export function createFissionScheduler(options = {}) {
 
 	// -- Events ---------------------------------------------------------------
 
+	function stopErrorFromMessage(message) {
+		const error = new Error(
+			typeof message.errorMessage === "string" && message.errorMessage
+				? message.errorMessage
+				: "the provider reported an error stop reason",
+		);
+		error.stopReason = "error";
+		return error;
+	}
+
+	// The host can resolve a turn normally while its assistant message says the
+	// turn failed. Read the last assistant message so an error stop reason can
+	// never be reported as a completed flow.
+	function lastAssistantStopError(flow) {
+		const messages = flow.agent?.state?.messages;
+		if (!Array.isArray(messages)) return null;
+		for (let index = messages.length - 1; index >= 0; index -= 1) {
+			const message = messages[index];
+			if (message?.role !== "assistant") continue;
+			return message.stopReason === "error" ? stopErrorFromMessage(message) : null;
+		}
+		return null;
+	}
+
 	function settleFlow(flow, info = {}) {
 		if (isTerminal(flow)) return flow.finishPromise;
+		if (!info.error && info.aborted !== true && !flow.cancelReason) {
+			const failure = lastAssistantStopError(flow);
+			if (failure) info = { ...info, error: failure };
+		}
+		const capped = classifyCostCap(flow, info.error);
 		flow.endInfo = { ...(flow.endInfo ?? {}), ...info };
 		if (info.aborted === true && !flow.cancelReason) {
 			flow.cancelReason = info.reason ?? "aborted";
 		}
-		if (info.error) flow.error = info.error;
+		if (info.error && !capped) flow.error = info.error;
 		void finishFlow(flow);
 		return flow.finishPromise;
 	}
 
+	// A cost cap ends the flow exactly like a cancellation, with a different
+	// cause. It must never fall into the crash path, which would report a
+	// provider failure and hide that the shared gate is exhausted.
+	function classifyCostCap(flow, error) {
+		if (!costCapError(error)) return false;
+		flow.batch.costCapped = true;
+		flow.costCapped = true;
+		flow.cancelReason ??= "cost-capped";
+		flow.error = null;
+		return true;
+	}
+
 	function crashFlow(flow, error) {
 		if (isTerminal(flow)) return;
-		flow.error = error instanceof Error ? error : new Error(String(error));
+		const failure = error instanceof Error ? error : new Error(String(error));
+		if (classifyCostCap(flow, failure)) {
+			flow.endInfo = { ...(flow.endInfo ?? {}), aborted: true, reason: flow.cancelReason };
+			void finishFlow(flow);
+			return;
+		}
+		flow.error = failure;
 		flow.endInfo = { ...(flow.endInfo ?? {}), aborted: false, error: flow.error };
 		void finishFlow(flow);
 	}
@@ -1838,13 +2091,24 @@ export function createFissionScheduler(options = {}) {
 			return;
 		}
 		if (event.type === "message_end") {
+			const message = event.message;
+			if (
+				message?.role === "assistant" &&
+				message.stopReason === "error" &&
+				!flow.cancelReason &&
+				!flow.error
+			) {
+				const failure = stopErrorFromMessage(message);
+				if (!classifyCostCap(flow, failure)) flow.error = failure;
+			}
 			void scheduleFlush(flow.batch);
 			return;
 		}
 		if (event.type === "error" && !flow.error) {
-			flow.error = event.error instanceof Error
+			const failure = event.error instanceof Error
 				? event.error
 				: new Error(String(event.error?.message ?? event.message ?? "flow error"));
+			if (!classifyCostCap(flow, failure)) flow.error = failure;
 		}
 	}
 
@@ -1892,6 +2156,7 @@ export function createFissionScheduler(options = {}) {
 				index: flow.index,
 				status: flow.status,
 				beginId: flow.beginId ?? null,
+				receiptId: flow.receiptId ?? null,
 				nested: flow.nested.map((child) => child.id),
 			})),
 			handoffs: batch.handoffs.map((record) => ({
@@ -1964,7 +2229,7 @@ export function createFissionScheduler(options = {}) {
 				);
 			}
 			flow.cancelReason = String(reason ?? "cancelled");
-			flow.batch.cancelled = true;
+			if (cancelOptions.costCap !== true) flow.batch.cancelled = true;
 			if (cancelOptions.cascade !== false) {
 				cancelDescendants(flow, flow.cancelReason);
 			}
@@ -2023,7 +2288,8 @@ export function createFissionScheduler(options = {}) {
 				return { ok: false, code: FISSION_SCHEDULER_CODES.FLOW_NOT_FOUND, flowId };
 			}
 			flow.batch.costCapped = true;
-			return scheduler.cancelFlow(flowId, reason);
+			flow.costCapped = true;
+			return scheduler.cancelFlow(flowId, reason, { costCap: true });
 		},
 
 		broadcast(text, broadcastOptions = {}) {
@@ -2117,6 +2383,7 @@ export function createFissionScheduler(options = {}) {
 						index: flow.index,
 						status: flow.status,
 						beginId: flow.beginId,
+						receiptId: flow.receiptId,
 						nested: flow.nested.map((child) => child.id),
 					});
 				}

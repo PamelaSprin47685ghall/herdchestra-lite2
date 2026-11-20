@@ -139,7 +139,7 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 			return {
 				block: true,
 				reason:
-					"Not in a scope. Outside all scopes only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { intent, stage, budget, elder_report, permission } }) before using any other tool.",
+					"Not in a scope. Outside all scopes only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, fission: [{ intent, budget, permission }] } }); one flow is a one-item fission array, and every item must declare permission.",
 			};
 		}
 		if (toolName === "wait") return undefined;

@@ -4,9 +4,7 @@
 
 import {
   applyAmend,
-  beginScope,
   closeScope,
-  createState,
   currentScope,
   findActivePools,
   findFoldablePool,
@@ -16,13 +14,12 @@ import {
   splitFissionBudget,
   validateFission,
 } from "../scope/index.mjs";
-import { DECISION_FRAMING, NORMAL_STAGES } from "../scope/stages.mjs";
 import { MAIN_AGENT } from "../host/policy.mjs";
-import { applyCollapses, findBegin, findToolCallIndex } from "../transcript/index.mjs";
+import { findBegin } from "../transcript/index.mjs";
 import { invalidatePromotion } from "../relay/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
-import { amendText, beginText, endText } from "./texts.mjs";
+import { amendText, endText } from "./texts.mjs";
 import {
   charsToTokens,
   resolveModelPolicy,
@@ -30,15 +27,14 @@ import {
 import {
   measureScopeInterior,
   shouldFoldPool,
-  sliceChars,
 } from "./fold.mjs";
 import { modelChoice, queueModelSwitch } from "./models.mjs";
 
 import { loadDoc, render } from "../prompts/index.mjs";
 import { applyStageBegin, missingStages } from "../scope/stage-flags.mjs";
+import { DECISION_FRAMING, NORMAL_STAGES } from "../scope/stages.mjs";
 
 const E = loadDoc("errors");
-const L = loadDoc("labels");
 
 function handleAmendCall(station, call, base, currentIndex) {
   const state = station.state;
@@ -93,6 +89,31 @@ function handlePinCall(station, call) {
   return textResult("OK");
 }
 
+/** True when the model can still see the elder's begin on the branch. */
+function elderBeginVisible(station, record) {
+  if (typeof station.findBeginEntry !== "function") return false;
+  const entry = station.findBeginEntry(record.beginToolCallId);
+  return entry !== null && entry !== undefined;
+}
+
+/**
+ * Stage refusals carry the concrete stage names. The scope domain answers
+ * with a bare code, so this layer renders the prompt text: the stage the
+ * model may choose, or the stages still missing before execution.
+ */
+function fissionRefusalText(state, validation) {
+  if (validation.code === "INVALID_STAGE") {
+    return state.herdMode
+      ? render(E["herd-only-framing"], { stage: DECISION_FRAMING })
+      : render(E["normal-stage"], { stages: NORMAL_STAGES.join(" | ") });
+  }
+  if (validation.code === "STAGE_FLAGS_UNMET") {
+    const missing = missingStages(state.stageFlags);
+    return render(E["stage-flags-unmet"], { missing: missing.join(", ") });
+  }
+  return validation.reason;
+}
+
 /**
  * Register one effective fission batch with the injected scheduler and reserve
  * its budgets. Validation is complete before the first mutation. The owner
@@ -114,7 +135,41 @@ function handleFissionBegin(station, call, { args, ctx }) {
     relayOn: station.relayOn(ctx),
   };
   const validation = validateFission(state, begin, options);
-  if (!validation.ok) return errorResult(validation.code, validation.reason);
+  if (!validation.ok) {
+    return errorResult(validation.code, fissionRefusalText(state, validation));
+  }
+  // A preceding todo can request a handoff after batch preflight. From then
+  // on the handoff owns the session, so the opening is refused before any
+  // scheduler or retirement check can answer with a lesser error.
+  if (!state.herdMode && state.relay?.handoffPending) {
+    return errorResult("RELAY_HANDOFF_PENDING", E["scope-handoff-pending"]);
+  }
+
+  // An unarchived elder at the level this batch will occupy must be reported
+  // before any flow opens: the flows begin beneath this receipt, no later
+  // sibling comes back for the elder, and a report given to an unseen scope
+  // would only be invented. The elder whose begin already left the branch is
+  // sealed instead, exactly as a host boundary retires it.
+  const elderReport =
+    typeof begin.elder_report === "string" ? trimText(begin.elder_report) : null;
+  const parentScope = currentScope(state);
+  const boundary =
+    Number.isInteger(state.relay?.generation) && state.relay.generation >= 0
+      ? state.relay.generation
+      : 0;
+  const epoch = Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0;
+  const pendingElder = findPendingReportElder(
+    state,
+    parentScope?.id ?? null,
+    boundary,
+    epoch,
+  );
+  const elderVisible = pendingElder !== null && elderBeginVisible(station, pendingElder);
+  if (elderVisible && !elderReport) {
+    return errorResult("MISSING_ELDER_REPORT", E["missing-elder-report"], {
+      field: "elder_report",
+    });
+  }
 
   // Retirement has two halves: the scheduler must know the batch, and the
   // host context must expose the abort that ends this agent's run. `ctx.agent`
@@ -140,7 +195,7 @@ function handleFissionBegin(station, call, { args, ctx }) {
       flows: validation.items,
       totals: validation.totals,
       stage,
-      elderReport: typeof begin.elder_report === "string" ? trimText(begin.elder_report) : null,
+      elderReport,
       mainAgent: options.mainAgent,
       nested: Boolean(station.fissionFlow),
     });
@@ -161,6 +216,12 @@ function handleFissionBegin(station, call, { args, ctx }) {
       // The split refusal is the answer; a cancel failure adds nothing.
     }
     return errorResult(split.code, split.reason);
+  }
+  // The elder transition commits only after the batch is registered and its
+  // budget is reserved: a refused batch must not archive or seal anything.
+  if (pendingElder !== null) {
+    if (elderVisible) pendingElder.report = elderReport;
+    else pendingElder.sealed = true;
   }
   if (options.mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
   if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
@@ -215,209 +276,47 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       "A fission flow does not open or close its own scope; the scheduler owns its begin and end.",
     );
   }
-  const rawModel = hasBegin ? args.begin?.model : null;
-  if (rawModel != null && (typeof rawModel !== "string" || !rawModel.trim())) {
-    return errorResult("INVALID_ARGUMENT", E["scope-model"], { field: "model" });
+  if (hasBegin) {
+    return errorResult(
+      "INVALID_BEGIN_SHAPE",
+      "A begin requires stage, elder_report, and fission. The single-flow begin shape no longer exists; to open one flow, pass a one-item fission array.",
+    );
   }
-  if (!hasBegin && !hasEnd) {
+  if (!hasEnd) {
     return errorResult(
       "INVALID_ARGUMENT",
       endPresent ? E["scope-end-false"] : E["scope-neither"],
     );
   }
-  const elderReport = hasBegin ? args.begin?.elder_report : undefined;
-  if (hasBegin && elderReport !== undefined && elderReport !== null && typeof elderReport !== "string") {
-    return errorResult(
-      "INVALID_ARGUMENT",
-      E["scope-elder-report"],
-      { field: "elder_report" },
-    );
-  }
-  // A preceding todo can request handoff after batch preflight.
-  if (hasBegin && !state.herdMode && state.relay?.handoffPending) {
-    return errorResult(
-      "RELAY_HANDOFF_PENDING",
-      E["scope-handoff-pending"],
-    );
-  }
-
-  // Poka-yoke only: "rw" means the scope may write; "ro" is a trusted
-  // declaration and is never enforced. An omitted (or null) permission is
-  // treated as "rw", because forgetting to declare is exactly the mistake this
-  // gate exists to catch; the handler must not depend on host-side schema
-  // validation. The guard runs before any state transition, so a refused begin
-  // cannot damage the open scope.
-  if (hasBegin) {
-    const rawPermission = args.begin?.permission;
-    if (rawPermission !== undefined && rawPermission !== null && rawPermission !== "ro" && rawPermission !== "rw") {
-      return errorResult(
-        "INVALID_ARGUMENT",
-        E["scope-permission"],
-        { field: "permission" },
-      );
-    }
-    const declared = rawPermission ?? "rw";
-    if (declared === "rw" && args.begin?.stage === DECISION_FRAMING) {
-      return errorResult(
-        "RW_IN_DECISION_FRAMING",
-        E["rw-decision-framing"],
-        { field: "permission", stage: args.begin?.stage },
-      );
-    }
-    if (declared === "rw" && station.relayOn(ctx) && state.relay?.firstEvaluation === null) {
-      return errorResult(
-        "RW_BEFORE_LEDGER",
-        E["rw-before-ledger"],
-        {
-          field: "permission",
-          generation: state.relay?.generation ?? 0,
-          firstEvaluation: state.relay?.firstEvaluation ?? null,
-        },
-      );
-    }
-  }
-
-  const stage = args.begin?.stage;
-  // Stage flags describe the main holder's own work line. A subagent session
-  // is spawned for one sliced piece of work and may open any stage in any
-  // order, so the verdict is taken once here: the gate below and both flag
-  // writes later reuse it, never recomputing mid-call.
-  const mainAgent = station.policy(ctx) === MAIN_AGENT;
-  // Pre-validate an opening scope without touching live state so a failed
-  // begin cannot damage the scope being closed in a combined call.
-  if (hasBegin) {
-    if (state.herdMode && stage !== DECISION_FRAMING) {
-      return errorResult(
-        "INVALID_STAGE",
-        render(E["herd-only-framing"], { stage: DECISION_FRAMING }),
-      );
-    }
-    if (!state.herdMode && !NORMAL_STAGES.includes(stage)) {
-      return errorResult(
-        "INVALID_STAGE",
-        render(E["normal-stage"], { stages: NORMAL_STAGES.join(" | ") }),
-      );
-    }
-    if (mainAgent && stage === "direct-execution") {
-      const missing = missingStages(state.stageFlags);
-      if (missing.length > 0) {
-        return errorResult(
-          "STAGE_FLAGS_UNMET",
-          render(E["stage-flags-unmet"], { missing: missing.join(", ") }),
-        );
-      }
-    }
-    const validation = beginScope(createState(), {
-      toolCallId: call.id,
-      intent: args.begin?.intent,
-      stage,
-      budget: args.begin?.budget,
-    });
-    if (!validation.ok) return errorResult(validation.code, validation.reason);
-  }
 
   station.observeActualModel(ctx);
-  const current = currentScope(state);
-  const from = modelChoice(station, ctx, current?.modelSpec ?? state.baseModelSpec, current?.modelKey ?? state.baseModelKey);
-  const parent = state.scopes.at(-2);
-  const outer = hasEnd && current
-    ? modelChoice(station, ctx, parent?.modelSpec ?? current.previousModelSpec ?? state.baseModelSpec,
-      parent?.modelKey ?? current.previousModelKey ?? state.baseModelKey)
-    : from;
-  const target = rawModel == null ? outer : modelChoice(station, ctx, rawModel);
-  const changingModel = target.spec !== from.spec && (!target.key || !from.key || target.key !== from.key);
-  const projectedTokens = target.window > 0 ? station.currentContextTokens(base, target.key) : null;
-  const beginFlood = hasBegin && target.window > 0 && projectedTokens >= 0.82 * target.window;
-  const returnFlood = hasEnd && !hasBegin && changingModel && target.window > 0 &&
-    (!from.window || target.window < from.window) && projectedTokens >= 0.82 * target.window;
-  const foldContext = { state, args, base, currentMessage, currentPersisted, target, ctx };
-  // The level whose siblings are archived is the parent of the active scope:
-  // for a begin-only call it is the current scope id (the new scope is nested);
-  // for closing it is the parent level of the closing scope.
-  const beginParentId = current?.id ?? null;
-  const boundary = state.relay?.generation ?? 0;
-  const epoch = state.epoch ?? 0;
-
-  // --- Begin only ---------------------------------------------------------
-  if (hasBegin && !hasEnd) {
-    const pending = findPendingReportElder(state, beginParentId, boundary, epoch);
-    let visible = false;
-    if (pending) {
-      visible =
-        findBegin(base, pending.beginToolCallId) !== null &&
-        station.findBeginEntry(pending.beginToolCallId) !== null;
-      if (visible) {
-        if (!(typeof elderReport === "string" && trimText(elderReport))) {
-          return errorResult(
-            "MISSING_ELDER_REPORT",
-            E["missing-elder-report"],
-            { intent: pending.intent },
-          );
-        }
-      }
-    }
-    if (beginFlood) {
-      const overflow = prepareWindow(station, foldContext, projectedTokens, state);
-      if (overflow) return overflow;
-    }
-    if (pending) {
-      if (visible) {
-        pending.report = trimText(elderReport);
-        pending.sealed = false;
-      } else {
-        // The pending elder's interior left the branch; never ask for a
-        // report about a scope the model cannot see.
-        pending.sealed = true;
-      }
-    }
-    if (!beginFlood) foldEligiblePool(station, { ...foldContext, parentId: beginParentId, boundary, epoch });
-    const out = beginScope(state, {
-      toolCallId: call.id,
-      intent: args.begin?.intent,
-      stage,
-      budget: args.begin?.budget,
-    });
-    if (!out.ok) return errorResult(out.code, out.reason);
-    if (mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
-    if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
-    attachModel(station, out.scope, target, outer, from);
-    out.scope.preBeginInputTokens =
-      Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
-    return textResult(beginText(out.scope));
-  }
-
-  // --- End (only or combined) ---------------------------------------------
   const scope = currentScope(state);
   if (!scope) {
     return errorResult("NOT_IN_SCOPE", E["scope-end-outside"]);
   }
+  const from = modelChoice(station, ctx, scope.modelSpec ?? state.baseModelSpec, scope.modelKey ?? state.baseModelKey);
+  const parent = state.scopes.at(-2);
+  const outer = modelChoice(station, ctx, parent?.modelSpec ?? scope.previousModelSpec ?? state.baseModelSpec,
+    parent?.modelKey ?? scope.previousModelKey ?? state.baseModelKey);
+  const target = outer;
+  const changingModel = target.spec !== from.spec && (!target.key || !from.key || target.key !== from.key);
+  const projectedTokens = target.window > 0 ? station.currentContextTokens(base, target.key) : null;
+  const returnFlood = changingModel && target.window > 0 &&
+    (!from.window || target.window < from.window) && projectedTokens >= 0.82 * target.window;
+  const foldContext = { state, base, currentMessage, currentPersisted, target, ctx };
+
+  // --- End -----------------------------------------------------------------
   if (sameMessageBeginIds?.has(scope.beginToolCallId)) {
     return errorResult(
       "SAME_MESSAGE_BOUNDARY",
       E["same-message"],
     );
   }
-  // In a combined call the elder report must be valid before anything closes.
   const selfVisible = findBegin(base, scope.beginToolCallId) !== null &&
     station.findBeginEntry(scope.beginToolCallId) !== null;
-  if (hasBegin) {
-    if (selfVisible && !(typeof elderReport === "string" && trimText(elderReport))) {
-      return errorResult(
-        "MISSING_ELDER_REPORT",
-        E["missing-elder-report"],
-        { intent: scope.intent },
-      );
-    }
-  }
 
   const parentId = state.scopes.at(-2)?.id ?? null;
   const order = scopeOrder(scope);
-  if (beginFlood) {
-    const preview = { ...state, scopes: state.scopes.slice(0, -1), collapses: state.collapses.slice() };
-    if (selfVisible) preview.collapses.push({ parentId, order, boundary: scope.boundary, epoch: scope.epoch, collapsed: false });
-    const overflow = prepareWindow(station, foldContext, projectedTokens, preview);
-    if (overflow) return overflow;
-  }
 
   sealClosedParentChildren(state, scope.id);
 
@@ -446,11 +345,9 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   const closed = closeScope(state, { toolCallId: call.id });
   if (!closed.ok) return errorResult(closed.code, closed.reason);
 
-  // The closed scope becomes a pending elder at its parent level. In a
-  // combined call begin.elder_report archives it immediately, so it opens as
-  // the hot workbench; an end-only close leaves report null (pending).
-  const archivedReport = hasBegin && selfVisible ? trimText(elderReport) : null;
-  const report = archivedReport;
+  // The closed scope becomes a pending elder at its parent level. A close
+  // writes no report; report stays null until a later begin archives it.
+  const report = null;
   if (selfVisible) {
     state.collapses.push({
       scopeId: scope.id,
@@ -483,7 +380,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
 
   if (returnFlood) {
     floodPools(station, foldContext);
-  } else if (!beginFlood && (hasBegin || changingModel)) {
+  } else if (changingModel) {
     foldEligiblePool(station, {
       ...foldContext,
       parentId,
@@ -495,80 +392,26 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   const deferred = closed.defers ?? [];
   const steerSent = station.deliverSteer(closed.steerText);
   const remainingScope = currentScope(state);
-  let text = endText(
+  const text = endText(
     "",
     null,
     deferred.length,
     closed.steerText,
     steerSent,
-    hasBegin,
+    false,
     remainingScope,
     station.relayReady() && !state.herdMode,
     state.herdMode,
   );
-  if (hasBegin) {
-    const opened = beginScope(state, {
-      toolCallId: call.id,
-      intent: args.begin.intent,
-      stage,
-      budget: args.begin.budget,
-    });
-    text += `\n\n${beginText(opened.scope)}`;
-    if (opened.ok) {
-      if (mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
-      if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
-      attachModel(station, opened.scope, target, outer, from);
-      opened.scope.preBeginInputTokens =
-        Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
-    }
-  } else queueModelSwitch(station, target, from, remainingScope?.id ?? null);
+  queueModelSwitch(station, target, from, remainingScope?.id ?? null);
   return textResult(text, {
     scopeId: scope.id,
     deferred: deferred.length,
   });
 }
 
-function attachModel(station, scope, target, outer, from) {
-  scope.modelSpec = target.spec;
-  scope.modelKey = target.key;
-  scope.previousModelSpec = outer.spec;
-  scope.previousModelKey = outer.key;
-  queueModelSwitch(station, target, from, scope.id);
-}
-
 function floodBatch(state) {
   return findActivePools(state).flatMap(({ pool }) => pool).sort((a, b) => a.order - b.order);
-}
-
-function prepareWindow(station, { base, target, state, currentMessage, currentPersisted }, projected, preview) {
-  const cut = currentPersisted === false && base.at(-1) === currentMessage ? base.length - 1 : base.length;
-  const batch = floodBatch(preview).filter((rec) => {
-    const begin = findBegin(base, rec.beginToolCallId);
-    const end = findToolCallIndex(base, rec.endToolCallId);
-    return begin && end > begin.resultIndex && end < cut && station.findBeginEntry(rec.beginToolCallId);
-  });
-  const after = applyCollapses(base, batch.map((rec) => ({ ...rec, collapsed: true })), state.epoch);
-  const removedChars = Math.max(0, sliceChars(base) - sliceChars(after));
-  const postFoldTokens = Math.max(0, projected - charsToTokens(removedChars, station.tokensPerCharFor(target.key)));
-  if (postFoldTokens >= 0.95 * target.window) return windowError(target, postFoldTokens);
-  if (batch.length === 0) return;
-  const folded = station.foldBatch({ batch, base, currentMessage, currentPersisted, epoch: state.epoch });
-  if (folded.rebased) station.rebaseBaselines(folded);
-  const actuallyRemoved = folded.rebased ? folded.savedChars ?? removedChars : 0;
-  const actualTokens = Math.max(0, projected - charsToTokens(actuallyRemoved, station.tokensPerCharFor(target.key)));
-  if (actualTokens >= 0.95 * target.window) return windowError(target, actualTokens);
-}
-
-function windowError(target, postFoldTokens) {
-  return errorResult(
-    "MODEL_CONTEXT_EXCEEDED",
-    render(E["context-exceeded"], {
-      tokens: postFoldTokens,
-      model: target.spec ?? L["target-model"],
-      window: target.window,
-    }),
-    { postFoldTokens, contextWindow: target.window },
-  );
 }
 
 function floodPools(station, { state, base, currentMessage, currentPersisted }) {
@@ -579,7 +422,7 @@ function floodPools(station, { state, base, currentMessage, currentPersisted }) 
 }
 
 /** Fold a whole eligible elder pool in one decision, when economics allow. */
-function foldEligiblePool(station, { state, parentId, boundary, epoch, args, base, currentMessage, currentPersisted, target, ctx }) {
+function foldEligiblePool(station, { state, parentId, boundary, epoch, base, currentMessage, currentPersisted, target, ctx }) {
   const pool = findFoldablePool(state, parentId, boundary, epoch);
   if (pool.length === 0) return { foldedCount: 0 };
   const lastIn = Number.isFinite(station.lastTotalInput) ? station.lastTotalInput : null;
@@ -601,7 +444,6 @@ function foldEligiblePool(station, { state, parentId, boundary, epoch, args, bas
     pool,
     state,
     base,
-    budget: args.begin?.budget,
     usageSnapshot,
     pricing,
     contextTokens: station.currentContextTokens(base, target.key),

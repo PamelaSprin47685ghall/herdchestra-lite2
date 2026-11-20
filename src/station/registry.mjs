@@ -1,5 +1,6 @@
 // Station registry: one station per session manager, plus the active registry.
 
+import { findFissionManager, isFissionManager } from "../host/fission-manager.mjs";
 import { SessionStation } from "./station.mjs";
 
 const nullTickets = {
@@ -79,7 +80,12 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog)
 			const id = identityId(agent) ?? identityId(meta?.identity);
 			if (!id) throw new TypeError("Flow agent identity (ctx.agent.id) is required");
 			if (!station || (permission !== "ro" && permission !== "rw")) throw new TypeError("Flow station and permission are required");
-			const manager = meta?.manager ?? station.manager ?? null;
+			// A flow station built from the owner's base inherits the owner's raw
+			// manager. Prefer the flow's own proxy: the host may expose the manager
+			// it was handed, or only the raw one, so resolve both forms by identity.
+			const declared = meta?.manager ?? station.manager ?? null;
+			const manager = findFissionManager(declared, id) ?? findFissionManager(declared, meta?.label) ?? declared;
+			if (isFissionManager(manager) && station.manager !== manager) station.manager = manager;
 			const existing = globalFlows().get(id);
 			if (existing || station.fissionFlow) throw new Error("Flow is already bound");
 			const entry = {

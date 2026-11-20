@@ -68,6 +68,15 @@ export class FissionManagerError extends Error {
 	}
 }
 
+/** Marker every flow proxy carries; Symbol.for keeps it stable across instances. */
+export const FISSION_MANAGER = Symbol.for("herdchestra-lite2.fission-manager.v1");
+
+/** True only for a proxy built by createFissionManager(). */
+export function isFissionManager(value) {
+	if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
+	return value[FISSION_MANAGER] === true;
+}
+
 const REQUIRED_METHODS = ["getLeafId", "getBranch", "branch", "resetLeaf", "seal", "close"];
 
 /** Sync appends that read the manager-global leaf and return the new entry id. */
@@ -113,6 +122,9 @@ function movesConversation(entry) {
 /** One lease registry per shared manager, so unrelated managers never share a count. */
 const registries = new WeakMap();
 
+/** Flow proxies by the manager they wrap, so the station layer can find one. */
+const flowProxies = new WeakMap();
+
 function registryFor(shared) {
 	let registry = registries.get(shared);
 	if (!registry) {
@@ -136,6 +148,82 @@ function assertShared(shared) {
 			`shared manager lacks ${missing.join(", ")}; a flow proxy cannot isolate its leaf without them`,
 		);
 	}
+}
+
+/** True when a manager exposes the leaf contract a flow proxy needs. */
+export function canProxyFissionManager(shared) {
+	try {
+		assertShared(shared);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function registerFlowProxy(shared, proxy, keys) {
+	let map = flowProxies.get(shared);
+	if (!map) {
+		map = new Map();
+		flowProxies.set(shared, map);
+	}
+	for (const key of keys) {
+		if (typeof key === "string" && key !== "") map.set(key, proxy);
+	}
+}
+
+/**
+ * Find the flow proxy created over `value` (a raw manager or a proxy) for
+ * `flowKey`. A host session may expose its manager without the proxy it was
+ * handed, so the station layer resolves the proxy by identity instead.
+ */
+export function findFissionManager(value, flowKey) {
+	if (!value || (typeof value !== "object" && typeof value !== "function")) return null;
+	if (isFissionManager(value)) return value;
+	if (typeof flowKey !== "string" || flowKey === "") return null;
+	return flowProxies.get(value)?.get(flowKey) ?? null;
+}
+
+function newestDescendant(entries, ancestorId) {
+	const byId = new Map(entries.map((entry) => [entry.id, entry]));
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		let current = entries[index];
+		for (let guard = 0; current && guard < 100000; guard += 1) {
+			if (current.id === ancestorId) return entries[index].id;
+			current = current.parentId ? byId.get(current.parentId) : undefined;
+		}
+	}
+	return ancestorId;
+}
+
+/**
+ * Derive a flow's live leaf from the journal. The scheduler writes the flow's
+ * own `scope.begin` with `data.flow = flow.label`; every later write descends
+ * from it, including handoff segments. Returns null until that begin exists.
+ */
+export function createFlowTailResolver(shared, options = {}) {
+	const names = new Set();
+	for (const value of [options.label, options.flowId]) {
+		if (typeof value === "string" && value !== "") names.add(value);
+	}
+	if (names.size === 0) {
+		throw new FissionManagerError("FISSION_UNSUPPORTED", "a flow tail resolver requires a flow id or label");
+	}
+	let beginId;
+	return () => {
+		if (typeof shared.getEntries !== "function") return null;
+		const entries = shared.getEntries();
+		if (!Array.isArray(entries)) return null;
+		if (beginId === undefined) {
+			for (let index = entries.length - 1; index >= 0; index -= 1) {
+				const entry = entries[index];
+				if (entry?.type === "custom" && entry.customType === "scope.begin" && names.has(entry.data?.flow)) {
+					beginId = entry.id;
+					break;
+				}
+			}
+		}
+		return beginId === undefined ? null : newestDescendant(entries, beginId);
+	};
 }
 
 function acquireLease(shared) {
@@ -248,33 +336,50 @@ export function retainFissionManager(shared) {
  */
 export function createFissionManager(shared, options = {}) {
 	assertShared(shared);
-	const tail = options.tail ?? null;
+	const resolveTail = typeof options.resolveTail === "function" ? options.resolveTail : null;
+	// Before the flow's begin entry exists a resolver has nothing to point at.
+	// Anchor such construction-time writes at the owner's leaf instead of
+	// guessing a flow branch; the first resolved tail replaces the anchor.
+	const tail = options.tail ?? (resolveTail ? shared.getLeafId() : null);
 	if (tail !== null) {
 		if (typeof tail !== "string" || !hasEntry(shared, tail)) {
 			throw new FissionManagerError("FISSION_UNSUPPORTED", `flow tail ${String(tail)} is not an entry of the shared manager`);
 		}
 	}
 	const lease = acquireLease(shared);
-	const state = { tail, label: options.label ?? "", lease };
+	const state = { tail, label: options.label ?? "", lease, pinned: false, resolveTail };
 	const operations = Object.create(null);
+
+	// The journal is the truth for a live flow: the scheduler and the handoff
+	// copier write to the flow's branch through the raw manager, so a locally
+	// advanced tail goes stale on their next write. An explicit branch(),
+	// resetLeaf(), or tail assignment pins the proxy until the caller moves it.
+	function currentTail() {
+		if (!state.pinned && state.resolveTail) {
+			const live = state.resolveTail();
+			if (typeof live === "string") state.tail = live;
+		}
+		return state.tail;
+	}
 
 	function writeAtTail(name, args) {
 		assertWritable(state);
 		requireMethod(shared, name);
-		const id = appendAt(shared, state.tail, () => shared[name](...args));
+		const id = appendAt(shared, currentTail(), () => shared[name](...args));
 		if (typeof id === "string") state.tail = id;
 		return id;
 	}
 
 	operations.appendMessage = (message) => {
 		assertWritable(state);
+		const tail = currentTail();
 		if (typeof shared.appendMessageToBranch === "function") {
-			const id = shared.appendMessageToBranch(message, state.tail, { preserveActiveLeaf: true });
+			const id = shared.appendMessageToBranch(message, tail, { preserveActiveLeaf: true });
 			state.tail = id;
 			return id;
 		}
 		requireMethod(shared, "appendMessage");
-		const id = appendAt(shared, state.tail, () => shared.appendMessage(message));
+		const id = appendAt(shared, tail, () => shared.appendMessage(message));
 		state.tail = id;
 		return id;
 	};
@@ -282,16 +387,18 @@ export function createFissionManager(shared, options = {}) {
 	operations.appendMessageToBranch = (message, parentId, branchOptions) => {
 		assertWritable(state);
 		requireMethod(shared, "appendMessageToBranch");
-		const parent = parentId === undefined ? state.tail : parentId;
+		const tail = currentTail();
+		const parent = parentId === undefined ? tail : parentId;
 		const id = shared.appendMessageToBranch(message, parent, branchOptions);
-		if (branchOptions?.preserveActiveLeaf === false && parent === state.tail) state.tail = id;
+		if (branchOptions?.preserveActiveLeaf === false && parent === tail) state.tail = id;
 		return id;
 	};
 
 	operations.appendModelUsage = (usage, owner) => {
 		assertWritable(state);
 		requireMethod(shared, "appendModelUsage");
-		const parentId = owner?.parentId === undefined ? state.tail : owner.parentId;
+		const tail = currentTail();
+		const parentId = owner?.parentId === undefined ? tail : owner.parentId;
 		const sessionId = owner?.sessionId ?? (typeof shared.getSessionId === "function" ? shared.getSessionId() : undefined);
 		if (sessionId === undefined) {
 			throw new FissionManagerError("FISSION_UNSUPPORTED", "shared manager exposes no session id for model usage");
@@ -300,7 +407,7 @@ export function createFissionManager(shared, options = {}) {
 		// the owner first makes that path explicit; appendAt restores the shared
 		// leaf regardless.
 		const id = appendAt(shared, parentId, () => shared.appendModelUsage(usage, { sessionId, parentId }));
-		if (id !== undefined && parentId === state.tail) state.tail = id;
+		if (id !== undefined && parentId === tail) state.tail = id;
 		return id;
 	};
 
@@ -309,7 +416,7 @@ export function createFissionManager(shared, options = {}) {
 	operations.branchWithSummary = (branchFromId, summary, details, fromExtension) => {
 		assertWritable(state);
 		requireMethod(shared, "branchWithSummary");
-		const parent = branchFromId === undefined ? state.tail : branchFromId;
+		const parent = branchFromId === undefined ? currentTail() : branchFromId;
 		const id = appendAt(shared, parent, () => shared.branchWithSummary(parent, summary, details, fromExtension));
 		state.tail = id;
 		return id;
@@ -321,13 +428,14 @@ export function createFissionManager(shared, options = {}) {
 		// The host records the title entry synchronously before its first await.
 		// Scope only that prefix, remember the leaf it leaves behind, restore the
 		// shared leaf, and hand the pending persistence promise back untouched.
+		const tail = currentTail();
 		const saved = shared.getLeafId();
 		let written = null;
 		let promise;
 		let failure;
 		let failed = false;
 		try {
-			selectLeaf(shared, state.tail);
+			selectLeaf(shared, tail);
 			promise = shared.setSessionName(name, source, trigger);
 			written = shared.getLeafId();
 		} catch (error) {
@@ -343,9 +451,9 @@ export function createFissionManager(shared, options = {}) {
 		if (failed) throw failure;
 		// A rename that appended moved the leaf to the new title entry, which was
 		// recorded at the flow's tail. A no-op rename leaves the leaf at the tail.
-		if (typeof written === "string" && written !== state.tail) {
+		if (typeof written === "string" && written !== tail) {
 			const entry = entryFor(shared, written);
-			if (entry?.parentId === state.tail) state.tail = written;
+			if (entry?.parentId === tail) state.tail = written;
 		}
 		return promise;
 	};
@@ -355,7 +463,7 @@ export function createFissionManager(shared, options = {}) {
 			requireMethod(shared, name);
 			// appendAt is the project's synchronous leaf-scope primitive. Reads do
 			// not advance the tail.
-			return appendAt(shared, state.tail, () => shared[name](...args));
+			return appendAt(shared, currentTail(), () => shared[name](...args));
 		};
 	}
 
@@ -376,24 +484,26 @@ export function createFissionManager(shared, options = {}) {
 
 	operations.getBranch = (fromId) => {
 		// The host treats a nullish origin as "the active leaf"; mirror that.
-		const origin = fromId ?? state.tail;
+		const origin = fromId ?? currentTail();
 		if (origin === null) return [];
 		return shared.getBranch(origin);
 	};
 
-	operations.getLeafId = () => state.tail;
-	operations.getLeafEntry = () => entryFor(shared, state.tail);
+	operations.getLeafId = () => currentTail();
+	operations.getLeafEntry = () => entryFor(shared, currentTail());
 
 	operations.branch = (id) => {
 		assertWritable(state);
 		if (typeof id !== "string") throw new TypeError("branch(id) requires an entry id");
 		if (!hasEntry(shared, id)) throw new Error(`Entry ${id} not found`);
 		state.tail = id;
+		state.pinned = true;
 	};
 
 	operations.resetLeaf = () => {
 		assertWritable(state);
 		state.tail = null;
+		state.pinned = true;
 	};
 
 	// The atomic batch stages entries across the whole shared journal and its
@@ -421,8 +531,9 @@ export function createFissionManager(shared, options = {}) {
 	Object.defineProperties(operations, {
 		shared: { get: () => shared, enumerable: true },
 		tail: {
-			get: () => state.tail,
+			get: () => currentTail(),
 			set: (value) => {
+				state.pinned = true;
 				if (value === null) {
 					state.tail = null;
 					return;
@@ -437,9 +548,10 @@ export function createFissionManager(shared, options = {}) {
 		label: { get: () => state.label, enumerable: true },
 		lease: { get: () => lease, enumerable: false },
 	});
+	Object.defineProperty(operations, FISSION_MANAGER, { value: true, enumerable: false });
 
 	const bound = new Map();
-	return new Proxy(operations, {
+	const proxy = new Proxy(operations, {
 		get(target, property) {
 			if (property === "then") return undefined;
 			if (property === Symbol.toStringTag) return "FissionManager";
@@ -467,4 +579,6 @@ export function createFissionManager(shared, options = {}) {
 			return property in target || property in shared;
 		},
 	});
+	registerFlowProxy(shared, proxy, [options.flowId, options.label]);
+	return proxy;
 }

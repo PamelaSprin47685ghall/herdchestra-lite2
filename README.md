@@ -1,12 +1,18 @@
 # Herdchestra Lite 2
 
-Herdchestra Lite 2 adds budgeted work scopes to omp. Each scope controls which tools can run and how many times they can run. Use `scope({ end: true })` to close it.
+Herdchestra Lite 2 adds budgeted work scopes to omp. A scope opens as a fission batch of one or more flows, controls which tools can run and how many times they can run in each flow, and closes with `scope({ end: true })`.
 
 When a scope folds, its user messages move before its opening `scope` call. Their content and order stay intact. The scope summary records outcomes and remaining work without repeating those messages.
 
+## Fission batches
+
+`scope({ begin: { stage, elder_report, fission: [{ intent, budget, permission }] } })` opens one batch of flows. `begin.fission` is a non-empty array; there is no single-flow begin shape, so one flow is a one-item array. `begin.stage` covers the whole batch, `begin.elder_report` is required (a string or `null`), and each item carries its own `intent`, `budget`, `permission`, and optional `model`. The entire array is validated before any flow starts: one invalid item rejects the whole batch and opens nothing.
+
+A fission begin currently cannot also close a scope. `scope({ begin, end: true })` is refused before any state change; close the open scope with a plain `scope({ end: true })` call, then open the batch in a following call. A flow does not open or close its own scope — the scheduler writes both ends — and `amend` is unavailable in fission.
+
 ## Stages
 
-Every `scope({ begin })` must name a stage. The innermost open scope determines the current stage; outside all scopes there is no stage.
+Every `scope({ begin })` batch names one `begin.stage`, shared by all its flows. The innermost open scope determines the current stage; outside all scopes there is no stage.
 
 ## Design records
 
@@ -52,16 +58,16 @@ The stage sections for `decision-framing`, `acceptance-cases`, `architecture-des
 
 ## Scope permission
 
-Every `scope({ begin })` declares `permission: "ro" | "rw"`. The declaration is mistake-proofing, not an enforcement boundary: `"ro"` is trusted, and the harness never blocks a write because a scope called itself read-only.
+Every fission item declares its own `permission: "ro" | "rw"`, and the field is required: a missing, `null`, or other value rejects the whole batch, so forgetting the declaration cannot bypass the gate.
 
-An omitted (or null) `permission` is treated as `"rw"`: forgetting to declare the field must not bypass the gate.
+`"ro"` is enforced inside that flow: `edit`, `write`, `bash`, and `ast_edit` are blocked. The declaration is still mistake-proofing rather than a security boundary; it stops the ordinary write path, not every possible side effect.
 
 `"rw"` is refused in two cases:
 
-- the scope's stage is `decision-framing`, which answers why rather than what;
+- the batch's stage is `decision-framing`, which answers why rather than what;
 - the relay has not recorded its first submitted `todo` ledger for the current generation. A `todo` view is a read-only inspection and does not count.
 
-A refused begin changes no state. Submit a ledger first, or open the scope with `"ro"`.
+A refused batch changes no state, and no flow starts. Submit a ledger first, or open the flows with `"ro"`.
 
 ## Herd mode
 
@@ -119,13 +125,17 @@ way, and only a genuine seam failure exits 1.
 
 ## Model selection
 
-Set `begin.model` to an omp `/switch` selector to use a different model for a scope:
+Set a fission item's `model` to an omp `/switch` selector to use a different model for that flow:
 
 ```js
-scope({ begin: { intent: "Review the results", stage: "direct-execution", budget: { read: 3 }, model: "@smol" } })
+scope({ begin: {
+  stage: "direct-execution",
+  elder_report: null,
+  fission: [{ intent: "Review the results", budget: { read: 3 }, permission: "ro", model: "@smol" }],
+} })
 ```
 
-Omit `model` or use `null` to inherit the enclosing scope’s model, or the session model when there is no enclosing scope. Closing a scope restores the enclosing model. A combined `end: true` and `begin` inherits from the enclosing scope, not from the scope being closed. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.
+Omit `model` or use `null` to inherit the model of the scope that opens the batch, or the session model when there is no enclosing scope. Closing a flow's scope restores the enclosing model. A combined `end: true` and `begin` is currently refused, so a batch always inherits from the scope that opens it. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.
 
 Each model has a separate record of the conversation prefix it has cached. The extension uses the target model’s context window when it can resolve it in advance. At 82% of that window it attempts to fold eligible history without dropping the current workbench. It refuses to open the scope if the retained context is estimated to occupy at least 95% of the target window.
 

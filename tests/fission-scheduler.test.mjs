@@ -341,12 +341,23 @@ describe("fission scheduler", () => {
 		const flows = h.scheduler.listFlows();
 		expect(flows.map((flow) => flow.status)).toEqual(["running", "running"]);
 		for (const flow of flows) {
-			expect(h.manager.getEntry(flow.beginId).parentId).toBe(ackId);
+			// The owner's ack is a sibling, not an ancestor: every flow hangs
+			// under its own receipt, which hangs under the shared batch begin.
+			expect(h.manager.getEntry(flow.receiptId).parentId).toBe(registered.batchBeginId);
+			expect(h.manager.getEntry(flow.beginId).parentId).toBe(flow.receiptId);
+			expect(h.manager.getEntry(flow.receiptId).message.toolCallId).toBe("call-a");
+			expect(h.manager.getBranch(flow.beginId).some((entry) => entry.id === ackId)).toBe(false);
 		}
 		expect(h.bindings[0].station.state.scopes.at(-1).intent).toBe("first");
 		expect(h.bindings[1].station.state.scopes.at(-1).intent).toBe("second");
-		for (const { session } of h.spawned) {
+		for (const [index, { session }] of h.spawned.entries()) {
 			expect(session.agent.state.messages.length).toBeGreaterThan(0);
+			// The ack prefix stops at the batch begin, so the flow's own begin
+			// is scheduler-written and must be injected explicitly.
+			expect(session.agent.state.messages.some((message) =>
+				message.customType === "scope.begin" &&
+				JSON.parse(message.content).flow === flows[index].label,
+			)).toBe(true);
 		}
 
 		// Finish in sequence: the first segment is copied to the second flow
@@ -363,6 +374,118 @@ describe("fission scheduler", () => {
 		await h.scheduler.flowEnded(h.scheduler.listFlows()[1].flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
 		expect(done.status).toBe("closed");
+	});
+
+	test("each flow sees the shared tool call and its own receipt", async () => {
+		const h = harness({ fission: twoFlows() });
+		const items = twoFlows();
+		const toolCallId = "call-receipt";
+		const toolCallEntry = h.manager.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: toolCallId, name: "scope", arguments: { begin: true } }],
+			toolCalls: [{ id: toolCallId, name: "scope", arguments: { begin: true } }],
+			timestamp: 1,
+		});
+		const registered = register(h, toolCallId);
+		expect(h.manager.getEntry(registered.batchBeginId).parentId).toBe(toolCallEntry);
+		expect(reserve(h).ok).toBe(true);
+		const ackId = h.manager.appendMessage({
+			role: "toolResult",
+			toolCallId,
+			content: "owner receipt",
+		});
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+
+		const flows = h.scheduler.listFlows();
+		expect(flows.map((flow) => flow.receiptId)).toHaveLength(2);
+		expect(new Set(flows.map((flow) => flow.receiptId)).size).toBe(2);
+		for (const [index, flow] of flows.entries()) {
+			const receipt = h.manager.getEntry(flow.receiptId);
+			expect(receipt.type).toBe("message");
+			expect(receipt.parentId).toBe(registered.batchBeginId);
+			expect(receipt.message.role).toBe("toolResult");
+			expect(receipt.message.toolName).toBe("scope");
+			expect(receipt.message.isError).toBe(false);
+			expect(Array.isArray(receipt.message.content)).toBe(true);
+			expect(receipt.message.content).toHaveLength(1);
+			expect(receipt.message.content[0].type).toBe("text");
+			expect(typeof receipt.message.content[0].text).toBe("string");
+			expect(receipt.message.toolCallId).toBe(toolCallId);
+			expect(receipt.message.details.fissionReceipt.flowId).toBe(flow.flowId);
+			// The receipt, not the prompt, states this flow's assignment.
+			const text = receipt.message.content[0].text;
+			expect(text).toContain(items[index].intent);
+			for (const [tool, amount] of Object.entries(items[index].budget)) {
+				expect(text).toContain(`${tool} ${amount}`);
+			}
+			expect(text).toContain(`Permission: ${items[index].permission}.`);
+			expect(text).toContain("Model: owner-model.");
+			// Disk parent chain: the shared toolCall and batch begin are
+			// ancestors of exactly one receipt and one flow begin.
+			expect(h.manager.getEntry(flow.beginId).parentId).toBe(flow.receiptId);
+			const branch = h.manager.getBranch(flow.beginId);
+			expect(branch.some((entry) => entry.id === ackId)).toBe(false);
+			expect(branch.filter((entry) =>
+				entry.type === "message" && entry.message?.toolCallId === toolCallId,
+			)).toHaveLength(1);
+
+			const messages = h.spawned[index].session.agent.state.messages;
+			const callIndex = messages.findIndex((message) =>
+				message.role === "assistant" && JSON.stringify(message).includes(toolCallId),
+			);
+			const receiptIndex = messages.findIndex((message) =>
+				message.role === "toolResult" && message.toolCallId === toolCallId,
+			);
+			expect(callIndex).toBeGreaterThanOrEqual(0);
+			// The shared call is followed directly by this flow's own result;
+			// the batch boundary follows the receipt, not the call.
+			expect(receiptIndex).toBe(callIndex + 1);
+			expect(messages.filter((message) =>
+				message.role === "toolResult" && message.toolCallId === toolCallId,
+			)).toHaveLength(1);
+			const batchIndex = messages.findIndex((message) =>
+				message.customType === "scope.begin" &&
+				JSON.parse(message.content).fissionBatch === true,
+			);
+			const flowIndex = messages.findIndex((message) =>
+				message.customType === "scope.begin" &&
+				JSON.parse(message.content).flow === flow.label,
+			);
+			expect(receiptIndex).toBeLessThan(batchIndex);
+			expect(batchIndex).toBeLessThan(flowIndex);
+			// Every flow sees the identical original call message object.
+			expect(h.spawned[0].session.agent.state.messages[0]).toBe(messages[0]);
+		}
+	});
+
+	test("an assistant error stop reason crashes the flow instead of closing it", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-stop-error");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-stop-error", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+
+		const flows = h.scheduler.listFlows();
+		h.spawned[0].session.agent.state.messages.push({
+			role: "assistant",
+			content: [{ type: "text", text: "provider failed" }],
+			stopReason: "error",
+			errorMessage: "provider failed",
+			timestamp: Date.now(),
+		});
+		h.spawned[0].session.finish.resolve();
+		await h.scheduler.flowEnded(flows[0].flowId);
+
+		expect(h.scheduler.listFlows()[0].status).toBe("crashed");
+		// The sibling keeps running; the batch fails only once every flow stops.
+		expect(h.scheduler.listFlows()[1].status).toBe("running");
+		h.spawned[1].session.finish.resolve();
+		await h.scheduler.flowEnded(flows[1].flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+		expect(done.status).toBe("failed");
+		expect(done.outcome).toBe("failed");
+		expect(done.flows[0].status).toBe("crashed");
+		expect(done.flows[1].status).not.toBe("crashed");
 	});
 
 	test("copies a closed flow to the next running flow and adopts the heir", async () => {
@@ -424,6 +547,19 @@ describe("fission scheduler", () => {
 		expect(h.manager.getBranch().some((entry) =>
 			entry.customType === "fission.handoff.begin",
 		)).toBe(true);
+		// Both scopes the batch opened are closed. The heir's own scope closes
+		// before promotion, so the batch scope is on top and pops last; the
+		// owner is back at the scope it opened before the batch.
+		expect(h.state.scopes.map((scope) => scope.id)).toEqual([h.parent.id]);
+		expect(currentScope(h.state).id).toBe(h.parent.id);
+		// The scheduler's own boundaries enter the model's context in journal
+		// order: the heir's scope.end, then the batch scope.end.
+		const endPayloads = h.ownerAgent.state.messages
+			.filter((message) => message.customType === "scope.end")
+			.map((message) => JSON.parse(message.content));
+		expect(endPayloads.filter((payload) => payload.flow === second.label)).toHaveLength(1);
+		expect(endPayloads.at(-1).batchId).toBe(registered.batchId);
+		expect(endPayloads.at(-1).flow).toBeUndefined();
 	});
 
 	test("refuses an unaffordable batch before any journal or budget change", () => {
@@ -658,6 +794,17 @@ describe("fission scheduler", () => {
 		expect(done.status).toBe("closed");
 		expect(done.heir).toBe(sibling.label);
 		expect(done.flows.map((flow) => flow.status)).toEqual(["closed", "closed"]);
+		// Every nested boundary closes in order: the nested batch scope, then
+		// the parent flow scope, then the outer batch scope.
+		expect(h.state.scopes.map((scope) => scope.id)).toEqual([h.parent.id]);
+		expect(currentScope(h.state).id).toBe(h.parent.id);
+		// The nested batch's scope.end reached the parent flow's context through
+		// the nested heir, not only the journal.
+		const parentSession = h.spawned.find(({ plan }) => plan.flowId === parent.flowId).session;
+		expect(parentSession.agent.state.messages.some((message) =>
+			message.customType === "scope.end" &&
+			JSON.parse(message.content).batchId === nested.batchId,
+		)).toBe(true);
 	});
 
 	test("broadcast reaches every leaf, including a sibling beside a nested batch", async () => {
@@ -754,7 +901,10 @@ describe("fission scheduler", () => {
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(second.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
-		expect(done.status).toBe("closed");
+		// A sibling crash fails the batch summary even though the surviving
+		// flow completed and adopts the conversation.
+		expect(done.status).toBe("failed");
+		expect(done.outcome).toBe("failed");
 		expect(done.flows.map((flow) => flow.status)).toEqual(["crashed", "closed"]);
 		expect(done.heir).toBe(second.label);
 		expect(h.ownerAgent.state.messages).toEqual(h.spawned[1].session.agent.state.messages);
@@ -800,6 +950,67 @@ describe("fission scheduler", () => {
 		expect(end.data.status).toBe("cost-capped");
 		// No closed flow exists, so the owner's context is not adopted.
 		expect(h.ownerAgent.state.messages).toEqual([]);
+	});
+
+	test("a CostCapError is classified as a cost cap, not a crash", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-cap-error");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-cap-error", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+
+		const cap = Object.assign(new Error("session cost cap exceeded"), { name: "CostCapError" });
+		h.spawned[0].session.finish.reject(cap);
+		await waitFor(() =>
+			h.scheduler.listFlows().find((flow) => flow.flowId === first.flowId).status === "cancelled",
+		);
+		// Only the capped flow stops; the sibling is neither aborted nor
+		// classified as cancelled by it.
+		expect(h.spawned[1].session.agent.aborted).toBe(false);
+		expect(h.scheduler.listFlows().find((flow) => flow.flowId === second.flowId).status).toBe("running");
+		const aborted = h.manager.getEntries().find((entry) =>
+			entry.customType === "fission.aborted" && entry.data?.flowId === first.flowId,
+		);
+		expect(aborted.data.reason).toBe("cost-capped");
+
+		h.spawned[1].session.finish.resolve();
+		await h.scheduler.flowEnded(second.flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+		expect(done.status).toBe("cost-capped");
+		expect(done.flows.map((flow) => flow.status)).toEqual(["cancelled", "closed"]);
+		// The survivor still takes over; the cap is reported by the batch status.
+		expect(h.ownerAgent.state.messages).toEqual(h.spawned[1].session.agent.state.messages);
+	});
+
+	test("the last-ended flow takes over even when it crashed", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-last-crash");
+		expect(reserve(h).ok).toBe(true);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-last-crash", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [, second] = h.scheduler.listFlows();
+		const secondSession = h.spawned[1].session;
+
+		h.spawned[0].session.finish.reject(new Error("first exploded"));
+		await waitFor(() => h.scheduler.listFlows().some((flow) => flow.status === "crashed"));
+		h.spawned[1].session.finish.reject(new Error("second exploded"));
+		await h.scheduler.flowEnded(second.flowId);
+		const done = await h.scheduler.waitForBatch(registered.batchId);
+
+		expect(done.status).toBe("failed");
+		expect(done.heir).toBeNull();
+		// The batch closes structurally and the last-ended flow still owns the
+		// context, with a scope.end recorded for its failed turn.
+		expect(h.ownerAgent.state.messages).toEqual(secondSession.agent.state.messages);
+		expect(h.state.scopes.map((scope) => scope.id)).toEqual([h.parent.id]);
+		const tip = h.manager.getBranch().at(-1);
+		expect(tip.customType).toBe("scope.end");
+		expect(tip.data.batchId).toBe(registered.batchId);
+		const failedEnd = h.manager.getEntries().find((entry) =>
+			entry.customType === "scope.end" && entry.data?.flow === second.label,
+		);
+		expect(failedEnd.data.status).toBe("failed");
 	});
 
 	test("cancelling a flow aborts its nested subtree at every depth", async () => {

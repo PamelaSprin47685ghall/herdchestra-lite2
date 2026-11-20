@@ -133,6 +133,241 @@ function liveBatchElsewhere(state, manager) {
 	return null;
 }
 
+// -- Owner input and abort bridge -----------------------------------------
+//
+// A batch retires the owner. The owner Agent then runs no turn, so its
+// AgentSession.prompt() and AgentSession.steer() have no live agent to drive.
+// User input must reach every active leaf instead, and Esc must stop the whole
+// batch, not an idle owner.
+//
+// The host exposes three public entries for this: AgentSession.prompt,
+// AgentSession.steer, and AgentSession.abort. This bridge patches them on the
+// owner session object only. It never patches the prototype and never patches a
+// flow session, because every flow owns its own AgentSession: a nudge sent
+// through a flow's own extension instance cannot cross this bridge.
+//
+// The scheduler's retirement path is not intercepted. retireOwner() aborts the
+// owner Agent directly with `agent.abort()`, which never passes through
+// AgentSession.abort. When that path falls back to `ctx.abort()`, no flow has
+// spawned yet, so `activeLeaves()` is empty and the abort wrapper delegates
+// untouched. An abort after the last flow closed is host cleanup for the same
+// reason.
+//
+// Restoration is lazy and exact. Each wrapper re-reads scheduler liveness
+// before it acts. When no batch is live, it restores the host's own method and
+// delegates, so an idle session carries no patched method. Disposal also
+// uninstalls the bridge before the host's own dispose runs.
+
+const INPUT_METHODS = Object.freeze(["prompt", "steer", "abort"]);
+
+function inputBridges() {
+	const state = activationState();
+	state.inputs ??= new WeakMap();
+	return state.inputs;
+}
+
+function schedulerIsDisposed(scheduler) {
+	if (typeof scheduler?.status !== "function") return false;
+	try {
+		return scheduler.status()?.disposed === true;
+	} catch {
+		return true;
+	}
+}
+
+/** A live batch is the only state in which owner input belongs to the flows. */
+function batchIsLive(scheduler) {
+	if (typeof scheduler?.hasLiveBatches !== "function") return false;
+	if (schedulerIsDisposed(scheduler)) return false;
+	try {
+		return scheduler.hasLiveBatches() === true;
+	} catch {
+		return false;
+	}
+}
+
+function runningLeaves(scheduler) {
+	if (typeof scheduler?.activeLeaves !== "function") return [];
+	try {
+		const leaves = scheduler.activeLeaves();
+		return Array.isArray(leaves) ? leaves : [];
+	} catch {
+		return [];
+	}
+}
+
+/** Slash commands are host operations; they are not turns for the flows. */
+function isFlowInput(value) {
+	return typeof value === "string" && value.trim() !== "" && !value.startsWith("/");
+}
+
+function broadcastText(scheduler, text) {
+	let outcome;
+	try {
+		outcome = scheduler.broadcast(text);
+	} catch (error) {
+		throw new Error(`fission input was not delivered: ${error?.message ?? error}`);
+	}
+	if (outcome?.ok === true) return outcome;
+	const detail = outcome?.detail ?? outcome?.code ?? "the scheduler refused the broadcast";
+	throw new Error(`fission input was not delivered: ${detail}`);
+}
+
+function noRecipient(verb) {
+	return new Error(
+		`fission: no active flow can receive this ${verb}; the batch is still starting or has already closed`,
+	);
+}
+
+/**
+ * Bind one owner AgentSession to one fission scheduler.
+ *
+ * While a batch is live, `prompt()` and `steer()` broadcast their text to every
+ * active leaf, and `abort()` fans out through `cancelAll()` before the owner's
+ * own cleanup runs. Outside that window every method delegates untouched.
+ *
+ * Returns the installed bridge, or null when the host exposes none of the three
+ * methods or when no method can be redefined. A refusal leaves the session as
+ * the host built it.
+ */
+export function installFissionInput(session, scheduler) {
+	if (!session || (typeof session !== "object" && typeof session !== "function")) return null;
+	if (typeof scheduler?.broadcast !== "function" || typeof scheduler?.cancelAll !== "function") {
+		return null;
+	}
+	const inputs = inputBridges();
+	const existing = inputs.get(session);
+	if (existing) return existing;
+
+	const patched = new Map();
+	const wrappers = new Map();
+	let active = true;
+	// A bridge is installed when the session starts, long before any batch
+	// exists. Ordinary prompts in that window must delegate without removing
+	// the bridge, or the batch this session later opens would run unbridged.
+	let sawLiveBatch = false;
+
+	function callOriginal(name, receiver, args) {
+		const saved = patched.get(name);
+		if (!saved) return undefined;
+		return Reflect.apply(saved.original, receiver ?? session, args);
+	}
+
+	function restore() {
+		if (!active) return false;
+		active = false;
+		if (inputs.get(session) === bridge) inputs.delete(session);
+		for (const [name, saved] of patched) {
+			if (session[name] !== wrappers.get(name)) continue;
+			try {
+				if (saved.own) Object.defineProperty(session, name, saved.own);
+				else delete session[name];
+			} catch (error) {
+				record("fission", error, { seam: `input.${name}`, restore: true, optional: true });
+			}
+		}
+		return true;
+	}
+
+	const bridge = {
+		session,
+		scheduler,
+		get installed() {
+			return active;
+		},
+		uninstall: restore,
+	};
+
+	/**
+	 * Whether this call belongs to the flows. The first call that observes a
+	 * live batch arms restoration; a call after that batch closed restores the
+	 * host methods and delegates. A session that never opened a batch keeps the
+	 * bridge installed for the batch it may open later.
+	 */
+	function inBatchWindow() {
+		if (batchIsLive(scheduler)) {
+			sawLiveBatch = true;
+			return true;
+		}
+		if (sawLiveBatch) restore();
+		return false;
+	}
+
+	function makePrompt() {
+		return async function prompt(...args) {
+			const [text] = args;
+			if (!active || !inBatchWindow()) return callOriginal("prompt", this, args);
+			if (!isFlowInput(text)) return callOriginal("prompt", this, args);
+			if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
+			broadcastText(scheduler, text);
+			// The owner produced no turn. The broadcast itself is displayed once
+			// by the multiplexer under its broadcastId.
+			return false;
+		};
+	}
+
+	function makeSteer() {
+		return async function steer(...args) {
+			const [text] = args;
+			if (!active || !inBatchWindow()) return callOriginal("steer", this, args);
+			if (!isFlowInput(text)) return callOriginal("steer", this, args);
+			if (runningLeaves(scheduler).length === 0) throw noRecipient("input");
+			broadcastText(scheduler, text);
+			return undefined;
+		};
+	}
+
+	function makeAbort() {
+		return async function abort(...args) {
+			if (!active || !inBatchWindow()) return callOriginal("abort", this, args);
+			// No flow is running: this is the scheduler's owner retirement or
+			// post-batch cleanup, not a user interrupt. Delegate untouched.
+			if (runningLeaves(scheduler).length === 0) return callOriginal("abort", this, args);
+			const [options] = args;
+			const reason =
+				typeof options?.reason === "string" && options.reason !== ""
+					? options.reason
+					: "user-interrupt";
+			try {
+				scheduler.cancelAll(reason);
+			} catch (error) {
+				// The fan-out failure must not prevent the owner's own abort.
+				record("fission", error, { seam: "input.abort", cancelled: false });
+			}
+			return callOriginal("abort", this, args);
+		};
+	}
+
+	const factories = { prompt: makePrompt, steer: makeSteer, abort: makeAbort };
+	for (const name of INPUT_METHODS) {
+		if (typeof session[name] !== "function") continue;
+		const original = session[name];
+		const own = Object.getOwnPropertyDescriptor(session, name) ?? null;
+		const wrapper = factories[name]();
+		try {
+			Object.defineProperty(session, name, {
+				value: wrapper,
+				configurable: true,
+				writable: true,
+			});
+		} catch (error) {
+			record("fission", error, { seam: `input.${name}`, optional: true });
+			continue;
+		}
+		patched.set(name, { original, own });
+		wrappers.set(name, wrapper);
+	}
+	if (patched.size === 0) return null;
+	inputs.set(session, bridge);
+	return bridge;
+}
+
+/** Remove one input bridge; the host's own methods return in place. */
+export function uninstallFissionInput(session) {
+	const bridge = inputBridges().get(session);
+	return bridge ? bridge.uninstall() : false;
+}
+
 // -- Dispose barrier ------------------------------------------------------
 //
 // `omp -p` runs one turn, then awaits `session.dispose()` and exits. A fission
@@ -486,6 +721,11 @@ export function installDisposeBarrier(session, scheduler, options = {}) {
 				} catch (error) {
 					record("fission", error, { barrier: "dispose", optional: true });
 				}
+				try {
+					inputBridges().get(session)?.uninstall?.();
+				} catch (error) {
+					record("fission", error, { seam: "input.dispose", optional: true });
+				}
 				return Reflect.apply(original, receiver, args);
 			})();
 		}
@@ -532,6 +772,15 @@ function attach(state, registry, ctx) {
 			return refuse(state, "FISSION_UNSUPPORTED", String(error?.message ?? error), {
 				quiet: true,
 			});
+		}
+		// A flow session shares the manager, but only the owner's own input
+		// belongs to the batch. A flow's session keeps its own prompt path.
+		if (existing.ownerSession && view.session === existing.ownerSession) {
+			try {
+				installFissionInput(existing.ownerSession, existing.scheduler);
+			} catch (error) {
+				record("fission", error, { seam: "input", optional: true });
+			}
 		}
 		installDisposeBarrier(view.session, existing.scheduler);
 		return ready(state, "the scheduler is bound to this shared journal");
@@ -649,10 +898,19 @@ function attach(state, registry, ctx) {
 		});
 	}
 
+	let input = null;
+	try {
+		input = installFissionInput(session, scheduler);
+	} catch (error) {
+		record("fission", error, { seam: "input", optional: true });
+	}
+
 	const entry = {
 		manager,
 		scheduler,
 		bridge,
+		input,
+		ownerSession: session,
 		ownerLabel: identityId(ctx?.agent) ?? "unknown",
 	};
 	state.byManager.set(manager, entry);

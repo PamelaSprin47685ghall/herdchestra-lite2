@@ -92,10 +92,8 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 		(toolName === "edit" || toolName === "write" || toolName === "bash" || toolName === "ast_edit")) {
 		return { block: true, reason: "READ_ONLY_FLOW: this tool can change files and is unavailable in a read-only flow." };
 	}
-	// A flow may open one nested batch (design 5.10), but it never opens or
-	// closes its own scope: the scheduler writes both boundaries. Admitting
-	// only the batch begin keeps an illegal end from reaching the handler,
-	// where a flow that already retired would answer NOT_IN_SCOPE instead.
+	// A flow may declare completion or delegate to a nested batch. The
+	// scheduler writes the boundaries after the corresponding tool result.
 	// The deferred admission call carries no arguments, so only the preflight
 	// call can judge the shape; dispatch already passed this gate once.
 	if (!atDispatch && station.fissionFlow && toolName === "scope") {
@@ -103,11 +101,11 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 		const begin = args?.begin;
 		const nestedBegin = begin !== null && typeof begin === "object" &&
 			!Array.isArray(begin) && Object.hasOwn(begin, "fission");
-		if (args.end === true || !nestedBegin) {
+		if (!(args.end === true && !begin) && !nestedBegin) {
 			return {
 				block: true,
 				reason:
-					"SCOPE_UNAVAILABLE_IN_FISSION: A fission flow does not open or close its own scope; the scheduler owns its begin and end. A flow may only open a nested batch with scope({ begin: { fission: [...] } }).",
+					"SCOPE_UNAVAILABLE_IN_FISSION: Use scope({ end: true }) to finish the flow, or open a nested fission batch.",
 			};
 		}
 	}
@@ -219,6 +217,10 @@ function onContext(station, messages, ctx) {
 }
 
 function onSessionStop(station, ctx) {
+	if (station.fissionFlow) {
+		if (station.fissionFlow.endRequested || station.pendingFission?.retired) return undefined;
+		return continueFeedback("Your flow is still open. When your work is complete, call scope({ end: true }).");
+	}
 	if (station.state.herdMode) return undefined;
 	if (!station.relayOn(ctx)) return undefined;
 	const scope = currentScope(station.state);

@@ -609,6 +609,8 @@ export class SessionStation {
 
 	maybeNudge(message, ctx) {
 		if (!message || message.role !== "assistant") return;
+		// Flow completion is managed by the fission scheduler, not the relay.
+		if (this.fissionFlow) return;
 		if (!this.relayOn(ctx)) return;
 		if (this.nudged.has(message)) return;
 		const decision = nudgeDecision(this.state, {

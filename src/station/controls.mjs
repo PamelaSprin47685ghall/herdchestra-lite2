@@ -276,13 +276,23 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
   }
   const fissionBegin = hasBegin && Object.hasOwn(args.begin, "fission");
   if (fissionBegin) return handleFissionBegin(station, call, { args, ctx });
-  // A flow's own begin and end are written by the scheduler; the flow only
-  // runs turns. An inner fission batch is the one scope call it may make, and
-  // that path returned above.
   if (station.fissionFlow) {
+    if (hasEnd && !hasBegin) {
+      const scheduler = station.registry?.fissionScheduler?.();
+      if (typeof scheduler?.requestFlowEnd !== "function") {
+        return errorResult("FISSION_SCHEDULER_UNAVAILABLE", "The flow scheduler is unavailable.");
+      }
+      try {
+        scheduler.requestFlowEnd(station.fissionFlow.id);
+        station.fissionFlow.endToolCallId = call.id;
+        return textResult("Flow completion declared. The scheduler will close this scope after the tool result is persisted.");
+      } catch (error) {
+        return errorResult(error.code ?? "FISSION_END_FAILED", String(error.message ?? error));
+      }
+    }
     return errorResult(
       "SCOPE_UNAVAILABLE_IN_FISSION",
-      "A fission flow does not open or close its own scope; the scheduler owns its begin and end.",
+      "Use scope({ end: true }) to finish the flow, or open a nested fission batch.",
     );
   }
   if (hasBegin) {

@@ -1989,7 +1989,7 @@ export function createFissionScheduler(options = {}) {
 			`Fission flow ${flow.label} (batch ${flow.batch.id}, index ${flow.index}, stage ${flow.batch.stage}).`,
 			`Intent: ${flow.item.intent}`,
 			`Budget for this flow: ${budget || "none"}. Permission: ${flow.item.permission}.`,
-			"Your scope is already open; do not call scope({ begin }).",
+			"Your flow scope is already open. When your work is complete, call scope({ end: true }); do not call todo. To delegate a nested batch, call scope({ begin: { stage, elder_report, fission: [...] } }); this retires your flow and the nested batch completes it.",
 		].join("\n");
 	}
 
@@ -2118,6 +2118,7 @@ export function createFissionScheduler(options = {}) {
 				error: null,
 				endInfo: null,
 				retired: false,
+				endRequested: false,
 				released: false,
 				nested: [],
 				nestedSealed: false,
@@ -2334,6 +2335,9 @@ export function createFissionScheduler(options = {}) {
 		// own agent_end yet. Start it here so the parent waits on a live child
 		// instead of a descriptor nobody will advance.
 		pendingNested(flow);
+		if (!flow.endRequested && !flow.nested.some((batch) => batch.ownerRetired) && !info.error && !info.aborted && !flow.cancelReason) {
+			info = { ...info, error: new Error("flow stopped without calling scope({ end: true })") };
+		}
 		if (!info.error && info.aborted !== true && !flow.cancelReason) {
 			const failure = lastAssistantStopError(flow);
 			if (failure) info = { ...info, error: failure };
@@ -2382,7 +2386,9 @@ export function createFissionScheduler(options = {}) {
 		if (!isObject(event)) return;
 		if (event.type === "agent_end") {
 			pendingNested(flow);
-			settleFlow(flow, { aborted: Boolean(flow.cancelReason) });
+			if (flow.endRequested || flow.cancelReason || flow.error || flow.nested.some((batch) => batch.ownerRetired)) {
+				settleFlow(flow, { aborted: Boolean(flow.cancelReason) });
+			}
 			return;
 		}
 		if (event.type === "message_end") {
@@ -2471,6 +2477,25 @@ export function createFissionScheduler(options = {}) {
 		registerBatch,
 		retireOwner,
 		onOwnerEnd,
+
+		requestFlowEnd(flowId) {
+			const flow = findFlow(flowId);
+			if (!flow || flow.status !== "running" || flow.endRequested) {
+				throw refusal("FISSION_END_UNAVAILABLE", "The flow is not running or has already declared completion.", { flowId });
+			}
+			if (typeof flow.agent?.abort !== "function") {
+				throw refusal(FISSION_SCHEDULER_CODES.UNSUPPORTED, "The flow agent cannot stop after declaring completion.", { flowId });
+			}
+			flow.endRequested = true;
+			if (flow.station?.fissionFlow) flow.station.fissionFlow.endRequested = true;
+			return { ok: true };
+		},
+
+		retireEndedFlow(flowId) {
+			const flow = findFlow(flowId);
+			if (!flow?.endRequested || isTerminal(flow)) return;
+			flow.agent.abort(Symbol.for("pi-agent-core.terminal-tool-result"));
+		},
 
 		// Standalone entry point. The control path registers and reserves
 		// separately; this convenience method must reserve for itself, because

@@ -280,6 +280,7 @@ async function startNested(h, { toolCallId, parentFlowId, fission }) {
 		relayOn: false,
 	});
 	expect(split.ok).toBe(true);
+	h.scheduler.retireOwner({ batch: registered.batch });
 	h.manager.appendMessage({ role: "toolResult", toolCallId, content: "registered" });
 	const outcome = await h.scheduler.onOwnerEnd({ batch: registered.batch });
 	expect(outcome.ok).toBe(true);
@@ -341,6 +342,21 @@ describe("fission scheduler manager identity", () => {
 });
 
 describe("fission scheduler", () => {
+	test("only an explicit scope end completes an ordinary flow", async () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = register(h, "call-explicit-end");
+		reserve(h);
+		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-explicit-end", content: "registered" });
+		await h.scheduler.onOwnerEnd({ batch: registered.batch });
+		const [first, second] = h.scheduler.listFlows();
+		h.scheduler.requestFlowEnd(first.flowId);
+		h.scheduler.retireEndedFlow(first.flowId);
+		expect(h.spawned[0].session.agent.aborted).toBe(true);
+		await h.scheduler.flowEnded(first.flowId);
+		expect(h.scheduler.listFlows()[0].status).toBe("closed");
+		await h.scheduler.flowEnded(second.flowId);
+		expect(h.scheduler.listFlows()[1].status).toBe("crashed");
+	});
 	test("registration charges nothing; the control reservation is the only debit", async () => {
 		const h = harness({ fission: twoFlows() });
 		const registered = register(h, "call-a");
@@ -405,6 +421,7 @@ describe("fission scheduler", () => {
 		// Finish in sequence: the first segment is copied to the second flow
 		// while it is still running. Unordered ends are covered by the handoff
 		// case, which waits on the journal before resolving the next turn.
+		h.scheduler.requestFlowEnd(h.scheduler.listFlows()[0].flowId);
 		h.spawned[0].session.finish.resolve();
 		await h.scheduler.flowEnded(h.scheduler.listFlows()[0].flowId);
 		// A handoff record leaves the queue only after its segment is committed
@@ -412,6 +429,7 @@ describe("fission scheduler", () => {
 		// observe the journal a microtask before injection, when the target's
 		// model context does not yet contain the copied turn.
 		await waitFor(() => h.scheduler.batchStatus(registered.batchId).handoffs.length === 0);
+		h.scheduler.requestFlowEnd(h.scheduler.listFlows()[1].flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(h.scheduler.listFlows()[1].flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
@@ -521,6 +539,7 @@ describe("fission scheduler", () => {
 		expect(h.scheduler.listFlows()[0].status).toBe("crashed");
 		// The sibling keeps running; the batch fails only once every flow stops.
 		expect(h.scheduler.listFlows()[1].status).toBe("running");
+		h.scheduler.requestFlowEnd(flows[1].flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(flows[1].flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
@@ -552,6 +571,7 @@ describe("fission scheduler", () => {
 				timestamp: 2,
 			});
 		};
+		h.scheduler.requestFlowEnd(first.flowId);
 		firstSession.finish.resolve();
 		await h.scheduler.flowEnded(first.flowId);
 		// The journal records `handoff.end` before copyRecord injects the
@@ -571,6 +591,7 @@ describe("fission scheduler", () => {
 		expect(entries.some((entry) => entry.customType === "fission.handoff.begin")).toBe(true);
 		expect(entries.some((entry) => entry.customType === "fission.handoff.end")).toBe(true);
 
+		h.scheduler.requestFlowEnd(second.flowId);
 		secondSession.finish.resolve();
 		await h.scheduler.flowEnded(second.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
@@ -982,6 +1003,7 @@ describe("fission scheduler", () => {
 		expect(h.scheduler.batchStatus(registered.batchId).handoffs).toHaveLength(0);
 
 		const nestedSession = h.spawned.find(({ plan }) => plan.flowId === nestedFlow.flowId).session;
+		h.scheduler.requestFlowEnd(nestedFlow.flowId);
 		nestedSession.finish.resolve();
 		await h.scheduler.flowEnded(nestedFlow.flowId);
 		const nestedDone = await h.scheduler.waitForBatch(nested.batchId);
@@ -998,6 +1020,7 @@ describe("fission scheduler", () => {
 			typeof message.content === "string" && message.content.includes(nested.batchId),
 		)).toBe(true);
 
+		h.scheduler.requestFlowEnd(sibling.flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(sibling.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
@@ -1031,6 +1054,7 @@ describe("fission scheduler", () => {
 		// finishFlow seals the flow synchronously before its first await. A
 		// nested begin arriving in that window must be refused, never left
 		// dangling under a flow that is about to close.
+		h.scheduler.requestFlowEnd(parent.flowId);
 		const finishing = h.scheduler.flowEnded(parent.flowId);
 		let failure;
 		try {
@@ -1078,6 +1102,7 @@ describe("fission scheduler", () => {
 			nested: true,
 		});
 		expect(nested.ok).toBe(true);
+		h.scheduler.retireOwner({ batch: nested.batch });
 		// The host persisted the child's tool result, but its agent_end has not
 		// started the spawn yet.
 		h.manager.appendMessage({ role: "toolResult", toolCallId: "call-hold-child", content: "registered" });
@@ -1089,6 +1114,7 @@ describe("fission scheduler", () => {
 		await waitFor(() => h.scheduler.listFlows().some((flow) => flow.batchId === nested.batchId));
 		const nestedFlow = h.scheduler.listFlows().find((flow) => flow.batchId === nested.batchId);
 		const nestedSession = h.spawned.find(({ plan }) => plan.flowId === nestedFlow.flowId).session;
+		h.scheduler.requestFlowEnd(nestedFlow.flowId);
 		nestedSession.finish.resolve();
 		await h.scheduler.flowEnded(nestedFlow.flowId);
 		await h.scheduler.waitForBatch(nested.batchId);
@@ -1096,6 +1122,7 @@ describe("fission scheduler", () => {
 			h.scheduler.listFlows().find((flow) => flow.flowId === parent.flowId).status === "closed",
 		);
 
+		h.scheduler.requestFlowEnd(sibling.flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(sibling.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
@@ -1122,6 +1149,7 @@ describe("fission scheduler", () => {
 
 		// The sibling ends while the nested child is still running. It must
 		// write its own end and queue its segment, not finalize the batch.
+		h.scheduler.requestFlowEnd(second.flowId);
 		h.spawned.find(({ plan }) => plan.flowId === second.flowId).session.finish.resolve();
 		await h.scheduler.flowEnded(second.flowId);
 		expect(h.scheduler.listFlows().find((flow) => flow.flowId === second.flowId).status).toBe("closed");
@@ -1130,6 +1158,7 @@ describe("fission scheduler", () => {
 		// Finish the nested child; its completion re-runs the parent, which now
 		// receives the sibling segment and becomes the heir.
 		const nestedSession = h.spawned.find(({ plan }) => plan.flowId === nestedFlow.flowId).session;
+		h.scheduler.requestFlowEnd(nestedFlow.flowId);
 		nestedSession.finish.resolve();
 		await h.scheduler.flowEnded(nestedFlow.flowId);
 		await h.scheduler.waitForBatch(nested.batchId);
@@ -1229,6 +1258,7 @@ describe("fission scheduler", () => {
 			entry.customType === "fission.aborted" && entry.data?.flow === first.label,
 		)).toBe(true);
 
+		h.scheduler.requestFlowEnd(second.flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(second.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
@@ -1255,6 +1285,7 @@ describe("fission scheduler", () => {
 		);
 		expect(aborted.data.reason).toContain("provider exploded");
 
+		h.scheduler.requestFlowEnd(second.flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(second.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
@@ -1331,6 +1362,7 @@ describe("fission scheduler", () => {
 		);
 		expect(aborted.data.reason).toBe("cost-capped");
 
+		h.scheduler.requestFlowEnd(second.flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(second.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);
@@ -1406,6 +1438,7 @@ describe("fission scheduler", () => {
 		);
 		expect(h.scheduler.listFlows().find((flow) => flow.flowId === middle.flowId).status).toBe("cancelled");
 
+		h.scheduler.requestFlowEnd(sibling.flowId);
 		h.spawned[1].session.finish.resolve();
 		await h.scheduler.flowEnded(sibling.flowId);
 		const done = await h.scheduler.waitForBatch(registered.batchId);

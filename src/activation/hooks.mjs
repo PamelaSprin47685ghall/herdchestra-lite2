@@ -172,6 +172,9 @@ export function wireHooks(pi, registry) {
 	try {
 		pi.on("tool_result", (event, ctx) => {
 			const station = registry.stationFor(ctx);
+			if (station?.fissionFlow?.endToolCallId === event?.toolCallId) {
+				registry.fissionScheduler?.()?.retireEndedFlow?.(station.fissionFlow.id);
+			}
 			retirePendingBatch(station, registry, ctx, event?.toolCallId);
 		});
 	} catch (error) {

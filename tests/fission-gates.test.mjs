@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { beginScope, createState } from "../src/scope/index.mjs";
-import { onToolCall } from "../src/station/gates.mjs";
+import { onSessionStop, onToolCall } from "../src/station/gates.mjs";
 
 const NESTED = {
 	stage: "acceptance-cases",
@@ -33,6 +33,14 @@ function scopeEvent(id, input) {
 }
 
 describe("fission flow scope admission", () => {
+	test("requires an explicit end before a flow can stop", () => {
+		const station = flowStation();
+		station.relayOn = () => true;
+		expect(onSessionStop(station, {}).additionalContext).toContain("scope({ end: true })");
+		station.fissionFlow.endRequested = true;
+		expect(onSessionStop(station, {})).toBeUndefined();
+	});
+
 	test("admits a nested batch begin from a flow", () => {
 		const verdict = onToolCall(
 			flowStation(),
@@ -43,15 +51,14 @@ describe("fission flow scope admission", () => {
 		expect(verdict).toBeUndefined();
 	});
 
-	test("refuses a flow end before dispatch", () => {
+	test("admits a flow end before dispatch", () => {
 		const verdict = onToolCall(
 			flowStation(),
 			scopeEvent("call-end", { end: true }),
 			{},
 		);
 
-		expect(verdict?.block).toBe(true);
-		expect(verdict.reason).toContain("SCOPE_UNAVAILABLE_IN_FISSION");
+		expect(verdict).toBeUndefined();
 	});
 
 	test("refuses a flow begin that opens no batch", () => {

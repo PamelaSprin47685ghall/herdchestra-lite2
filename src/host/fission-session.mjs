@@ -430,7 +430,12 @@ export function deriveFissionConfig(options = {}) {
 		toolNames: [...toolNames],
 		mountedToolNames: [...mountedToolNames],
 		advertiseHeadlessAsk: activeToolNames.includes("ask"),
-		providerSessionId: `${sessionId}:fission:${flowId}`,
+		// Every flow speaks to the provider as the owner's session. A per-flow
+		// id would be a separate cache namespace, so each flow's first request
+		// would pay the whole prefix again; the handoff and the heir's adoption
+		// would pay it a third time. One id keeps the provider cache warm across
+		// fission and return.
+		providerSessionId: sessionId,
 		providerPromptCacheKey: promptCacheKey,
 		taskPromptCacheKey,
 		modelRegistry,

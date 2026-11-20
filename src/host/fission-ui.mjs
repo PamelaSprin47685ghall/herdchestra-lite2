@@ -3,6 +3,43 @@ import { createEventMux } from "./event-mux.mjs";
 const bridges = new WeakMap();
 
 /**
+ * The retirement banner.
+ *
+ * Retiring an owner is a deliberate handover, not a failed turn. The host
+ * still synthesizes two artifacts for it: an `aborted` assistant message whose
+ * `errorMessage` carries the abort reason, and an error tool result for every
+ * call the aborted batch never ran. Neither says anything the user can act on,
+ * so the live stream drops both.
+ *
+ * Matching is on the exact reason string this extension passes to
+ * `agent.abort()`; a user interrupt or a provider failure carries a different
+ * text and stays visible.
+ */
+const OWNER_RETIRED_REASON = "Fission owner retired";
+
+function messageText(message) {
+	const content = message?.content;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => (typeof part?.text === "string" ? part.text : ""))
+		.join("\n");
+}
+
+/** True for the host's own record of a deliberate owner retirement. */
+export function isRetiredOwnerArtifact(event) {
+	const message = event?.message;
+	if (!message || typeof message !== "object") return false;
+	if (message.role === "assistant") {
+		return message.stopReason === "aborted" && message.errorMessage === OWNER_RETIRED_REASON;
+	}
+	if (message.role === "toolResult" && message.isError === true) {
+		return messageText(message).includes(OWNER_RETIRED_REASON);
+	}
+	return false;
+}
+
+/**
  * Install before the session's UI subscribes. Existing subscribers are private
  * to the host and cannot be moved into the multiplexed stream afterwards.
  */
@@ -53,7 +90,8 @@ export function installFissionUI(session) {
 
 	// Register once so one host event enters the mux once, not once per listener.
 	const unsubscribeOwner = original.call(session, (event) => {
-		if (active) mux.accept(owner, event);
+		if (!active || isRetiredOwnerArtifact(event)) return;
+		mux.accept(owner, event);
 	});
 	// Define the method instead of assigning it: an accessor's setter is host
 	// state this bridge must not touch, and a refused patch has to leave the

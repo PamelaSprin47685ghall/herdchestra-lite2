@@ -87,7 +87,7 @@ describe("deriveFissionConfig", () => {
 		expect(config.toolNames).toEqual(["read", "ask"]);
 		expect(config.mountedToolNames).toEqual(["read"]);
 		expect(config.advertiseHeadlessAsk).toBe(true);
-		expect(config.providerSessionId).toBe("session-1:fission:flow-a");
+		expect(config.providerSessionId).toBe("session-1");
 		expect(config.providerPromptCacheKey).toBe("agent-cache");
 		expect(config.taskPromptCacheKey).toBe("task-cache");
 		expect(config.modelRegistry).toBe(MODEL_REGISTRY);

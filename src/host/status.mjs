@@ -90,20 +90,51 @@ function hostLabelFromProcess() {
 	}
 }
 
+/**
+ * One ledger per process, not one per extension instance.
+ *
+ * Every fission flow builds its own extension instance, and therefore its own
+ * status runtime. A runtime-local ledger would split the session's totals once
+ * per flow and leave the owner's widget blind to every request a flow made:
+ * the line would sit at 0.0k while the flows spent real tokens. The key is
+ * still the shared manager, so one session keeps one record.
+ *
+ * `displayHost` lives here too. Flow contexts run with `hasUI: false`, so only
+ * the owner can write the widget; a flow that records usage hands the line to
+ * the last host that could draw it.
+ */
+const STATE_KEY = Symbol.for("herdchestra-lite2.status-state.v1");
+
+function sharedState() {
+	let state = globalThis[STATE_KEY];
+	if (!state) {
+		state = {
+			sessions: new WeakMap(),
+			totals: new Map(),
+			orphanKey: {},
+			activeUsageKey: null,
+			displayHost: null,
+		};
+		Object.defineProperty(globalThis, STATE_KEY, {
+			value: state,
+			enumerable: false,
+			configurable: true,
+		});
+	}
+	return state;
+}
+
 /** Build one isolated status runtime. Production installs one per extension. */
 export function createStatusRuntime(options = {}) {
 	const diagnostics = options.diagnostics ?? null;
-	const sessions = new WeakMap();
-	const totals = new Map();
-	const orphanKey = {};
-	let activeUsageKey = null;
-	let displayHost = null;
+	const shared = sharedState();
+	const sessions = shared.sessions;
 
 	// Flows run with `hasUI: false`, so their own context cannot host the
 	// widget even though they drive the one session record. Remember the last
 	// context that could and write the line there.
 	function rememberDisplayHost(ctx) {
-		if (canUseWidget(ctx)) displayHost = ctx;
+		if (canUseWidget(ctx)) shared.displayHost = ctx;
 	}
 
 	function keyFor(ctx) {
@@ -113,7 +144,7 @@ export function createStatusRuntime(options = {}) {
 		// ways and give every flow a private `last`.
 		const proxy = fissionProxyFor(ctx);
 		const key = proxy?.shared ?? ctx?.sessionManager ?? ctx;
-		return key && (typeof key === "object" || typeof key === "function") ? key : orphanKey;
+		return key && (typeof key === "object" || typeof key === "function") ? key : shared.orphanKey;
 	}
 
 	function readBranchUsage(manager, session) {
@@ -135,7 +166,7 @@ export function createStatusRuntime(options = {}) {
 		const key = keyFor(ctx);
 		const session = freshSession();
 		sessions.set(key, session);
-		totals.set(key, session.totals);
+		shared.totals.set(key, session.totals);
 		readBranchUsage(key, session);
 		return session;
 	}
@@ -166,14 +197,23 @@ export function createStatusRuntime(options = {}) {
 		}
 	}
 
+	/**
+	 * The whole session tree's running total.
+	 *
+	 * Σ is not one manager's spend: a root session, its fission flows, and any
+	 * child session that shares the tree all draw on the same budget, so the
+	 * line reports what the tree spent. A genuinely new root session starts a
+	 * fresh ledger and clears this map, so nothing older leaks in.
+	 */
 	function totalOfAllSessions() {
 		const total = zeroUsage();
-		for (const snapshot of totals.values()) accumulateUsage(total, snapshot);
+		for (const snapshot of shared.totals.values()) accumulateUsage(total, snapshot);
 		return total;
 	}
 
-	function usageCurrentText(session) {
-		const active = activeUsageKey ? sessions.get(activeUsageKey)?.last : null;
+	function usageCurrentText(session, key) {
+		const activeKey = shared.activeUsageKey;
+		const active = activeKey && activeKey === key ? sessions.get(activeKey)?.last : null;
 		const current = active && anyPositive(active) ? active : session.last;
 		return usageLine(current, totalOfAllSessions());
 	}
@@ -193,7 +233,7 @@ export function createStatusRuntime(options = {}) {
 	}
 
 	function flushWidget(ctx, session) {
-		const host = canUseWidget(ctx) ? ctx : displayHost;
+		const host = canUseWidget(ctx) ? ctx : shared.displayHost;
 		if (!host) return;
 		const parts = [];
 		if (session.host) parts.push(stylePart(host, "accent", session.host));
@@ -208,7 +248,7 @@ export function createStatusRuntime(options = {}) {
 	}
 
 	function flushUsage(ctx, session) {
-		session.usageText = usageCurrentText(session);
+		session.usageText = usageCurrentText(session, keyFor(ctx));
 		flushWidget(ctx, session);
 	}
 
@@ -257,7 +297,7 @@ export function createStatusRuntime(options = {}) {
 				// Single-value fields show the most recent writer, whichever
 				// flow or side request it was. Recording the writer only for
 				// sub agents froze the line on the last sub agent's numbers.
-				activeUsageKey = keyFor(ctx);
+				shared.activeUsageKey = keyFor(ctx);
 			}
 		}
 		showSessionPrefix(ctx);
@@ -296,10 +336,10 @@ export function createStatusRuntime(options = {}) {
 				// A genuinely new session starts a new ledger: the old
 				// manager's totals and its last writer must not leak into
 				// this line.
-				if (created) {
-					totals.clear();
-					totals.set(key, session.totals);
-					activeUsageKey = null;
+				if (created && !ctx?.agent?.parentId) {
+					shared.totals.clear();
+					shared.totals.set(key, session.totals);
+					shared.activeUsageKey = null;
 				}
 				showSessionPrefix(ctx);
 				showHost(ctx);

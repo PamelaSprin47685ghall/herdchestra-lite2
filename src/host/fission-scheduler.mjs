@@ -306,6 +306,42 @@ export function createFissionScheduler(options = {}) {
 	const bridge = options.bridge ?? installFissionEvents(ownerSession);
 	const ownsBridge = options.bridge === undefined;
 
+	/**
+	 * Run the turn that answers the user after the batch has been adopted.
+	 *
+	 * Started synchronously so `agent.state.isStreaming` is already true when
+	 * the caller resolves the batch: a dispose barrier or a prompt that saw the
+	 * batch close must still wait for this run.
+	 *
+	 * The host's unexpected-stop detector is configured per session, not per
+	 * turn (`features.unexpectedStopDetection`), and the extension cannot reach
+	 * that handle through a public export. A session left on its default
+	 * "mechanical" mode never classifies a text stop, so this deliberate turn
+	 * costs nothing; a session set to "smart" pays one judge call for it.
+	 */
+	function startPostScopeTurn(batch, anchor) {
+		let pending;
+		try {
+			pending = batch.owner.agent.continue();
+		} catch (error) {
+			pending = Promise.reject(error);
+		}
+		return Promise.resolve(pending).then(
+			async () => {
+				// agent.continue() settles before agent_end maintenance, and the
+				// judge runs inside that maintenance; idle covers it.
+				try {
+					await batch.owner.session?.waitForIdle?.();
+				} catch {
+					// Idle is a wait, not a result.
+				}
+			},
+			(error) => {
+				batchWarning(batch, "POST_BATCH_CONTINUE_FAILED", error, anchor);
+			},
+		);
+	}
+
 	const batches = [];
 	const batchesById = new Map();
 	const limits = [];
@@ -1424,6 +1460,7 @@ export function createFissionScheduler(options = {}) {
 						`Intent: ${flow.item.intent}`,
 						`Budget: ${budget || "none"}. Permission: ${flow.item.permission}. Model: ${modelLabel(flow.model)}.`,
 						"This receipt assigns this flow only; sibling receipts assign the other flows.",
+						"Your flow scope is already open. When your work is complete, call scope({ end: true }); do not call todo. To delegate a nested batch, call scope({ begin: { stage, elder_report, fission: [...] } }); this retires your flow and the nested batch completes it.",
 					].join("\n"),
 				},
 			],
@@ -1767,14 +1804,20 @@ export function createFissionScheduler(options = {}) {
 			);
 		}
 		owner.agent.reset();
-		const target = owner.agent.state?.messages;
-		if (!Array.isArray(target)) {
+		const state = owner.agent.state;
+		if (!state || !Array.isArray(state.messages)) {
 			throw refusal(
 				FISSION_SCHEDULER_CODES.UNSUPPORTED,
 				"owner agent.state.messages disappeared after reset()",
 			);
 		}
-		target.splice(0, target.length, ...heirMessages);
+		// DRY: adoption takes the heir's array by reference instead of copying
+		// every message into the owner's. Both histories already share their
+		// prefix objects (the flow was seeded from the owner's branch), so a
+		// copy would duplicate the whole prefix and throw away the identity the
+		// next request's prompt cache is keyed on. The heir is closed and never
+		// writes again, so one array can serve the owner from here on.
+		state.messages = heirMessages;
 
 		const model = heir.model ?? heir.session?.model;
 		if (model && owner.session?.model !== model) {
@@ -2170,9 +2213,7 @@ export function createFissionScheduler(options = {}) {
 				typeof batch.owner.agent?.continue === "function" &&
 				batch.owner.agent.state?.isStreaming !== true;
 			if (needsPostScopeTurn) {
-				void Promise.resolve(batch.owner.agent.continue()).catch((error) => {
-					batchWarning(batch, "POST_BATCH_CONTINUE_FAILED", error, anchor);
-				});
+				void startPostScopeTurn(batch, anchor);
 			}
 			releaseCarryOver(batch);
 			if (batch.parentFlow) {
@@ -2713,10 +2754,14 @@ export function createFissionScheduler(options = {}) {
 
 		for (let index = 0; index < spawned.length; index += 1) {
 			const { session } = spawned[index];
-			if (!session?.prompt && !session?.agent?.prompt) {
+			if (
+				typeof session?.agent?.continue !== "function" &&
+				!session?.prompt &&
+				!session?.agent?.prompt
+			) {
 				throw refusal(
 					FISSION_SCHEDULER_CODES.SESSION_UNSUPPORTED,
-					`${planned[index].flowId}: no prompt() is available`,
+					`${planned[index].flowId}: neither agent.continue() nor prompt() is available`,
 					{ flowId: planned[index].flowId },
 				);
 			}
@@ -2879,7 +2924,9 @@ export function createFissionScheduler(options = {}) {
 			emit(batch, "flow.started", { flowId: flow.id, label: flow.label });
 			let pending;
 			try {
-				pending = prompt(intentText(flow));
+				pending = typeof flow.agent?.continue === "function"
+					? flow.agent.continue()
+					: prompt(intentText(flow));
 			} catch (error) {
 				crashFlow(flow, error);
 				continue;

@@ -122,7 +122,7 @@ function fissionRefusalText(state, validation) {
  * before the receipt is emitted; the loop still commits this tool's result
  * afterwards, so this handler never claims the flows started.
  */
-function handleFissionBegin(station, call, { args, ctx }) {
+function handleFissionBegin(station, call, { args, ctx, base, currentMessage, currentPersisted }) {
   const state = station.state;
   if (args.end === true) {
     return errorResult("INVALID_ARGUMENT", "A fission begin cannot also close a scope.");
@@ -191,6 +191,36 @@ function handleFissionBegin(station, call, { args, ctx }) {
     return errorResult("FISSION_UNAVAILABLE", "Fission cannot start: no fission scheduler is attached to the station registry.");
   }
 
+  // The elder transition runs before registration, not after it.
+  //
+  // Two reasons. The economics decision below is *about* the elder that just
+  // received its report, so the report has to be committed first, exactly as
+  // the pre-fission begin path ordered it. And a fold rewrites the branch from
+  // the elder's begin, so performing it after `registerBatch` wrote the batch
+  // boundary would leave that boundary dangling off the rebased branch.
+  //
+  // A refused registration therefore leaves the elder archived. That is the
+  // lesser harm: the model did give its report, and the next begin must not
+  // demand it a second time.
+  if (pendingElder !== null) {
+    if (elderVisible) pendingElder.report = elderReport;
+    else pendingElder.sealed = true;
+  }
+  // The economics decision belongs to the begin path. Fission used to drop
+  // this call entirely, so `shouldFoldPool` only ever ran on a model change at
+  // scope end: pools kept accruing rent and never reached a decision.
+  foldEligiblePool(station, {
+    state,
+    parentId: parentScope?.id ?? null,
+    boundary,
+    epoch,
+    base,
+    currentMessage,
+    currentPersisted,
+    target: modelChoice(station, ctx, state.baseModelSpec, state.baseModelKey),
+    ctx,
+  });
+
   const stage = begin.stage;
   let registered;
   try {
@@ -225,12 +255,6 @@ function handleFissionBegin(station, call, { args, ctx }) {
       // The split refusal is the answer; a cancel failure adds nothing.
     }
     return errorResult(split.code, split.reason);
-  }
-  // The elder transition commits only after the batch is registered and its
-  // budget is reserved: a refused batch must not archive or seal anything.
-  if (pendingElder !== null) {
-    if (elderVisible) pendingElder.report = elderReport;
-    else pendingElder.sealed = true;
   }
   if (options.mainAgent) state.stageFlags = applyStageBegin(state.stageFlags, stage);
   if (!state.herdMode) state.relay = invalidatePromotion(state.relay);
@@ -275,7 +299,9 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     return errorResult("INVALID_ARGUMENT", E["scope-end-type"]);
   }
   const fissionBegin = hasBegin && Object.hasOwn(args.begin, "fission");
-  if (fissionBegin) return handleFissionBegin(station, call, { args, ctx });
+  if (fissionBegin) {
+    return handleFissionBegin(station, call, { args, ctx, base, currentMessage, currentPersisted });
+  }
   if (station.fissionFlow) {
     if (hasEnd && !hasBegin) {
       const scheduler = station.registry?.fissionScheduler?.();

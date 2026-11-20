@@ -43,6 +43,31 @@ describe("fission flow scope admission", () => {
 		expect(onSessionStop(station, {})).toBeUndefined();
 	});
 
+	// The main session is the path the nudge originally served: a scope left
+	// open when the model stops must produce a continuation that names the
+	// closing call, not merely the idea of closing.
+	test("nudges a main session that stops with a scope open", () => {
+		const state = createState();
+		const opened = beginScope(state, {
+			toolCallId: "call-main",
+			intent: "main",
+			stage: "direct-execution",
+			budget: { read: 4 },
+			time: 60,
+		});
+		expect(opened.ok).toBe(true);
+		const station = { state, fissionFlow: null, relayOn: () => true };
+
+		const feedback = onSessionStop(station, {});
+		expect(feedback?.continue).toBe(true);
+		expect(feedback.additionalContext).toContain("scope({ end: true })");
+
+		// Outside the full flow a finished scope owes nothing, so the same stop
+		// allows a natural end.
+		state.scopes = [];
+		expect(onSessionStop(station, {})).toBeUndefined();
+	});
+
 	test("admits a nested batch begin from a flow", () => {
 		const verdict = onToolCall(
 			flowStation(),

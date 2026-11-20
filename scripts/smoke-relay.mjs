@@ -23,6 +23,7 @@
 import { activate } from "../src/main.mjs";
 import { stateFor } from "../src/station/index.mjs";
 import { beginGenerationAfterHandoff } from "../src/relay/ledger.mjs";
+import { beginScope } from "../src/scope/index.mjs";
 
 function memoryManager() {
 	const entries = [];
@@ -97,8 +98,47 @@ const ctx = {
 	sessionManager: manager,
 	agentMessages: [],
 	invokeTool: (params) => native.execute(params),
+	// A fission begin refuses to start without a host abort path.
+	abort() {},
 };
 const station = stateFor(ctx);
+
+/**
+ * The smallest scheduler port that lets a `scope({ begin })` call succeed.
+ *
+ * This fake host spawns no flows, so the port opens the batch scope itself and
+ * reports a registered batch. `retireOwner` keeps the owner alive instead of
+ * aborting it, because the smoke drives the tools directly and never runs a
+ * turn to abort. `handleFissionBegin` sets `station.pendingFission` after
+ * `registerBatch` returns, and `call()` below clears that descriptor, since a
+ * batch that never starts must not refuse the next begin.
+ */
+const scheduler = {
+	registerBatch(request) {
+		const opened = beginScope(request.station.state, {
+			toolCallId: request.toolCallId,
+			intent: "smoke batch",
+			stage: request.stage,
+			budget: { ...request.totals },
+			time: request.begin?.time,
+		});
+		if (!opened.ok) {
+			return { ok: false, code: opened.code, reason: opened.reason };
+		}
+		return {
+			ok: true,
+			batchId: "smoke-batch",
+			batch: { id: "smoke-batch" },
+			batchBeginId: "smoke-begin",
+		};
+	},
+	cancelBatch() {},
+	retireOwner() {
+		return { ok: true, abort: false };
+	},
+};
+station.registry?.setFissionScheduler?.(scheduler);
+
 let callSeq = 0;
 
 async function call(name, args) {
@@ -106,6 +146,9 @@ async function call(name, args) {
 	const tool = host.tools.get(name);
 	if (!tool) throw new Error(`${name} is not registered`);
 	const output = await tool.execute(id, args, undefined, undefined, ctx);
+	// A batch registered here never spawns a flow, so its pending descriptor is
+	// spent as soon as the call returns.
+	if (name === "scope" && args?.begin) station.pendingFission = null;
 	return {
 		text: (output.content ?? []).map((part) => part.text ?? "").join(""),
 		code: output.details?.code,
@@ -131,7 +174,14 @@ function expectLine(text, line, name) {
 	expect(text.includes(line), `${name}: missing ${JSON.stringify(line)} in:\n${text}`);
 }
 
-const S5 = { begin: { intent: "smoke", stage: "direct-execution", budget: { read: 1 }, time: 60, permission: "rw" } };
+const S5 = {
+	begin: {
+		stage: "direct-execution",
+		elder_report: null,
+		time: 60,
+		fission: [{ intent: "smoke", budget: { read: 1 }, permission: "rw" }],
+	},
+};
 
 await check("status names the flow before any ledger", async () => {
 	const view = await call("todo", { op: "view" });

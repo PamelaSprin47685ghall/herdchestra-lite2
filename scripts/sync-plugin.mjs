@@ -25,7 +25,12 @@ const RUNTIME_DIRS = ["src", "resources"];
 const FINGERPRINTS = [
   { file: "src/relay/texts.mjs", needle: "status.flow", min: 1 },
   { file: "src/relay/texts.mjs", needle: 'case "reopened"', min: 1 },
-  { file: "src/station/controls.mjs", needle: "state.relay?.fullFlow === true", min: 2 },
+  // The `rw` gate moved into fission validation: accounting.mjs owns the two
+  // refusals (before the first ledger, and in decision-framing), while
+  // controls.mjs keeps the single end-of-scope relay check. Counting two in
+  // controls.mjs described a shape the file no longer has.
+  { file: "src/scope/accounting.mjs", needle: "state.relay?.fullFlow === true", min: 2 },
+  { file: "src/station/controls.mjs", needle: "state.relay?.fullFlow === true", min: 1 },
 ];
 const checkOnly = process.argv.includes("--check");
 

@@ -4,9 +4,16 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [2.3.0] — 2026-11-19
 
-## [Unreleased]
+This release numbers the workflow work accumulated since 2.1.0 as a minor
+release rather than a patch: the diagnostics ring, delta state persistence, the
+host seam self-check, the silent-failure fixes, and the cross-stage discipline
+in the Stage Prompts block arrive together. The 2.1.1–2.1.6 entries below record
+the individual steps that led here and stay as history; this section records
+what this release itself changes.
 
 ### Added
 
@@ -53,8 +60,9 @@ All notable changes to this extension. The format follows
   `null`), and every item must declare `permission: "ro" | "rw"`; an omitted
   or null permission rejects the whole batch instead of defaulting to `"rw"`.
   There is no single-flow begin shape, so one flow is a one-item array, and the
-  batch is validated atomically before any flow starts. `"ro"` now blocks
-  `edit`, `write`, `bash`, and `ast_edit` inside that flow. A fission begin
+  batch is validated atomically before any flow starts. `"ro"` is a declaration
+  the system trusts: no tool is blocked because a flow called itself read-only.
+  A fission begin
   cannot also close a scope: `end: true` with `begin` is refused before any
   state change, so a caller closes the current scope with a plain `end: true`
   call and opens the batch in a following call. The scope tool reference, the
@@ -131,15 +139,6 @@ All notable changes to this extension. The format follows
   `resources/prompts/labels.md`, so no model-facing sentence stays hardcoded in
   source. The duplicated stage prompt copy in `docs/design/stages.md` is gone:
   `resources/prompts/stages.md` is the only copy.
-
-This release numbers the workflow work accumulated since 2.1.0 as a minor
-release rather than a patch: the diagnostics ring, delta state persistence, the
-host seam self-check, the silent-failure fixes, and now the cross-stage
-discipline in the Stage Prompts block arrive together. The 2.1.1–2.1.6 entries
-below record the individual steps that led here and stay as history; this
-section records what this release itself changes.
-
-### Changed
 
 - The Stage Prompts block now carries the cross-stage discipline: the four
   working stages may open in any order and none gates another, but in principle

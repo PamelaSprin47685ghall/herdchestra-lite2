@@ -91,7 +91,7 @@ The stage sections for `decision-framing`, `acceptance-cases`, `architecture-des
 
 Every fission item declares its own `permission: "ro" | "rw"`, and the field is required: a missing, `null`, or other value rejects the whole batch, so forgetting the declaration cannot bypass the gate.
 
-`"ro"` is enforced inside that flow: `edit`, `write`, `bash`, and `ast_edit` are blocked. The declaration is still mistake-proofing rather than a security boundary; it stops the ordinary write path, not every possible side effect.
+`"ro"` is a declaration, not an enforcement boundary. A flow that says `"ro"` is trusted: the system never blocks a tool because the scope called itself read-only, and it never audits a tool call against the claim. Mistake-proofing lives in the required field and in the two `"rw"` refusals below; what a flow *does* with the tools it already holds stays a matter of the flow's own discipline.
 
 `"rw"` is refused in two cases:
 

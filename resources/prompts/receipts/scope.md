@@ -172,7 +172,7 @@ You are still inside scope level {{level}}: {{intent}}.{{leave_framing}} Do not 
 
 ## inside-text.simple
 
-You are still inside scope level {{level}}: {{intent}}.{{leave_framing}} Do not write the final user-facing conclusion. Continue the task or close the scope.
+You are still inside scope level {{level}}: {{intent}}.{{leave_framing}} Do not write the final user-facing conclusion. Continue the task or close it with scope({ end: true }).
 
 ## receipt.simple-inside
 

@@ -148,7 +148,6 @@ export function createFlowState(base) {
       put(flow, key, structuredClone(base[key]));
     }
   }
-  flow.pinSeen = new Set(base.pinSeen ?? []);
   return flow;
 }
 

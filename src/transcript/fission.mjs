@@ -244,8 +244,19 @@ function toolCallIds(message) {
 }
 
 /** Convert one persisted custom message to the AgentMessage a model reads. */
+// A conversion must be stable: the same journal entry has to produce the same
+// message object every time it is replayed. `adopt()` replaces the owner's
+// whole context with `handoffMessages(branch)`, so a rebuilt boundary that
+// carries a fresh `Date.now()` changes bytes the provider already cached and
+// breaks the prompt-cache prefix at the oldest scope boundary. The WeakMap
+// keeps object identity; a finite entry timestamp keeps the bytes stable even
+// when a manager hands out fresh entry objects.
+const convertedMessages = new WeakMap();
+
 function customMessage(entry) {
 	if (!contextCustomMessage(entry)) return null;
+	const cached = convertedMessages.get(entry);
+	if (cached !== undefined) return cached;
 	const message = {
 		role: "custom",
 		customType: entry.customType,
@@ -254,7 +265,24 @@ function customMessage(entry) {
 		timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now(),
 	};
 	if (entry.details !== undefined) message.details = entry.details;
+	convertedMessages.set(entry, message);
 	return message;
+}
+
+/** Convert one persisted scope boundary without losing its recorded fields. */
+function boundaryMessage(entry) {
+	const cached = convertedMessages.get(entry);
+	if (cached !== undefined) return cached;
+	const boundary = {
+		role: "custom",
+		customType: entry.customType,
+		content: JSON.stringify(entry.data ?? {}),
+		display: false,
+		timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now(),
+	};
+	if (entry.details !== undefined) boundary.details = entry.details;
+	convertedMessages.set(entry, boundary);
+	return boundary;
 }
 
 /**
@@ -297,13 +325,7 @@ export function handoffMessages(entries) {
 			continue;
 		}
 		if (entry.type !== "custom" || !/^scope\.(begin|end)$/.test(entry.customType)) continue;
-		const boundary = {
-			role: "custom",
-			customType: entry.customType,
-			content: JSON.stringify(entry.data ?? {}),
-			display: false,
-			timestamp: Date.now(),
-		};
+		const boundary = boundaryMessage(entry);
 		if (outstanding.size > 0) deferred.push(boundary);
 		else result.push(boundary);
 	}

@@ -235,9 +235,9 @@ export class SessionStation {
 	 * the ring in ../host/diagnostics.mjs keeps the history a single field
 	 * loses on the next failure.
 	 */
-	noteError(domain, error) {
+	noteError(domain, error, detail = undefined) {
 		this.lastError = String(error?.message ?? error);
-		record(domain, error);
+		record(domain, error, detail);
 	}
 
 	// -- Policy --------------------------------------------------------------

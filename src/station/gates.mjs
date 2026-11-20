@@ -21,6 +21,7 @@ import {
 	successorStartNudge,
 } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
+import { record } from "../host/diagnostics.mjs";
 import { ownerRetirement } from "./retirement.mjs";
 import {
 	CONTROL_TOOLS,
@@ -30,6 +31,40 @@ import {
 } from "./messages.mjs";
 import { insideScopeText } from "./texts.mjs";
 
+/**
+ * Record the model's own report while a handoff waits.
+ *
+ * Both message events carry the same text, so the rule lives here once: a
+ * session outside every scope, with a handoff pending, whose assistant turn
+ * made no tool call.
+ */
+function capturePendingReport(station, message) {
+	const state = station.state;
+	if (state.herdMode || currentScope(state) || !state.relay?.handoffPending) return;
+	if (toolCalls(message).length > 0) return;
+	const text = message?.content
+		?.filter((block) => block?.type === "text")
+		.map((block) => block.text)
+		.join("\n") ?? "";
+	station.captureHandoffReport(text);
+}
+
+/**
+ * Record one gate failure in the diagnostics ring.
+ *
+ * A real station owns `noteError`; a host double or a test stub may expose only
+ * `lastError`. Both must land in the ring, because a swallowed message-event
+ * failure is exactly the silence `herd-diag` exists to break.
+ */
+function noteFailure(station, error) {
+	if (typeof station?.noteError === "function") {
+		station.noteError("gates", error);
+		return;
+	}
+	if (station) station.lastError = String(error?.message ?? error);
+	record("gates", error);
+}
+
 function onAssistantMessage(station, message, ctx) {
 	if (!station.fissionFlow && station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
@@ -37,17 +72,10 @@ function onAssistantMessage(station, message, ctx) {
 		station.dispatch.setPreparing(message);
 		station.dispatch.rememberGroups(message);
 		station.processAssistantMessage(message, { persisted: false });
-		if (!station.state.herdMode && !currentScope(station.state) &&
-			station.state.relay?.handoffPending && toolCalls(message).length === 0) {
-			const text = message?.content
-				?.filter((block) => block?.type === "text")
-				.map((block) => block.text)
-				.join("\n") ?? "";
-			station.captureHandoffReport(text);
-		}
+		capturePendingReport(station, message);
 		station.maybeNudge(message, ctx);
 	} catch (error) {
-		station.lastError = String(error?.message ?? error);
+		noteFailure(station, error);
 	}
 	return undefined;
 }
@@ -64,17 +92,10 @@ function onMessageEnd(station, event, ctx) {
 			const found = station.assistantForToolCall(controls[0].id);
 			station.processAssistantMessage(message, { persisted: Boolean(found) });
 		}
-		if (!station.state.herdMode && !currentScope(station.state) &&
-			station.state.relay?.handoffPending && toolCalls(message).length === 0) {
-			const text = message?.content
-				?.filter((block) => block?.type === "text")
-				.map((block) => block.text)
-				.join("\n") ?? "";
-			station.captureHandoffReport(text);
-		}
+		capturePendingReport(station, message);
 		station.maybeNudge(message, ctx);
 	} catch (error) {
-		station.lastError = String(error?.message ?? error);
+		noteFailure(station, error);
 	}
 	return undefined;
 }
@@ -89,10 +110,11 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 	if (station.fissionFlow && toolName === "amend") {
 		return { block: true, reason: "AMEND_UNAVAILABLE_IN_FISSION: amend can overwrite another flow's shared history." };
 	}
-	if (station.fissionFlow?.permission === "ro" &&
-		(toolName === "edit" || toolName === "write" || toolName === "bash" || toolName === "ast_edit")) {
-		return { block: true, reason: "READ_ONLY_FLOW: this tool can change files and is unavailable in a read-only flow." };
-	}
+	// `permission` is a declaration, not an enforcement boundary. A scope that
+	// says `"ro"` is trusted: the system never blocks a write because the scope
+	// called itself read-only, and it never audits a tool call against the
+	// claim. Mistake-proofing lives in the required field and in the two `rw`
+	// refusals at begin time; it does not inspect what a tool would do.
 	// A flow may declare completion or delegate to a nested batch. The
 	// scheduler writes the boundaries after the corresponding tool result.
 	// The deferred admission call carries no arguments, so only the preflight

@@ -87,7 +87,13 @@ import {
 import { installFissionEvents } from "./fission-events.mjs";
 import { createFissionSession, deriveFissionConfig } from "./fission-session.mjs";
 import { isFissionManager } from "./fission-manager.mjs";
-import { ownerRetirement } from "../station/retirement.mjs";
+import { toolCalls } from "../transcript/messages.mjs";
+import { depthAt, findToolResultId, maxHandoffId, tailOf } from "./fission-journal.mjs";
+import {
+	flowStillHoldsCopy,
+	messageText,
+	retractQueuedCopies,
+} from "./queue-retraction.mjs";
 
 export const FISSION_SCHEDULER_CODES = Object.freeze({
 	UNSUPPORTED: "FISSION_UNSUPPORTED",
@@ -140,7 +146,6 @@ const COST_CAP_CODES = new Set([
 	"MAX_COST_EXCEEDED",
 ]);
 const SHARED_STATE_FIELDS = new Set(["herdMode", "relay", "stageFlags", "pins"]);
-const TOOL_RESULT_ROLES = new Set(["toolResult", "tool_result", "tool"]);
 
 function isObject(value) {
 	return value !== null && typeof value === "object";
@@ -171,16 +176,6 @@ function refusal(code, message, details = {}) {
 function tokenFor(value) {
 	const token = String(value ?? "").replace(/[^A-Za-z0-9]/g, "").slice(-32);
 	return token || "0";
-}
-
-function maxHandoffId(entries) {
-	let max = 0;
-	for (const entry of entries) {
-		if (entry?.type !== "custom" || entry.customType !== "fission.handoff.begin") continue;
-		const value = entry.data?.handoffId;
-		if (Number.isSafeInteger(value) && value > max) max = value;
-	}
-	return max;
 }
 
 function sumBudgets(items) {
@@ -216,19 +211,113 @@ function sharesSharedManager(candidate, manager) {
 	return candidate.shared === manager;
 }
 
-function findToolResultId(manager, toolCallId) {
-	if (!isNonEmptyString(toolCallId)) return null;
-	const entries = manager.getEntries();
-	for (let index = entries.length - 1; index >= 0; index -= 1) {
-		const entry = entries[index];
-		const message = entry?.type === "message" ? entry.message : undefined;
-		if (!message || !TOOL_RESULT_ROLES.has(message.role)) continue;
-		// A per-flow receipt shares the batch's toolCallId. The owner's ack is
-		// the result the control path persisted, never a flow receipt.
-		if (message.details?.fissionReceipt) continue;
-		if (message.toolCallId === toolCallId || message.toolCallID === toolCallId) return entry.id;
+/**
+ * Merge the flow's collapse records into the owner's.
+ *
+ * A flow state is cloned from the owner's, so it already carries every record
+ * the owner had. Copying it back wholesale would replace records the owner
+ * holds with the flow's copies, whose `epoch` may have advanced while the flow
+ * ran: `applyCollapses` matches records by epoch, so a promoted epoch silently
+ * un-collapses history the provider still has cached. The owner's record wins;
+ * only scopes the owner never saw are added.
+ */
+export function mergeCollapses(ownerRecords, heirRecords) {
+	const merged = Array.isArray(ownerRecords) ? [...ownerRecords] : [];
+	const seen = new Set();
+	for (const record of merged) {
+		if (typeof record?.scopeId === "string") seen.add(record.scopeId);
 	}
-	return null;
+	for (const record of Array.isArray(heirRecords) ? heirRecords : []) {
+		const id = record?.scopeId;
+		if (typeof id === "string") {
+			if (seen.has(id)) continue;
+			seen.add(id);
+		}
+		merged.push(record);
+	}
+	return merged;
+}
+
+/**
+ * Merge per-model cache records, keeping the most conservative position.
+ *
+ * `cachedUntilPos` is a promise about what the provider still holds. The
+ * owner's value describes the owner's branch, the flow's describes the flow's;
+ * after adoption the owner continues on the flow's branch, so the smaller
+ * position is the only one both sides can prove.
+ */
+export function mergeModelCaches(ownerCaches, heirCaches) {
+	const merged = {};
+	for (const [key, entry] of Object.entries(ownerCaches ?? {})) merged[key] = entry;
+	for (const [key, entry] of Object.entries(heirCaches ?? {})) {
+		const existing = merged[key];
+		if (existing === undefined) {
+			merged[key] = entry;
+			continue;
+		}
+		const ownerPos = Number.isInteger(existing?.cachedUntilPos) ? existing.cachedUntilPos : 0;
+		const heirPos = Number.isInteger(entry?.cachedUntilPos) ? entry.cachedUntilPos : 0;
+		merged[key] = { ...existing, ...entry, cachedUntilPos: Math.min(ownerPos, heirPos) };
+	}
+	return merged;
+}
+
+/**
+ * State fields the flow must never write back to the owner.
+ *
+ * A flow state is a clone, so every key it carries describes the flow's own
+ * branch. Four of them describe the owner's session instead: the shared four
+ * below, and the model identity below that. Copying the model identity back
+ * makes `from` and `target` at the next scope end derive from the same value,
+ * which turns `changingModel` false forever and silently disables the
+ * economics fold (`shouldFoldPool` has no other caller).
+ */
+const OWNER_MODE_KEYS = new Set([
+	"baseModelSpec",
+	"baseModelKey",
+	"previousModelSpec",
+	"previousModelKey",
+	"modelRecovery",
+]);
+
+/**
+ * Compose the owner's context after adoption.
+ *
+ * The owner keeps its own messages as the prefix, then the flow's receipt, the
+ * batch's structural boundaries, and the heir's own activity. Adopting the
+ * heir's array wholesale would interleave those boundaries into a conversation
+ * that never contained them, which changes bytes the provider already cached
+ * and breaks the prompt-cache prefix at the oldest boundary. Appending them
+ * after the owner's conversation keeps the same content visible while leaving
+ * the cached prefix untouched.
+ *
+ * The owner's ack for the batch's scope call is dropped, not kept beside the
+ * receipt: both answer the same toolCallId, and a provider rejects a call that
+ * is answered twice. The ack was the current turn's own new content, so
+ * replacing it costs nothing that was already cached.
+ */
+export function composeAdoptedMessages(ownerMessages, heirMessages, options = {}) {
+	const owner = Array.isArray(ownerMessages) ? ownerMessages : [];
+	const heir = Array.isArray(heirMessages) ? heirMessages : [];
+	const from = Number.isInteger(options.adoptFrom) && options.adoptFrom >= 0
+		? options.adoptFrom
+		: 0;
+	const tail = heir.slice(Math.min(from, heir.length));
+	const callId = typeof options.callId === "string" ? options.callId : null;
+	const prefix = callId === null
+		? owner
+		: owner.filter(
+			(message) =>
+				!(message?.role === "toolResult" && message.toolCallId === callId),
+		);
+	const receipt = Array.isArray(options.receipt) ? options.receipt : [];
+	const boundaries = Array.isArray(options.boundaries) ? options.boundaries : [];
+	return [
+		...prefix,
+		...receipt,
+		...boundaries,
+		...tail,
+	];
 }
 
 /**
@@ -529,6 +618,16 @@ export function createFissionScheduler(options = {}) {
 		}
 		if (!isObject(base)) return base;
 		const flowManager = flow.session?.sessionManager ?? base.manager;
+		// A real station forks a view that also owns fresh dispatch caches, a
+		// fresh persistence anchor, and a fresh usage ledger. A plain station
+		// object (a test double, a host adapter) owns none of those, so its view
+		// needs exactly two own fields and inherits the rest.
+		//
+		// The old fallback copied a fourteen-field list that stopped existing in
+		// 2.1.0, when those caches and the anchor moved out of the station. A
+		// view built from it looked initialized while holding nothing, and any
+		// later edit that trusted it would have shared the owner's caches with a
+		// flow. Two fields cannot drift that way.
 		if (typeof base.forkForFlow === "function") {
 			return base.forkForFlow(flow.state, flowManager);
 		}
@@ -536,30 +635,6 @@ export function createFissionScheduler(options = {}) {
 		view.state = flow.state;
 		view.fissionFlow = null;
 		view.pendingFission = null;
-		view.ownerRetired = null;
-		view.lastPersisted = null;
-		view.lastStateEntryId = null;
-		view.stateWrites = 0;
-		view.handled = new Map();
-		view.processedCalls = new Set();
-		view.processedMessages = new Set();
-		view.callGroups = new Map();
-		view.preparingMessage = null;
-		view.dispatchMessage = null;
-		view.dispatchPositions = new Map();
-		view.dispatchHasScope = false;
-		view.nudged = new WeakSet();
-		view.lastError = null;
-		view.agentPolicy = null;
-		view.handoffReport = null;
-		view.todoGrantKey = null;
-		view.pendingModelSwitch = null;
-		view.modelSwitchInFlight = null;
-		recordLimit(
-			"FLOW_STATION_SHARES_USAGE_LEDGER",
-			"The flow station view shares the owner's usage ledger, so flow usage is measured against the owner's scope state.",
-			{ flowId: flow.id },
-		);
 		return view;
 	}
 
@@ -571,37 +646,6 @@ export function createFissionScheduler(options = {}) {
 			`flow ${flow.id} exposes no subscribe()`,
 			{ flowId: flow.id },
 		);
-	}
-
-	// -- Journal-derived structure -------------------------------------------
-
-	function isDescendant(entry, ancestorId, byId) {
-		let current = entry;
-		for (let guard = 0; current && guard < 100000; guard += 1) {
-			if (current.id === ancestorId) return true;
-			current = current.parentId ? byId.get(current.parentId) : undefined;
-		}
-		return false;
-	}
-
-	function tailOf(flow) {
-		if (!flow.beginId) return null;
-		const entries = manager.getEntries();
-		const byId = new Map(entries.map((entry) => [entry.id, entry]));
-		for (let index = entries.length - 1; index >= 0; index -= 1) {
-			if (isDescendant(entries[index], flow.beginId, byId)) return entries[index].id;
-		}
-		return flow.beginId;
-	}
-
-	function depthAt(entryId) {
-		let depth = 0;
-		for (const entry of manager.getBranch(entryId)) {
-			if (entry.type !== "custom") continue;
-			if (entry.customType === "scope.begin") depth += 1;
-			else if (entry.customType === "scope.end") depth -= 1;
-		}
-		return depth;
 	}
 
 	function sourceSegment(record) {
@@ -946,7 +990,7 @@ export function createFissionScheduler(options = {}) {
 		const inherited = Array.isArray(flow.inheritedCarry) ? flow.inheritedCarry.splice(0) : [];
 		const consumed = consumedBroadcastIds(flow);
 		const unlanded = pending.filter((entry) => !isConsumed(flow, entry, consumed));
-		const stuck = retractQueuedCopies(flow, unlanded);
+		const stuck = retractOwnQueuedCopies(flow, unlanded);
 		const released = refreshStuckCopies();
 		for (const entry of pending) {
 			const record = broadcastRecord(entry.broadcastId, entry.text);
@@ -997,7 +1041,7 @@ export function createFissionScheduler(options = {}) {
 				const isCopy = (message) =>
 					message === held.entry.message ||
 					message?.details?.fissionBroadcast?.broadcastId === held.entry.broadcastId;
-				if (flowStillHoldsCopy(held.flow, held.entry, isCopy, { withdrew: false, withdrawn: [] })) {
+				if (flowStillHoldsCopy(held.flow.agent, held.entry, isCopy, { withdrew: false, withdrawn: [] })) {
 					continue;
 				}
 				record.stuck.delete(flowId);
@@ -1028,178 +1072,18 @@ export function createFissionScheduler(options = {}) {
 		return messages.includes(entry.message);
 	}
 
-	// The host keeps a queued copy in three places: the pending steering and
-	// follow-up queues, the batch it dequeued for the next model call, and the
-	// live-steered messages a provider already took into its in-flight
-	// response. clearSteeringQueue() touches only the first, and abort()
-	// restores the other two, so a whole-queue clear both destroys the user's
-	// own input and lets our copy resurface as a ghost turn. Take back only the
-	// copies this flow queued: withdraw the undelivered ones before the abort,
-	// which makes the host neither record nor requeue them, then strip our
-	// messages from both pending queues with peek/replace. Anything that is not
-	// ours goes back where it was.
-	// Return the entries whose copy could not be proven gone. A missing or
-	// throwing read proves nothing, so it counts as still held: routing such a
-	// copy onward would show the text a second time if the host ever runs the
-	// stale copy.
-	//
-	// Every host call stands alone. Withdraw, restore, and strip touch
-	// different queues and can refuse independently: one failure must not skip
-	// the rest of the retraction, and the host's own input must never vanish
-	// with it. A refused rewrite is reported with the affected text.
-	function retractQueuedCopies(flow, entries) {
-		if (entries.length === 0) return new Set();
-		const agent = flow.agent;
-		const ours = new Set(entries.map((entry) => entry.message));
-		const ids = new Set(entries.map((entry) => entry.broadcastId));
-		const isCopy = (message) =>
-			ours.has(message) ||
-			ids.has(message?.details?.fissionBroadcast?.broadcastId);
-		const probe = {
-			withdrew: false,
-			withdrawn: [],
-			withdrawnByQueue: { steering: [], followUp: [] },
-		};
-		// The withdraw is the only call that can prove a provider no longer
-		// holds a copy. Its failure is reported, and the pending queues are
-		// still stripped below.
-		if (typeof agent?.withdrawUndeliveredQueuedMessages === "function") {
-			try {
-				const withdrawn = agent.withdrawUndeliveredQueuedMessages() ?? {};
-				probe.withdrew = true;
-				probe.withdrawnByQueue.steering = Array.isArray(withdrawn.steering) ? withdrawn.steering : [];
-				probe.withdrawnByQueue.followUp = Array.isArray(withdrawn.followUp) ? withdrawn.followUp : [];
-				probe.withdrawn = [
-					...probe.withdrawnByQueue.steering,
-					...probe.withdrawnByQueue.followUp,
-				];
-			} catch (error) {
-				batchWarning(flow.batch, "FLOW_QUEUE_RETRACT_FAILED", error, flow);
-			}
-		}
-		// The withdraw takes every undelivered message, not only ours. Put the
-		// host's own input back one queue at a time: a refusal in one queue
-		// never strands the other, and whatever cannot be put back is reported
-		// with its text rather than silently lost.
-		if (probe.withdrew) {
-			for (const queue of ["steering", "followUp"]) {
-				const withdrawn = probe.withdrawnByQueue[queue];
-				try {
-					const restored = requeueKept(agent, queue, withdrawn, isCopy);
-					for (const message of restored.lost) {
-						reportLostInput(flow, queue, message, restored.error);
-					}
-				} catch (error) {
-					// requeueKept is total by design; this guards a host whose
-					// accessors throw, so no message goes unreported.
-					for (const message of withdrawn.filter((message) => !isCopy(message))) {
-						reportLostInput(flow, queue, message, error);
-					}
-				}
-			}
-		}
-		// Strip our copies from both pending queues. Each queue stands alone: a
-		// throwing read or rewrite of one is reported and the other still runs,
-		// because a skipped strip leaves a ghost turn behind.
-		for (const queue of ["steering", "followUp"]) {
-			const peek = queue === "steering" ? agent?.peekSteeringQueue : agent?.peekFollowUpQueue;
-			if (typeof peek !== "function" || typeof agent?.replaceQueue !== "function") continue;
-			try {
-				const pending = peek.call(agent);
-				if (!Array.isArray(pending)) continue;
-				const kept = pending.filter((message) => !isCopy(message));
-				if (kept.length !== pending.length) agent.replaceQueue(queue, kept);
-			} catch (error) {
-				batchWarning(flow.batch, "FLOW_QUEUE_RETRACT_FAILED", error, flow);
-			}
-		}
-		const stuck = new Set();
-		for (const entry of entries) {
-			if (flowStillHoldsCopy(flow, entry, isCopy, probe)) stuck.add(entry);
-		}
-		return stuck;
-	}
-
-	function flowStillHoldsCopy(flow, entry, isCopy, probe) {
-		const agent = flow.agent;
-		for (const peek of [
-			agent?.peekSteeringQueue,
-			agent?.peekFollowUpQueue,
-			agent?.peekUndeliveredQueuedMessages,
-		]) {
-			if (typeof peek !== "function") continue;
-			let pending;
-			try {
-				pending = peek.call(agent);
-			} catch {
-				return true;
-			}
-			if (Array.isArray(pending) && pending.some(isCopy)) return true;
-		}
-		if (probe.withdrawn.some(isCopy)) return false;
-		// No readable queue lists the copy. A successful withdraw call emptied
-		// the undelivered set; without one, an unreadable undelivered set could
-		// still hold it.
-		return !probe.withdrew && typeof agent?.peekUndeliveredQueuedMessages !== "function";
-	}
-
-	// The host withdraws every undelivered message of a run, not only ours. Put
-	// the user's own input back at the head of its queue, where the host's abort
-	// restoration would have kept it, so preserving our text never costs theirs.
-	//
-	// Nothing here throws. A message the host handed back and then refused to
-	// take again is returned as lost, so the caller can report it with its text
-	// instead of letting the exception be its only trace.
-	function requeueKept(agent, queue, messages, isCopy) {
-		if (!Array.isArray(messages)) return { lost: [], error: null };
-		const kept = messages.filter((message) => !isCopy(message));
-		if (kept.length === 0) return { lost: [], error: null };
-		const peek = queue === "steering" ? agent?.peekSteeringQueue : agent?.peekFollowUpQueue;
-		const readQueue = () => {
-			if (typeof peek !== "function") return null;
-			try {
-				const pending = peek.call(agent);
-				return Array.isArray(pending) ? pending : null;
-			} catch {
-				return null;
-			}
-		};
-		let pending = readQueue();
-		let error = null;
-		if (pending !== null && typeof agent?.replaceQueue === "function") {
-			try {
-				agent.replaceQueue(queue, [...kept, ...pending]);
-				return { lost: [], error };
-			} catch (caught) {
-				error = caught;
-				// A refused rewrite may still have landed; read again before
-				// adding a second copy of the user's text.
-				pending = readQueue();
-				if (pending === null) return { lost: kept, error };
-			}
-		}
-		const missing = pending === null ? kept : kept.filter((message) => !pending.includes(message));
-		const lost = [];
-		for (const message of missing) {
-			try {
-				if (queue === "steering") {
-					if (typeof agent?.steer !== "function") throw new Error("agent.steer() is unavailable");
-					agent.steer(message);
-				} else {
-					if (typeof agent?.followUp !== "function") throw new Error("agent.followUp() is unavailable");
-					agent.followUp(message);
-				}
-			} catch (caught) {
-				error ??= caught;
-				lost.push(message);
-			}
-		}
-		if (lost.length === 0) return { lost, error };
-		// Trust an append only when the queue confirms it. An unreadable queue
-		// proves nothing, so the message stays reported.
-		const after = readQueue();
-		if (after === null) return { lost, error };
-		return { lost: lost.filter((message) => !after.includes(message)), error };
+	/**
+	 * Retract this flow's unqueued broadcast copies.
+	 *
+	 * The retraction itself lives in ../host/queue-retraction.mjs; this wrapper
+	 * supplies the two flow-scoped ports it cannot build itself: the batch
+	 * warning sink and the lost-input reporter.
+	 */
+	function retractOwnQueuedCopies(flow, entries) {
+		return retractQueuedCopies(flow, entries, {
+			warn: (code, error) => batchWarning(flow.batch, code, error, flow),
+			lost: (queue, message, error) => reportLostInput(flow, queue, message, error),
+		});
 	}
 
 	// A withdrawn message the host gave back and then refused to take again is
@@ -1215,17 +1099,6 @@ export function createFissionScheduler(options = {}) {
 		};
 		flow.batch.warnings.push(warning);
 		emit(flow.batch, "flow.warning", warning);
-	}
-
-	function messageText(message) {
-		const content = message?.content;
-		if (typeof content === "string") return content;
-		if (!Array.isArray(content)) return null;
-		const parts = content
-			.map((part) =>
-				typeof part === "string" ? part : typeof part?.text === "string" ? part.text : "")
-			.filter((part) => part.length > 0);
-		return parts.length > 0 ? parts.join("\n") : null;
 	}
 
 	// Place one unconsumed copy. The text must end up in exactly one live
@@ -1509,15 +1382,15 @@ export function createFissionScheduler(options = {}) {
 	}
 
 	function writeEnd(flow, status) {
-		return writeAt(tailOf(flow), "scope.end", endData(flow, status));
+		return writeAt(tailOf(manager, flow), "scope.end", endData(flow, status));
 	}
 
 	function writeAborted(flow, reason) {
-		return writeAt(tailOf(flow), "fission.aborted", abortedData(flow, reason));
+		return writeAt(tailOf(manager, flow), "fission.aborted", abortedData(flow, reason));
 	}
 
 	function writeBatchEnd(batch, anchor) {
-		return writeAt(tailOf(anchor), "scope.end", {
+		return writeAt(tailOf(manager, anchor), "scope.end", {
 			batchId: batch.id,
 			stage: batch.stage,
 			status: batch.status,
@@ -1672,9 +1545,9 @@ export function createFissionScheduler(options = {}) {
 			);
 		}
 		const entries = sourceSegment(record);
-		const tail = tailOf(target);
-		const sourceBase = depthAt(record.from) - 1;
-		const targetDepth = depthAt(tail);
+		const tail = tailOf(manager, target);
+		const sourceBase = depthAt(manager, record.from) - 1;
+		const targetDepth = depthAt(manager, tail);
 		const result = await copyHandoff(manager, {
 			tail,
 			entries,
@@ -1803,6 +1676,11 @@ export function createFissionScheduler(options = {}) {
 				`heir ${heir.label} exposes no message array`,
 			);
 		}
+		// The owner's own messages are the cached prefix. Capture them before
+		// reset() clears the array, and take only the heir's own activity.
+		const ownerMessages = Array.isArray(owner.agent.state?.messages)
+			? owner.agent.state.messages.slice()
+			: [];
 		owner.agent.reset();
 		const state = owner.agent.state;
 		if (!state || !Array.isArray(state.messages)) {
@@ -1811,13 +1689,15 @@ export function createFissionScheduler(options = {}) {
 				"owner agent.state.messages disappeared after reset()",
 			);
 		}
-		// DRY: adoption takes the heir's array by reference instead of copying
-		// every message into the owner's. Both histories already share their
-		// prefix objects (the flow was seeded from the owner's branch), so a
-		// copy would duplicate the whole prefix and throw away the identity the
-		// next request's prompt cache is keyed on. The heir is closed and never
-		// writes again, so one array can serve the owner from here on.
-		state.messages = heirMessages;
+		state.messages = composeAdoptedMessages(ownerMessages, heirMessages, {
+			adoptFrom: heir.adoptFrom,
+			callId: batch.toolCallId,
+			receipt: heir.receiptId ? boundaryMessages(heir.receiptId) : [],
+			boundaries: [
+				...(batch.batchBeginId ? boundaryMessages(batch.batchBeginId) : []),
+				...(heir.beginId ? boundaryMessages(heir.beginId) : []),
+			],
+		});
 
 		const model = heir.model ?? heir.session?.model;
 		if (model && owner.session?.model !== model) {
@@ -1844,7 +1724,7 @@ export function createFissionScheduler(options = {}) {
 		// flow's state.
 		let heirTail = null;
 		try {
-			heirTail = tailOf(heir);
+			heirTail = tailOf(manager, heir);
 			manager.branch(heirTail);
 		} catch (error) {
 			failures.push({
@@ -1858,11 +1738,24 @@ export function createFissionScheduler(options = {}) {
 
 	function promote(batch, heir, { persist = true } = {}) {
 		const target = batch.owner.state;
+		// The owner's epoch names its own host boundary history. A flow runs on a
+		// private branch and may observe a boundary the owner never saw; importing
+		// that number would retire collapse records the owner still needs.
+		const ownerEpoch = target.epoch;
+		const ownerCollapses = target.collapses;
+		const ownerCaches = target.modelCaches;
+		const ownerCharges = target.charges;
 		for (const key of Object.keys(heir.state)) {
 			if (SHARED_STATE_FIELDS.has(key)) continue;
+			if (OWNER_MODE_KEYS.has(key)) continue;
 			target[key] = heir.state[key];
 		}
-		target.pinSeen = heir.state.pinSeen;
+		target.epoch = ownerEpoch;
+		target.collapses = mergeCollapses(ownerCollapses, heir.state.collapses);
+		target.modelCaches = mergeModelCaches(ownerCaches, heir.state.modelCaches);
+		// Flow charges name flow scopes that are already closed; the owner's own
+		// charges describe scopes it still holds open.
+		target.charges = ownerCharges;
 		if (!persist) return;
 		try {
 			options.onPromote?.(target, heir.state, batch);
@@ -2185,7 +2078,7 @@ export function createFissionScheduler(options = {}) {
 				}
 			} else if (anchor) {
 				try {
-					manager.branch(tailOf(anchor));
+					manager.branch(tailOf(manager, anchor));
 				} catch (error) {
 					batchWarning(batch, "LEAF_BRANCH_FAILED", error, anchor);
 				}
@@ -2255,9 +2148,13 @@ export function createFissionScheduler(options = {}) {
 		}
 		// Defense in depth: the station gate already refuses a retired owner,
 		// but a direct port caller must not register a batch for it either.
-		const retirement = ownerRetirement(request.station, {
-			agent: request.identity ?? request.ctx?.agent ?? null,
-		});
+		// The predicate is asked of the station itself: importing the station's
+		// own module here would make the scheduler depend on the layer above it.
+		const retirement = typeof request.station.ownerRetirement === "function"
+			? request.station.ownerRetirement({
+				agent: request.identity ?? request.ctx?.agent ?? null,
+			})
+			: null;
 		if (retirement) {
 			throw refusal(FISSION_SCHEDULER_CODES.OWNER_RETIRED, retirement.reason, {
 				batchId: retirement.batchId,
@@ -2335,7 +2232,7 @@ export function createFissionScheduler(options = {}) {
 		// would place the receipt beside this boundary instead of under it. This
 		// write therefore leaves the leaf on the boundary, so the host's next
 		// append is its child. On failure the old leaf is restored.
-		const anchorId = batch.parentFlow ? tailOf(batch.parentFlow) : manager.getLeafId();
+		const anchorId = batch.parentFlow ? tailOf(manager, batch.parentFlow) : manager.getLeafId();
 		const savedLeaf = manager.getLeafId();
 		try {
 			if (anchorId) manager.branch(anchorId);
@@ -2889,6 +2786,10 @@ export function createFissionScheduler(options = {}) {
 				...batchBoundary,
 				...boundaryMessages(flow.beginId),
 			);
+			// Adoption appends only what the flow itself produced after this
+			// boundary block; the injected prefix stays out of the owner's
+			// conversation.
+			flow.adoptFrom = flow.agent.state.messages.length;
 			try {
 				options.bindFlow(flow.id, flow.station, flow.permission, {
 					batchId: batch.id,

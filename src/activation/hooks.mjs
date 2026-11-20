@@ -37,8 +37,13 @@ function retirePendingBatch(station, registry, ctx, toolCallId) {
 	try {
 		outcome = port?.retireOwner?.({ batchId: batch.batchId, station, ctx });
 	} catch (error) {
-		station.lastError = String(error?.message ?? error);
-		record("hooks", error, { fission: batch.batchId, retire: true });
+		const detail = { fission: batch.batchId, retire: true };
+		if (typeof station?.noteError === "function") {
+			station.noteError("hooks", error, detail);
+		} else {
+			if (station) station.lastError = String(error?.message ?? error);
+			record("hooks", error, detail);
+		}
 	}
 	// `ctx.agent` is only an ExtensionAgentIdentity, so the abort goes through
 	// the context operation itself. The owner must not continue even when the
@@ -73,7 +78,14 @@ function batchRunning(port, batch) {
 	if (typeof port?.hasRunningFlows === "function") {
 		return port.hasRunningFlows(batch.batchId) === true;
 	}
-	return true;
+	// No port exposes a per-batch probe. The descriptor itself decides.
+	//
+	// A retired descriptor is an owner that deliberately stopped its run: the
+	// host must not wake it with a continuation, so it counts as live and the
+	// stop stays open. Anything else is a descriptor nobody can witness any
+	// more; calling it live would return `undefined` from every later
+	// session_stop and silence the scope nudge for the rest of the process.
+	return batch.retired === true;
 }
 
 /**

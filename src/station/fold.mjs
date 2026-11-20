@@ -456,6 +456,18 @@ export function foldBatch({
 	const source = Array.isArray(base) ? base : [];
 	const tailCut = persistedTail(source, currentMessage, currentPersisted);
 	const valid = [];
+	// A record marked collapsed without a physical fold still disappears from
+	// the next outbound list: `applyCollapses` compresses it there. The
+	// provider's cached prefix therefore ends at that record's begin, and the
+	// ledger has to say so now. Otherwise the economics decision keeps
+	// counting cache hits on content that is about to vanish.
+	let capAt = Number.POSITIVE_INFINITY;
+	const cap = (index) => {
+		if (Number.isInteger(index) && index >= 0) capAt = Math.min(capAt, index);
+	};
+	const flushCap = () => {
+		if (Number.isFinite(capAt)) capCachePositions(state, capAt);
+	};
 	for (const record of batch ?? []) {
 		const begin = findBegin(source, record.beginToolCallId);
 		const endIndex = findToolCallIndex(source, record.endToolCallId);
@@ -463,16 +475,23 @@ export function foldBatch({
 			record.collapsed = true;
 			continue;
 		}
-		if (
-			tailCut <= endIndex ||
-			crossesHandoffBoundary(source, begin.resultIndex + 1, endIndex)
-		) {
+		// A collapse that spans a handoff boundary is skipped by
+		// `applyCollapses` too, so its outbound bytes never change.
+		if (crossesHandoffBoundary(source, begin.resultIndex + 1, endIndex)) {
 			record.collapsed = true;
+			continue;
+		}
+		if (tailCut <= endIndex) {
+			// The end message is not persisted yet, so this fold has to wait.
+			// The next turn will compress the interior all the same.
+			record.collapsed = true;
+			cap(begin.assistantIndex);
 			continue;
 		}
 		valid.push({ record, begin, endIndex });
 	}
 	if (valid.length === 0) {
+		flushCap();
 		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 
@@ -480,12 +499,15 @@ export function foldBatch({
 	let beginEntry = findBeginEntry(manager, first.record.beginToolCallId);
 	while (!beginEntry && valid.length > 1) {
 		first.record.collapsed = true;
+		cap(first.begin.assistantIndex);
 		valid.shift();
 		first = valid[0];
 		beginEntry = findBeginEntry(manager, first.record.beginToolCallId);
 	}
 	if (!beginEntry) {
 		first.record.collapsed = true;
+		cap(first.begin.assistantIndex);
+		flushCap();
 		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 
@@ -502,6 +524,8 @@ export function foldBatch({
 		typeof manager.branch !== "function"
 	) {
 		for (const record of records) record.collapsed = true;
+		cap(first.begin.assistantIndex);
+		flushCap();
 		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 	try {
@@ -516,14 +540,18 @@ export function foldBatch({
 		}
 	} catch {
 		for (const record of records) record.collapsed = true;
+		cap(first.begin.assistantIndex);
+		flushCap();
 		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 
 	for (const record of records) record.collapsed = true;
 	markSubsumedDescendants(state, records);
 	// The fold physically rewrote the branch at foldStartIdx: every provider
-	// cache keeps only the prefix before it.
-	capCachePositions(state, foldStartIdx);
+	// cache keeps only the prefix before it. Records marked earlier without a
+	// physical fold may sit even further back, so the tightest cap wins.
+	cap(foldStartIdx);
+	flushCap();
 	const savedChars = Math.max(0, sliceChars(tailBefore) - sliceChars(tailAfter));
 	const savedTokens = charsToTokens(savedChars, tokensPerChar);
 	const maxOrder = records.reduce(

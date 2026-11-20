@@ -54,7 +54,7 @@ The summary of the previous scope at this level. Record its outcomes and remaini
 
 ## fission.permission
 
-Declare this flow's write intent. It is required on every fission item and must be "ro" or "rw": an item that omits it, passes null, or names another value rejects the whole batch. "ro" is enforced inside that flow — edit, write, bash, and ast_edit are blocked. "rw" is refused in stage "decision-framing", and in the full flow while this generation has not submitted its first todo ledger (a todo view does not count); submit the ledger first, or choose a later stage. In simple mode "rw" is allowed.
+Declare this flow's write intent. It is required on every fission item and must be "ro" or "rw": an item that omits it, passes null, or names another value rejects the whole batch. "ro" is a declaration, not an enforcement boundary: the flow is trusted, and no tool is blocked because it said "ro". "rw" is refused in stage "decision-framing", and in the full flow while this generation has not submitted its first todo ledger (a todo view does not count); submit the ledger first, or choose a later stage. In simple mode "rw" is allowed.
 
 ## fission.model
 

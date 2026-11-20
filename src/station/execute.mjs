@@ -11,31 +11,35 @@ import {
 } from "./controls.mjs";
 import { controlsIn, parseArgs } from "./messages.mjs";
 
-function executeScope(station, toolCallId, params, ctx) {
+/**
+ * Run one control tool through the processed-id cache.
+ *
+ * A control call may already have been answered while its assistant message
+ * was scanned. Both lookups are the same question asked on either side of that
+ * scan, so every control tool shares this order instead of repeating it.
+ */
+function withProcessedCache(station, toolCallId, direct) {
 	const cached = station.processed.handledFor(toolCallId);
 	if (cached) return cached;
 	station.processControlsForTool(toolCallId);
 	const processed = station.processed.handledFor(toolCallId);
 	if (processed) return processed;
-	return directScope(station, toolCallId, params, ctx);
+	return direct();
+}
+
+function executeScope(station, toolCallId, params, ctx) {
+	return withProcessedCache(station, toolCallId, () =>
+		directScope(station, toolCallId, params, ctx));
 }
 
 function executeAmend(station, toolCallId, params) {
-	const cached = station.processed.handledFor(toolCallId);
-	if (cached) return cached;
-	station.processControlsForTool(toolCallId);
-	const processed = station.processed.handledFor(toolCallId);
-	if (processed) return processed;
-	return directAmend(station, toolCallId, params);
+	return withProcessedCache(station, toolCallId, () =>
+		directAmend(station, toolCallId, params));
 }
 
 function executeDefer(station, toolCallId, params) {
-	const cached = station.processed.handledFor(toolCallId);
-	if (cached) return cached;
-	station.processControlsForTool(toolCallId);
-	const processed = station.processed.handledFor(toolCallId);
-	if (processed) return processed;
-	return directDefer(station, toolCallId, params);
+	return withProcessedCache(station, toolCallId, () =>
+		directDefer(station, toolCallId, params));
 }
 
 function executePin(station, toolCallId, params) {

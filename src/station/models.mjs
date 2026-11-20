@@ -23,7 +23,8 @@ export function modelChoice(station, ctx, spec, key) {
 	const parsed = typeof spec === "string"
 		? preparseModelSpec(station.pricingCatalog, ctx, spec)
 		: null;
-	const live = actualModel(ctx) ?? station.usage.lastCtxModel;
+	// The ledger is absent only on a station double that never measured usage.
+	const live = actualModel(ctx) ?? station.usage?.lastCtxModel;
 	// Only an exact resolution may name the model a later check expects. A
 	// fuzzy match only estimates size and price. The host resolves roles and
 	// aliases that the extension never sees.

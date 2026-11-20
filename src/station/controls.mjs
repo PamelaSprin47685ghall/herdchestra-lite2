@@ -29,6 +29,7 @@ import {
   shouldFoldPool,
 } from "./fold.mjs";
 import { modelChoice, queueModelSwitch } from "./models.mjs";
+import { ownerRetirement, retiredOwnerReason } from "./retirement.mjs";
 
 import { loadDoc, render } from "../prompts/index.mjs";
 import { applyStageBegin, missingStages } from "../scope/stage-flags.mjs";
@@ -126,7 +127,15 @@ function handleFissionBegin(station, call, { args, ctx }) {
   if (args.end === true) {
     return errorResult("INVALID_ARGUMENT", "A fission begin cannot also close a scope.");
   }
-  if (station.pendingFission && station.pendingFission.retired !== true) {
+  // Retirement is a permanent fact for this owner identity. A started turn
+  // that arrives after the receipt must not open a second batch; only the
+  // batch's flows or its adopted heir may act again.
+  const retirement = ownerRetirement(station, ctx);
+  if (retirement) return errorResult(retirement.code, retirement.reason);
+  if (station.pendingFission) {
+    if (station.pendingFission.retired === true) {
+      return errorResult("OWNER_RETIRED", retiredOwnerReason(station.pendingFission.batchId));
+    }
     return errorResult("FISSION_BATCH_PENDING", "A fission batch from this agent has not retired yet; wait for its receipt.");
   }
   const begin = args.begin;

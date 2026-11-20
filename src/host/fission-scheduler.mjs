@@ -83,6 +83,7 @@ import {
 import { installFissionEvents } from "./fission-events.mjs";
 import { createFissionSession, deriveFissionConfig } from "./fission-session.mjs";
 import { isFissionManager } from "./fission-manager.mjs";
+import { ownerRetirement } from "../station/retirement.mjs";
 
 export const FISSION_SCHEDULER_CODES = Object.freeze({
 	UNSUPPORTED: "FISSION_UNSUPPORTED",
@@ -91,6 +92,7 @@ export const FISSION_SCHEDULER_CODES = Object.freeze({
 	BATCH_BEGIN_MISSING: "FISSION_BATCH_BEGIN_MISSING",
 	BATCH_SCOPE_MISSING: "FISSION_BATCH_SCOPE_MISSING",
 	OWNER_BUSY: "FISSION_OWNER_BUSY",
+	OWNER_RETIRED: "FISSION_OWNER_RETIRED",
 	SESSION_UNSUPPORTED: "FISSION_SESSION_UNSUPPORTED",
 	SPAWN_FAILED: "FISSION_SPAWN_FAILED",
 	MODEL_UNRESOLVED: "FISSION_MODEL_UNRESOLVED",
@@ -489,6 +491,7 @@ export function createFissionScheduler(options = {}) {
 		view.state = flow.state;
 		view.fissionFlow = null;
 		view.pendingFission = null;
+		view.ownerRetired = null;
 		view.lastPersisted = null;
 		view.lastStateEntryId = null;
 		view.stateWrites = 0;
@@ -597,6 +600,19 @@ export function createFissionScheduler(options = {}) {
 				{ flowId: parentFlow.id },
 			);
 		}
+		// A flow that opened a nested batch was aborted when that batch
+		// retired. Its status can still read "running" until the inner batch
+		// resolves, so the domain state decides: one live nested batch per flow.
+		const liveRetired = parentFlow?.nested?.find(
+			(child) => child.ownerRetired === true && child.done !== true,
+		);
+		if (liveRetired) {
+			throw refusal(
+				FISSION_SCHEDULER_CODES.OWNER_RETIRED,
+				`nested batch owner ${parentFlow.id} retired when batch ${liveRetired.id} opened; the flow cannot open another batch`,
+				{ flowId: parentFlow.id, batchId: liveRetired.id },
+			);
+		}
 		const owner = parentFlow
 			? { session: parentFlow.session, agent: parentFlow.agent, state: parentFlow.state }
 			: { session: ownerSession, agent: ownerAgent, state: request.station?.state ?? options.state };
@@ -662,6 +678,9 @@ export function createFissionScheduler(options = {}) {
 		if (pending && (pending === batch || pending.batch === batch || pending.batchId === batch.id)) {
 			station.pendingFission = null;
 		}
+		// The batch is terminal and its heir has been adopted. The owner's
+		// session may interact again, so the retirement gate ends here.
+		station?.clearOwnerRetired?.(batch.id);
 		batch.resolveDone(result);
 	}
 
@@ -1502,6 +1521,16 @@ export function createFissionScheduler(options = {}) {
 		if (!isObject(request.station) || !isObject(request.station.state)) {
 			throw refusal(FISSION_SCHEDULER_CODES.UNSUPPORTED, "registerBatch requires station.state");
 		}
+		// Defense in depth: the station gate already refuses a retired owner,
+		// but a direct port caller must not register a batch for it either.
+		const retirement = ownerRetirement(request.station, {
+			agent: request.identity ?? request.ctx?.agent ?? null,
+		});
+		if (retirement) {
+			throw refusal(FISSION_SCHEDULER_CODES.OWNER_RETIRED, retirement.reason, {
+				batchId: retirement.batchId,
+			});
+		}
 		if (!isNonEmptyString(request.toolCallId)) {
 			throw refusal(FISSION_SCHEDULER_CODES.INVALID_REQUEST, "toolCallId is required");
 		}
@@ -1641,6 +1670,12 @@ export function createFissionScheduler(options = {}) {
 			);
 		}
 		batch.ownerRetired = true;
+		// Arm the station's gate even when a caller reaches the port directly.
+		batch.station?.markOwnerRetired?.({
+			batchId: batch.id,
+			toolCallId: batch.toolCallId,
+			identity: batch.identity ?? request.ctx?.agent ?? null,
+		});
 		abort();
 		emit(batch, "owner.retired", {});
 		return { ok: true, abort: false };

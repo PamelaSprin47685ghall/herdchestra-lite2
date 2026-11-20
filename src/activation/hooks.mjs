@@ -22,6 +22,13 @@ function retirePendingBatch(station, registry, ctx, toolCallId) {
 	if (!batch || batch.retired === true) return false;
 	if (batch.toolCallId !== toolCallId) return false;
 	batch.retired = true;
+	// Arm the station's own gate before the scheduler or the host sees the
+	// abort: a started turn can deliver its next tool call immediately.
+	station?.markOwnerRetired?.({
+		batchId: batch.batchId,
+		toolCallId,
+		identity: ctx?.agent ?? null,
+	});
 	// The descriptor is the station's stop guard, not the scheduler's batch
 	// object. Only the id crosses the port; the scheduler resolves its own
 	// record from it.

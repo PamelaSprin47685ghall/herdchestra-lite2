@@ -25,6 +25,17 @@ export function installFissionUI(session) {
 		}
 	});
 
+	function restoreSubscribe() {
+		if (session.subscribe !== subscribe) return;
+		try {
+			if (ownDescriptor) Object.defineProperty(session, "subscribe", ownDescriptor);
+			else delete session.subscribe;
+		} catch {
+			// The host keeps the method it ended with. Teardown must still
+			// finish: a failed restore must not hide a dead cached bridge.
+		}
+	}
+
 	function subscribe(listener) {
 		if (typeof listener !== "function") throw new TypeError("Listener must be a function");
 		const entry = { listener, active: true };
@@ -44,11 +55,23 @@ export function installFissionUI(session) {
 	const unsubscribeOwner = original.call(session, (event) => {
 		if (active) mux.accept(owner, event);
 	});
+	// Define the method instead of assigning it: an accessor's setter is host
+	// state this bridge must not touch, and a refused patch has to leave the
+	// session exactly as it was found.
 	try {
-		session.subscribe = subscribe;
+		Object.defineProperty(session, "subscribe", {
+			value: subscribe,
+			configurable: true,
+			enumerable: ownDescriptor?.enumerable ?? false,
+			writable: true,
+		});
 		if (session.subscribe !== subscribe) throw new Error("Session subscribe cannot be patched");
 	} catch (error) {
-		unsubscribeOwner();
+		try {
+			unsubscribeOwner();
+		} catch {
+			// The patch already failed; the original error is the answer.
+		}
 		throw error;
 	}
 
@@ -77,15 +100,24 @@ export function installFissionUI(session) {
 		dispose() {
 			if (!active) return;
 			active = false;
-			unsubscribeOwner();
-			for (const unsubscribe of flows.values()) unsubscribe();
-			flows.clear();
-			if (session.subscribe === subscribe) {
-				if (ownDescriptor) Object.defineProperty(session, "subscribe", ownDescriptor);
-				else delete session.subscribe;
-			}
-			listeners.clear();
+			// Drop the cache first. A host unsubscribe that throws must never
+			// leave a dead bridge to be returned by a later install.
 			bridges.delete(session);
+			try {
+				unsubscribeOwner();
+			} catch {
+				// The owner callback is already gated by `active`.
+			}
+			for (const unsubscribe of [...flows.values()]) {
+				try {
+					unsubscribe();
+				} catch {
+					// Detach is best effort.
+				}
+			}
+			flows.clear();
+			restoreSubscribe();
+			listeners.clear();
 		},
 	};
 	bridges.set(session, bridge);

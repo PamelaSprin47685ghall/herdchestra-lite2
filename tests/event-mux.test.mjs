@@ -108,4 +108,48 @@ describe("event mux", () => {
 		mux.accept("a", close);
 		expect(output).toEqual([open, close, firstStart, firstUpdate, secondStart, secondEnd]);
 	});
+
+	test("discards a cancelled copy's own terminal events instead of throwing", () => {
+		const output = [];
+		const mux = createEventMux((event) => output.push(event));
+		const start = message("message_start", "a");
+		const aborted = message("message_end", "partial", { stopReason: "aborted" });
+		mux.accept("a", start);
+		mux.cancel("a", aborted);
+		// The source stays subscribed, so the same copy can still deliver its
+		// real end or a late update after the supplied terminal event.
+		expect(() => mux.accept("a", message("message_end", "a"))).not.toThrow();
+		expect(() => mux.accept("a", message("message_update", "late"))).not.toThrow();
+		expect(output).toEqual([start, aborted]);
+	});
+
+	test("a cancelled flow can open a new message", () => {
+		const output = [];
+		const mux = createEventMux((event) => output.push(event));
+		const first = message("message_start", "a");
+		const aborted = message("message_end", "partial", { stopReason: "aborted" });
+		mux.accept("a", first);
+		mux.cancel("a", aborted);
+		const second = message("message_start", "b");
+		const secondEnd = message("message_end", "b");
+		mux.accept("a", second);
+		mux.accept("a", secondEnd);
+		expect(output).toEqual([first, aborted, second, secondEnd]);
+	});
+
+	test("cancelling a duplicate broadcast copy loses no display", () => {
+		const output = [];
+		const mux = createEventMux((event) => output.push(event));
+		// The host carries the id under message.details; the third argument is
+		// spread into the message itself.
+		const broadcast = { details: { fissionBroadcast: { broadcastId: "broadcast-1" } } };
+		const first = [message("message_start", "hello", broadcast), message("message_end", "hello", broadcast)];
+		const duplicate = [message("message_start", "hello", broadcast), message("message_end", "hello", broadcast)];
+		const aborted = message("message_end", "hello", { ...broadcast, stopReason: "aborted" });
+		for (const event of first) mux.accept("a", event);
+		mux.accept("b", duplicate[0]);
+		mux.cancel("b", aborted);
+		expect(() => mux.accept("b", duplicate[1])).not.toThrow();
+		expect(output).toEqual(first);
+	});
 });

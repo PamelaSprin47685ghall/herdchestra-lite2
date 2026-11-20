@@ -107,6 +107,11 @@ import {
 import { skillReceiptText } from "./texts.mjs";
 import { planDispatch } from "./dispatch.mjs";
 import { nudgeDecision } from "./nudge.mjs";
+import {
+	clearOwnerRetired as clearOwnerRetirement,
+	markOwnerRetired as markOwnerRetirement,
+	ownerRetirement,
+} from "./retirement.mjs";
 
 export function receiptTextOf(message) {
 	const content = message?.content;
@@ -148,6 +153,7 @@ export class SessionStation {
 		this.lastError = null;
 		this.hostBoundaryKey = null;
 		this.agentPolicy = null;
+		this.ownerRetired = null;
 		this.handoffReport = null;
 		this.relayState = true;
 		this.todoGrantKey = null;
@@ -680,6 +686,20 @@ export class SessionStation {
 
 	recordLedgerEvaluation(phases, op, options = {}) {
 		return recordLedgerEvaluation(this, phases, op, options);
+	}
+
+	// -- Owner retirement gate ------------------------------------------------
+
+	markOwnerRetired(request) {
+		return markOwnerRetirement(this, request);
+	}
+
+	clearOwnerRetired(batchId) {
+		return clearOwnerRetirement(this, batchId);
+	}
+
+	ownerRetirement(ctx) {
+		return ownerRetirement(this, ctx);
 	}
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------

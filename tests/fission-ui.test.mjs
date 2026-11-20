@@ -222,4 +222,102 @@ describe("installFissionUI", () => {
 		bridge.cancel("b", bEnd);
 		expect(seen).toEqual([open, aborted, bStart, bEnd]);
 	});
+
+	test("a throwing host unsubscribe cannot poison the session", () => {
+		const listeners = new Set();
+		const session = {
+			subscribe(listener) {
+				listeners.add(listener);
+				return () => {
+					throw new Error("host unsubscribe failed");
+				};
+			},
+			emit(event) {
+				for (const listener of [...listeners]) listener(event);
+			},
+			get listenerCount() {
+				return listeners.size;
+			},
+		};
+		const originalSubscribe = session.subscribe;
+		const bridge = installFissionUI(session);
+		const seen = [];
+		session.subscribe((event) => seen.push(event));
+		bridge.attach("a", {
+			subscribe() {
+				return () => {
+					throw new Error("flow detach failed");
+				};
+			},
+		});
+
+		expect(() => bridge.dispose()).not.toThrow();
+		expect(session.subscribe).toBe(originalSubscribe);
+		expect(bridge.listenerCount).toBe(0);
+		expect(() => bridge.accept("a", turn())).toThrow(/disposed/);
+
+		// The dead bridge is not cached: the session can be bridged again.
+		const second = installFissionUI(session);
+		expect(second).not.toBe(bridge);
+		const after = [];
+		session.subscribe((event) => after.push(event));
+		const event = turn();
+		session.emit(event);
+		expect(after).toEqual([event]);
+		// A listener subscribed through the dead bridge keeps the raw stream.
+		expect(seen).toEqual([event]);
+	});
+
+	test("installing over an accessor leaves its setter untouched", () => {
+		const listeners = new Set();
+		const original = (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		};
+		const session = {
+			emit(event) {
+				for (const listener of [...listeners]) listener(event);
+			},
+		};
+		let setterCalls = 0;
+		Object.defineProperty(session, "subscribe", {
+			configurable: true,
+			enumerable: false,
+			get: () => original,
+			set: () => {
+				setterCalls += 1;
+			},
+		});
+
+		const bridge = installFissionUI(session);
+		expect(setterCalls).toBe(0);
+		const seen = [];
+		session.subscribe((event) => seen.push(event));
+		session.emit(turn());
+		expect(seen).toHaveLength(1);
+
+		bridge.dispose();
+		expect(setterCalls).toBe(0);
+		expect(session.subscribe).toBe(original);
+		expect(Object.getOwnPropertyDescriptor(session, "subscribe")?.get).toBeInstanceOf(Function);
+	});
+
+	test("a refused patch leaves no owner subscription behind", () => {
+		const listeners = new Set();
+		const original = (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		};
+		const session = { emit() {} };
+		Object.defineProperty(session, "subscribe", {
+			value: original,
+			configurable: false,
+			enumerable: false,
+			writable: false,
+		});
+
+		expect(() => installFissionUI(session)).toThrow(TypeError);
+		expect(session.subscribe).toBe(original);
+		expect(listeners.size).toBe(0);
+	});
 });

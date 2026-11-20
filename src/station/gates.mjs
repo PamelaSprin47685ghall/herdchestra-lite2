@@ -20,6 +20,7 @@ import {
 	successorStartNudge,
 } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
+import { ownerRetirement } from "./retirement.mjs";
 import {
 	CONTROL_TOOLS,
 	controlsIn,
@@ -79,6 +80,11 @@ function onMessageEnd(station, event, ctx) {
 
 function onToolCall(station, event, ctx, atDispatch = false) {
 	const { toolName, toolCallId } = event;
+	// A retired fission owner may still have a started or queued turn. Its
+	// identity decides: flows and an adopted heir hold other identities or
+	// other stations, so only the retired owner is refused here.
+	const retirement = ownerRetirement(station, ctx);
+	if (retirement) return { block: true, reason: retirement.reason };
 	if (station.fissionFlow && toolName === "amend") {
 		return { block: true, reason: "AMEND_UNAVAILABLE_IN_FISSION: amend can overwrite another flow's shared history." };
 	}

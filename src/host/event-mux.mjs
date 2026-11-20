@@ -5,6 +5,11 @@ export function createEventMux(emit) {
 	const queue = [];
 	const messages = new Map();
 	const broadcasts = new Set();
+	// A cancelled message is closed by a caller-supplied terminal event. The
+	// source that produced it stays subscribed, so the copy's own terminal
+	// events may still arrive; they belong to a closed message and are dropped
+	// instead of throwing into the emitter.
+	const cancelled = new Set();
 
 	function broadcastId(event) {
 		return event.message?.details?.fissionBroadcast?.broadcastId;
@@ -45,6 +50,7 @@ export function createEventMux(emit) {
 		let message = messages.get(flowId);
 		if (type === "message_start") {
 			if (message) throw new Error("Flow already has an open message");
+			cancelled.delete(flowId);
 			const id = broadcastId(event);
 			const duplicate = id != null && broadcasts.has(id);
 			if (id != null) broadcasts.add(id);
@@ -62,7 +68,10 @@ export function createEventMux(emit) {
 			return;
 		}
 		if (type === "message_update" || type === "message_end") {
-			if (!message) throw new Error("Flow has no open message");
+			if (!message) {
+				if (cancelled.has(flowId)) return;
+				throw new Error("Flow has no open message");
+			}
 			if (type === "message_end") messages.delete(flowId);
 			if (message.duplicate) return;
 			if (message.queued) {
@@ -111,10 +120,12 @@ export function createEventMux(emit) {
 	// The caller supplies the actual terminal event, including the aborted
 	// message snapshot. This keeps the host's event shape and reason intact.
 	function cancel(flowId, endEvent) {
-		if (messages.has(flowId)) {
-			if (endEvent?.type !== "message_end") throw new Error("Cancellation requires a message_end event");
-			accept(flowId, endEvent);
-		}
+		if (!messages.has(flowId)) return;
+		if (endEvent?.type !== "message_end") throw new Error("Cancellation requires a message_end event");
+		// Mark before closing: accept() removes the record, and the source may
+		// still deliver the same copy's real end or a late update afterwards.
+		cancelled.add(flowId);
+		accept(flowId, endEvent);
 	}
 
 	return { accept, cancel, drain };

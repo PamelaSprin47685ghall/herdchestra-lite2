@@ -3,6 +3,7 @@ import test from "node:test";
 import {
 	observeProviderRequest,
 	observeProviderResponse,
+	providerDiagnostics,
 	projectProviderRequest,
 	wireProviderObservation,
 } from "../src/host/provider-observer.mjs";
@@ -18,6 +19,19 @@ function station() {
 function context(api = "openai-responses", id = "model-a") {
 	return { model: { api, id, provider: "provider-a", baseUrl: "https://example.invalid/v1" }, agent: { id: "Main" } };
 }
+
+test("latest diagnostics expose successful local reports without inheriting the owner", () => {
+	reset();
+	const owner = station();
+	const payload = responsePayload();
+	observeProviderRequest(owner, { payload }, context());
+	const report = observeProviderRequest(owner, { payload }, context());
+	assert.equal(report.classification, "prefix-preserved");
+	assert.deepEqual(providerDiagnostics(owner), [report]);
+	assert.deepEqual(providerDiagnostics(Object.create(owner)), []);
+	assert.equal(JSON.stringify(providerDiagnostics(owner)).includes("secret user request"), false);
+	assert.equal(snapshot().length, 0);
+});
 
 function responsePayload() {
 	return {

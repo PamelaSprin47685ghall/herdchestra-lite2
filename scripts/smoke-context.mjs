@@ -15,6 +15,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { installContextPreparation, splitRequestHistory } from "../src/host/context-preparation.mjs";
+import { contextHeaderOf } from "../src/host/adapter.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const TOOL_ROUNDS = 4;
@@ -80,6 +81,7 @@ async function exerciseHost(host, start) {
 	let contextCount = 0;
 	let executed = 0;
 	let liveContext;
+	let extensionMessages;
 	const mock = createMockModel({
 		responses: [
 			...Array.from({ length: TOOL_ROUNDS }, (_, index) => ({
@@ -90,7 +92,7 @@ async function exerciseHost(host, start) {
 	});
 	const runner = makeRunner(ExtensionRunner, manager, mock.model, id, (event) => {
 		contextCount += 1;
-		assert.notEqual(event.messages, liveContext.messages, "ExtensionRunner must clone the live loop context");
+		extensionMessages = event.messages;
 		return { messages: event.messages };
 	});
 	const agent = new Agent({
@@ -112,6 +114,9 @@ async function exerciseHost(host, start) {
 		},
 		transformContext: async (messages, signal) => {
 			const result = await runner.emitContext(messages, signal);
+			// Runner reports handler exceptions instead of rethrowing them.
+			// Keep assertions outside that boundary so a failure stops the smoke.
+			assert.notEqual(extensionMessages, liveContext.messages, "ExtensionRunner must clone the live loop context");
 			const receipts = result.filter((message) => message.herdSkill === true);
 			assert.equal(receipts.length, frames.length + 1, "the next request lost an earlier receipt");
 			for (const message of receipts) {
@@ -147,6 +152,7 @@ async function exerciseHost(host, start) {
 		if (event.type === "message_end") manager.appendMessage(event.message);
 	});
 	const removePreparation = installContextPreparation(session, { station, ctx: runner.createContext() });
+	assert.equal(contextHeaderOf(session)?.tools?.[0]?.parameters?.properties?.value?.type, "number", "the request header lost the host tool schema");
 	const removeObserver = agent.addBeforeModelCallHook((_signal, context) => {
 		liveContext = context;
 		assert.notEqual(context.messages, agent.state.messages, "loop and Agent arrays were aliased");

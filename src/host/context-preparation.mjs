@@ -22,6 +22,16 @@ function checkSignal(signal) {
 	}
 }
 
+function stateStamp(station) {
+	return { state: station.state, epoch: station.state?.epoch };
+}
+
+function checkState(station, stamp) {
+	if (station.state !== stamp.state || station.state?.epoch !== stamp.epoch) {
+		throw failure("CONTEXT_PREPARATION_STALE", "The station state changed while the request was being prepared.");
+	}
+}
+
 /** Separate committed history from input whose host events have not run yet. */
 export function splitRequestHistory(messages, committed) {
 	if (!Array.isArray(messages) || !Array.isArray(committed)) {
@@ -31,6 +41,9 @@ export function splitRequestHistory(messages, committed) {
 	if (committed.length > 0) {
 		const tail = committed.at(-1);
 		end = messages.lastIndexOf(tail);
+		if (end >= 0 && messages.indexOf(tail) !== end) {
+			throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "The last committed message appears at more than one loop position.");
+		}
 		if (end < 0) {
 			let matches = 0;
 			for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -54,12 +67,15 @@ export function splitRequestHistory(messages, committed) {
 	return { prefix: messages.slice(0, end + 1), pending };
 }
 
-function commitPrepared(registration, binding, signal, context, original, length, split, receipt) {
+function commitPrepared(registration, binding, signal, context, request, receipt) {
 	checkSignal(signal);
 	if (!registration.active) return;
-	if (registration.binding !== binding || context.messages !== original || original.length !== length) {
+	const { original, items, split, stamp } = request;
+	if (registration.binding !== binding || context.messages !== original || original.length !== items.length ||
+		original.some((message, index) => message !== items[index])) {
 		throw failure("CONTEXT_PREPARATION_STALE", "The request changed while its state was being prepared.");
 	}
+	checkState(binding.station, stamp);
 	if (receipt === null) return;
 	if (receipt?.herdSkill !== true) {
 		throw failure("CONTEXT_PREPARATION_INVALID_RECEIPT", "The station did not supply a skill receipt.");
@@ -72,26 +88,30 @@ function commitPrepared(registration, binding, signal, context, original, length
 	context.messages = [...committed, ...split.pending];
 }
 
-function prepareState(registration, binding, signal, context) {
+function prepareState(registration, binding, signal, context, persistedStamp) {
 	checkSignal(signal);
 	if (!registration.active) return;
 	if (registration.binding !== binding) {
 		throw failure("CONTEXT_PREPARATION_STALE", "The agent binding changed while history was being persisted.");
 	}
+	if (persistedStamp) checkState(binding.station, persistedStamp);
 	if (!Array.isArray(context?.messages)) {
 		throw failure("CONTEXT_PREPARATION_INVALID_CONTEXT", "The model call has no live message array.");
 	}
 	const { station, ctx } = binding;
 	const original = context.messages;
-	const length = original.length;
+	const items = original.slice();
 	const split = splitRequestHistory(original, messagesOf(binding.session));
 	const receipt = station.prepareRequest(ctx, split.prefix.at(-1));
+	// Boundary observation can advance the epoch synchronously. Only later
+	// changes, while a restore ticket is pending, invalidate this request.
+	const request = { original, items, split, stamp: stateStamp(station) };
 	if (receipt && typeof receipt.then === "function") {
 		return Promise.resolve(receipt).then((settled) =>
-			commitPrepared(registration, binding, signal, context, original, length, split, settled),
+			commitPrepared(registration, binding, signal, context, request, settled),
 		);
 	}
-	return commitPrepared(registration, binding, signal, context, original, length, split, receipt);
+	return commitPrepared(registration, binding, signal, context, request, receipt);
 }
 
 function prepare(registration, signal, context) {
@@ -99,8 +119,9 @@ function prepare(registration, signal, context) {
 	const binding = registration.binding;
 	const settle = binding.session.settleInFlightMessagePersistence;
 	if (typeof settle === "function") {
+		const stamp = stateStamp(binding.station);
 		return Promise.resolve(settle.call(binding.session)).then(() =>
-			prepareState(registration, binding, signal, context),
+			prepareState(registration, binding, signal, context, stamp),
 		);
 	}
 	return prepareState(registration, binding, signal, context);

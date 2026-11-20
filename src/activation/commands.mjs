@@ -1,6 +1,7 @@
 // Activation commands: bind user commands to the current session station.
 
 import { snapshot } from "../host/diagnostics.mjs";
+import { providerDiagnostics } from "../host/provider-observer.mjs";
 
 /** Render evidence on one line: compact JSON, or the value itself. */
 function compactDetail(detail) {
@@ -21,7 +22,8 @@ export function wireCommands(pi, registry) {
 		description: "Print the last host diagnostics",
 		handler: async (_args, ctx) => {
 			const entries = snapshot();
-			if (entries.length === 0) {
+			const reports = providerDiagnostics(registry.stationFor(ctx));
+			if (entries.length === 0 && reports.length === 0) {
 				ctx?.ui?.notify?.("Herdchestra: no diagnostics recorded.", "info");
 				return "Herdchestra: no diagnostics recorded.";
 			}
@@ -31,6 +33,9 @@ export function wireCommands(pi, registry) {
 					return `${new Date(entry.t).toISOString()} [${entry.domain}] ${entry.message}${repeat}${compactDetail(entry.detail)}`;
 				},
 			);
+			for (const report of reports) {
+				lines.push(`[provider latest]${compactDetail(report)}`);
+			}
 			const text = lines.join("\n");
 			ctx?.ui?.notify?.(text, "info");
 			return text;

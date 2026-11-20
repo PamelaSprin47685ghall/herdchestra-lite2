@@ -187,6 +187,14 @@ function previousObservation(station) {
 	return Object.hasOwn(station, "providerObservation") ? station.providerObservation : null;
 }
 
+/** Return only this station's latest safe reports, including normal changes. */
+export function providerDiagnostics(station) {
+	if (!station || typeof station !== "object") return [];
+	const request = previousObservation(station)?.report;
+	const response = Object.hasOwn(station, "providerResponse") ? station.providerResponse : null;
+	return [request, response].filter(Boolean);
+}
+
 function firstDifference(before, after, comparison) {
 	if (comparison.messages.equal) return null;
 	const index = comparison.messages.commonMessages;
@@ -258,7 +266,7 @@ export function observeProviderRequest(station, event, ctx) {
 		firstDifference: difference,
 	});
 	station.providerObservation = { sequence, revision, frame, report };
-	if (!["baseline", "prefix-preserved"].includes(classification)) {
+	if (["prefix-changed", "unavailable"].includes(classification)) {
 		record("provider", "Provider payload observation: " + classification, report);
 	}
 	return report;

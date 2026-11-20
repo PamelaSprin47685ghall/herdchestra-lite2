@@ -127,8 +127,8 @@ function beginResultTokens(record, tokensPerChar) {
 // -- Multi-model fold economics ---------------------------------------------
 
 /**
- * Cache view for one model key: the provider still holds messages
- * [0, cachedUntilPos) while lastUsedAt sits inside the five-minute TTL.
+ * Local cache estimate for one model key. Messages [0, cachedUntilPos) are
+ * eligible under the TTL model; provider usage is the evidence of a hit.
  * Returns { pos, tpc, fresh }; pos is an exclusive message index and tpc is
  * the model's measured tokens-per-char density.
  */
@@ -442,6 +442,26 @@ function persistedTail(base, currentMessage, currentPersisted) {
 	return source.length;
 }
 
+function currentLeaf(manager) {
+	const value = typeof manager.getLeafId === "function"
+		? manager.getLeafId()
+		: manager.getBranch()?.at(-1)?.id ?? null;
+	if (value !== null && typeof value !== "string") {
+		throw new TypeError("The session manager did not provide a valid leaf id.");
+	}
+	return value;
+}
+
+function restoreLeaf(manager, leaf) {
+	if (currentLeaf(manager) !== leaf) {
+		if (leaf === null) manager.resetLeaf();
+		else manager.branch(leaf);
+	}
+	if (currentLeaf(manager) !== leaf) {
+		throw new Error("The session manager did not restore the previous leaf.");
+	}
+}
+
 /**
  * Fold a batch of archived elders into one branch operation. Records whose
  * begin/end left the branch are marked collapsed without a fork.
@@ -462,6 +482,10 @@ export function foldBatch({
 	epoch,
 }) {
 	const source = Array.isArray(base) ? base : [];
+	const originalFlags = new Map((batch ?? []).map((record) => [record, record.collapsed]));
+	const restoreFlags = () => {
+		for (const [record, collapsed] of originalFlags) record.collapsed = collapsed;
+	};
 	const tailCut = persistedTail(source, currentMessage, currentPersisted);
 	const valid = [];
 	// A record marked collapsed without a physical fold still disappears from
@@ -536,6 +560,13 @@ export function foldBatch({
 		flushCap();
 		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
+	let previousLeaf;
+	try {
+		previousLeaf = currentLeaf(manager);
+	} catch (error) {
+		restoreFlags();
+		throw new Error("Cannot fold without a restorable session leaf.", { cause: error });
+	}
 	try {
 		const parentId = beginEntry.parentId ?? null;
 		if (parentId) manager.branch(parentId);
@@ -546,10 +577,20 @@ export function foldBatch({
 				throw new Error("fold append failed");
 			}
 		}
-	} catch {
-		for (const record of records) record.collapsed = true;
-		cap(first.begin.assistantIndex);
-		flushCap();
+	} catch (error) {
+		restoreFlags();
+		try {
+			restoreLeaf(manager, previousLeaf);
+		} catch (rollbackError) {
+			const failure = new AggregateError(
+				[error, rollbackError],
+				"The fold failed and the previous session leaf could not be restored.",
+			);
+			failure.code = "FOLD_ROLLBACK_FAILED";
+			throw failure;
+		}
+		// Partial writes remain off the active branch. No record or cache
+		// cursor changes until the complete folded tail has been written.
 		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 

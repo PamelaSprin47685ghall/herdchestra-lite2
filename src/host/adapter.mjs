@@ -84,14 +84,26 @@ export function contextHeaderOf(ctx) {
 	if ((typeof systemPrompt !== "string" && !Array.isArray(systemPrompt)) || !Array.isArray(tools)) {
 		return null;
 	}
-	return {
-		systemPrompt,
-		tools: tools.map((tool) => ({
-			name: tool.name,
-			description: tool.description,
-			parameters: tool.parameters,
-		})),
-	};
+	try {
+		const definitions = [];
+		for (const tool of tools) {
+			let parameters = tool.parameters;
+			// Current hosts use callable ArkType schemas. JSON.stringify would
+			// silently omit those functions and undercount the tool header.
+			if (typeof parameters === "function") {
+				if (typeof parameters.toJsonSchema !== "function") return null;
+				parameters = parameters.toJsonSchema({
+					target: "draft-2020-12",
+					fallback: (value) => value.base,
+				});
+			}
+			if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return null;
+			definitions.push({ name: tool.name, description: tool.description, parameters });
+		}
+		return JSON.parse(JSON.stringify({ systemPrompt, tools: definitions }));
+	} catch {
+		return null;
+	}
 }
 
 /** One flat view of every host object the extension reads. */

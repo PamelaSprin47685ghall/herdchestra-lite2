@@ -10,11 +10,32 @@ function sameMessage(left, right) {
 }
 
 function branchMessages(manager) {
+	if (typeof manager.buildSessionContext === "function") {
+		const messages = manager.buildSessionContext()?.messages;
+		if (!Array.isArray(messages)) throw new TypeError("The session context has no message array.");
+		return messages;
+	}
 	const branch = manager.getBranch();
 	if (!Array.isArray(branch)) throw new TypeError("The session branch is not an array.");
-	return branch
-		.filter((entry) => entry?.type === "message" && entry.message)
-		.map((entry) => entry.message);
+	const messages = [];
+	for (const entry of branch) {
+		if (entry?.type === "message" && entry.message) messages.push(entry.message);
+		else if (entry?.type === "custom_message") {
+			messages.push({
+				role: "custom",
+				customType: entry.customType,
+				content: entry.content,
+				attribution: entry.attribution,
+				excludeFromContext: entry.excludeFromContext,
+				timestamp: typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : entry.timestamp,
+			});
+		} else if (["compaction", "branch_summary", "reset_boundary"].includes(entry?.type)) {
+			// Rebuilding these entries requires the host's retained-history rules.
+			// Never mistake an older receipt for the end of the current context.
+			throw new TypeError("This session history requires buildSessionContext().");
+		}
+	}
+	return messages;
 }
 
 function appendToJournal(manager, message) {
@@ -25,7 +46,11 @@ function appendToJournal(manager, message) {
 	// Some host managers silently discard writes after they close. A returned
 	// entry id alone is not proof that the current branch contains the write.
 	if (typeof manager.getBranch === "function") {
-		if (!sameMessage(branchMessages(manager).at(-1), message)) {
+		const branch = manager.getBranch();
+		const stored = Array.isArray(branch)
+			? branch.findLast((entry) => entry?.type === "message")?.message
+			: undefined;
+		if (!sameMessage(stored, message)) {
 			throw new Error("The session branch did not retain the appended message.");
 		}
 	}
@@ -63,12 +88,36 @@ function turnKey(messages) {
 	return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
 }
 
+function journalOmits(message) {
+	const custom = message?.role === "custom";
+	const hook = message?.role === "hookMessage";
+	// AgentSession.#persistMessageEnd consumes these notes within one run.
+	// Other custom input is persisted and must pass the journal check.
+	if ((custom || hook) && message.customType === "vibe-mode-context") return true;
+	if (custom && message.customType === "prewalk-plan") return true;
+	// The scheduler renders these from its own state entries.
+	return custom && /^scope\.(begin|end)$/.test(message.customType);
+}
+
 function lastTurnMessage(messages) {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const message = messages[index];
-		if (!isSkill(message) && message?.role !== "custom") return message;
+		if (!isSkill(message) && !journalOmits(message)) return message;
 	}
 	return undefined;
+}
+
+function sameTurnMessage(left, right) {
+	if (sameMessage(left, right)) return true;
+	const custom = (message) => message?.role === "custom" || message?.role === "hookMessage";
+	if (!custom(left) || !custom(right)) return false;
+	// The host normalizes custom messages and removes private display details
+	// when it persists them. Compare the input, not those display-only fields.
+	return left.customType === right.customType &&
+		sameMessage(left.content, right.content) &&
+		left.timestamp === right.timestamp &&
+		(left.attribution ?? "agent") === (right.attribution ?? "agent") &&
+		(left.excludeFromContext === true) === (right.excludeFromContext === true);
 }
 
 function commitError(phase, cause) {
@@ -81,7 +130,7 @@ function commitError(phase, cause) {
 function syncLiveReceipt(live, prefix, receipt) {
 	if (!live) return;
 	const start = receiptStart(live);
-	if (!sameMessage(lastTurnMessage(live.slice(0, start)), lastTurnMessage(prefix))) {
+	if (!sameTurnMessage(lastTurnMessage(live.slice(0, start)), lastTurnMessage(prefix))) {
 		throw new Error("Live history and the request end at different messages.");
 	}
 	if (start === live.length - 1 && live[start] === receipt) return;
@@ -119,6 +168,9 @@ export function commitSkillReceipt(manager, messages, source = null) {
 		const key = turnKey(prefix);
 		const persisted = journal.at(-1);
 		if (isSkill(persisted)) {
+			const carried = prefix.findLastIndex((message) => sameMessage(message, persisted));
+			const suffix = carried < 0 ? [] : prefix.slice(carried + 1);
+			const hasNewNote = suffix.length > 0 && suffix.every(journalOmits);
 			// Existing sessions lack a turn key. Preserve their committed bytes
 			// only when the message immediately before the receipt still agrees.
 			// A later context transform may rewrite an older scope. When it
@@ -127,16 +179,21 @@ export function commitSkillReceipt(manager, messages, source = null) {
 			const matches = sameMessage(proposed, persisted) ||
 				(typeof persisted.herdSkillTurn === "string"
 					? persisted.herdSkillTurn === key
-					: sameMessage(lastTurnMessage(journal), lastTurnMessage(prefix)));
-			if (!matches) {
+					: sameTurnMessage(lastTurnMessage(journal), lastTurnMessage(prefix)));
+			if (!matches && !hasNewNote) {
 				throw new Error("The persisted receipt belongs to a different message prefix.");
 			}
-			receipt = persisted;
-			reuse = true;
+			// A live-only note can follow the last journal receipt. Its presence
+			// after that exact receipt proves a new request, not a stale replay.
+			receipt = hasNewNote ? { ...proposed, herdSkillTurn: key } : persisted;
+			reuse = !hasNewNote;
 		} else {
 			receipt = { ...proposed, herdSkillTurn: key };
 		}
-		if (live && !sameMessage(lastTurnMessage(live), lastTurnMessage(prefix))) {
+		if (!sameTurnMessage(lastTurnMessage(journal), lastTurnMessage(prefix))) {
+			throw new Error("The journal and the request end at different messages.");
+		}
+		if (live && !sameTurnMessage(lastTurnMessage(live), lastTurnMessage(prefix))) {
 			throw new Error("Live history and the request end at different messages.");
 		}
 	} catch (error) {
@@ -159,30 +216,3 @@ export function commitSkillReceipt(manager, messages, source = null) {
 	return [...prefix, receipt];
 }
 
-function commitResult(result, ctx, managerFor) {
-	if (!result || !Array.isArray(result.messages) || !isSkill(result.messages.at(-1))) {
-		return result;
-	}
-	let manager;
-	try {
-		// A supplied resolver owns routing. Falling back after its failure can
-		// put a flow's receipt on the owner's shared branch.
-		manager = managerFor ? managerFor(ctx) : ctx?.sessionManager;
-	} catch (error) {
-		throw commitError("session lookup", error);
-	}
-	return { ...result, messages: commitSkillReceipt(manager, result.messages, ctx) };
-}
-
-/** Persist the receipt after either a synchronous or an asynchronous handler. */
-export function hackContext(pi, handler, options = {}) {
-	const managerFor =
-		typeof options.managerFor === "function" ? options.managerFor : null;
-	return pi.on("context", (event, ctx) => {
-		const result = handler(event, ctx);
-		if (result && typeof result.then === "function") {
-			return Promise.resolve(result).then((settled) => commitResult(settled, ctx, managerFor));
-		}
-		return commitResult(result, ctx, managerFor);
-	});
-}

@@ -142,6 +142,33 @@ snapshot under the host's `parentId` tree, with a checkpoint every 64 writes;
 full-snapshot entries. A measured 400-turn session writes 4.5% of what
 per-turn snapshots would write.
 
+### Request history
+
+Each managed model request gets one persistent Skill receipt. The extension
+uses `agent.addBeforeModelCallHook` to place it in the live tool loop before
+the host clones messages for context extensions. It also commits the same
+receipt to Agent history and the session journal. These histories have
+separate arrays; retries reuse the committed receipt and its original clock.
+
+The host defers new user and queued input events until after request
+preparation. A Skill therefore goes after committed history and before any
+pending inputs. The host still owns those inputs and commits them once.
+Flows install this preparation before `agent.continue()`, which skips the
+ordinary `before_agent_start` event. Read-only task agents keep their existing
+policy and receive no Skill receipts.
+
+`herd-diag` includes the current station's latest provider payload report.
+The report records hashes and message counts, without storing prompts or
+credentials. It distinguishes a preserved prefix, a changed namespace,
+an intentional history rewrite, changed cache settings, and an unexpected
+prefix change. Incremental payloads and unsupported provider formats are
+marked explicitly and cannot establish a complete prefix comparison.
+
+The observation point is `before_provider_request`. Later extension handlers
+and transport code can still change the request. These reports and the
+construction checks do not measure provider cache hits; cache usage still
+comes from the provider's reported token usage.
+
 ## Host smoke
 
 `bun scripts/smoke-omp.mjs` loads the real omp `AgentSession` from a local
@@ -151,10 +178,19 @@ events it binds, and the append-only state log.
 
 A checkout whose native addon is older than its source cannot be imported.
 When `~/.omp/natives/<version>` already holds a matching prebuilt addon, the
-script borrows it and re-runs itself in a child process, so the seams are
-verified against the real class instead of skipped. `OMP_SMOKE_BORROW=0`
-disables the borrow and keeps the honest skip; the exit code stays 0 either
-way, and only a genuine seam failure exits 1.
+script borrows it and re-runs itself in a child process. CI sets
+`OMP_SMOKE_BORROW=0` and `OMP_SMOKE_STRICT=1`, builds the native addon from
+the pinned host source, and treats missing host capabilities as failures.
+
+`bun scripts/smoke-context.mjs` uses the same `OMP_HOST`. It runs the real
+Agent loop and ExtensionRunner with the host's mock model, for both `prompt()`
+and `continue()`. Each run executes four tools and five model requests. It
+checks message order, stable prior prefixes, separate history arrays, and
+the absence of per-call markers on committed Skills. It makes no API calls
+and always fails if the host or its dependencies cannot load.
+
+CI pins the host to `57771ae562b9345e0579bceb2d68d585e3e6927e` and Bun
+`1.4.4`. A host upgrade should pass both smoke scripts before use.
 
 ## Model selection
 
@@ -171,6 +207,6 @@ scope({ begin: {
 
 Omit `model` or use `null` to inherit the model of the scope that opens the batch, or the session model when there is no enclosing scope. Closing a flow's scope restores the enclosing model. A combined `end: true` and `begin` is currently refused, so a batch always inherits from the scope that opens it. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.
 
-Each model has a separate record of the conversation prefix it has cached. The extension uses the target model’s context window when it can resolve it in advance. At 82% of that window it attempts to fold eligible history without dropping the current workbench. It refuses to open the scope if the retained context is estimated to occupy at least 95% of the target window.
+Each model has separate local usage and prefix estimates. The extension uses the target model’s context window when it can resolve it in advance. At 82% of that window it attempts to fold eligible history without dropping the current workbench. It then estimates the complete retained request separately for each target model, including the request header. It refuses to open the scope if that estimate occupies at least 95% of the target window or the complete request size cannot be estimated.
 
 Returning to a smaller model also folds eligible history at 82%, keeping the scope that just closed as the workbench. If the host truncates nested scopes, the extension restores the model of the surviving outer scope before the next request when it sees the boundary during compaction or before the agent starts.

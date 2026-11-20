@@ -205,6 +205,10 @@ test("the station can decline preparation without changing context", async () =>
 test("an awaited preparation cannot commit after cancellation or removal", async () => {
 	for (const cancelled of [true, false]) {
 		const f = fixture();
+		const input = { role: "user", content: "Keep this pending direction.", timestamp: 20 };
+		f.loop.messages.push(input);
+		const original = f.loop.messages;
+		const before = structuredClone(original);
 		let resolveReceipt;
 		f.station.prepareRequest = () => new Promise((resolve) => { resolveReceipt = resolve; });
 		const remove = installContextPreparation(f.session, f);
@@ -216,7 +220,9 @@ test("an awaited preparation cannot commit after cancellation or removal", async
 		if (cancelled) await assert.rejects(pending, /cancelled while preparing/);
 		else await pending;
 		assert.equal(f.entries.length, 1);
-		assert.equal(f.loop.messages.length, 1);
+		assert.equal(f.loop.messages, original);
+		assert.deepEqual(f.loop.messages, before);
+		assert.equal(f.loop.messages.at(-1), input);
 		assert.equal(f.session.agent.state.messages.length, 1);
 	}
 });
@@ -231,6 +237,75 @@ test("an awaited preparation rejects a changed agent binding", async () => {
 	resolveReceipt(f.station.skillReceipt(f.ctx));
 	await assert.rejects(pending, { code: "CONTEXT_PREPARATION_STALE" });
 	assert.equal(f.entries.length, 1);
+});
+
+test("a restore ticket cannot commit across a station replacement or epoch change", async () => {
+	for (const replace of [false, true]) {
+		const f = fixture();
+		f.station.state = { epoch: 1 };
+		const input = { role: "user", content: "Pending direction", timestamp: 21 };
+		f.loop.messages.push(input);
+		const original = f.loop.messages;
+		let resolveReceipt;
+		f.station.prepareRequest = () => new Promise((resolve) => { resolveReceipt = resolve; });
+		installContextPreparation(f.session, f);
+		const pending = f.prepare();
+		if (replace) f.station.state = { epoch: 1 };
+		else f.station.state.epoch += 1;
+		resolveReceipt(f.station.skillReceipt(f.ctx));
+		await assert.rejects(pending, { code: "CONTEXT_PREPARATION_STALE" });
+		assert.equal(f.entries.length, 1);
+		assert.equal(f.session.agent.state.messages.length, 1);
+		assert.equal(f.loop.messages, original);
+		assert.equal(f.loop.messages.at(-1), input);
+	}
+});
+
+test("a persistence flush cannot prepare for a retired station epoch", async () => {
+	const f = fixture();
+	f.station.state = { epoch: 1 };
+	let release;
+	f.session.settleInFlightMessagePersistence = () => new Promise((resolve) => { release = resolve; });
+	installContextPreparation(f.session, f);
+	const pending = f.prepare();
+	f.station.state.epoch += 1;
+	release();
+	await assert.rejects(pending, { code: "CONTEXT_PREPARATION_STALE" });
+	assert.equal(f.receiptReads(), 0);
+	assert.equal(f.entries.length, 1);
+});
+
+test("synchronous boundary observation can advance the epoch before a restore ticket", async () => {
+	const f = fixture();
+	f.station.state = { epoch: 1 };
+	f.station.prepareRequest = () => {
+		f.station.state.epoch += 1;
+		return Promise.resolve(f.station.skillReceipt(f.ctx));
+	};
+	installContextPreparation(f.session, f);
+	await f.prepare();
+	assert.equal(f.station.state.epoch, 2);
+	assert.equal(f.entries.length, 2);
+	assert.equal(f.loop.messages.at(-1).herdSkill, true);
+});
+
+test("a pending input replaced during a restore ticket is never overwritten", async () => {
+	const f = fixture();
+	const input = { role: "user", content: "Old direction", timestamp: 22 };
+	f.loop.messages.push(input);
+	const original = f.loop.messages;
+	let resolveReceipt;
+	f.station.prepareRequest = () => new Promise((resolve) => { resolveReceipt = resolve; });
+	installContextPreparation(f.session, f);
+	const pending = f.prepare();
+	const replacement = { ...input, content: "Replacement direction" };
+	f.loop.messages[1] = replacement;
+	resolveReceipt(f.station.skillReceipt(f.ctx));
+	await assert.rejects(pending, { code: "CONTEXT_PREPARATION_STALE" });
+	assert.equal(f.loop.messages, original);
+	assert.equal(f.loop.messages[1], replacement);
+	assert.equal(f.entries.length, 1);
+	assert.equal(f.session.agent.state.messages.length, 1);
 });
 
 test("initial input stays after the receipt and is committed only by its host event", async () => {
@@ -271,10 +346,24 @@ test("queued steering retains its order without being appended twice", async () 
 	assert.equal(f.entries.at(-1).message, receipt);
 	for (const message of pending) {
 		f.session.agent.state.messages.push(message);
-		f.manager.appendMessage(message);
+		if (message.role === "custom") {
+			// AgentSession stores custom input outside ordinary message entries.
+			f.entries.push({
+				type: "custom_message",
+				customType: message.customType,
+				content: message.content,
+				timestamp: new Date(message.timestamp).toISOString(),
+			});
+		} else f.manager.appendMessage(message);
 	}
 	assert.deepEqual(f.loop.messages, f.session.agent.state.messages);
 	assert.equal(f.loop.messages.filter((message) => message === pending[0]).length, 1);
+	await f.prepare();
+	assert.equal(f.receiptReads(), 3);
+	assert.equal(f.entries.at(-2).type, "custom_message");
+	assert.equal(f.entries.at(-1).message.herdSkill, true);
+	assert.equal(f.loop.messages.filter((message) => message === pending[1]).length, 1);
+	assert.deepEqual(f.loop.messages, f.session.agent.state.messages);
 });
 
 test("preparation waits for earlier message persistence before appending its receipt", async () => {
@@ -318,6 +407,20 @@ test("missing committed tails and uncommitted outputs fail instead of becoming i
 	assert.throws(() => splitRequestHistory([user], [output]), { code: "CONTEXT_PREPARATION_HISTORY_MISMATCH" });
 	assert.throws(() => splitRequestHistory([user, output], [user]), { code: "CONTEXT_PREPARATION_HISTORY_MISMATCH" });
 	assert.throws(() => splitRequestHistory([{ role: "toolResult", toolCallId: "unknown" }], []), { code: "CONTEXT_PREPARATION_HISTORY_MISMATCH" });
+});
+
+test("a reused pending input object cannot be mistaken for the committed tail", async () => {
+	const f = fixture();
+	const input = f.loop.messages[0];
+	f.loop.messages.push(input);
+	const original = f.loop.messages;
+	installContextPreparation(f.session, f);
+	await assert.rejects(f.prepare(), { code: "CONTEXT_PREPARATION_HISTORY_MISMATCH" });
+	assert.equal(f.loop.messages, original);
+	assert.deepEqual(f.loop.messages, [input, input]);
+	assert.deepEqual(f.session.agent.state.messages, [input]);
+	assert.equal(f.entries.length, 1);
+	assert.equal(f.receiptReads(), 0);
 });
 
 test("structural tail matches must be unique and known input roles remain pending", () => {

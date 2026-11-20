@@ -10,7 +10,7 @@ const source = process.env.SESSION_ROUTING_SOURCE
 const { rememberSession, sessionFor, setAgentMessages } = await import(
 	new URL("capture.mjs", source)
 );
-const { messagesOf, modelOf, sessionOf } = await import(
+const { contextHeaderOf, messagesOf, modelOf, sessionOf } = await import(
 	new URL("adapter.mjs", source)
 );
 
@@ -28,6 +28,33 @@ function makeSession(manager, id, { legacy = false, agentId = false } = {}) {
 function contextFor(manager, id, session) {
 	return { sessionManager: manager, agent: { id }, ...(session ? { session } : {}) };
 }
+
+test("request headers retain callable schemas and omit execution functions", () => {
+	const session = makeSession({}, "header");
+	const parameters = () => {};
+	parameters.toJsonSchema = (options) => {
+		assert.equal(options.target, "draft-2020-12");
+		return { type: "object", properties: { value: { type: "number" } } };
+	};
+	session.agent.state.systemPrompt = ["Use the tools."];
+	session.agent.state.tools = [{ name: "step", description: "Step", parameters, execute() {} }];
+	rememberSession(session);
+	const header = contextHeaderOf(session);
+	assert.equal(header.tools[0].parameters.properties.value.type, "number");
+	assert.equal(Object.hasOwn(header.tools[0], "execute"), false);
+	header.tools[0].parameters.properties.value.type = "string";
+	assert.equal(contextHeaderOf(session).tools[0].parameters.properties.value.type, "number");
+});
+
+test("unavailable request schemas stay unknown rather than becoming an empty header", () => {
+	const session = makeSession({}, "unknown-header");
+	rememberSession(session);
+	session.agent.state.systemPrompt = "system";
+	session.agent.state.tools = [{ name: "opaque", parameters() {} }];
+	assert.equal(contextHeaderOf(session), null);
+	session.agent.state.tools = [];
+	assert.deepEqual(contextHeaderOf(session), { systemPrompt: "system", tools: [] });
+});
 
 test("an explicit session keeps its own messages when its manager is shared", () => {
 	const manager = {};

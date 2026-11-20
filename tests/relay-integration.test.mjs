@@ -12,7 +12,6 @@ import {
 	installBuiltinSlashExecutor,
 	installVibeTools,
 	parseSlashCommand,
-	rememberSession,
 	sessionFor,
 } from "../src/host/index.mjs";
 import { createStationRegistry, stateFor } from "../src/station/index.mjs";
@@ -20,6 +19,8 @@ import { scopeParameters } from "../src/tools/descriptions.mjs";
 import { allStagesRan } from "./helpers/stage-flags.mjs";
 import { beginScope, createStageFlags, validateFission } from "../src/scope/index.mjs";
 import { beginGenerationAfterHandoff } from "../src/relay/ledger.mjs";
+import { installContextPreparation } from "../src/host/context-preparation.mjs";
+import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -69,6 +70,7 @@ function makeManager() {
 				type: "compaction",
 				method,
 				details,
+				timestamp: Date.now(),
 				id: id(),
 				parentId: leafId,
 			};
@@ -104,7 +106,7 @@ function makeManager() {
 					messages.push({
 						role: "compactionSummary",
 						content: [{ type: "text", text: summary }],
-						timestamp: Date.now(),
+						timestamp: c.timestamp,
 					});
 				}
 			}
@@ -254,7 +256,7 @@ async function start(options = {}) {
 		isGeneratingHandoff: false,
 		calls: [],
 		agent: {
-			state: { messages: [] },
+			state: { messages: [], systemPrompt: [], tools: [] },
 			beforeToolCall({ toolCall, args }) {
 				return emit(host.handlers, "tool_call", {
 					type: "tool_call", toolCallId: toolCall.id,
@@ -294,7 +296,6 @@ async function start(options = {}) {
 			return result;
 		},
 	};
-	rememberSession(session);
 	await activate(host.pi);
 	installBuiltinSlashExecutor(async (text, runtime) => {
 		const parsed = parseSlashCommand(text);
@@ -312,18 +313,23 @@ async function start(options = {}) {
 	const aborts = [];
 	const ctx = {
 		sessionManager: manager,
-		agentMessages: [],
 		mode: options.mode ?? "rpc",
 		abort: () => {
 			aborts.push(true);
 		},
 		invokeTool: (params) => native.execute(params),
 	};
+	attachRequestPreparation(session, ctx);
+	session.agent.state.tools = [...host.tools.values()];
 	stateFor(ctx).state.stageFlags = allStagesRan();
 	if (options.sessionInit) manager.appendSessionInit(options.sessionInit);
 	const user = { role: "user", content: "do the task", timestamp: Date.now() };
 	manager.appendMessage(user);
-	ctx.agentMessages.push(user);
+	appendRequestMessages(ctx, user);
+	if (options.beforeStart !== false) {
+		const prepared = await emit(host.handlers, "before_agent_start", { systemPrompt: session.agent.state.systemPrompt }, ctx);
+		if (prepared?.systemPrompt) session.agent.state.systemPrompt = prepared.systemPrompt;
+	}
 	return { host, ctx, manager, native, session, aborts, beforeModelCallHooks };
 }
 
@@ -335,7 +341,7 @@ async function runAssistant(host, ctx, message, { prepareAll = false } = {}) {
 		ctx,
 	);
 	ctx.sessionManager.appendMessage(message);
-	ctx.agentMessages.push(message);
+	appendRequestMessages(ctx, message);
 	const calls = message.content.filter((block) => block.type === "toolCall");
 	const runtime = sessionFor(ctx)?.agent;
 	const tools = new Map(calls.map((block) => [block.name, host.tools.get(block.name) ?? {
@@ -359,7 +365,7 @@ async function runAssistant(host, ctx, message, { prepareAll = false } = {}) {
 		if (decision?.block) {
 			const result = toolResult(block.id, block.name, decision.reason, true);
 			ctx.sessionManager.appendMessage(result);
-			ctx.agentMessages.push(result);
+			appendRequestMessages(ctx, result);
 			results.push({ result, blocked: true });
 			continue;
 		}
@@ -382,13 +388,20 @@ async function runAssistant(host, ctx, message, { prepareAll = false } = {}) {
 			output.details,
 		);
 		ctx.sessionManager.appendMessage(result);
-		ctx.agentMessages.push(result);
+		appendRequestMessages(ctx, result);
 		results.push({ result, blocked: false, output });
 	}
 	return results;
 }
 
+async function outbound(host, ctx) {
+	const messages = await ctx.requestPreparation.prepare();
+	const result = await emit(host.handlers, "context", { type: "context", messages }, ctx);
+	return result ?? { messages };
+}
+
 async function emitStop(host, ctx) {
+	const previous = ctx.session.agent.state.messages;
 	const result = await emit(
 		host.handlers,
 		"session_stop",
@@ -396,6 +409,7 @@ async function emitStop(host, ctx) {
 		ctx,
 	);
 	await sleep(10);
+	if (ctx.session.agent.state.messages !== previous) ctx.requestPreparation.beginRun();
 	return result;
 }
 
@@ -412,7 +426,7 @@ function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { rea
 	const result = toolResult(id, "scope", "Scope opened.");
 	manager.appendMessage(message);
 	manager.appendMessage(result);
-	if (Array.isArray(ctx.agentMessages)) ctx.agentMessages.push(message, result);
+	if (Array.isArray(ctx.agentMessages)) appendRequestMessages(ctx, message, result);
 	return opened.scope;
 }
 
@@ -433,7 +447,7 @@ describe("relay integration", () => {
 				...names.filter((name) => name !== "todo"),
 			);
 		};
-		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		const context = await outbound(host, ctx);
 		await sleep(5);
 		const text = JSON.stringify(context.messages);
 		expect(text).not.toContain("evaluate the ledger");
@@ -452,7 +466,7 @@ describe("relay integration", () => {
 		});
 		stateFor(ctx).state.relay.fullFlow = true;
 		host.activeTools.splice(0, host.activeTools.length, "read", "write", "todo");
-		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		const context = await outbound(host, ctx);
 		expect(JSON.stringify(context.messages)).toContain("evaluate the ledger");
 		await runAssistant(host, ctx, assistant([{ type: "text", text: "greeting" }]));
 		expect(host.steers.length).toBe(1);
@@ -482,10 +496,15 @@ describe("relay integration", () => {
 			ctx,
 		);
 		expect(stateFor(ctx).state.epoch).toBe(before);
-		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		const context = await outbound(host, ctx);
 		const text = JSON.stringify(context.messages);
 		expect(text).not.toContain("todo");
 		expect(text).not.toContain("handoff");
+		expect(ctx.requestPreparation.hooks.size).toBe(1);
+		expect(context.messages.some((message) => message.herdSkill === true)).toBe(false);
+		expect(ctx.agentMessages.some((message) => message.herdSkill === true)).toBe(false);
+		expect(ctx.session.agent.state.messages.some((message) => message.herdSkill === true)).toBe(false);
+		expect(ctx.sessionManager.getBranch().some((entry) => entry.message?.herdSkill === true)).toBe(false);
 	});
 
 	test("a subagent classified before its session_init lands is reclassified", async () => {
@@ -504,7 +523,7 @@ describe("relay integration", () => {
 			assistant([call("r1", "read", { path: "a" })]),
 		);
 		expect(read[0].blocked).toBe(false);
-		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		const context = await outbound(host, ctx);
 		const text = JSON.stringify(context.messages);
 		expect(text).not.toContain("todo");
 		expect(text).not.toContain("handoff");
@@ -527,7 +546,7 @@ describe("relay integration", () => {
 		);
 		expect(read[0].blocked).toBe(true);
 		expect(read[0].result.content[0].text).toContain("Outside all scopes");
-		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		const context = await outbound(host, ctx);
 		expect(JSON.stringify(context.messages)).toContain("todo");
 	});
 
@@ -559,7 +578,7 @@ describe("relay integration", () => {
 			},
 		});
 		host.activeTools.splice(0, host.activeTools.length, "read", "grep");
-		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
+		const context = await outbound(host, ctx);
 		expect(JSON.stringify(context.messages)).not.toContain("handoff");
 		expect(host.activeTools).not.toContain("todo");
 		const read = await runAssistant(
@@ -570,16 +589,19 @@ describe("relay integration", () => {
 		expect(read[0].blocked).toBe(false);
 	});
 
-	test("the relay verdict grants todo even before before_agent_start", async () => {
-		const { host, ctx } = await start({
+	test("request preparation grants todo to a continuation without before_agent_start", async () => {
+		const { host, ctx, session } = await start({
+			beforeStart: false,
 			sessionInit: {
 				agent: "task",
 				readOnly: false,
 				tools: ["read", "write", "bash", "edit"],
 			},
 		});
+		// A flow continuation installs the same adapter before agent.continue().
+		installContextPreparation(session, { station: stateFor(ctx), ctx });
 		host.activeTools.splice(0, host.activeTools.length, "read");
-		await emit(host.handlers, "context", { messages: [] }, ctx);
+		await outbound(host, ctx);
 		await sleep(5);
 		expect(host.activeTools).toContain("todo");
 	});
@@ -1057,15 +1079,17 @@ describe("host truncation", () => {
 
 	test("a host handoff message truncates to the outermost scope", async () => {
 		const { host, ctx } = await openNestedScopes();
-		ctx.agentMessages.push({
+		const handoff = {
 			role: "custom",
 			customType: "handoff",
 			content: [
 				{ type: "text", text: "<handoff-context>host handoff</handoff-context>" },
 			],
 			timestamp: 42,
-		});
-		await emit(host.handlers, "context", { messages: ctx.agentMessages }, ctx);
+		};
+		ctx.sessionManager.appendMessage(handoff);
+		appendRequestMessages(ctx, handoff);
+		await outbound(host, ctx);
 		const state = stateFor(ctx).state;
 		expect(state.epoch).toBe(1);
 		expect(state.scopes.length).toBe(1);

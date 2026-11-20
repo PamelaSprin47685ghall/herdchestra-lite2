@@ -156,6 +156,19 @@ export function createUsageLedger(options) {
 			ledger.received.add(message);
 			const snap = usageSnapshot(message.usage);
 			const tIn = totalInput(snap);
+			if (tIn <= 0) {
+				// Host gates emit zero-usage assistant messages without a model
+				// call. They cannot replace a measured context or refresh a cache.
+				ledger.sentContext = null;
+				ledger.lastSample = null;
+				// Preserve a real reported output charge if a provider omitted
+				// input usage. It supplies no input-density measurement either.
+				if (snap.output > 0 || snap.cost > 0) {
+					ledger.lastOutputTokens += Math.max(0, snap.output);
+					ledger.lastUsageCost = message.usage.cost ?? null;
+				}
+				return;
+			}
 			const live = actualModelOf(ctx) ?? ledger.lastCtxModel;
 			const key = message.provider
 				? modelKeyOf(message)

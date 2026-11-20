@@ -9,9 +9,10 @@ import { stateFor } from "../src/station/index.mjs";
 import { createState } from "../src/scope/index.mjs";
 import { beginText, skillReceiptText } from "../src/station/texts.mjs";
 import { allStagesRan } from "./helpers/stage-flags.mjs";
-import { installVibeTools, rememberSession } from "../src/host/index.mjs";
+import { installVibeTools } from "../src/host/index.mjs";
 import { finishedReport } from "../src/transcript/index.mjs";
 import { beginScope } from "../src/scope/index.mjs";
+import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -116,12 +117,6 @@ function toolResult(id, name, text, isError = false) {
 	};
 }
 
-function makeRuntime(manager) {
-	const host = makeHost();
-	const ctx = { sessionManager: manager, agentMessages: [] };
-	return { host, ctx };
-}
-
 test("broadcast renderer displays the complete message", async () => {
 	const host = makeHost();
 	let renderer;
@@ -135,22 +130,39 @@ test("broadcast renderer displays the complete message", async () => {
 	expect(renderer({ content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] }).text).toBe("first\nsecond");
 });
 
-async function start(manager) {
+async function start(manager, options = {}) {
 	const host = makeHost();
 	await activate(host.pi);
-	const ctx = { sessionManager: manager, agentMessages: [] };
+	const ctx = { sessionManager: manager };
+	const session = {
+		sessionManager: manager,
+		agent: {
+			state: { messages: manager.buildSessionContext().messages, systemPrompt: [], tools: [...host.tools.values()] },
+			beforeToolCall({ toolCall, args }) {
+				return emit(host.handlers, "tool_call", {
+					type: "tool_call", toolCallId: toolCall.id,
+					toolName: toolCall.name, input: args,
+				}, ctx);
+			},
+		},
+	};
+	attachRequestPreparation(session, ctx);
 	stateFor(ctx).state.stageFlags = allStagesRan();
 	const user = { role: "user", content: "do the task", timestamp: Date.now() };
 	manager.appendMessage(user);
-	ctx.agentMessages.push(user);
-	return { host, ctx };
+	appendRequestMessages(ctx, user);
+	if (options.beforeStart !== false) {
+		const prepared = await emit(host.handlers, "before_agent_start", { systemPrompt: session.agent.state.systemPrompt }, ctx);
+		if (prepared?.systemPrompt) session.agent.state.systemPrompt = prepared.systemPrompt;
+	}
+	return { host, ctx, session };
 }
 
 async function runAssistant(host, ctx, message) {
 	const manager = ctx.sessionManager;
 	await emit(host.handlers, "assistant_message", { type: "assistant_message", message }, ctx);
 	manager.appendMessage(message);
-	ctx.agentMessages.push(message);
+	appendRequestMessages(ctx, message);
 	const results = [];
 	for (const block of message.content) {
 		if (block.type !== "toolCall") continue;
@@ -163,7 +175,7 @@ async function runAssistant(host, ctx, message) {
 		if (decision?.block) {
 			const result = toolResult(block.id, block.name, decision.reason, true);
 			manager.appendMessage(result);
-			ctx.agentMessages.push(result);
+			appendRequestMessages(ctx, result);
 			results.push({ result, blocked: true });
 			continue;
 		}
@@ -174,16 +186,37 @@ async function runAssistant(host, ctx, message) {
 			: { content: [{ type: "text", text: nativeText }] };
 		const result = toolResult(block.id, block.name, output.content[0].text, Boolean(output.isError));
 		manager.appendMessage(result);
-		ctx.agentMessages.push(result);
+		appendRequestMessages(ctx, result);
 		results.push({ result, blocked: false, output });
 	}
 	return results;
 }
 
 async function outbound(host, ctx) {
-	const result = await emit(host.handlers, "context", { type: "context", messages: ctx.agentMessages }, ctx);
-	return result.messages;
+	const messages = await ctx.requestPreparation.prepare();
+	const result = await emit(host.handlers, "context", { type: "context", messages }, ctx);
+	return result?.messages ?? messages;
 }
+
+test("before_agent_start installs preparation before the first context projection", async () => {
+	const manager = makeManager();
+	const { host, ctx, session } = await start(manager, { beforeStart: false });
+	expect(ctx.requestPreparation.hooks.size).toBe(0);
+	const first = await emit(host.handlers, "before_agent_start", { systemPrompt: [] }, ctx);
+	if (first?.systemPrompt) session.agent.state.systemPrompt = first.systemPrompt;
+	expect(ctx.requestPreparation.hooks.size).toBe(1);
+	const messages = await outbound(host, ctx);
+	const receipt = ctx.agentMessages.at(-1);
+	expect(receipt.herdSkill).toBe(true);
+	expect(messages.at(-1)).toEqual(receipt);
+	expect(session.agent.state.messages.at(-1)).toBe(receipt);
+	expect(ctx.agentMessages).not.toBe(session.agent.state.messages);
+	await emit(host.handlers, "before_agent_start", { systemPrompt: session.agent.state.systemPrompt }, ctx);
+	await outbound(host, ctx);
+	expect(ctx.requestPreparation.hooks.size).toBe(1);
+	expect(ctx.agentMessages.at(-1)).toBe(receipt);
+	expect(manager.getBranch().filter((entry) => entry.message?.herdSkill)).toHaveLength(1);
+});
 
 function texts(messages) {
 	return messages.map((message) =>
@@ -206,7 +239,7 @@ function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { rea
 	const result = toolResult(id, "scope", "Scope opened.");
 	manager.appendMessage(message);
 	manager.appendMessage(result);
-	ctx.agentMessages.push(message, result);
+	appendRequestMessages(ctx, message, result);
 	return opened.scope;
 }
 
@@ -805,7 +838,7 @@ describe("vibe mode", () => {
 	test("rewrites the host custom message outbound only", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		ctx.agentMessages.push({
+		appendRequestMessages(ctx, {
 			role: "custom",
 			customType: "vibe-mode-context",
 			content: "drive two worker CLIs",
@@ -820,15 +853,7 @@ describe("vibe mode", () => {
 describe("same-message scope and command co-dispatch", () => {
 	async function runHostPrepareOrder(host, ctx, message) {
 		const manager = ctx.sessionManager;
-		const agent = {
-			beforeToolCall({ toolCall, args }) {
-				return emit(host.handlers, "tool_call", {
-					type: "tool_call", toolCallId: toolCall.id,
-					toolName: toolCall.name, input: args,
-				}, ctx);
-			},
-		};
-		rememberSession({ sessionManager: manager, agent });
+		const agent = ctx.session.agent;
 		await outbound(host, ctx);
 		const decisions = [];
 		for (const block of message.content) {
@@ -854,10 +879,10 @@ describe("same-message scope and command co-dispatch", () => {
 			results.push({ result, blocked: false, output });
 		}
 		manager.appendMessage(message);
-		ctx.agentMessages.push(message);
+		appendRequestMessages(ctx, message);
 		for (const { result } of results) {
 			manager.appendMessage(result);
-			ctx.agentMessages.push(result);
+			appendRequestMessages(ctx, result);
 		}
 		await emit(host.handlers, "assistant_message", { type: "assistant_message", message }, ctx);
 		return results;
@@ -969,15 +994,10 @@ describe("herd mode", () => {
 		const before = host.steers.length;
 
 		await host.commands.get("herd").handler("", ctx);
-		const pulled = await emit(
-			host.handlers,
-			"context",
-			{ type: "context", messages: ctx.agentMessages },
-			ctx,
-		);
+		const pulled = await outbound(host, ctx);
 
 		expect(host.steers.length).toBe(before);
-		const receipt = pulled.messages.at(-1);
+		const receipt = pulled.at(-1);
 		expect(receipt.herdSkill).toBe(true);
 		expect(receipt.content[0].text).toContain("Herd mode: on.");
 	});
@@ -1054,11 +1074,8 @@ describe("herd mode", () => {
 	test("kills a tool that overruns deadline+1s and replaces its result", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		const session = {
-			agent: { beforeToolCall: async () => undefined },
-			sessionManager: manager,
-		};
-		rememberSession(session);
+		const session = ctx.session;
+		session.agent.beforeToolCall = async () => undefined;
 		let sawSignal = null;
 		const slowExecute = (id, params, signal) => {
 			sawSignal = signal;

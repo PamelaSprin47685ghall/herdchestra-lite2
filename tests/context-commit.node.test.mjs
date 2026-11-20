@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import * as contextModule from "../src/host/hack-context.mjs";
+import { appendHistoryMessage, commitSkillReceipt } from "../src/host/hack-context.mjs";
 import { rememberSession } from "../src/host/capture.mjs";
 
-const { appendHistoryMessage, commitSkillReceipt, hackContext } = contextModule;
 let nextAgent = 0;
 
 function user(text = "start") {
@@ -39,12 +38,6 @@ function harness(initial = [user()]) {
 	rememberSession(session);
 	const ctx = { agent: { id, kind: "main" }, sessionManager: manager, session };
 	return { entries, manager, session, ctx };
-}
-
-function contextHook(handler, options) {
-	let hook;
-	hackContext({ on: (name, callback) => { assert.equal(name, "context"); hook = callback; } }, handler, options);
-	return hook;
 }
 
 test("append permits an explicit journal-only replay", () => {
@@ -160,41 +153,180 @@ test("commit preserves a receipt already carried by a transformed projection", (
 	assert.equal(fixture.entries.length, 2);
 });
 
-test("legacy hook repairs an old persisted receipt missing from live history", () => {
+test("commit repairs a legacy receipt missing from live history", () => {
 	const old = skill("old committed clock", 2);
 	const fixture = harness([user(), old]);
 	fixture.session.agent.state.messages.pop();
-	const hook = contextHook((event) => ({ messages: [...event.messages, skill("new clock", 99)] }));
-	const result = hook({ messages: fixture.session.agent.state.messages.slice() }, fixture.ctx);
-	assert.equal(result.messages.at(-1), old);
+	const result = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill("new clock", 99)], fixture.ctx);
+	assert.equal(result.at(-1), old);
 	assert.equal(fixture.session.agent.state.messages.at(-1), old);
 	assert.equal(fixture.entries.length, 2);
 });
 
-test("legacy hook commits an asynchronous context handler result", async () => {
-	const fixture = harness();
-	const hook = contextHook(async (event) => ({ messages: [...event.messages, skill()] }));
-	const result = await hook({ messages: fixture.session.agent.state.messages.slice() }, fixture.ctx);
-	assert.equal(fixture.entries.length, 2);
-	assert.equal(fixture.entries.at(-1).message, result.messages.at(-1));
-	assert.equal(fixture.session.agent.state.messages.at(-1), result.messages.at(-1));
+function custom(text = "A queued context note") {
+	return {
+		role: "custom",
+		customType: "queue-note",
+		content: text,
+		display: false,
+		details: { __queueChipText: "preview" },
+		timestamp: 10,
+	};
+}
+
+function customEntry(message) {
+	return {
+		type: "custom_message",
+		customType: message.customType,
+		content: message.content,
+		display: message.display,
+		details: {},
+		attribution: "agent",
+		timestamp: new Date(message.timestamp).toISOString(),
+	};
+}
+
+function useSemanticContext(fixture, messages) {
+	const semantic = messages.slice();
+	fixture.manager.buildSessionContext = () => ({ messages: semantic.slice() });
+	const append = fixture.manager.appendMessage;
+	fixture.manager.appendMessage = (message) => {
+		const id = append(message);
+		semantic.push(message);
+		return id;
+	};
+}
+
+for (const useBuilder of [true, false]) {
+	test(`a persisted custom input starts a new receipt with${useBuilder ? "" : "out"} the host context builder`, () => {
+		const fixture = harness();
+		const first = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx);
+		const note = custom();
+		fixture.entries.push(customEntry(note));
+		fixture.session.agent.state.messages.push(note);
+		if (useBuilder) {
+			useSemanticContext(fixture, [...first, { ...note, details: {}, attribution: "agent" }]);
+		}
+		const result = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill("new clock", 20)], fixture.ctx);
+		assert.equal(result.at(-2), note);
+		assert.notEqual(result.at(-1), first.at(-1));
+		assert.equal(fixture.entries.filter((entry) => entry.message?.herdSkill).length, 2);
+		const repeated = commitSkillReceipt(fixture.manager, result, fixture.ctx);
+		assert.equal(repeated.at(-1), result.at(-1));
+		assert.equal(fixture.entries.length, 4);
+	});
+}
+
+test("a legacy receipt after a custom input is reused despite display normalization", () => {
+	const note = custom();
+	const old = skill("old committed clock", 12);
+	const fixture = harness([user(), note, old]);
+	fixture.entries[1] = customEntry(note);
+	fixture.session.agent.state.messages.pop();
+	const result = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill("later", 20)], fixture.ctx);
+	assert.equal(result.at(-1), old);
+	assert.equal(fixture.entries.length, 3);
 });
 
-test("legacy hook does not fall back to the owner after flow routing fails", () => {
-	const fixture = harness();
-	const hook = contextHook(
-		(event) => ({ messages: [...event.messages, skill()] }),
-		{ managerFor: () => { throw new Error("flow is no longer bound"); } },
-	);
+test("a new custom input cannot reuse a legacy receipt for different input", () => {
+	const oldNote = custom("Old direction");
+	const fixture = harness([user(), oldNote, skill()]);
+	fixture.entries[1] = customEntry(oldNote);
+	fixture.session.agent.state.messages = [user(), custom("New direction")];
 	assert.throws(
-		() => hook({ messages: fixture.session.agent.state.messages.slice() }, fixture.ctx),
+		() => commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill("later", 20)], fixture.ctx),
+		(error) => error.code === "CONTEXT_SKILL_COMMIT_FAILED" && error.phase === "prefix check",
+	);
+	assert.equal(fixture.entries.length, 3);
+});
+
+test("a file mention after a receipt starts a new request", () => {
+	const fixture = harness();
+	commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx);
+	const mention = { role: "fileMention", files: [{ path: "notes.md", content: "Work notes" }], timestamp: 10 };
+	fixture.manager.appendMessage(mention);
+	fixture.session.agent.state.messages.push(mention);
+	const result = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill("next", 20)], fixture.ctx);
+	assert.equal(result.at(-2), mention);
+	assert.equal(fixture.entries.filter((entry) => entry.message?.herdSkill).length, 2);
+});
+
+for (const type of ["compaction", "branch_summary"]) {
+	test(`the host context builder resolves a ${type} before a receipt is committed`, () => {
+		const fixture = harness([user(), skill("before boundary", 2)]);
+		const summary = { role: type === "compaction" ? "compactionSummary" : "branchSummary", summary: "Earlier work", timestamp: 10 };
+		fixture.entries.push({ type, summary: "Earlier work", timestamp: new Date(10).toISOString() });
+		fixture.session.agent.state.messages = [summary];
+		useSemanticContext(fixture, [summary]);
+		const result = commitSkillReceipt(fixture.manager, [summary, skill("after boundary", 20)], fixture.ctx);
+		assert.equal(result[0], summary);
+		assert.equal(result.at(-1).content[0].text, "after boundary");
+		assert.equal(fixture.entries.length, 4);
+	});
+}
+
+test("summary replay without a host context builder fails before it writes", () => {
+	const fixture = harness();
+	fixture.entries.push({ type: "compaction", summary: "Earlier work" });
+	assert.throws(
+		() => commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx),
 		(error) => error.code === "CONTEXT_SKILL_COMMIT_FAILED" && error.phase === "session lookup",
+	);
+	assert.equal(fixture.entries.length, 2);
+});
+
+test("state entries do not masquerade as model input after a receipt", () => {
+	const fixture = harness();
+	const first = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx);
+	fixture.entries.push({ type: "custom", customType: "herd.state", data: { revision: 2 } });
+	const repeated = commitSkillReceipt(fixture.manager, first, fixture.ctx);
+	assert.equal(repeated.at(-1), first.at(-1));
+	assert.equal(fixture.entries.length, 3);
+});
+
+test("missing journal output stops preparation before it writes a receipt", () => {
+	const fixture = harness();
+	const answer = { role: "assistant", content: "Not yet persisted", timestamp: 10 };
+	fixture.session.agent.state.messages.push(answer);
+	assert.throws(
+		() => commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx),
+		(error) => error.code === "CONTEXT_SKILL_COMMIT_FAILED" && error.phase === "prefix check",
 	);
 	assert.equal(fixture.entries.length, 1);
 });
 
-test("legacy hook returns a non-skill result unchanged", () => {
-	const result = { messages: [user()] };
-	const hook = contextHook(() => result);
-	assert.equal(hook({}, {}), result);
+for (const [role, customType] of [
+	["custom", "vibe-mode-context"],
+	["hookMessage", "vibe-mode-context"],
+	["custom", "prewalk-plan"],
+]) {
+	test(`host one-run ${role} ${customType} can follow a committed receipt`, () => {
+		const fixture = harness();
+		const first = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx);
+		const note = { role, customType, content: "Live instructions", timestamp: 10 };
+		fixture.session.agent.state.messages.push(note);
+		const result = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill("next", 20)], fixture.ctx);
+		assert.equal(result.at(-2), note);
+		assert.notEqual(result.at(-1), first.at(-1));
+		assert.equal(fixture.entries.length, 3);
+		const repeated = commitSkillReceipt(fixture.manager, result, fixture.ctx);
+		assert.equal(repeated.at(-1), result.at(-1));
+		assert.equal(fixture.entries.length, 3);
+	});
+}
+
+test("ordinary missing custom input still fails instead of claiming a host exemption", () => {
+	const fixture = harness();
+	commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx);
+	fixture.session.agent.state.messages.push(custom("This note must be persisted."));
+	assert.throws(
+		() => commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill("next", 20)], fixture.ctx),
+		(error) => error.code === "CONTEXT_SKILL_COMMIT_FAILED" && error.phase === "prefix check",
+	);
+	assert.equal(fixture.entries.length, 2);
+});
+
+test("commit returns a non-skill list unchanged", () => {
+	const result = [user()];
+	assert.equal(commitSkillReceipt(null, result), result);
 });

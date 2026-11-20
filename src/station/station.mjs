@@ -710,6 +710,12 @@ export class SessionStation {
 			return { messages };
 		} catch (error) {
 			this.noteError("context", error);
+			if (error?.code === "FOLD_ROLLBACK_FAILED") {
+				// The host catches context-handler errors. Cancel the live Agent
+				// too, so a broken journal cannot reach the provider unchanged.
+				sessionFor(ctx)?.agent?.abort?.(error);
+				throw error;
+			}
 			return { messages: original };
 		}
 	}

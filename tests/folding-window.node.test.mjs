@@ -80,6 +80,45 @@ test("stable header and message prefix permit an incremental density sample", ()
 	assert.equal(state.modelCaches[HIGH].tokensPerChar, 0.3);
 });
 
+test("a zero-usage host stop does not replace measured input or refresh cache estimates", () => {
+	const state = observedState();
+	const messages = [text("user", "a".repeat(1000))];
+	const ledger = ledgerFor(state, messages);
+	ledger.noteSentContext({ key: HIGH, messages, header: HEADER });
+	const measured = usage(5000);
+	measured.usage.output = 200;
+	measured.usage.cost = { total: 1 };
+	ledger.onMessage(measured, null);
+	const previousCache = { ...state.modelCaches[HIGH] };
+	const previousCost = ledger.lastUsageCost;
+	messages.push(text("user", "A request that the gate will stop."));
+	ledger.noteSentContext({ key: HIGH, messages, header: HEADER });
+	const stopped = usage(0);
+	stopped.stopReason = "aborted";
+	ledger.onMessage(stopped, null);
+	assert.equal(ledger.lastTotalInput, 5000);
+	assert.equal(ledger.lastOutputTokens, 200);
+	assert.equal(ledger.lastUsageCost, previousCost);
+	assert.deepEqual(state.modelCaches[HIGH], previousCache);
+	assert.equal(ledger.sentContext, null);
+	assert.equal(ledger.lastSample, null);
+});
+
+test("a request served from cache remains a valid input measurement", () => {
+	const state = observedState();
+	const messages = [text("user", "a".repeat(1000))];
+	const ledger = ledgerFor(state, messages);
+	ledger.noteSentContext({ key: HIGH, messages, header: HEADER });
+	const response = usage(0);
+	response.usage.cacheRead = 5000;
+	response.usage.output = 100;
+	ledger.onMessage(response, null);
+	assert.equal(ledger.lastTotalInput, 5000);
+	assert.equal(ledger.lastOutputTokens, 100);
+	assert.equal(ledger.lastSample.totalInput, 5000);
+	assert.equal(state.modelCaches[HIGH].fixedOverheadTokens, 4300);
+});
+
 for (const change of ["header", "prefix", "missing header"]) {
 	test(`density ignores an unaligned ${change} even when the request grows`, () => {
 		const state = observedState();

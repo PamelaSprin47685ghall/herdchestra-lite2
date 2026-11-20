@@ -258,6 +258,8 @@ function harness({ fission, budget = { read: 10, bash: 4 }, hooks = {}, seed }) 
 			hooks.unbindFlow?.(flowId);
 		},
 		prepareFlow: hooks.prepareFlow,
+		onBatchEvent: hooks.onBatchEvent,
+		onPromote: hooks.onPromote,
 		async spawnFlow(plan) {
 			if (hooks.spawnFlow) return hooks.spawnFlow(plan);
 			const session = makeFlowSession(plan);
@@ -722,6 +724,79 @@ describe("fission scheduler", () => {
 		expect(endPayloads.at(-1).batchId).toBe(registered.batchId);
 		expect(endPayloads.at(-1).flow).toBeUndefined();
 	});
+
+	for (const mode of ["branch throws", "branch does nothing", "branch moves then throws", "reset throws"]) {
+		test(`keeps the owner history and stops continuation when adoption ${mode}`, async () => {
+			const events = [];
+			let promotions = 0;
+			let continued = 0;
+			let steered = 0;
+			const h = harness({
+				fission: [{ intent: "only", budget: { read: 2 }, permission: "ro" }],
+				hooks: {
+					onBatchEvent: (event) => events.push(event),
+					onPromote: () => { promotions += 1; },
+				},
+			});
+			const ownerMessage = { role: "user", content: "owner history", timestamp: 1 };
+			h.manager.appendMessage(ownerMessage);
+			h.ownerAgent.state.messages.push(ownerMessage);
+			const registered = register(h, "call-failed-adoption");
+			expect(reserve(h).ok).toBe(true);
+			h.manager.appendMessage({ role: "toolResult", toolCallId: "call-failed-adoption", content: "registered" });
+			await h.scheduler.onOwnerEnd({ batch: registered.batch });
+			const [only] = h.scheduler.listFlows();
+			const session = h.spawned[0].session;
+			h.bindings[0].station.state.amends = ["heir-only-key"];
+			const ownerMessages = h.ownerAgent.state.messages.slice();
+			const savedLeaf = h.manager.getLeafId();
+			const branch = h.manager.branch;
+			let branchAttempts = 0;
+			h.manager.branch = (target) => {
+				const entry = h.manager.getEntry(target);
+				// Only the final adoption selects the batch's scope.end. Boundary
+				// writes and their leaf restoration still use the normal host stub.
+				if (entry?.customType === "scope.end" &&
+					entry.data?.batchId === registered.batchId && !entry.data?.flow) {
+					branchAttempts += 1;
+					if (mode === "branch does nothing") return;
+					if (mode === "branch moves then throws") branch(target);
+					if (mode !== "reset throws") throw new Error("injected adoption branch failure");
+				}
+				return branch(target);
+			};
+			if (mode === "reset throws") {
+				const reset = h.ownerAgent.reset;
+				h.ownerAgent.reset = () => {
+					reset();
+					throw new Error("injected owner reset failure");
+				};
+			}
+			h.ownerAgent.continue = async () => { continued += 1; };
+			h.ownerSession.steer = async () => { steered += 1; };
+			expect(h.scheduler.broadcast("input still awaiting delivery").ok).toBe(true);
+			h.scheduler.requestFlowEnd(only.flowId);
+			h.scheduler.retireEndedFlow(only.flowId);
+			session.finish.resolve();
+			await h.scheduler.flowEnded(only.flowId);
+			const done = await h.scheduler.waitForBatch(registered.batchId);
+
+			expect(branchAttempts).toBe(1);
+			expect(done.status).toBe("failed");
+			expect(done.outcome).toBe("failed-with-adoption-failure");
+			expect(done.limits).toContain(mode === "reset throws" ? "OWNER_CONTEXT_NOT_ADOPTED" : "OWNER_LEAF_NOT_MOVED");
+			expect(h.ownerAgent.state.messages).toEqual(ownerMessages);
+			expect(h.manager.getLeafId()).toBe(savedLeaf);
+			expect(h.state.amends).toEqual([]);
+			expect(promotions).toBe(0);
+			expect(events.some((event) => event.type === "batch.adopted")).toBe(false);
+			expect(continued).toBe(0);
+			expect(steered).toBe(0);
+			expect(h.scheduler.batchStatus(registered.batchId).warnings.some((warning) =>
+				warning.code === "CARRY_OVER_INPUT_BLOCKED" && warning.text === "input still awaiting delivery",
+			)).toBe(true);
+		});
+	}
 
 	test("refuses an unaffordable batch before any journal or budget change", () => {
 		const h = harness({ fission: twoFlows(), budget: { read: 1, bash: 1 } });

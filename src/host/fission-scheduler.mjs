@@ -74,6 +74,15 @@
 
 import { beginScope, closeScope, splitFissionBudget, validateFission } from "../scope/accounting.mjs";
 import { createFlowState } from "../scope/state.mjs";
+import { scopeOrder } from "../scope/index.mjs";
+import {
+	findBegin,
+	findToolCallIndex,
+} from "../transcript/index.mjs";
+// Character accounting lives in one place: importing it keeps a flow's
+// measured interior identical to the one the station records for ordinary
+// scopes, so both kinds of elder are priced by the same ruler.
+import { sliceChars } from "../station/fold.mjs";
 import {
 	appendAt,
 	copyHandoff,
@@ -239,12 +248,18 @@ export function mergeCollapses(ownerRecords, heirRecords) {
 }
 
 /**
- * Merge per-model cache records, keeping the most conservative position.
+ * Merge per-model cache records, keeping the position that is still valid.
  *
  * `cachedUntilPos` is a promise about what the provider still holds. The
- * owner's value describes the owner's branch, the flow's describes the flow's;
- * after adoption the owner continues on the flow's branch, so the smaller
- * position is the only one both sides can prove.
+ * owner's value describes the owner's branch, the flow's describes the flow's.
+ * After adoption the conversation continues on the flow's branch, so the entry
+ * whose TTL clock is newer describes the cache the next request will actually
+ * hit. Taking the minimum unconditionally threw that away: the heir's freshly
+ * warmed prefix was truncated back to the owner's older position, and every
+ * later decision priced already-cached content as a miss.
+ *
+ * A stale entry proves nothing, so freshness decides first; only when both
+ * clocks are equally fresh does the more conservative position win.
  */
 export function mergeModelCaches(ownerCaches, heirCaches) {
 	const merged = {};
@@ -257,6 +272,13 @@ export function mergeModelCaches(ownerCaches, heirCaches) {
 		}
 		const ownerPos = Number.isInteger(existing?.cachedUntilPos) ? existing.cachedUntilPos : 0;
 		const heirPos = Number.isInteger(entry?.cachedUntilPos) ? entry.cachedUntilPos : 0;
+		const ownerAt = Number.isFinite(existing?.lastUsedAt) ? existing.lastUsedAt : 0;
+		const heirAt = Number.isFinite(entry?.lastUsedAt) ? entry.lastUsedAt : 0;
+		if (heirAt !== ownerAt) {
+			// The newer writer owns the truth about what the provider holds.
+			merged[key] = heirAt > ownerAt ? { ...existing, ...entry } : { ...entry, ...existing };
+			continue;
+		}
 		merged[key] = { ...existing, ...entry, cachedUntilPos: Math.min(ownerPos, heirPos) };
 	}
 	return merged;
@@ -646,6 +668,37 @@ export function createFissionScheduler(options = {}) {
 			`flow ${flow.id} exposes no subscribe()`,
 			{ flowId: flow.id },
 		);
+	}
+
+	/** Open-scope depth of one flow state, after its own scope opened. */
+	function levelOf(state) {
+		return Array.isArray(state?.scopes) ? state.scopes.length : 0;
+	}
+
+	/**
+	 * The owner level the batch returns to once its own scope closes.
+	 *
+	 * The batch scope is the innermost scope the owner opened for this batch, so
+	 * everything outside it is the parent stack. `level` is the depth the model
+	 * lands on, and `intent`/`budget` describe the scope it resumes inside (or
+	 * nothing at the top level).
+	 */
+	function levelAfter(batch) {
+		const stack = Array.isArray(batch?.owner?.state?.scopes) ? batch.owner.state.scopes : [];
+		const index = stack.findIndex((scope) => scope?.id === batch.scopeId);
+		const parents = index >= 0 ? stack.slice(0, index) : stack;
+		const parent = parents.at(-1) ?? null;
+		const budget = parent
+			? Object.entries(parent.remaining ?? {})
+				.filter(([tool]) => Object.hasOwn(parent.budget ?? {}, tool))
+				.map(([tool, left]) => `${tool} ${left}/${parent.budget[tool]}`)
+				.join(", ")
+			: "";
+		return {
+			level: parents.length,
+			intent: typeof parent?.intent === "string" ? parent.intent : null,
+			budget: budget === "" ? null : budget,
+		};
 	}
 
 	function sourceSegment(record) {
@@ -1353,6 +1406,7 @@ export function createFissionScheduler(options = {}) {
 			intent: flow.item.intent,
 			stage: flow.batch.stage,
 			budget: { ...flow.item.budget },
+			level: levelOf(flow.state),
 			permission: flow.item.permission,
 			batchId: flow.batch.id,
 			flow: flow.label,
@@ -1368,6 +1422,7 @@ export function createFissionScheduler(options = {}) {
 			flow: flow.label,
 			flowIndex: flow.index,
 			status,
+			level: levelOf(flow.state),
 		};
 	}
 
@@ -1390,12 +1445,16 @@ export function createFissionScheduler(options = {}) {
 	}
 
 	function writeBatchEnd(batch, anchor) {
+		const afterClose = levelAfter(batch);
 		return writeAt(tailOf(manager, anchor), "scope.end", {
 			batchId: batch.id,
 			stage: batch.stage,
 			status: batch.status,
 			heir: anchor.label,
 			flows: batch.flows.map((flow) => flow.label),
+			level: afterClose.level,
+			parentIntent: afterClose.intent,
+			parentBudget: afterClose.budget,
 		});
 	}
 
@@ -1437,6 +1496,79 @@ export function createFissionScheduler(options = {}) {
 		}
 	}
 
+	/**
+	 * Record the flow's own scope as a pending elder.
+	 *
+	 * Fission is the only begin shape the scope tool still accepts, so the
+	 * collapse records the economics folds have to be written here: a flow's
+	 * `scope({ end: true })` only calls requestFlowEnd and never reaches the
+	 * station's end handler that pushes records. Without this the whole
+	 * deferred-fold economy ran against an always-empty `state.collapses`.
+	 *
+	 * The record starts with `report: null` because it is the hot workbench.
+	 * The next batch at this level archives it through `begin.elder_report`;
+	 * only then does it satisfy `findFoldablePool`.
+	 */
+	function recordFlowCollapse(flow, scope) {
+		const state = flow.state;
+		if (!state || !Array.isArray(state.collapses)) return;
+		if (!scope || typeof scope.beginToolCallId !== "string") return;
+		const endToolCallId =
+			(typeof flow.endToolCallId === "string" && flow.endToolCallId) ||
+			(typeof scope.endToolCallId === "string" && scope.endToolCallId) ||
+			null;
+		if (!endToolCallId) return;
+		if (state.collapses.some((record) => record?.scopeId === scope.id)) return;
+		const messages = Array.isArray(flow.agent?.state?.messages)
+			? flow.agent.state.messages
+			: [];
+		const begin = findBegin(messages, scope.beginToolCallId);
+		const endIndex = findToolCallIndex(messages, endToolCallId);
+		const interior =
+			begin && endIndex > begin.resultIndex
+				? messages.slice(begin.resultIndex + 1, endIndex)
+				: [];
+		// `makeScope` records the boundary and epoch but no parent id, so the
+		// level comes from the live stack. `closeScope` has already popped this
+		// scope, which makes the new top the level the record belongs to.
+		const parentId = state.scopes.at(-1)?.id ?? null;
+		state.collapses.push({
+			scopeId: scope.id,
+			intent: typeof scope.intent === "string" ? scope.intent : null,
+			beginToolCallId: scope.beginToolCallId,
+			endToolCallId,
+			report: null,
+			parentId,
+			order: scopeOrder(scope),
+			boundary: scope.boundary ?? 0,
+			epoch: scope.epoch ?? 0,
+			collapsed: false,
+			sealed: false,
+			// No measured usage is available on a flow: its ledger is not
+			// wired to the owner's. Character weight is the honest fallback
+			// and `measuredModelKey: null` selects it in netRemovableTokens.
+			interiorTokens: null,
+			measuredModelKey: null,
+			baseModelKey: null,
+			interiorChars: sliceChars(interior),
+			pinTokens: 0,
+			pinChars: 0,
+			userChars: sliceChars(
+				interior.filter((message) => message?.role === "user"),
+			),
+			paidRentCost: 0,
+			baseInputTokens: Number.isFinite(scope.baseInputTokens)
+				? scope.baseInputTokens
+				: null,
+			preBeginInputTokens: Number.isFinite(scope.preBeginInputTokens)
+				? scope.preBeginInputTokens
+				: null,
+			endInputTokens: null,
+			endInputTokensPending: false,
+			createdAt: Date.now(),
+		});
+	}
+
 	function closeFlowScope(flow) {
 		const scopes = flow.state?.scopes;
 		if (!Array.isArray(scopes) || scopes.at(-1)?.id !== flow.scopeId) return;
@@ -1450,6 +1582,7 @@ export function createFissionScheduler(options = {}) {
 					flow,
 				);
 			}
+			if (closed?.ok) recordFlowCollapse(flow, closed.scope);
 		} catch (error) {
 			batchWarning(flow.batch, "SCOPE_CLOSE_FAILED", error, flow);
 		}
@@ -1699,24 +1832,12 @@ export function createFissionScheduler(options = {}) {
 			],
 		});
 
-		const model = heir.model ?? heir.session?.model;
-		if (model && owner.session?.model !== model) {
-			if (typeof owner.session?.setModel === "function") {
-				try {
-					await owner.session.setModel(model);
-				} catch (error) {
-					failures.push({
-						code: "OWNER_MODEL_NOT_SWITCHED",
-						detail: `setModel() failed: ${error?.message ?? error}`,
-					});
-				}
-			} else if (owner.session?.model !== model) {
-				failures.push({
-					code: "OWNER_MODEL_NOT_SWITCHED",
-					detail: "the owner session exposes no setModel()",
-				});
-			}
-		}
+		// The owner keeps its own model. A flow's model is a flow detail: adopting
+		// the heir's context must not silently move the main session onto the
+		// model a single flow asked for. Switching here also threw away the
+		// provider cache, because a per-model cache namespace never held the
+		// owner's prefix — the adapter observes the real model on the next turn
+		// and records it, which is the only place a model change belongs.
 		// The leaf move is what makes the next user turn attach to the heir's
 		// branch. It runs after the switch and is reported, not thrown: the
 		// owner's context already belongs to the heir, so abandoning promotion

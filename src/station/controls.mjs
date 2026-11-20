@@ -22,6 +22,7 @@ import { parseArgs, trimText } from "./messages.mjs";
 import { amendText, endText } from "./texts.mjs";
 import {
   charsToTokens,
+  preparseModelSpec,
   resolveModelPolicy,
 } from "../host/pricing.mjs";
 import {
@@ -113,6 +114,62 @@ function fissionRefusalText(state, validation) {
     return render(E["stage-flags-unmet"], { missing: missing.join(", ") });
   }
   return validation.reason;
+}
+
+/**
+ * Resolve the model, price, and window each flow will actually read the pool
+ * with. A flow that names no model inherits its parent scope (or the base
+ * model); a named one is preparsed so its pricing and window are known before
+ * any flow starts.
+ *
+ * Using only `state.baseModelSpec` was wrong twice: a nested batch runs under a
+ * different model than the base one, and every per-flow model was ignored, so
+ * the economics priced the pool against a model no flow would use.
+ */
+function fissionTargets(station, ctx, items, parentScope, state) {
+  const inherited = modelChoice(
+    station,
+    ctx,
+    parentScope?.modelSpec ?? state.baseModelSpec,
+    parentScope?.modelKey ?? state.baseModelKey,
+  );
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const budget = item?.budget ?? null;
+    const spec = typeof item?.model === "string" ? item.model.trim() : "";
+    if (!spec) return { ...inherited, budget };
+    let parsed = null;
+    try {
+      parsed = preparseModelSpec(station.pricingCatalog, ctx, spec);
+    } catch {
+      parsed = null;
+    }
+    const key = parsed?.canonicalKey || spec;
+    return {
+      spec,
+      key,
+      window: Number.isFinite(parsed?.contextWindow) ? parsed.contextWindow : 0,
+      pricing:
+        parsed?.pricing ??
+        resolveModelPolicy(station.pricingCatalog, { model: spec }),
+      budget,
+    };
+  });
+}
+
+/**
+ * A flow whose projected request no longer fits 95% of its window must not
+ * open. The 82% mark only triggers the fold, which already ran; this check
+ * judges the context the flows will actually send after that fold.
+ */
+function windowOverflow(station, base, targets, savedTokens = 0) {
+  const reclaimed = Number.isFinite(savedTokens) ? Math.max(0, savedTokens) : 0;
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (!target?.key || !(target.window > 0)) continue;
+    const projected =
+      station.currentContextTokens(base, target.key) - reclaimed;
+    if (projected >= 0.95 * target.window) return { target, projected };
+  }
+  return null;
 }
 
 /**
@@ -209,7 +266,11 @@ function handleFissionBegin(station, call, { args, ctx, base, currentMessage, cu
   // The economics decision belongs to the begin path. Fission used to drop
   // this call entirely, so `shouldFoldPool` only ever ran on a model change at
   // scope end: pools kept accruing rent and never reached a decision.
-  foldEligiblePool(station, {
+  // Each flow reads the pool with its own model and pays its own budget's
+  // worth of rent, so the decision is made per flow and any one of them may
+  // justify the fold.
+  const targets = fissionTargets(station, ctx, validation.items, parentScope, state);
+  const folded = foldEligiblePool(station, {
     state,
     parentId: parentScope?.id ?? null,
     boundary,
@@ -217,9 +278,17 @@ function handleFissionBegin(station, call, { args, ctx, base, currentMessage, cu
     base,
     currentMessage,
     currentPersisted,
-    target: modelChoice(station, ctx, state.baseModelSpec, state.baseModelKey),
+    targets,
     ctx,
   });
+  const overflow = windowOverflow(station, base, targets, folded.savedTokens ?? 0);
+  if (overflow) {
+    return errorResult("CONTEXT_EXCEEDED", E["context-exceeded"], {
+      model: overflow.target.key,
+      projectedTokens: Math.round(overflow.projected),
+      contextWindow: overflow.target.window,
+    });
+  }
 
   const stage = begin.stage;
   let registered;
@@ -431,6 +500,10 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
       parentId,
       boundary: scope.boundary ?? 0,
       epoch: scope.epoch ?? 0,
+      // The closing scope's own budget is the best available estimate of how
+      // many further reads follow: without it budgetSteps() answers one step
+      // and every decision becomes short-sighted.
+      budget: scope.budget ?? null,
     });
   }
 
@@ -466,10 +539,18 @@ function floodPools(station, { state, base, currentMessage, currentPersisted }) 
   if (folded.rebased) station.rebaseBaselines(folded);
 }
 
-/** Fold a whole eligible elder pool in one decision, when economics allow. */
-function foldEligiblePool(station, { state, parentId, boundary, epoch, base, currentMessage, currentPersisted, target, ctx }) {
+/**
+ * Fold a whole eligible elder pool in one decision, when economics allow.
+ *
+ * `targets` names every model that will read the pool and the budget it will
+ * read it with. Each one is judged separately: a flow's own model, cache
+ * state, and remaining steps decide whether folding pays, and one flow that
+ * pays is enough because the fold removes the same bytes for every reader.
+ * `target`/`budget` keep the single-reader call sites unchanged.
+ */
+function foldEligiblePool(station, { state, parentId, boundary, epoch, base, currentMessage, currentPersisted, target, targets, ctx, budget }) {
   const pool = findFoldablePool(state, parentId, boundary, epoch);
-  if (pool.length === 0) return { foldedCount: 0 };
+  if (pool.length === 0) return { foldedCount: 0, savedTokens: 0 };
   const lastIn = Number.isFinite(station.usage.lastTotalInput) ? station.usage.lastTotalInput : null;
   const usageSnapshot =
     lastIn === null
@@ -480,27 +561,51 @@ function foldEligiblePool(station, { state, parentId, boundary, epoch, base, cur
           cost: station.usage.lastUsageCost ?? null,
           modelKey: station.usage.lastUsageModelKey,
         };
-  const pricing = target.pricing ?? resolveModelPolicy(
-    station.pricingCatalog,
-    target.key === station.usage.lastUsageModelKey && station.usage.lastCtxModel ? { model: station.usage.lastCtxModel } : undefined,
-    target.key === station.usage.lastUsageModelKey ? station.usagePricingHint() : undefined,
-  );
-  const decision = shouldFoldPool({
-    pool,
-    state,
-    base,
-    usageSnapshot,
-    pricing,
-    contextTokens: station.currentContextTokens(base, target.key),
-    tokensPerChar: station.tokensPerCharFor(target.key),
-    modelKey: target.key,
-    outerModels: [
-      modelChoice(station, ctx, state.baseModelSpec, state.baseModelKey),
-      ...state.scopes.map((scope) => modelChoice(station, ctx, scope.modelSpec, scope.modelKey)),
-    ],
-    emergency: false,
-  });
-  if (!decision.fold) return { foldedCount: 0 };
+  const list =
+    Array.isArray(targets) && targets.length > 0
+      ? targets
+      : [{ ...(target ?? {}), budget: budget ?? target?.budget ?? null }];
+  // Every model still on the stack holds its own provider cache and pays the
+  // rebuild penalty when the fold rewrites the branch. Sibling flow targets
+  // are outer models for each other for the same reason.
+  const stackModels = [
+    modelChoice(station, ctx, state.baseModelSpec, state.baseModelKey),
+    ...state.scopes.map((scope) => modelChoice(station, ctx, scope.modelSpec, scope.modelKey)),
+  ].map((choice) => ({ key: choice?.key ?? null, pricing: choice?.pricing ?? null }));
+  let decided = false;
+  for (const entry of list) {
+    if (!entry?.key) continue;
+    const sameAsMeasured =
+      entry.key === station.usage.lastUsageModelKey && station.usage.lastCtxModel;
+    const pricing = entry.pricing ?? resolveModelPolicy(
+      station.pricingCatalog,
+      sameAsMeasured ? { model: station.usage.lastCtxModel } : undefined,
+      sameAsMeasured ? station.usagePricingHint() : undefined,
+    );
+    const decision = shouldFoldPool({
+      pool,
+      state,
+      base,
+      budget: entry.budget ?? budget,
+      usageSnapshot,
+      pricing,
+      contextTokens: station.currentContextTokens(base, entry.key),
+      tokensPerChar: station.tokensPerCharFor(entry.key),
+      modelKey: entry.key,
+      outerModels: [
+        ...stackModels.filter((choice) => choice.key && choice.key !== entry.key),
+        ...list
+          .filter((sibling) => sibling?.key && sibling.key !== entry.key)
+          .map((sibling) => ({ key: sibling.key, pricing: sibling.pricing ?? null })),
+      ],
+      emergency: false,
+    });
+    if (decision.fold) {
+      decided = true;
+      break;
+    }
+  }
+  if (!decided) return { foldedCount: 0, savedTokens: 0 };
   const folded = station.foldBatch({
     batch: pool,
     base,

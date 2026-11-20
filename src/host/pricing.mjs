@@ -7,7 +7,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { modelOf, modelRegistryOf } from "./adapter.mjs";
+import { modelOf, modelRegistryOf, sessionOf } from "./adapter.mjs";
 import { usageField, usageSnapshot } from "./usage.mjs";
 
 // Fallback when no model configuration and no usage cost are available.
@@ -341,12 +341,11 @@ function addConfiguredEntries(target, value) {
 }
 
 function configuredMaps(ctx, catalog) {
-	let session = null;
-	try {
-		session = sessionFor(ctx);
-	} catch {
-		session = null;
-	}
+	// `sessionOf` is the adapter's total read: it returns the live session or
+	// null and never throws. Calling a bare `sessionFor` here used to raise a
+	// ReferenceError that the surrounding catch turned into `session = null`,
+	// so settings that live on the AgentSession were silently ignored.
+	const session = sessionOf(ctx);
 	const sources = [
 		ctx?.settings,
 		session?.settings,
@@ -399,12 +398,7 @@ function resolveConfiguredSpec(ctx, catalog, text) {
 }
 
 function registryFor(ctx) {
-	let session = null;
-	try {
-		session = sessionFor(ctx);
-	} catch {
-		session = null;
-	}
+	const session = sessionOf(ctx);
 	const candidates = [
 		ctx?.modelRegistry,
 		session?.modelRegistry,

@@ -122,9 +122,13 @@ export function createState() {
     // resume the pending switch.
     modelRecovery: null,
     // Provider prompt caches keyed by canonical model key (provider/id).
-    // Entries: { cachedUntilPos, lastUsedAt, tokensPerChar } where
+    // Entries: { cachedUntilPos, lastUsedAt, tokensPerChar,
+    // fixedOverheadTokens } where
     // cachedUntilPos is the exclusive message index the provider still
-    // holds. Persisted with the snapshot.
+    // holds, tokensPerChar is the measured density of *dialogue* characters,
+    // and fixedOverheadTokens is the part of every input payload that does not
+    // come from the dialogue at all (system prompt plus tool schemas).
+    // Persisted with the snapshot.
     modelCaches: {},
     // Boolean stage flags: S2/S3/S4 start false, S5 requires all three true,
     // and opening S1 clears them.
@@ -175,7 +179,9 @@ export function cacheIsFresh(entry, now = Date.now(), ttl = CACHE_TTL_MS) {
 /**
  * Create or update a cache entry. cachedUntilPos is the exclusive message
  * index up to which the provider cache is valid; lastUsedAt refreshes the
- * TTL clock; tokensPerChar is this model's measured token density.
+ * TTL clock; tokensPerChar is this model's measured dialogue density;
+ * fixedOverheadTokens is the constant prefix (system prompt and tool
+ * schemas) that no dialogue character accounts for.
  */
 export function touchModelCache(state, key, fields = {}, options = {}) {
   if (!state || typeof state !== "object" || !validKey(key)) return null;
@@ -196,6 +202,12 @@ export function touchModelCache(state, key, fields = {}, options = {}) {
       Number.isFinite(fields.tokensPerChar) && fields.tokensPerChar >= 0
         ? fields.tokensPerChar
         : (Number.isFinite(existing.tokensPerChar) ? existing.tokensPerChar : null),
+    fixedOverheadTokens:
+      Number.isFinite(fields.fixedOverheadTokens) && fields.fixedOverheadTokens >= 0
+        ? fields.fixedOverheadTokens
+        : (Number.isFinite(existing.fixedOverheadTokens)
+            ? existing.fixedOverheadTokens
+            : null),
   };
   put(state.modelCaches, key, entry);
   return entry;

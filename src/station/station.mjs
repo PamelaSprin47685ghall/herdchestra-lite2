@@ -648,13 +648,24 @@ export class SessionStation {
 				this.state.collapses,
 				this.state.epoch,
 			);
+			// `messages` is the outbound list: amends removed entries and
+			// collapses replaced whole intervals, so its length is not a
+			// position in the branch. The economics compare a cache's
+			// `cachedUntilPos` against branch indexes, so record the highest
+			// branch position the provider actually saw.
+			let outboundFrontier = -1;
+			for (const message of messages) {
+				const at = original.indexOf(message);
+				if (at > outboundFrontier) outboundFrontier = at;
+			}
 			messages = messages.map(rewriteVibeMessage);
 			this.maybeRebase(ctx, messages);
 			if (key) {
 				this.usage.sentContext = {
 					key,
 					chars: sliceChars(messages),
-					frontier: messages.length,
+					frontier:
+						outboundFrontier >= 0 ? outboundFrontier + 1 : messages.length,
 				};
 			}
 			return { messages };

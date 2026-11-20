@@ -379,7 +379,15 @@ export function shouldFoldPool({
 	let B_pool = 0;
 	let A_paid = 0;
 	for (const record of records) {
-		B_pool += netRemovableTokens(record, tokensPerChar);
+		// The single-model path runs on one tokenizer chain: every record's
+		// measured interior was produced by the same model that is reading it.
+		// Passing the record's own key keeps that measurement instead of
+		// discarding it and re-deriving tokens from characters.
+		B_pool += netRemovableTokens(
+			record,
+			tokensPerChar,
+			record.measuredModelKey ?? null,
+		);
 		A_paid += Number.isFinite(record?.paidRentCost) ? record.paidRentCost : 0;
 	}
 
@@ -545,6 +553,19 @@ export function foldBatch({
 		return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
 	}
 
+	// Measure the removable interior before marking the records collapsed:
+	// netRemovableTokens answers zero for a collapsed record, and the saved
+	// amount has to describe what the fold actually took out.
+	const measuredSaved = records.reduce(
+		(sum, record) =>
+			sum +
+			netRemovableTokens(
+				record,
+				tokensPerChar,
+				record.measuredModelKey ?? null,
+			),
+		0,
+	);
 	for (const record of records) record.collapsed = true;
 	markSubsumedDescendants(state, records);
 	// The fold physically rewrote the branch at foldStartIdx: every provider
@@ -553,7 +574,10 @@ export function foldBatch({
 	cap(foldStartIdx);
 	flushCap();
 	const savedChars = Math.max(0, sliceChars(tailBefore) - sliceChars(tailAfter));
-	const savedTokens = charsToTokens(savedChars, tokensPerChar);
+	const savedTokens =
+		measuredSaved > 0
+			? measuredSaved
+			: charsToTokens(savedChars, tokensPerChar);
 	const maxOrder = records.reduce(
 		(max, record) => (Number.isInteger(record.order) && record.order > max ? record.order : max),
 		-1,

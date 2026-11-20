@@ -60,6 +60,16 @@ export function createUsageLedger(options) {
 		lastUsageModelKey: null,
 		received: new WeakSet(),
 		sentContext: null,
+		// Previous outbound sample for the incremental density estimate:
+		// { key, chars, totalInput, sent }. The difference between two
+		// samples cancels the system prompt and tool schemas exactly, which
+		// is the only way to measure the dialogue's own density.
+		lastSample: null,
+		// Models whose density already came from a slope sample. The first
+		// slope replaces the ratio-based guess outright; averaging a clean
+		// measurement with a number that is wrong by 2.5x would only halve the
+		// error, so smoothing starts with the second sample.
+		slopeKeys: new Set(),
 	};
 
 	/** Recover the most recent usage from the persisted branch tail. */
@@ -128,23 +138,76 @@ export function createUsageLedger(options) {
 				);
 				const sent = ledger.sentContext;
 				const frontier = index < 0 ? messages.length : index;
+				// `chars` is the dialogue weight of the payload this usage
+				// answers. A sent record with the same key names it exactly;
+				// otherwise the message prefix is the best available estimate.
+				const measured = sent?.key === key ? sent.chars : null;
 				const chars =
-					sent?.key === key
-						? sent.chars
-						: sliceChars(index < 0 ? messages : messages.slice(0, index));
+					measured ??
+					sliceChars(index < 0 ? messages : messages.slice(0, index));
 				ledger.sentContext = null;
-				touchModelCache(state, key, {
-					cachedUntilPos:
-						sent?.key === key ? Math.min(frontier, sent.frontier) : frontier,
-					lastUsedAt: Date.now(),
-					tokensPerChar:
+				const previous = modelCacheFor(state, key);
+				const prior = ledger.lastSample;
+				let density = previous?.tokensPerChar;
+				// Incremental slope: system prompt and tool schemas are the
+				// same in both payloads, so their tokens cancel in the
+				// difference and only dialogue text remains. Both samples must
+				// be same-model, sent-context aligned, and monotone: a fold or
+				// an amend shrinks the outbound list and voids the sample.
+				if (
+					prior &&
+					prior.key === key &&
+					prior.sent === true &&
+					measured !== null &&
+					measured > prior.chars &&
+					tIn > prior.totalInput
+				) {
+					const slope =
+						(tIn - prior.totalInput) / (measured - prior.chars);
+					if (Number.isFinite(slope) && slope > 0) {
+						const sample = Math.min(
+							MAX_TOKENS_PER_CHAR,
+							Math.max(MIN_TOKENS_PER_CHAR, slope),
+						);
+						if (ledger.slopeKeys.has(key)) {
+							density =
+								Number.isFinite(density) && density > 0
+									? density * 0.5 + sample * 0.5
+									: sample;
+						} else {
+							density = sample;
+							ledger.slopeKeys.add(key);
+						}
+					}
+				}
+				if (!Number.isFinite(density) || density <= 0) {
+					density =
 						chars > 0 && tIn > 0
 							? Math.min(
 									MAX_TOKENS_PER_CHAR,
 									Math.max(MIN_TOKENS_PER_CHAR, tIn / chars),
 								)
-							: (modelCacheFor(state, key)?.tokensPerChar ??
-								FALLBACK_TOKENS_PER_CHAR),
+							: FALLBACK_TOKENS_PER_CHAR;
+				}
+				ledger.lastSample = {
+					key,
+					chars,
+					totalInput: tIn,
+					sent: measured !== null,
+				};
+				touchModelCache(state, key, {
+					cachedUntilPos:
+						sent?.key === key ? Math.min(frontier, sent.frontier) : frontier,
+					lastUsedAt: Date.now(),
+					tokensPerChar: density,
+					// Everything the payload paid that no dialogue character
+					// explains: the system prompt and tool schemas. Recorded
+					// per model so a later model switch can project the same
+					// fixed cost instead of pretending it vanished.
+					fixedOverheadTokens:
+						chars > 0 && tIn > 0
+							? Math.max(0, tIn - chars * density)
+							: (previous?.fixedOverheadTokens ?? null),
 				});
 			}
 			const callIds = new Set(toolCalls(message).map((call) => call.id));
@@ -194,18 +257,25 @@ export function createUsageLedger(options) {
 
 	/** Observed token density, clamped to a safe band. */
 	function tokensPerChar(messages) {
-		const totalIn = ledger.lastTotalInput;
-		if (!Number.isFinite(totalIn) || totalIn <= 0) {
-			return FALLBACK_TOKENS_PER_CHAR;
+		// The ratio of total input to dialogue characters is not a density: it
+		// also contains the system prompt and tool schemas, which is a large
+		// constant and drove this value to the clamp ceiling in every real
+		// session. Only the per-model incremental sample measures dialogue.
+		const key = ledger.lastUsageModelKey;
+		const cached = key ? modelCacheFor(state, key)?.tokensPerChar : null;
+		if (Number.isFinite(cached) && cached > 0) return cached;
+		const sample = ledger.lastSample;
+		if (sample && Number.isFinite(sample.chars) && sample.chars > 0) {
+			const rate = sample.totalInput / sample.chars;
+			if (Number.isFinite(rate) && rate > 0) {
+				return Math.min(
+					MAX_TOKENS_PER_CHAR,
+					Math.max(MIN_TOKENS_PER_CHAR, rate),
+				);
+			}
 		}
-		const source = Array.isArray(messages) ? messages : contextMessages();
-		const chars = sliceChars(source);
-		if (!(chars > 0)) return FALLBACK_TOKENS_PER_CHAR;
-		const rate = totalIn / chars;
-		return Math.min(
-			MAX_TOKENS_PER_CHAR,
-			Math.max(MIN_TOKENS_PER_CHAR, rate),
-		);
+		void messages;
+		return FALLBACK_TOKENS_PER_CHAR;
 	}
 
 	function tokensPerCharFor(key) {
@@ -222,7 +292,13 @@ export function createUsageLedger(options) {
 			!Number.isFinite(ledger.lastTotalInput) ||
 			(key && key !== ledger.lastUsageModelKey)
 		) {
-			return charsToTokens(sliceChars(source), tpc);
+			// A model switch has no measured payload for this transcript. The
+			// projection must still pay the constant prefix (system prompt and
+			// tool schemas), which is per model and never zero in practice.
+			const fixed = Number.isFinite(modelCacheFor(state, key)?.fixedOverheadTokens)
+				? Math.max(0, modelCacheFor(state, key).fixedOverheadTokens)
+				: 0;
+			return fixed + charsToTokens(sliceChars(source), tpc);
 		}
 		let pendingChars = 0;
 		let usageIndex = -1;
@@ -285,6 +361,39 @@ export function createUsageLedger(options) {
 				scope.baseInputTokens = Math.max(0, scope.baseInputTokens - saved);
 			}
 		}
+		// The hot workbench is not an open scope: it is a closed record whose
+		// begin still stands after the fold. Its base was measured before the
+		// reclaimed bytes disappeared, so it has to move down with the branch.
+		// Without this, the next fold of that record computes
+		// `lastTotalInput - baseInputTokens` against a base that still counts
+		// the previous fold's content, and M_after collapses towards zero.
+		for (const record of state.collapses ?? []) {
+			if (!record || record.collapsed !== false) continue;
+			if (
+				Number.isInteger(folded.maxOrder) &&
+				Number.isInteger(record.order) &&
+				record.order <= folded.maxOrder
+			) {
+				continue;
+			}
+			if (
+				ledger.lastUsageModelKey &&
+				record.baseModelKey === ledger.lastUsageModelKey
+			) {
+				if (Number.isFinite(record.baseInputTokens)) {
+					record.baseInputTokens = Math.max(0, record.baseInputTokens - saved);
+				}
+				if (Number.isFinite(record.preBeginInputTokens)) {
+					record.preBeginInputTokens = Math.max(
+						0,
+						record.preBeginInputTokens - saved,
+					);
+				}
+			}
+			if (Number.isFinite(record.endInputTokens)) {
+				record.endInputTokens = Math.max(0, record.endInputTokens - saved);
+			}
+		}
 		if (Number.isFinite(ledger.lastTotalInput)) {
 			ledger.lastTotalInput = Math.max(0, ledger.lastTotalInput - saved);
 		}
@@ -314,7 +423,12 @@ export function createUsageLedger(options) {
 		const emergency =
 			cw && Number.isFinite(contextTokens) && contextTokens >= 0.9 * cw;
 		if (emergency) {
-			const tree = Array.isArray(original) ? original : contextMessages();
+			// Always fold against the persisted tree. `original` is the live
+			// message array and may carry an unpushed tail, so slicing it and
+			// writing the result back to the branch would splice history the
+			// SessionManager never held.
+			void original;
+			const tree = contextMessages();
 			const batch = pools
 				.flatMap(({ pool }) => pool)
 				.sort((a, b) => a.order - b.order);

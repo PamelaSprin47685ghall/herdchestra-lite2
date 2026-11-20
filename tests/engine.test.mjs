@@ -25,6 +25,11 @@ import {
 const STEER_HEADER =
   "You deferred the following findings in this scope. Address them now:";
 
+function withoutClock(value) {
+  const { startedAt, ...rest } = value;
+  return rest;
+}
+
 function openScope(intent, budget, toolCallId = "call_begin") {
   const state = createState();
   const result = beginScope(state, {
@@ -991,7 +996,7 @@ describe("serializeState and deserializeState", () => {
       { ...payload, version: 1, collapses: [{}] },
     ];
     for (const input of corrupt) {
-      expect(deserializeState(input)).toEqual(createState());
+      expect(withoutClock(deserializeState(input))).toEqual(withoutClock(createState()));
     }
   });
 
@@ -1001,11 +1006,11 @@ describe("serializeState and deserializeState", () => {
 
     const badRemaining = serializeState(state);
     badRemaining.scopes[0].remaining.bash = -1;
-    expect(deserializeState(badRemaining)).toEqual(createState());
+    expect(withoutClock(deserializeState(badRemaining))).toEqual(withoutClock(createState()));
 
     const badCharge = serializeState(state);
     badCharge.charges.call_bash.amount = 0;
-    expect(deserializeState(badCharge)).toEqual(createState());
+    expect(withoutClock(deserializeState(badCharge))).toEqual(withoutClock(createState()));
   });
 
   test("migrates a version 1 state to version 2 with a fresh relay", () => {

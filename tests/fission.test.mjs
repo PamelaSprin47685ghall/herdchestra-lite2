@@ -77,7 +77,7 @@ function journal() {
 		resetLeaf: () => { leaf = null; },
 		appendCustomEntry: (customType, data) => append({ type: "custom", id: (++next).toString(16).padStart(8, "0"), parentId: leaf, customType, data }),
 		appendMessage: (message) => append({ type: "message", id: (++next).toString(16).padStart(8, "0"), parentId: leaf, message }),
-		ingestReplicatedEntry: append,
+		ingestReplicatedEntry: (entry) => { append(entry); },
 	};
 }
 
@@ -277,9 +277,10 @@ describe("fission transcript consumption", () => {
 			{ id: "a2", type: "message", message: { role: "user", content: "second" } },
 		];
 		let writes = 0;
+		const ingest = sm.ingestReplicatedEntry;
 		sm.ingestReplicatedEntry = (entry) => {
 			writes += 1;
-			return writes === 2 ? undefined : entry.id;
+			if (writes === 1) ingest(entry);
 		};
 		await expect(copyHandoff(sm, {
 			tail,
@@ -307,7 +308,7 @@ describe("fission transcript consumption", () => {
 			source: { from: "b1", to: "b1" },
 			vibeInactive: true,
 			durableAtomicWrites: true,
-		})).rejects.toThrow("was committed as");
+		})).rejects.toThrow("was not committed");
 		expect(sm.getBranch().at(-1).id).toBe(tail);
 	});
 

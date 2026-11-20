@@ -368,13 +368,10 @@ export async function copyHandoff(sm, { tail = null, entries, handoffId, sourceB
 			if (entry.type === "custom" && entry.data?.beginToolCallId) {
 				copy.data = { ...entry.data, beginToolCallId: ids.get(entry.data.beginToolCallId) ?? entry.data.beginToolCallId };
 			}
-			// Every write returns the id it committed. `undefined` is the host's
-			// refusal (session or parent mismatch); chaining the next entry onto a
-			// refused id would leave a half segment that looks committed.
-			const written = sm.ingestReplicatedEntry(copy);
-			if (typeof written !== "string" || written === "") throw new Error(`handoff aborted: entry ${String(copy.id)} was not committed`);
-			if (written !== copy.id) throw new Error(`handoff aborted: entry ${String(copy.id)} was committed as ${written}`);
-			current = written;
+			// The host returns void; check the branch instead of the return value.
+			sm.ingestReplicatedEntry(copy);
+			if (leafId(sm) !== copy.id) throw new Error(`handoff aborted: entry ${String(copy.id)} was not committed`);
+			current = copy.id;
 			copied.push(copy);
 		}
 		current = sm.appendCustomEntry(HANDOFF_END, { handoffId, count: copied.length });

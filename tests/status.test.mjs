@@ -111,6 +111,24 @@ describe("one-line status widget", () => {
 		expect(ui.widgets.get("herd").content).toHaveLength(1);
 	});
 
+	test("sums the charge of each call after a model switch", () => {
+		const { pi, handlers } = makeHost();
+		const runtime = createStatusRuntime();
+		runtime.install(pi);
+		const ui = makeUi();
+		const ctx = { hasUI: true, ui, sessionManager: makeManager() };
+
+		emit(handlers, "session_start", {}, ctx);
+		// The same 1000 tokens cost 0.030, then 0.002 on the next model.
+		emit(handlers, "message_end", { message: { role: "assistant", usage: usage(1000, 0, 0.03) } }, ctx);
+		emit(handlers, "message_end", { message: { role: "assistant", usage: usage(1000, 0, 0.002) } }, ctx);
+
+		const line = herdLine(ui);
+		expect(line).toContain("Σ: 2.0k × 0.0% → 0.0k [¥𝟬.𝟬𝟯𝟮];");
+		expect(line).not.toContain("¥𝟬.𝟬𝟲𝟬");
+		expect(line).not.toContain("¥𝟬.𝟬𝟬𝟰");
+	});
+
 	test("reads historical usage from the branch on session start", () => {
 		const { pi, handlers } = makeHost();
 		const runtime = createStatusRuntime();

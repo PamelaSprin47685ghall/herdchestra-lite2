@@ -5,6 +5,7 @@ import {
 	FISSION_SCHEDULER_CODES,
 	createFissionScheduler,
 } from "../src/host/fission-scheduler.mjs";
+import { FISSION_MANAGER } from "../src/host/fission-manager.mjs";
 import {
 	beginScope,
 	createState,
@@ -137,8 +138,9 @@ function makeFlowSession(plan) {
 	return session;
 }
 
-function harness({ fission, budget = { read: 10, bash: 4 }, hooks = {} }) {
+function harness({ fission, budget = { read: 10, bash: 4 }, hooks = {}, seed }) {
 	const manager = makeJournal();
+	seed?.(manager);
 	const state = createState();
 	const parent = beginScope(state, {
 		intent: "owner",
@@ -297,6 +299,45 @@ function twoFlows() {
 		{ intent: "second", budget: { read: 2, bash: 1 }, permission: "rw" },
 	];
 }
+
+/** The registration contract a flow proxy exposes: its marker and wrapped manager. */
+function flowProxy(shared) {
+	return { [FISSION_MANAGER]: true, shared };
+}
+
+describe("fission scheduler manager identity", () => {
+	test("accepts a flow proxy over the scheduler's shared manager", () => {
+		const h = harness({ fission: twoFlows() });
+		const registered = h.scheduler.registerBatch({
+			toolCallId: "call-proxy",
+			sessionManager: flowProxy(h.manager),
+			station: h.station,
+			ctx: { agent: { id: "owner" } },
+			begin: h.begin,
+			flows: h.begin.fission,
+			totals: h.totals,
+			stage: h.begin.stage,
+			mainAgent: true,
+		});
+
+		expect(registered.ok).toBe(true);
+	});
+
+	test("refuses a flow proxy over a different shared journal", () => {
+		const h = harness({ fission: twoFlows() });
+		expect(() => h.scheduler.registerBatch({
+			toolCallId: "call-foreign-proxy",
+			sessionManager: flowProxy({}),
+			station: h.station,
+			ctx: { agent: { id: "owner" } },
+			begin: h.begin,
+			flows: h.begin.fission,
+			totals: h.totals,
+			stage: h.begin.stage,
+			mainAgent: true,
+		})).toThrow(/different SessionManager/);
+	});
+});
 
 describe("fission scheduler", () => {
 	test("registration charges nothing; the control reservation is the only debit", async () => {
@@ -682,6 +723,141 @@ describe("fission scheduler", () => {
 		expect(h.bindings).toHaveLength(2);
 	});
 
+	test("startup retires a chained half handoff without claiming it was delivered", async () => {
+		let target;
+		const h = harness({
+			fission: twoFlows(),
+			seed(manager) {
+				target = manager.appendMessage({ role: "user", content: "target" });
+				manager.branch(target);
+				manager.appendCustomEntry("fission.handoff.begin", {
+					handoffId: "half-safe",
+					sourceBeginId: "source-safe",
+				});
+				manager.appendMessage({ role: "user", content: "half copy" });
+			},
+		});
+		const registered = register(h, "call-recover-safe");
+		expect(registered.ok).toBe(true);
+		expect(h.scheduler.inspectIncompleteHandoffs()).toEqual([]);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const log = h.scheduler.handoffRecoveryLog();
+		expect(log).toHaveLength(1);
+		expect(log[0]).toMatchObject({
+			ok: true,
+			mode: "retire",
+			delivered: false,
+			replayable: false,
+		});
+		expect(log[0].retired).toHaveLength(1);
+		expect(log[0].retired[0]).toMatchObject({ handoffId: "half-safe", tail: target });
+		// The new batch begin follows the abort marker, never the abandoned
+		// half copy.
+		expect(h.manager.getEntry(registered.batchBeginId).parentId).toBe(log[0].retired[0].abortId);
+	});
+
+	test("startup refuses a multi-tail handoff and writes no batch begin", () => {
+		const h = harness({
+			fission: twoFlows(),
+			seed(manager) {
+				const tailA = manager.appendMessage({ role: "user", content: "tail A" });
+				manager.branch(tailA);
+				manager.appendCustomEntry("fission.handoff.begin", {
+					handoffId: "half-unsafe",
+					sourceBeginId: "source-unsafe",
+				});
+				manager.appendMessage({ role: "user", content: "copy A" });
+				manager.branch(tailA);
+				manager.appendMessage({ role: "user", content: "tail B" });
+				manager.appendCustomEntry("fission.handoff.begin", {
+					handoffId: "half-unsafe",
+					sourceBeginId: "source-unsafe",
+				});
+				manager.appendMessage({ role: "user", content: "copy B" });
+			},
+		});
+		let failure;
+		try {
+			register(h, "call-recover-unsafe");
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure?.code).toBe(FISSION_SCHEDULER_CODES.HANDOFF_RECOVERY_UNSAFE);
+		expect(h.manager.getEntries().some((entry) =>
+			entry.customType === "scope.begin" && entry.data?.fissionBatch === true,
+		)).toBe(false);
+		const inspect = h.scheduler.inspectIncompleteHandoffs();
+		expect(inspect).toHaveLength(1);
+		expect(inspect[0].recoverable).toBe(false);
+		expect(inspect[0].reason).toContain("more than one tail");
+		expect(h.scheduler.handoffRecoveryLog()[0]).toMatchObject({
+			ok: false,
+			code: FISSION_SCHEDULER_CODES.HANDOFF_RECOVERY_UNSAFE,
+		});
+	});
+
+	test("the constructor refuses a journal without a session file and writes nothing", () => {
+		const manager = makeJournal();
+		const tail = manager.appendMessage({ role: "user", content: "tail" });
+		manager.branch(tail);
+		manager.appendCustomEntry("fission.handoff.begin", {
+			handoffId: "half-no-session-file",
+			sourceBeginId: "source-no-session-file",
+		});
+		manager.appendMessage({ role: "user", content: "half copy" });
+		const entriesBefore = manager.getEntries().map((entry) => entry.id);
+		// The constructor contract needs a persistent session. A manager whose
+		// session file is unavailable is rejected before any recovery write.
+		manager.getSessionFile = () => null;
+		let failure;
+		try {
+			createFissionScheduler({
+				manager,
+				levelTemplate: LEVEL_TEMPLATE,
+				bindFlow() {},
+				vibeActive: false,
+			});
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure?.code).toBe(FISSION_SCHEDULER_CODES.UNSUPPORTED);
+		expect(String(failure?.message ?? failure?.detail)).toContain("persistent session file");
+		expect(manager.getEntries().map((entry) => entry.id)).toEqual(entriesBefore);
+		expect(manager.getEntries().some((entry) =>
+			entry.customType === "scope.begin" && entry.data?.fissionBatch === true,
+		)).toBe(false);
+	});
+
+	test("recovery refuses at register when durable writes disappear after construction", () => {
+		const h = harness({
+			fission: twoFlows(),
+			seed(manager) {
+				const tail = manager.appendMessage({ role: "user", content: "tail" });
+				manager.branch(tail);
+				manager.appendCustomEntry("fission.handoff.begin", {
+					handoffId: "half-no-durable",
+					sourceBeginId: "source-no-durable",
+				});
+				manager.appendMessage({ role: "user", content: "half copy" });
+			},
+		});
+		delete h.manager.appendEntriesAtomically;
+		let failure;
+		try {
+			register(h, "call-recover-no-durable");
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure?.code).toBe(FISSION_SCHEDULER_CODES.HANDOFF_RECOVERY_REQUIRED);
+		expect(String(failure?.message ?? failure?.detail)).toContain("durable");
+		const inspect = h.scheduler.inspectIncompleteHandoffs();
+		expect(inspect[0].recoverable).toBe(false);
+		expect(inspect[0].reason).toContain("durable");
+		expect(h.manager.getEntries().some((entry) =>
+			entry.customType === "scope.begin" && entry.data?.fissionBatch === true,
+		)).toBe(false);
+	});
+
 	test("a spawn failure keeps its reason and cleans without throwing", async () => {
 		const h = harness({
 			fission: twoFlows(),
@@ -705,6 +881,12 @@ describe("fission scheduler", () => {
 		const status = h.scheduler.batchStatus(registered.batchId);
 		expect(status.status).toBe("failed");
 		expect(status.flows).toEqual([]);
+		// The registered begin is closed even though the owner's scope stack
+		// never entered the batch.
+		const end = h.manager.getEntry(h.manager.getLeafId());
+		expect(end.customType).toBe("scope.end");
+		expect(end.data.batchId).toBe(registered.batchId);
+		expect(end.data.status).toBe("failed");
 	});
 
 	test("a subscribe failure keeps its reason and detaches the earlier flow", async () => {
@@ -745,6 +927,32 @@ describe("fission scheduler", () => {
 		expect(h.scheduler.batchStatus(registered.batchId).flows.every(
 			(flow) => flow.status === "crashed",
 		)).toBe(true);
+		const end = h.manager.getEntry(h.manager.getLeafId());
+		expect(end.customType).toBe("scope.end");
+		expect(end.data.batchId).toBe(registered.batchId);
+		expect(end.data.status).toBe("failed");
+		// The failure happened before any receipt or flow boundary, so the
+		// journal has no flow scope to close.
+		expect(h.manager.getEntries().some((entry) =>
+			entry.customType === "scope.end" && entry.data?.flow,
+		)).toBe(false);
+	});
+
+	test("cancelBatch before start closes the registered batch boundary", async () => {
+		const h = harness({ fission: twoFlows() });
+		const depth = h.state.scopes.length;
+		const registered = register(h, "call-cancel-close");
+		const result = h.scheduler.cancelBatch(registered.batchId, "reservation refused");
+		expect(result.ok).toBe(true);
+		expect(result.status).toBe("cancelled");
+		// Registration only wrote the journal boundary; cancellation must not
+		// move the owner's in-memory scope stack.
+		expect(h.state.scopes).toHaveLength(depth);
+		const end = h.manager.getEntry(h.manager.getLeafId());
+		expect(end.customType).toBe("scope.end");
+		expect(end.data.batchId).toBe(registered.batchId);
+		expect(end.data.status).toBe("cancelled");
+		expect(h.scheduler.batchStatus(registered.batchId).status).toBe("cancelled");
 	});
 
 	test("a nested batch keeps its parent open until the whole subtree closes", async () => {

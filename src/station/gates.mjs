@@ -86,6 +86,25 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 		(toolName === "edit" || toolName === "write" || toolName === "bash" || toolName === "ast_edit")) {
 		return { block: true, reason: "READ_ONLY_FLOW: this tool can change files and is unavailable in a read-only flow." };
 	}
+	// A flow may open one nested batch (design 5.10), but it never opens or
+	// closes its own scope: the scheduler writes both boundaries. Admitting
+	// only the batch begin keeps an illegal end from reaching the handler,
+	// where a flow that already retired would answer NOT_IN_SCOPE instead.
+	// The deferred admission call carries no arguments, so only the preflight
+	// call can judge the shape; dispatch already passed this gate once.
+	if (!atDispatch && station.fissionFlow && toolName === "scope") {
+		const args = parseArgs({ arguments: event.input ?? event.arguments ?? {} });
+		const begin = args?.begin;
+		const nestedBegin = begin !== null && typeof begin === "object" &&
+			!Array.isArray(begin) && Object.hasOwn(begin, "fission");
+		if (args.end === true || !nestedBegin) {
+			return {
+				block: true,
+				reason:
+					"SCOPE_UNAVAILABLE_IN_FISSION: A fission flow does not open or close its own scope; the scheduler owns its begin and end. A flow may only open a nested batch with scope({ begin: { fission: [...] } }).",
+			};
+		}
+	}
 	if (!station.fissionFlow && station.policy(ctx) === READ_ONLY_SUBAGENT && toolName !== "ask" && toolName !== "wait") {
 		return undefined;
 	}

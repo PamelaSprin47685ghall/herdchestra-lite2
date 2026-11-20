@@ -324,6 +324,36 @@ describe("fission flow scope control", () => {
 		expect(scheduler.registered[0].nested).toBe(true);
 		expect(station.pendingFission.batchId).toBe("b1");
 	});
+
+	test("a flow's end is refused even when the call also opens a batch", () => {
+		const scheduler = makeScheduler();
+		const station = makeStation({ state: createState(), scheduler });
+		station.fissionFlow = { id: "flow-a" };
+
+		const result = call(
+			station,
+			"call-nested-end",
+			{
+				begin: batchBegin([{ intent: "inner", budget: { read: 1 }, permission: "ro" }]),
+				end: true,
+			},
+			ownerContext({ id: "flow-a" }),
+		);
+
+		expect(result.details.code).toBe("INVALID_ARGUMENT");
+		expect(scheduler.registered).toHaveLength(0);
+	});
+
+	test("a flow's no-op end is still refused", () => {
+		const scheduler = makeScheduler();
+		const station = makeStation({ state: createState(), scheduler });
+		station.fissionFlow = { id: "flow-a" };
+
+		const result = call(station, "call-flow-end-false", { end: false });
+
+		expect(result.details.code).toBe("SCOPE_UNAVAILABLE_IN_FISSION");
+		expect(scheduler.registered).toHaveLength(0);
+	});
 });
 
 describe("station registry fission bindings", () => {

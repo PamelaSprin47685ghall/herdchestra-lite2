@@ -77,9 +77,12 @@ import {
 	handoffMessages,
 	incompleteHandoffs,
 	levelPattern,
+	planHandoffRecovery,
+	recoverIncompleteHandoffs,
 } from "../transcript/fission.mjs";
 import { installFissionEvents } from "./fission-events.mjs";
 import { createFissionSession, deriveFissionConfig } from "./fission-session.mjs";
+import { isFissionManager } from "./fission-manager.mjs";
 
 export const FISSION_SCHEDULER_CODES = Object.freeze({
 	UNSUPPORTED: "FISSION_UNSUPPORTED",
@@ -92,6 +95,7 @@ export const FISSION_SCHEDULER_CODES = Object.freeze({
 	SPAWN_FAILED: "FISSION_SPAWN_FAILED",
 	MODEL_UNRESOLVED: "FISSION_MODEL_UNRESOLVED",
 	HANDOFF_RECOVERY_REQUIRED: "FISSION_HANDOFF_RECOVERY_REQUIRED",
+	HANDOFF_RECOVERY_UNSAFE: "FISSION_HANDOFF_RECOVERY_UNSAFE",
 	HANDOFF_VIBE_ACTIVE: "FISSION_HANDOFF_VIBE_ACTIVE",
 	HANDOFF_FAILED: "FISSION_HANDOFF_FAILED",
 	NO_HEIR: "FISSION_NO_HEIR",
@@ -188,6 +192,21 @@ function sameCounts(left, right) {
 		if ((left?.[key] ?? 0) !== (right?.[key] ?? 0)) return false;
 	}
 	return true;
+}
+
+/**
+ * True when `candidate` is the scheduler's manager or a flow proxy over it.
+ *
+ * A flow's station carries the proxy that isolates its leaf, not the raw
+ * manager the scheduler was built over. The proxy exposes the manager it
+ * wraps, so registration unwraps one proxy before comparing identity. A proxy
+ * over a different journal still fails, because its shared manager is not this
+ * scheduler's journal.
+ */
+function sharesSharedManager(candidate, manager) {
+	if (candidate === manager) return true;
+	if (!isFissionManager(candidate)) return false;
+	return candidate.shared === manager;
 }
 
 function findToolResultId(manager, toolCallId) {
@@ -835,6 +854,44 @@ export function createFissionScheduler(options = {}) {
 		});
 	}
 
+	// A batch begin is written at registration, before any flow exists. If the
+	// start never completes, close that boundary on the owner's active branch;
+	// when the branch has moved elsewhere, attach the end to the begin itself
+	// so the journal still records a closed scope.
+	function closeUnstartedBatch(batch) {
+		if (!batch?.batchBeginId) return null;
+		const data = {
+			batchId: batch.id,
+			stage: batch.stage,
+			status: batch.status,
+			heir: null,
+			flows: batch.flows.map((flow) => flow.label),
+		};
+		try {
+			const leaf = manager.getLeafId();
+			let inside = false;
+			if (leaf) {
+				inside = manager.getBranch(leaf).some((entry) => entry.id === batch.batchBeginId);
+			}
+			if (inside) {
+				const entry = manager.getEntry(leaf);
+				if (
+					entry?.customType === "scope.end" &&
+					entry.data?.batchId === batch.id &&
+					Array.isArray(entry.data?.flows)
+				) {
+					return leaf;
+				}
+				return manager.appendCustomEntry("scope.end", data);
+			}
+			return appendAt(manager, batch.batchBeginId, () =>
+				manager.appendCustomEntry("scope.end", data),
+			);
+		} catch {
+			return null;
+		}
+	}
+
 	function closeFlowScope(flow) {
 		const scopes = flow.state?.scopes;
 		if (!Array.isArray(scopes) || scopes.at(-1)?.id !== flow.scopeId) return;
@@ -1436,7 +1493,7 @@ export function createFissionScheduler(options = {}) {
 		if (!isObject(request)) {
 			throw refusal(FISSION_SCHEDULER_CODES.INVALID_REQUEST, "registerBatch requires an object");
 		}
-		if (request.sessionManager !== manager) {
+		if (!sharesSharedManager(request.sessionManager, manager)) {
 			throw refusal(
 				FISSION_SCHEDULER_CODES.UNSUPPORTED,
 				"registerBatch received a different SessionManager; one scheduler belongs to one shared journal",
@@ -1462,6 +1519,30 @@ export function createFissionScheduler(options = {}) {
 		}
 		if (begin.elder_report === undefined) begin.elder_report = request.elderReport ?? null;
 		if (begin.stage === undefined) begin.stage = request.stage;
+
+		// Recover a historical half handoff before this batch writes its own
+		// begin, while no other live batch is using the journal. Recovery is
+		// retirement, not a retry: the source flow did not survive the restart,
+		// so the segment cannot be copied again and the handoff is never
+		// reported as delivered.
+		ensureStartupHandoffRecovery();
+		if (options.allowIncompleteHandoffs !== true) {
+			if (handoffRecoveryPending) {
+				throw refusal(
+					FISSION_SCHEDULER_CODES.HANDOFF_RECOVERY_REQUIRED,
+					"startup handoff recovery is still running; retry the scope begin",
+					{ handoffs: pendingHandoffs().map((item) => item.handoffId) },
+				);
+			}
+			const stale = pendingHandoffs();
+			if (stale.length > 0) {
+				throw refusal(
+					FISSION_SCHEDULER_CODES.HANDOFF_RECOVERY_REQUIRED,
+					handoffRecoveryNote ?? "the journal contains an incomplete handoff that startup recovery did not close",
+					{ handoffs: stale.map((item) => item.handoffId) },
+				);
+			}
+		}
 
 		const batch = createBatch({ ...request, begin });
 		batch.stage = begin.stage;
@@ -1691,18 +1772,124 @@ export function createFissionScheduler(options = {}) {
 
 	// -- Start body -----------------------------------------------------------
 
-	function assertNoIncompleteHandoffs() {
-		if (options.allowIncompleteHandoffs === true) return;
+	let handoffRecoveryStarted = false;
+	let handoffRecoveryPending = false;
+	let handoffRecoveryNote = null;
+	const handoffRecoveryLog = [];
+
+	function pendingHandoffs() {
 		const live = new Set();
 		for (const batch of batches) {
 			for (const record of batch.handoffs) live.add(record.handoffId);
 		}
-		const pending = incompleteHandoffs(manager.getEntries())
+		return incompleteHandoffs(manager.getEntries())
 			.filter((item) => !live.has(item.handoffId));
+	}
+
+	function durableRecoverySupported() {
+		return typeof manager.getSessionFile === "function" &&
+			Boolean(manager.getSessionFile()) &&
+			typeof manager.appendEntriesAtomically === "function";
+	}
+
+	function recordRecoveryFailure(error, handoffs) {
+		handoffRecoveryLog.push({
+			at: Date.now(),
+			ok: false,
+			code: error?.code ?? null,
+			message: String(error?.message ?? error),
+			handoffs,
+		});
+		handoffRecoveryNote = `${error?.code ?? "FISSION_RECOVERY_FAILED"}: ${error?.message ?? error}`;
+	}
+
+	// Startup recovery is deliberately conservative: it runs before the next
+	// batch writes its begin, only with durable writes, and only when every
+	// planned tail is outside the residue. It retires the residue instead of
+	// replaying it. The source flow did not survive the restart, so the segment
+	// cannot be copied again even when a recorded tail is intact; the audit
+	// therefore never reports the handoff as delivered.
+	function ensureStartupHandoffRecovery() {
+		if (handoffRecoveryStarted) return;
+		if (options.allowIncompleteHandoffs === true) {
+			handoffRecoveryStarted = true;
+			return;
+		}
+		if (vibeIsActive()) return;
+		const pending = pendingHandoffs();
+		if (pending.length === 0) {
+			handoffRecoveryStarted = true;
+			return;
+		}
+		// Never recover underneath a live batch that may still be writing the
+		// shared journal. A later begin can retry once the journal is quiet.
+		if (batches.some((batch) => !batch.done)) return;
+		handoffRecoveryStarted = true;
+		const handoffs = pending.map((item) => ({
+			handoffId: item.handoffId,
+			sourceBeginId: item.sourceBeginId,
+			tail: item.tail,
+		}));
+		if (!durableRecoverySupported()) {
+			const error = refusal(
+				FISSION_SCHEDULER_CODES.HANDOFF_RECOVERY_REQUIRED,
+				"the journal contains an incomplete handoff but this host offers no durable writes",
+				{ handoffs: handoffs.map((item) => item.handoffId) },
+			);
+			recordRecoveryFailure(error, handoffs);
+			throw error;
+		}
+		const plan = planHandoffRecovery(manager.getEntries());
+		const plannedIds = new Set(plan.handoffs.map((item) => item.handoffId));
+		const safe = plan.recoverable &&
+			plan.handoffs.length === pending.length &&
+			pending.every((item) => plannedIds.has(item.handoffId)) &&
+			plan.handoffs.every((handoff) => handoff.retirable && handoff.retryable);
+		if (!safe) {
+			const error = refusal(
+				FISSION_SCHEDULER_CODES.HANDOFF_RECOVERY_UNSAFE,
+				plan.reason ?? plan.retireReason ?? "the handoff tail chain is not provably safe",
+				{ handoffs: handoffs.map((item) => item.handoffId) },
+			);
+			recordRecoveryFailure(error, handoffs);
+			throw error;
+		}
+		const promise = recoverIncompleteHandoffs(manager, {
+			durableAtomicWrites: true,
+			retire: true,
+		});
+		// The chained-node retirement path is synchronous; a lone begin may
+		// still be awaiting the host's discard. A new begin must not be written
+		// inside the residue while that is in flight.
+		handoffRecoveryPending = pendingHandoffs().length > 0;
+		promise.then((result) => {
+			handoffRecoveryLog.push({
+				at: Date.now(),
+				ok: true,
+				mode: "retire",
+				handoffs,
+				retired: result.retired,
+				dropped: result.dropped,
+				delivered: false,
+				replayable: false,
+				note: "this closes a half handoff; the source flow did not survive, so the segment cannot be re-copied and the handoff is not completed",
+			});
+			handoffRecoveryNote = null;
+		}).catch((error) => {
+			handoffRecoveryStarted = false;
+			recordRecoveryFailure(error, handoffs);
+		}).finally(() => {
+			handoffRecoveryPending = false;
+		});
+	}
+
+	function assertNoIncompleteHandoffs() {
+		if (options.allowIncompleteHandoffs === true) return;
+		const pending = pendingHandoffs();
 		if (pending.length > 0) {
 			throw refusal(
 				FISSION_SCHEDULER_CODES.HANDOFF_RECOVERY_REQUIRED,
-				"the journal contains an incomplete handoff; this scheduler cannot remove a half segment",
+				"the journal contains an incomplete handoff; startup recovery did not close it",
 				{ handoffs: pending.map((item) => item.handoffId) },
 			);
 		}
@@ -1974,6 +2161,7 @@ export function createFissionScheduler(options = {}) {
 
 	function abortFailedBatch(batch, reason) {
 		const flows = Array.isArray(batch?.flows) ? batch.flows : [];
+		const sealed = [];
 		for (const flow of flows) {
 			if (!flow || typeof flow !== "object") continue;
 			if (Array.isArray(flow.unsubscribe)) {
@@ -1996,12 +2184,31 @@ export function createFissionScheduler(options = {}) {
 				} catch {
 					// The start error reports the failure.
 				}
+				if (!flow.endId) {
+					try {
+						flow.endId = writeEnd(flow, "failed");
+						sealed.push(flow);
+					} catch {
+						// The start error reports the failure.
+					}
+				}
 			}
 			if (flow.status === "running" || flow.status === "spawning") flow.status = "crashed";
 			try {
 				options.unbindFlow?.(flow.id);
 			} catch {
 				// Unbind is best effort.
+			}
+		}
+		const batchEndId = closeUnstartedBatch(batch);
+		for (const flow of sealed) {
+			try {
+				injectBoundaries(flow, [
+					flow.endId,
+					...(batchEndId ? [batchEndId] : []),
+				]);
+			} catch {
+				// Context injection is best effort during cleanup.
 			}
 		}
 		try {
@@ -2266,6 +2473,7 @@ export function createFissionScheduler(options = {}) {
 			batch.cancelled = true;
 			if (batch.flows.length === 0) {
 				batch.status = "cancelled";
+				closeUnstartedBatch(batch);
 				closeBatchScope(batch);
 				emit(batch, "batch.closed", { status: batch.status, heir: null });
 				resolveBatch(batch, answer(batch));
@@ -2394,11 +2602,42 @@ export function createFissionScheduler(options = {}) {
 		activeLeaves,
 
 		inspectIncompleteHandoffs() {
-			return incompleteHandoffs(manager.getEntries()).map((item) => ({
-				...item,
-				recoverable: false,
-				detail: "recovery needs rewriteEntries()/discardEntryDurably(); this scheduler refuses to start over residue",
-			}));
+			const entries = manager.getEntries();
+			const plan = planHandoffRecovery(entries);
+			const durable = durableRecoverySupported();
+			const byId = new Map(plan.handoffs.map((handoff) => [handoff.handoffId, handoff]));
+			return incompleteHandoffs(entries).map((item) => {
+				const handoff = byId.get(item.handoffId);
+				const tailExists = Boolean(
+					handoff && (handoff.tail === null || plan.kept.some((entry) => entry.id === handoff.tail)),
+				);
+				const safe = durable && plan.recoverable && handoff?.retirable === true && tailExists;
+				const reason = safe
+					? null
+					: !durable
+						? "durable writes are unavailable; this host cannot retire residue"
+						: !plan.recoverable
+							? plan.reason ?? "the plan would leave dangling references"
+							: handoff?.retireReason ?? (tailExists ? "the tail chain is not safe to retire" : "the recipient tail is missing");
+				return {
+					...item,
+					tail: handoff?.tail ?? item.tail,
+					entries: handoff?.dropIds.length ?? 1,
+					discardable: handoff?.discardable ?? false,
+					retryable: handoff?.retryable ?? false,
+					retirable: handoff?.retirable ?? false,
+					recoverable: safe,
+					reason,
+					detail: safe
+						? "retirement closes the half segment; the source cannot be replayed and the handoff is not completed"
+						: "refused: the scheduler will not start over this residue",
+					delivered: false,
+				};
+			});
+		},
+
+		handoffRecoveryLog() {
+			return handoffRecoveryLog.map((record) => ({ ...record }));
 		},
 
 		waitForBatch(batchId) {

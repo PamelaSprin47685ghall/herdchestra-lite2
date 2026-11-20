@@ -54,6 +54,13 @@ function broadcast(entry) {
 
 const SCOPE_STATE_TYPE = "scope.state";
 
+// Handoff journal markers. A completed copy writes begin ... end inside one
+// atomic batch. A recovery writes abort to close a segment that will never
+// finish. None of the three is a context message.
+const HANDOFF_BEGIN = "fission.handoff.begin";
+const HANDOFF_END = "fission.handoff.end";
+const HANDOFF_ABORT = "fission.handoff.abort";
+
 function scopeState(entry) {
 	return entry.type === "custom" && entry.customType === SCOPE_STATE_TYPE;
 }
@@ -187,7 +194,7 @@ export async function copyHandoff(sm, { tail, entries, handoffId, sourceBeginId,
 			ids.set(entry.id, id);
 		}
 		selectLeaf(sm, tail);
-		let current = sm.appendCustomEntry("fission.handoff.begin", { handoffId, sourceBeginId });
+		let current = sm.appendCustomEntry(HANDOFF_BEGIN, { handoffId, sourceBeginId });
 		const copied = [];
 		if (window.summary !== undefined) {
 			const message = { role: "custom", customType: "fission.compaction-summary", content: window.summary, display: false, details: { fissionCarry: "compaction-summary" }, timestamp: Date.now() };
@@ -207,7 +214,7 @@ export async function copyHandoff(sm, { tail, entries, handoffId, sourceBeginId,
 			current = copy.id;
 			copied.push(copy);
 		}
-		current = sm.appendCustomEntry("fission.handoff.end", { handoffId, count: copied.length });
+		current = sm.appendCustomEntry(HANDOFF_END, { handoffId, count: copied.length });
 		if (leafId(sm) !== current) throw new Error("handoff leaf did not advance");
 		return { tail: current, entries: copied, messages: handoffMessages(copied) };
 	});
@@ -221,8 +228,8 @@ export function incompleteHandoffs(entries) {
 	const pending = new Map();
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
-		if (entry.customType === "fission.handoff.begin") pending.set(entry.data?.handoffId, entry);
-		else if (entry.customType === "fission.handoff.end") pending.delete(entry.data?.handoffId);
+		if (entry.customType === HANDOFF_BEGIN) pending.set(entry.data?.handoffId, entry);
+		else if (entry.customType === HANDOFF_END || entry.customType === HANDOFF_ABORT) pending.delete(entry.data?.handoffId);
 	}
 	return [...pending.values()].map((entry) => ({ handoffId: entry.data?.handoffId, sourceBeginId: entry.data?.sourceBeginId, tail: entry.parentId, beginId: entry.id }));
 }
@@ -262,13 +269,17 @@ function openHandoffs(entries) {
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		const handoffId = entry.data?.handoffId;
-		if (entry.customType === "fission.handoff.begin") {
+		if (entry.customType === HANDOFF_BEGIN) {
 			const list = open.get(handoffId) ?? [];
 			list.push(entry);
 			open.set(handoffId, list);
-		} else if (entry.customType === "fission.handoff.end") {
+		} else if (entry.customType === HANDOFF_END) {
 			const list = open.get(handoffId);
 			if (list && list.length > 0) list.pop();
+		} else if (entry.customType === HANDOFF_ABORT) {
+			// An abort retires the whole transaction, including any sibling
+			// begin left behind by an earlier retry.
+			open.delete(handoffId);
 		}
 	}
 	return [...open.entries()].filter(([, list]) => list.length > 0);
@@ -278,8 +289,12 @@ function openHandoffs(entries) {
  * Plan a durable recovery: which entries of an uncommitted handoff must be
  * discarded, and which handoffs can be copied again to the same tail.
  *
- * Pure. It refuses a plan whose deletion would leave a kept entry pointing at
- * a removed one; the caller must not start a batch over such a journal.
+ * Pure. `recoverable` describes deletion: it refuses a plan whose deletion
+ * would leave a kept entry pointing at a removed one. `retirable` describes
+ * the deletion-free alternative. Retirement appends one abort marker at the
+ * handoff's tail, so it needs a single shared tail per handoff, outside every
+ * residue; otherwise the marker would itself land inside an abandoned
+ * segment.
  */
 export function planHandoffRecovery(entries) {
 	const drop = new Set();
@@ -292,7 +307,19 @@ export function planHandoffRecovery(entries) {
 			}
 		}
 		const last = begins.at(-1);
-		return { handoffId, sourceBeginId: last.data?.sourceBeginId, tail: last.parentId ?? null, beginId: last.id, dropIds: [...dropIds] };
+		const tail = last.parentId ?? null;
+		return {
+			handoffId,
+			sourceBeginId: last.data?.sourceBeginId,
+			tail,
+			beginId: last.id,
+			beginIds: begins.map((begin) => begin.id),
+			dropIds: [...dropIds],
+			// The host removes an entry only when it has no content child, so a
+			// lone begin marker is the one discard it can actually perform.
+			discardable: dropIds.size === 1,
+			oneTail: begins.every((begin) => (begin.parentId ?? null) === tail),
+		};
 	});
 	const kept = entries.filter((entry) => !drop.has(entry.id));
 	const keptIds = new Set(kept.map((entry) => entry.id));
@@ -314,30 +341,51 @@ export function planHandoffRecovery(entries) {
 	for (const handoff of handoffs) {
 		handoff.retryable = handoff.tail === null || keptIds.has(handoff.tail);
 		if (!handoff.retryable) handoff.reason = "the recipient tail is itself uncommitted residue";
+		handoff.retirable = handoff.oneTail && (handoff.tail === null || !drop.has(handoff.tail));
+		if (!handoff.retirable) {
+			handoff.retireReason = handoff.oneTail
+				? "the recipient tail is itself uncommitted residue"
+				: "one handoff left begin markers at more than one tail";
+		}
 	}
+	const blocked = handoffs.find((handoff) => !handoff.retirable);
+	const retirable = blocked === undefined;
+	const retireReason = blocked?.retireReason;
 	if (dangling.length > 0) {
-		return { recoverable: false, reason: "discarding the residue would leave dangling references", handoffs, dropIds: [...drop], kept, dangling };
+		return { recoverable: false, reason: "discarding the residue would leave dangling references", handoffs, dropIds: [...drop], kept, dangling, retirable, retireReason };
 	}
-	return { recoverable: true, handoffs, dropIds: [...drop], kept };
+	return { recoverable: true, handoffs, dropIds: [...drop], kept, retirable, retireReason };
 }
 
 /**
- * Durably discard uncommitted handoff residue on the raw shared manager.
+ * Durably close uncommitted handoff residue on the raw shared manager.
  *
- * The host's `discardEntryDurably` always appends a `branch_summary` marker
- * after the removal. That marker is a content child of the discarded entry's
- * parent, so once a leaf of a chained residue is removed the next ancestor can
- * no longer be discarded. The default path therefore removes only a lone begin
- * marker and refuses any larger residue before its first write. A segment with
- * data needs `discardAll(ids)`, the wiring point for a host primitive that
- * removes the whole segment in one durable operation.
+ * Two host facts decide the mechanism
+ * (oh-my-pi packages/coding-agent/src/session/session-manager.ts,
+ * discardEntryDurably):
+ *
+ * 1. The host removes an entry only when every child is a `service_tier_change`
+ *    metadata entry; a content child keeps the entry in the journal.
+ * 2. Either way it appends a `branch_summary` marker as a child of the entry's
+ *    parent. Once a leaf of a chained residue is removed, that marker makes the
+ *    next ancestor unremovable, forever. The host therefore cannot delete a
+ *    segment that holds any content, and no call order repairs that.
+ *
+ * The default path deletes only a lone begin marker and refuses any larger
+ * residue before its first write. A larger segment needs `discardAll(ids)`, a
+ * host primitive that does not exist yet. `retire: true` is the deletion-free
+ * path: branch to the handoff's recorded tail, then append one
+ * `fission.handoff.abort` marker. The abort closes the begin, the copied
+ * entries stay in the journal as unreachable siblings, and the marker is the
+ * last physical journal entry with the tail as parent, so the durable reload
+ * leaf lands on the tail in one write.
  *
  * `discard(id)` remains an explicit per-entry override for a host whose
  * removal adds no marker. A crash leaves whatever the host already committed;
  * rerunning recomputes the residue and is safe.
  */
 export async function recoverIncompleteHandoffs(sm, options = {}) {
-	const { durableAtomicWrites, discard, discardAll, entries = sm?.getEntries?.() } = options;
+	const { durableAtomicWrites, discard, discardAll, retire = false, entries = sm?.getEntries?.() } = options;
 	if (!sm || typeof sm.getEntries !== "function") {
 		throw recoveryFailure("FISSION_RECOVERY_UNSUPPORTED", "recovery needs a session manager that exposes getEntries()");
 	}
@@ -346,7 +394,11 @@ export async function recoverIncompleteHandoffs(sm, options = {}) {
 	}
 	if (!Array.isArray(entries)) throw recoveryFailure("FISSION_RECOVERY_UNSUPPORTED", "recovery needs the session entries");
 	const plan = planHandoffRecovery(entries);
-	if (plan.handoffs.length === 0) return { recovered: [], dropped: [], kept: plan.kept };
+	if (plan.handoffs.length === 0) return { recovered: [], dropped: [], retired: [], kept: plan.kept };
+	if (retire === true && typeof discardAll !== "function") {
+		if (!plan.retirable) throw recoveryFailure("FISSION_RECOVERY_UNSAFE", plan.retireReason ?? "the residue cannot be retired in place");
+		return retireIncompleteHandoffs(sm, plan);
+	}
 	if (!plan.recoverable) throw recoveryFailure("FISSION_RECOVERY_UNSAFE", plan.reason);
 	const expected = [...plan.dropIds];
 	let dropped;
@@ -392,6 +444,78 @@ export async function recoverIncompleteHandoffs(sm, options = {}) {
 	return {
 		recovered: plan.handoffs.map(({ handoffId, sourceBeginId, tail, retryable }) => ({ handoffId, sourceBeginId, tail, retryable })),
 		dropped,
+		retired: [],
 		kept: plan.kept,
+	};
+}
+
+/**
+ * Close every residue in place without removing a single entry.
+ *
+ * A lone begin marker is still handed to the host's discard, which removes it
+ * cleanly. A larger residue is retired with an abort marker at its tail: the
+ * copied entries stay in the journal, but the active branch no longer contains
+ * them, so no context carries half a handoff. Every write is an append, so a
+ * crash between handoffs leaves the journal consistent and rerunning is safe.
+ */
+async function retireIncompleteHandoffs(sm, plan) {
+	const dropped = [];
+	const retired = [];
+	const remove = typeof sm.discardEntryDurably === "function" ? (id) => sm.discardEntryDurably(id) : null;
+	for (const handoff of plan.handoffs) {
+		if (handoff.discardable && remove !== null) {
+			await remove(handoff.beginId);
+			dropped.push(handoff.beginId);
+			continue;
+		}
+		if (typeof sm.appendCustomEntry !== "function" || (handoff.tail !== null && typeof sm.branch !== "function")) {
+			throw recoveryFailure("FISSION_RECOVERY_UNSUPPORTED", "retirement needs branch(id) and appendCustomEntry(type, data)");
+		}
+		if (handoff.tail === null) {
+			if (typeof sm.resetLeaf !== "function") {
+				throw recoveryFailure("FISSION_RECOVERY_UNSUPPORTED", "retirement needs resetLeaf() for a root residue");
+			}
+			sm.resetLeaf();
+		} else {
+			sm.branch(handoff.tail);
+		}
+		const abortId = sm.appendCustomEntry(HANDOFF_ABORT, {
+			handoffId: handoff.handoffId,
+			beginIds: handoff.beginIds,
+			retired: handoff.dropIds.length,
+		});
+		if (typeof abortId !== "string" || abortId === "") {
+			throw recoveryFailure("FISSION_RECOVERY_INCOMPLETE", `handoff ${handoff.handoffId}: the host did not return an abort entry id`);
+		}
+		retired.push({ handoffId: handoff.handoffId, abortId, tail: handoff.tail, entries: handoff.dropIds.length });
+	}
+	const remaining = sm.getEntries();
+	const remainingIds = new Set(remaining.map((entry) => entry.id));
+	const leftovers = dropped.filter((id) => remainingIds.has(id));
+	if (leftovers.length > 0) {
+		throw recoveryFailure("FISSION_RECOVERY_INCOMPLETE", `recovery left ${leftovers.length} uncommitted entries in the journal`);
+	}
+	const stillPending = new Set(incompleteHandoffs(remaining).map((item) => item.handoffId));
+	for (const handoff of plan.handoffs) {
+		if (stillPending.has(handoff.handoffId)) {
+			throw recoveryFailure("FISSION_RECOVERY_INCOMPLETE", `handoff ${handoff.handoffId} still has an open begin marker`);
+		}
+	}
+	// The abandoned entries may stay in the journal, but never in the branch
+	// the next prompt rebuilds its context from.
+	if (typeof sm.getBranch === "function") {
+		const branchIds = new Set(sm.getBranch().map((entry) => entry.id));
+		for (const handoff of plan.handoffs) {
+			const onBranch = handoff.dropIds.filter((id) => branchIds.has(id));
+			if (onBranch.length > 0) {
+				throw recoveryFailure("FISSION_RECOVERY_INCOMPLETE", `handoff ${handoff.handoffId} residue is still on the active branch`);
+			}
+		}
+	}
+	return {
+		recovered: plan.handoffs.map(({ handoffId, sourceBeginId, tail, retryable }) => ({ handoffId, sourceBeginId, tail, retryable })),
+		dropped,
+		retired,
+		kept: remaining,
 	};
 }

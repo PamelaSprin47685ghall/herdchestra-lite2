@@ -111,7 +111,8 @@ export function wireHooks(pi, registry) {
 		installScopeDispatch(
 			dispatchSession(ctx),
 			(message, id, name) => station.prepareScopeDispatch(message, id, name),
-			(id, name, toolCtx) => station.admitScopeDispatch(id, name, toolCtx),
+			(id, name, toolCtx, receipt) =>
+				station.admitScopeDispatch(id, name, toolCtx, receipt),
 		);
 		return station;
 	};

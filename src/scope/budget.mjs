@@ -117,7 +117,12 @@ export function beatShares(items) {
   return shares;
 }
 
-export function budgetText(scope) {
+function formatClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+export function budgetText(scope, now = Date.now()) {
   if (!scope || !isPlainObject(scope.remaining)) return "";
   const entries = [];
   for (const tool of Reflect.ownKeys(scope.remaining).sort()) {
@@ -129,7 +134,14 @@ export function budgetText(scope) {
       `${tool} ${formatAmount(remaining)}/${formatAmount(budget)}`,
     );
   }
-  return entries.join(", ");
+  const tools = entries.join(", ");
+  if (!Number.isFinite(scope.deadlineAt)) return tools;
+  const left = Math.max(0, scope.deadlineAt - now);
+  const timed =
+    scope.overtimeAt !== null || left === 0
+      ? "time OVERTIME (1s per tool)"
+      : `time ${formatClock(left)}/${formatClock(scope.timeBudgetMs)}`;
+  return tools === "" ? timed : `${tools}, ${timed}`;
 }
 
 export { CHARGE_SCALE, validBudget, normalizeBudget, normalizeToolName };

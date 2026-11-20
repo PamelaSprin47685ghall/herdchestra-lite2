@@ -8,6 +8,34 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `bun run smoke:relay` drives the `todo` and `scope` tools that `activate()`
+  registers, against the real station in a fresh process, and asserts what a
+  session actually reads: both `Flow:` lines, the empty ledger's relay handoff,
+  the promoted successor's return to simple mode, and both directions of the
+  `direct-execution` gate. A build that emits no `Flow:` line exits non-zero.
+  This closes the gap the sync script left open: the installed copy can match
+  the working tree file for file while a running session still serves the
+  modules it loaded at process start, and writing a probe with a reused
+  tool-call id reads the cached refusal instead of the live gate.
+- `bun run sync:plugin` copies `src/` and `resources/` into the installed
+  plugin, reports every drifting file, and exits non-zero while the copy lacks
+  the current build fingerprints (`status.flow`, the `reopened` branch, the two
+  `fullFlow` gates). omp loads the installed copy rather than this working
+  tree, so live checks made before this change ran an older build: no `Flow:`
+  line, and `direct-execution` refused before the `RW_BEFORE_LEDGER` check.
+  The README now states the copy-then-restart requirement, and a `todo` result
+  without a `Flow:` line marks the session as stale.
+- The full flow is now optional. A session starts simple: a clear, small task
+  opens `direct-execution` with `"rw"` and no stage flags. The first submitted
+  `todo` ledger, empty or not, turns the full flow on: the stage flags, the
+  five-stage protocol, and the relay apply, and stay on across handoffs until
+  the promoted second empty evaluation ends it. A later task is simple again
+  until another ledger is submitted; a later submission, empty included, turns
+  the flow back on without arming another handoff. `todo` views never turn the
+  flow on.
+
 ### Fixed
 
 - Fission owner retirement now gives the host an explicit abort reason. This
@@ -32,6 +60,36 @@ All notable changes to this extension. The format follows
   call and opens the batch in a following call. The scope tool reference, the
   persistent rules, the not-in-a-scope error, and `README.md` now describe this
   shape and the limitation.
+- A refactor now states its class explicitly: it changes structure without
+  changing behavior, and it still submits a ledger. The three prompts carry
+  the sentence verbatim, and a prompt contract test pins it.
+- `SessionStation` no longer owns the dispatch positions, the processed-id
+  caches, or the persistence anchor. `DispatchTracker`, `ProcessedLedger`, and
+  `PersistenceAnchor` own them, and the station delegates. The `usage`
+  forwarding properties (`lastTotalInput`, `lastOutputTokens`, `lastUsageCost`,
+  `lastCtxModel`, `lastUsageModelKey`, `sentContext`) are gone: controls,
+  models, and handoff-state read the ledger's public fields through
+  `station.usage`. A fold now prunes amend keys whose beat left the branch, so
+  a dead key no longer rides every checkpoint for the rest of the session.
+  `activate()` preloads every prompt document, so a missing resource fails at
+  startup instead of mid-session.
+- The fold-pool key is now `JSON.stringify([parentId, boundary, epoch])`. The
+  old template string carried two literal NUL bytes as separators; they are
+  gone, and `scope-1`/23/4 can no longer collide with `scope-12`/3/4.
+- `deserializeState` no longer reads the pre-rename `regrets` field. A missing
+  `amends` field still migrates as an empty list; a snapshot that carries only
+  `regrets` loses its amend keys.
+- `bun run smoke:relay` passes a required `time` when it opens a scope. The
+  script predated the wall-clock requirement, so its begin was refused with
+  `INVALID_TIME` and the following end reported `NOT_IN_SCOPE`.
+- Task nature now selects the flow by default. The persistent rules, the stage
+  prompt header, and the `todo` tool description say the same thing: a
+  development task (a feature, a refactor, a design change) in principle
+  submits a ledger, so the five stages and the relay apply; an operational task
+  (ops, maintenance, diagnostics, delivery) in principle finishes in one simple
+  `direct-execution` scope. Judgment about what the work actually needs
+  overrides the default, so the rule guides the choice instead of forcing it.
+  A prompt contract test pins the sentence in all three documents.
 - The no-ledger nudge names both lawful ledger shapes. A model that had nothing
   to do saw only `todo({op:"init", list:[{phase,items}]})` and "The ledger must
   state what the user still needs", and invented work to satisfy it. The

@@ -10,6 +10,25 @@ When a scope folds, its user messages move before its opening `scope` call. Thei
 
 A fission begin currently cannot also close a scope. `scope({ begin, end: true })` is refused before any state change; close the open scope with a plain `scope({ end: true })` call, then open the batch in a following call. A flow does not open or close its own scope — the scheduler writes both ends — and `amend` is unavailable in fission.
 
+## Running from source
+
+omp loads the installed copy at `~/.omp/plugins/node_modules/herdchestra-lite2`, not this working tree, so an edit here does not reach a running session by itself. After changing `src/` or `resources/`:
+
+```sh
+bun run sync:plugin                    # copy src/ and resources/ into the installed plugin
+bun scripts/sync-plugin.mjs --check    # report drift without copying
+bun run smoke:relay                    # prove the current build's tool text and gates
+```
+
+Restart the session afterwards; modules load at process start. A `todo` result that shows a `Flow:` line comes from the current build, so a missing `Flow:` line means the session is still running an older copy.
+
+`bun run smoke:relay` answers that question without a restart. It loads this
+working tree, activates the extension against a fake host, and drives the
+registered `todo` and `scope` tools: it asserts the `Flow:` lines, the empty
+ledger's relay handoff, the promoted successor's return to simple mode, and both
+directions of the `direct-execution` gate. A build that emits no `Flow:` line
+exits non-zero, so a stale copy cannot pass quietly.
+
 ## Stages
 
 Every `scope({ begin })` batch names one `begin.stage`, shared by all its flows. The innermost open scope determines the current stage; outside all scopes there is no stage.
@@ -35,13 +54,25 @@ In default mode the four non-framing stages may be opened in any order, repeated
 ### Stage flags
 
 `acceptance-cases`, `architecture-design`, and `orchestration-plan` each start
-false. Opening one turns its flag true. `direct-execution` may open only when
-all three are true; it never clears them, so execution may run again. Opening
+false. Opening one turns its flag true. In the full flow, `direct-execution` may
+open only when all three are true; it never clears them, so execution may run
+again. Opening
 `decision-framing` clears all three, because a new decision starts a new line of
 work. A relay handoff also clears all three, in the same transaction that
 advances the generation: a successor must run the stages itself, because the
 predecessor's runs prove nothing about its intent. The flags persist with the
 session and survive compaction, but never a handoff.
+
+### Full flow and simple mode
+
+A session starts simple: a clear task that needs no orchestration opens
+`direct-execution` directly, with `"rw"` and without the stage flags. The first
+submitted `todo` ledger, empty or not, turns the full flow on: the stage flags,
+the five-stage protocol, and the relay all apply from then on. The flow stays on
+across handoffs; only the promoted second empty evaluation ends it. After that a
+new task is simple again, until another ledger is submitted, empty or not; that
+submission turns the full flow back on without re-arming a handoff. A `todo`
+view never turns the flow on.
 
 The flags describe the main session's own work line. Subagent sessions, read-only
 and read-write alike, are exempt from the ordering gate: they may open any stage
@@ -65,7 +96,7 @@ Every fission item declares its own `permission: "ro" | "rw"`, and the field is 
 `"rw"` is refused in two cases:
 
 - the batch's stage is `decision-framing`, which answers why rather than what;
-- the relay has not recorded its first submitted `todo` ledger for the current generation. A `todo` view is a read-only inspection and does not count.
+- in the full flow, the relay has not recorded its first submitted `todo` ledger for the current generation. A `todo` view is a read-only inspection and does not count.
 
 A refused batch changes no state, and no flow starts. Submit a ledger first, or open the flows with `"ro"`.
 
@@ -131,6 +162,7 @@ Set a fission item's `model` to an omp `/switch` selector to use a different mod
 scope({ begin: {
   stage: "direct-execution",
   elder_report: null,
+  time: 120,
   fission: [{ intent: "Review the results", budget: { read: 3 }, permission: "ro", model: "@smol" }],
 } })
 ```

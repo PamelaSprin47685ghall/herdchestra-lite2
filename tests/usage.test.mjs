@@ -43,6 +43,22 @@ describe("usageSnapshot", () => {
 	test("treats junk as zero", () => {
 		expect(usageSnapshot({ input_tokens: "oops", output_tokens: null })).toEqual(zeroUsage());
 	});
+
+	test("sums billing components when the provider omits a total", () => {
+		expect(
+			usageSnapshot({
+				input_tokens: 1000,
+				output_tokens: 200,
+				cost: { input: 0.003, output: 0.0006, cacheRead: 0.00004, cacheWrite: 0 },
+			}).cost,
+		).toBeCloseTo(0.00364, 9);
+	});
+
+	test("keeps the provider total when it is present", () => {
+		expect(
+			usageSnapshot({ cost: { input: 1, output: 2, total: 2.5 } }).cost,
+		).toBe(2.5);
+	});
 });
 
 describe("formatting", () => {
@@ -74,6 +90,15 @@ describe("aggregation", () => {
 		accumulateUsage(total, { input: 1, cacheRead: 2, cacheWrite: 3, output: 4, cost: 0.5 });
 		accumulateUsage(total, { input: 10, cacheRead: 20, cacheWrite: 30, output: 40, cost: 1.5 });
 		expect(total).toEqual({ input: 11, cacheRead: 22, cacheWrite: 33, output: 44, cost: 2 });
+	});
+
+	test("adds each call's charge whatever the model rate was", () => {
+		const total = zeroUsage();
+		// Equal token counts on two models cost different amounts. The total
+		// must be the sum of the charges, not the tokens times one rate.
+		accumulateUsage(total, { input: 1000, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0.03 });
+		accumulateUsage(total, { input: 1000, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0.002 });
+		expect(total.cost).toBeCloseTo(0.032, 12);
 	});
 
 	test("sums a list without mutating the inputs", () => {

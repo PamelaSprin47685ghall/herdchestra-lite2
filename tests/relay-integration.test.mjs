@@ -18,7 +18,8 @@ import {
 import { createStationRegistry, stateFor } from "../src/station/index.mjs";
 import { scopeParameters } from "../src/tools/descriptions.mjs";
 import { allStagesRan } from "./helpers/stage-flags.mjs";
-import { beginScope, createStageFlags } from "../src/scope/index.mjs";
+import { beginScope, createStageFlags, validateFission } from "../src/scope/index.mjs";
+import { beginGenerationAfterHandoff } from "../src/relay/ledger.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -160,7 +161,11 @@ function assistant(content, timestamp) {
 }
 
 function call(id, name, args) {
-	return { type: "toolCall", id, name, arguments: args };
+	const withTime =
+		name === "scope" && args?.begin && args.begin.time === undefined
+			? { ...args, begin: { ...args.begin, time: 60 } }
+			: args;
+	return { type: "toolCall", id, name, arguments: withTime };
 }
 
 function toolResult(id, name, text, isError, details) {
@@ -398,8 +403,8 @@ async function emitStop(host, ctx) {
 // The tests below cover what relay and the scope machinery do to a scope that
 // is already open, so their historical scope is seeded directly: state entry,
 // persisted boundary, and begin call on the branch.
-function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { read: 1 } }) {
-	const opened = beginScope(stateFor(ctx).state, { toolCallId: id, intent, stage, budget });
+function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { read: 1 }, time = 60 }) {
+	const opened = beginScope(stateFor(ctx).state, { toolCallId: id, intent, stage, budget, time });
 	expect(opened.ok).toBe(true);
 	const manager = ctx.sessionManager;
 	manager.appendCustomEntry("scope.begin", { intent, stage, budget: { ...budget } });
@@ -445,6 +450,7 @@ describe("relay integration", () => {
 				tools: ["read", "write", "bash"],
 			},
 		});
+		stateFor(ctx).state.relay.fullFlow = true;
 		host.activeTools.splice(0, host.activeTools.length, "read", "write", "todo");
 		const context = await emit(host.handlers, "context", { messages: [] }, ctx);
 		expect(JSON.stringify(context.messages)).toContain("evaluate the ledger");
@@ -594,7 +600,7 @@ describe("relay integration", () => {
 			ctx,
 			assistant([call("e1", "scope", { end: true })]),
 		);
-		expect(ended[0].output.content[0].text).toContain("Call todo now");
+		expect(ended[0].output.content[0].text).toContain("You are outside all scopes.");
 
 		const outsideTodo = await runAssistant(
 			host,
@@ -671,6 +677,7 @@ describe("relay integration", () => {
 		expect(output.details.phases).toEqual(native.phases);
 		expect(output.details.relay.generation).toBe(0);
 		expect(output.details.relay.firstEvaluation).toBe("nonempty");
+		expect(output.details.relay.fullFlow).toBe(true);
 		expect(output.details.relay.canStop).toBe(false);
 		expect(output.details.relay.lastLedger.open).toBe(1);
 		expect(output.details.relay.promotionInvalidated).toBe(false);
@@ -766,6 +773,7 @@ describe("relay integration", () => {
 		);
 		expect(promoted[0].output.details.relay.canStop).toBe(true);
 		expect(promoted[0].output.details.relay.handoffPending).toBe(false);
+		expect(promoted[0].output.details.relay.fullFlow).toBe(false);
 
 		const repeated = await runAssistant(
 			host,
@@ -774,6 +782,7 @@ describe("relay integration", () => {
 		);
 		expect(repeated[0].output.details.relay.canStop).toBe(true);
 		expect(repeated[0].output.details.relay.handoffPending).toBe(false);
+		expect(repeated[0].output.details.relay.fullFlow).toBe(true);
 	});
 
 	test("after handoff, a stop before the successor evaluates nudges instead of handing off again", async () => {
@@ -880,6 +889,7 @@ describe("relay integration", () => {
 			promotionInvalidated: false,
 			lastLedger: null,
 			handoffError: null,
+			fullFlow: true,
 		};
 		const unevaluated = await emitStop(noEvaluation.host, noEvaluation.ctx);
 		expect(unevaluated.continue).toBe(true);
@@ -1235,13 +1245,157 @@ describe("handoff transaction recovery", () => {
 	});
 });
 
+describe("simple mode", () => {
+	test("direct-execution opens without stage flags and rw needs no ledger", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.stageFlags = createStageFlags();
+		const [opened] = await runAssistant(
+			host,
+			ctx,
+			assistant([
+				call("b1", "scope", {
+					begin: {
+						stage: "direct-execution",
+						elder_report: null,
+						time: 60,
+						fission: [{ intent: "quick fix", budget: { edit: 1 }, permission: "rw" }],
+					},
+				}),
+			]),
+		);
+		const admitted = validateFission(
+			stateFor(ctx).state,
+			{ stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "quick fix", budget: { edit: 1 }, permission: "rw" }] },
+			{ mainAgent: true, relayOn: true },
+		);
+		expect(admitted.ok).toBe(true);
+		expect(opened.result.content[0].text).not.toContain("STAGE_FLAGS_UNMET");
+		expect(opened.result.content[0].text).not.toContain("RW_BEFORE_LEDGER");
+		expect(stateFor(ctx).state.relay.fullFlow).toBe(false);
+
+		// Simulate the single-flow batch finishing cleanly without entering full flow.
+		stateFor(ctx).state.pendingFission = null;
+		seedScope(ctx, { id: "b1:0", intent: "quick fix", budget: { edit: 1 } });
+		const [closed] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("e1", "scope", { end: true })]),
+		);
+		expect(closed.result.content[0].text).toContain("Finishing is not a tool call");
+		expect(await emitStop(host, ctx)).toBeUndefined();
+	});
+});
+
 describe("scope begin permission", () => {
 	test("the schema requires permission ro|rw on each fission item", () => {
 		const begin = scopeParameters.properties.begin;
-		expect(begin.required).toEqual(["stage", "elder_report", "fission"]);
+		expect(begin.required).toEqual(["stage", "elder_report", "fission", "time"]);
 		const item = begin.properties.fission.items;
 		expect(item.required).toContain("permission");
 		expect(item.properties.permission.enum).toEqual(["ro", "rw"]);
+	});
+
+	test("permission ro opens before the first ledger submission", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
+		const begin = { stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "inspect", budget: { read: 1 }, permission: "ro" }] };
+		expect(validateFission(stateFor(ctx).state, begin, { mainAgent: false, relayOn: true }).ok).toBe(true);
+		const [opened] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin }),
+		]));
+		expect(opened.result.content[0].text).not.toContain("RW_BEFORE_LEDGER");
+	});
+
+	test("permission rw is refused before the first ledger submission in fullFlow", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "write", budget: { edit: 1 }, permission: "rw" }] } }),
+		]));
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("permission rw is refused in decision-framing even after a ledger exists", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
+		stateFor(ctx).state.relay.firstEvaluation = "nonempty";
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { stage: "decision-framing", elder_report: null, time: 60, fission: [{ intent: "frame", budget: { read: 1 }, permission: "rw" }] } }),
+		]));
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("RW_IN_DECISION_FRAMING");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("permission rw opens after the first ledger submission", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
+		await runAssistant(host, ctx, assistant([
+			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["write the change"] }] }),
+		]));
+		expect(stateFor(ctx).state.relay.firstEvaluation).toBe("nonempty");
+		const begin = { stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "write", budget: { edit: 1 }, permission: "rw" }] };
+		expect(validateFission(stateFor(ctx).state, begin, { mainAgent: false, relayOn: true }).ok).toBe(true);
+		const [opened] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin }),
+		]));
+		expect(opened.result.content[0].text).not.toContain("RW_BEFORE_LEDGER");
+	});
+
+	test("an invalid permission value is rejected", async () => {
+		const { host, ctx } = await start();
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "work", budget: { read: 1 }, permission: "write" }] } }),
+		]));
+		expect(refused.result.isError).toBe(true);
+		expect(refused.result.content[0].text).toContain("INVALID_ARGUMENT");
+		expect(refused.result.content[0].text).toContain("permission");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("a todo view does not lift the rw gate", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
+		await runAssistant(host, ctx, assistant([
+			call("t1", "todo", { op: "view" }),
+		]));
+		expect(stateFor(ctx).state.relay.firstEvaluation).toBeNull();
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "write", budget: { edit: 1 }, permission: "rw" }] } }),
+		]));
+		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
+		expect(stateFor(ctx).state.scopes).toHaveLength(0);
+	});
+
+	test("a handoff resets the rw gate for the successor", async () => {
+		const { host, ctx } = await start();
+		await runAssistant(host, ctx, assistant([
+			call("t1", "todo", { op: "init", list: [{ phase: "work", items: ["ship it"] }] }),
+		]));
+		const station = stateFor(ctx);
+		station.state.relay = beginGenerationAfterHandoff(station.state.relay, { fromGeneration: 0 });
+		const [refused] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "audit", budget: { read: 1 }, permission: "rw" }] } }),
+		]));
+		expect(refused.result.content[0].text).toContain("RW_BEFORE_LEDGER");
+		expect(station.state.scopes).toHaveLength(0);
+	});
+
+	test("an omitted or null permission is rejected on a fission item", async () => {
+		const { host, ctx } = await start();
+		const [omitted] = await runAssistant(host, ctx, assistant([
+			call("b1", "scope", { begin: { stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "write", budget: { edit: 1 } }] } }),
+		]));
+		expect(omitted.result.isError).toBe(true);
+		expect(omitted.result.content[0].text).toContain("INVALID_FISSION_ITEM");
+
+		const [nulled] = await runAssistant(host, ctx, assistant([
+			call("b2", "scope", { begin: { stage: "direct-execution", elder_report: null, time: 60, fission: [{ intent: "write", budget: { edit: 1 }, permission: null }] } }),
+		]));
+		expect(nulled.result.isError).toBe(true);
+		expect(nulled.result.content[0].text).toContain("INVALID_ARGUMENT");
 	});
 });
 
@@ -1310,6 +1464,7 @@ describe("stage gates by session identity", () => {
 
 	test("the main session still needs all three stages before execution", async () => {
 		const { host, ctx } = await start();
+		stateFor(ctx).state.relay.fullFlow = true;
 		stateFor(ctx).state.stageFlags = createStageFlags();
 		const [refused] = await runAssistant(
 			host,

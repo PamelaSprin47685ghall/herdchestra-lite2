@@ -21,8 +21,6 @@ export {
 } from "./policy.mjs";
 export {
 	commonRulesText,
-	languageSkill,
-	outsideScopeInstruction,
 	stagePromptsBlock,
 	rewriteVibeModeContext,
 	injectSystemPrompt,

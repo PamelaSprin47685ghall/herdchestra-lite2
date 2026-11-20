@@ -22,11 +22,11 @@ Provide begin or end: true. A begin requires stage, elder_report, and fission; t
 
 ## begin
 
-Open a new innermost scope with a batch of one or more flows. A begin requires stage, elder_report, and fission: stage is one workflow stage shared by the whole batch, elder_report follows the rule below, and fission is a non-empty array of flows. Each fission item carries its own intent, budget, permission, and optional model; the array's length is the flow count, with no batch threshold. A one-item array runs one flow and degrades naturally. For a heavy task, also budget task so parallel subagent workers can take independent slices.
+Open a new innermost scope with a batch of one or more flows. A begin requires stage, elder_report, time, and fission: stage is one workflow stage shared by the whole batch, elder_report follows the rule below, time is the required wall-clock budget in seconds, and fission is a non-empty array of flows. Each fission item carries its own intent, budget, permission, and optional model; the array's length is the flow count, with no batch threshold. A one-item array runs one flow and degrades naturally. In the full flow, rw requires the first submitted todo ledger; in simple mode it is allowed. For a heavy task, also budget task so parallel subagent workers can take independent slices.
 
 ## begin.stage
 
-Required workflow stage for this scope. One stage covers the whole batch; a fission item does not name its own.
+Required workflow stage for this scope. One stage covers the whole batch; a fission item does not name its own. In the full flow, "direct-execution" also requires one run of each earlier stage; in simple mode it opens directly.
 
 ## begin.fission
 
@@ -40,13 +40,21 @@ A task of one flow: an outcome that can be completed and reviewed in a bounded s
 
 Map each tool name to an integer budget of assistant turns for this flow. One assistant message spends at most one unit in total: that unit is split across budgeted calls in proportion to their call counts, rounded to two decimals. Several read calls issued together consume one read share once, while a read in a later message consumes another share. Use actual tool names (bash, read, write, edit, glob, grep, lsp, task, web_search, debug, eval, etc.), not semantic descriptions. Example: {"bash": 6, "read": 7, "edit": 4}. Size each number by the number of turns you expect to use that tool in, not by individual calls. For a heavy task, also budget task: parallel subagent workers take independent slices at once, and one batch of task calls costs one task unit. Each flow's budget is charged separately, and scopes nested inside that flow draw from its remaining balance. Do not budget scope, amend, defer, pin, todo, ask, or wait. A budget can be empty if only free tools are needed. An unlisted budgeted tool has zero budget. Values must be non-negative integers; the accounting splits them into two-decimal shares, and a tool whose balance is below its share is blocked while the rest of the message still runs.
 
+## begin.time
+
+Wall-clock budget in seconds for this scope. Required: a positive number, never omitted. Every tool is capped at remaining normal time plus one second, so the hard limit is exactly the deadline plus 1s. When the deadline passes the scope enters chess-clock phase: each later tool gets 1 second, a tool that runs past its cap is killed, and its result is replaced by a scolding.
+
+Derive the number from measured throughput, not from optimism. Every turn's receipt reports the current UTC time and the time elapsed since this session began. Compare that clock against the work already finished in this session: if T minutes produced W units of finished work (files read, edits applied, checks run), a task shaped like this one costs roughly T × (this task's units / W). Round to the nearest honest figure, count one beat for the verification you will still have to run, and pad nothing beyond it. Set each tool's own timeout with the same arithmetic, and never plan on a tool finishing after the deadline.
+
+The aim is to spend the budget exactly. Closing on the last second is the honorable outcome; an overrun means the work was slower than you claimed; a budget left half unspent was inflated, and an inflated budget is not caution but a failure of self-knowledge. Finish the moment the work is done: never stretch a scope to even out the estimate, and never spend leftover time merely to make the number look right — padding for the clock is the same dishonesty as padding the budget. Treat the estimate as a guess with wide error bars and revise it as the session proceeds; the clock line exists to be used, not admired.
+
 ## begin.elder_report
 
 The summary of the previous scope at this level. Record its outcomes and remaining work; do not repeat user messages, which folding keeps before the scope's begin call. Pass a non-empty string only when an unarchived elder scope is pending at this level: the tail instruction names it and its intent. That summary archives the elder, turning it from pending into the hot workbench so older folded elders become eligible for batching. Pass null when no elder is pending, when the previous scope is not visible on the branch, or when this is the first scope at the level. This is a handoff receipt, not the user-facing answer.
 
 ## fission.permission
 
-Declare this flow's write intent. It is required on every fission item and must be "ro" or "rw": an item that omits it, passes null, or names another value rejects the whole batch. "ro" is enforced inside that flow — edit, write, bash, and ast_edit are blocked. "rw" is refused in stage "decision-framing" and while this generation has not submitted its first todo ledger (a todo view does not count); submit the ledger first, or choose a later stage.
+Declare this flow's write intent. It is required on every fission item and must be "ro" or "rw": an item that omits it, passes null, or names another value rejects the whole batch. "ro" is enforced inside that flow — edit, write, bash, and ast_edit are blocked. "rw" is refused in stage "decision-framing", and in the full flow while this generation has not submitted its first todo ledger (a todo view does not count); submit the ledger first, or choose a later stage. In simple mode "rw" is allowed.
 
 ## fission.model
 

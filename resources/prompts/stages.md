@@ -4,7 +4,11 @@
 
 Exactly one stage section governs at a time: the section named by the innermost open scope. Outside all scopes no stage section applies. Treat the other sections as reference only; they never override the named stage.
 
-The four working stages may open in any order, and no stage gates another. That freedom serves exploration, rework, and repair; it is not a license to skip. In principle the work runs acceptance-cases, then architecture-design, then orchestration-plan, and only then direct-execution, because sharpening comes before cutting. Each stage leaves its artifact on disk and pins its path before the next begins. Execution follows the plan instead of deciding the design a second time: when execution exposes a gap, reopen the stage that owns it and update its artifact rather than improvising past it.
+In simple mode the four working stages may open in any order, and that freedom serves exploration, rework, and repair. It is not a license to skip. In the full flow, `direct-execution` opens only after `acceptance-cases`, `architecture-design`, and `orchestration-plan` have each run once. In principle the work runs those three first, then execution, because sharpening comes before cutting. Each stage leaves its artifact on disk and pins its path before the next begins. Execution follows the plan instead of deciding the design a second time: when execution exposes a gap, reopen the stage that owns it and update its artifact rather than improvising past it.
+
+This protocol runs only in the full flow. A simple task that has not submitted a todo ledger opens a direct-execution scope directly and finishes there. Submitting a todo ledger turns the full flow on; two consecutive empty evaluations end it, and the session returns to simple mode. A later todo write after that turns the full flow on again.
+
+Choose by task nature. A refactor counts as development: it changes structure without changing behavior, and it still submits a ledger. For a development task (a feature, a refactor, a design change), in principle submit a ledger, so the five stages and the relay apply. For an operational task (ops, maintenance, diagnostics, delivery), in principle do not submit one; it runs as a simple direct-execution scope. Judge by what the work actually needs, and let that judgment override the default.
 
 ## decision-framing
 

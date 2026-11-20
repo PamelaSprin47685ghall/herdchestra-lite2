@@ -25,14 +25,35 @@ export function usageField(usage, names) {
 	return undefined;
 }
 
-/** Read a provider cost from a number, `cost.total`, or a total alias. */
+// Cost component names in billing order. A provider may report a total,
+// component amounts, or both. The component sum is the fallback, so a
+// provider that omits `total` still reports its real charge.
+const COST_PARTS = [
+	["input", "input_cost", "inputCost", "prompt"],
+	["output", "output_cost", "outputCost", "completion"],
+	["cacheRead", "cache_read", "cacheReadCost", "cache_read_cost"],
+	["cacheWrite", "cache_write", "cacheWriteCost", "cache_write_cost"],
+];
+
+function costPartSum(cost) {
+	let sum = 0;
+	for (const names of COST_PARTS) {
+		const value = usageField(cost, names);
+		if (value !== undefined) sum += usageNumber(value);
+	}
+	return sum;
+}
+
+/** Read one call's charge. Never derive it from tokens and a model rate. */
 export function usageCost(usage) {
 	const cost = usage?.cost;
-	const totalCost = usageField(usage, ["total_cost", "totalCost", "cost_total"]);
 	if (typeof cost === "number") return usageNumber(cost);
-	if (cost !== undefined && cost !== null && cost.total !== undefined && cost.total !== null) {
-		return usageNumber(cost.total);
+	if (cost && typeof cost === "object") {
+		const total = cost.total ?? usageField(cost, ["total_cost", "cost_total"]);
+		if (total !== undefined) return usageNumber(total);
+		return costPartSum(cost);
 	}
+	const totalCost = usageField(usage, ["total_cost", "totalCost", "cost_total"]);
 	if (totalCost !== undefined) return usageNumber(totalCost);
 	return 0;
 }

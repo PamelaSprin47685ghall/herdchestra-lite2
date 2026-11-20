@@ -389,6 +389,7 @@ function harness({ fission, budget = { read: 10, bash: 4 } }) {
 		intent: "owner",
 		stage: "architecture-design",
 		budget,
+		time: 60,
 	}).scope;
 	const ownerAgent = makeAgent("owner");
 	const ownerSession = {
@@ -442,7 +443,7 @@ function harness({ fission, budget = { read: 10, bash: 4 } }) {
 		},
 	});
 	ref.scheduler = scheduler;
-	const begin = { stage: "architecture-design", elder_report: null, fission };
+	const begin = { stage: "architecture-design", elder_report: null, time: 60, fission };
 	const totals = {};
 	for (const item of fission) {
 		for (const [tool, amount] of Object.entries(item.budget)) {

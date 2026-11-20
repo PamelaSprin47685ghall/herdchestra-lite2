@@ -5,6 +5,7 @@ export {
   createFlowState,
   currentScope,
   scopeOrder,
+  effectiveDeadline,
   CACHE_TTL_MS,
   modelCacheFor,
   cacheIsFresh,

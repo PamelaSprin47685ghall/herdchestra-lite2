@@ -165,3 +165,23 @@ Finishing is not a tool call.
 ## receipt.close-handoff
 
 Close all scopes before writing the pending relay handoff report.
+
+## inside-nudge.simple
+
+You are still inside scope level {{level}}: {{intent}}.{{leave_framing}} Do not write the final user-facing conclusion. Continue the task or close it with scope({ end: true }).
+
+## inside-text.simple
+
+You are still inside scope level {{level}}: {{intent}}.{{leave_framing}} Do not write the final user-facing conclusion. Continue the task or close the scope.
+
+## receipt.simple-inside
+
+Simple mode: this task runs without a ledger, so no relay applies. Finish the work, close every scope, then write the final answer. A todo write, even an empty list, turns on the full flow.
+
+## receipt.simple-outside
+
+Simple mode: this task runs without a ledger, so no relay applies. Write the final answer as ordinary assistant text. A todo write, even an empty list, turns on the full flow.
+
+## language
+
+(Routine reminder appended at the end of every turn; not a new user message.) 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。

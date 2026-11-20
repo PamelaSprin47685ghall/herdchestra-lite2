@@ -19,7 +19,7 @@
 去掉 `S1`–`S5` 代号，统一采用职责明确的双词英文阶段名。改名对照与来历保留在
 [ADR 0001](../adr/0001-stage-names.md)，只在查阅旧对话时才需要。
 
-- 在 `herdMode === false`（默认模式）下，模型可在 `acceptance-cases`、`architecture-design`、`orchestration-plan`、`direct-execution` 之间**任意跳转、回退或重复开启**，不设前置阶段门禁。
+- 在 `herdMode === false`（默认模式）下，模型可在 `acceptance-cases`、`architecture-design`、`orchestration-plan`、`direct-execution` 之间**任意跳转、回退或重复开启**，不设前置阶段门禁。全流程中 `direct-execution` 仍要求三个前置阶段标志；未提交 `todo` 的 simple 任务不受此门禁。
 - 不设门禁不等于可以跳过。原则上工作按 `acceptance-cases` → `architecture-design` → `orchestration-plan` → `direct-execution` 推进：每个阶段先把产物落盘并 `pin` 路径，执行阶段按计划施工而不是重新设计，执行中发现缺口就回到拥有该缺口的阶段补正。自由跳转的正当用途是探索、返工与补漏；把前序阶段做成事后补写的摆设，是这条纪律唯一禁止的事。
 - 一旦进入 `herdMode === true`，模型开启新 `scope` 时**只能**指定 `stage: "decision-framing"`。
 - 离开所有 `scope` 后，当前天然处于无阶段状态，不在 `state` 中维护全局 `stage`。
@@ -68,7 +68,7 @@
 3. **持久化与边界清理**：
    - `serializeState` / `deserializeState` 兼容读写 `herdMode`（默认 `false`）与 `pins`（默认 `[]`），以及每个 `scope` 的 `stage`。
    - `truncateForHostBoundary(state)` 在压缩或切换边界清理 `scopes`/`collapses` 时，**保留 `state.herdMode` 与 `state.pins` 不被重置**。
-   - `relay` 代际推进（`advanceRelayForHandoff`）在同一次 `persist()` 内把三个阶段标志重置为 `false`：继任者必须自己依次开启 `acceptance-cases`、`architecture-design`、`orchestration-plan`，才能开启 `direct-execution`。前任跑过的阶段不构成继任者的证据。
+   - `relay` 代际推进（`advanceRelayForHandoff`）在同一次 `persist()` 内把三个阶段标志重置为 `false`：继任者必须自己依次开启 `acceptance-cases`、`architecture-design`、`orchestration-plan`，才能开启 `direct-execution`。前任跑过的阶段不构成继任者的证据。`relay.fullFlow` 的每次翻转（首次账本写入置 `true`，两空账晋升置 `false`）同样清零三个阶段标志。
 
 ---
 
@@ -90,7 +90,7 @@
    - `herdMode === true` 时：若 `begin.stage !== "decision-framing"`，返回错误 `INVALID_STAGE`（提示当前处于 herd 模式，只能开启 `decision-framing`）。
    - `herdMode === false` 时：若 `begin.stage === "decision-framing"`，返回错误 `INVALID_STAGE`（提示平时禁止开启 `decision-framing`，仅允许 `acceptance-cases | architecture-design | orchestration-plan | direct-execution`）。
    - 开启 `acceptance-cases`、`architecture-design`、`orchestration-plan` 时把对应标志置为 `true`；开启 `decision-framing` 时把三个标志全部重置为 `false`。
-   - 开启 `direct-execution` 前校验三个标志是否全为 `true`；不足时返回 `STAGE_FLAGS_UNMET` 并列出缺口，且不改动任何状态。`direct-execution` 本身不清除标志，可重复开启。该校验只对主代理会话执行。
+   - 全流程中开启 `direct-execution` 前校验三个标志是否全为 `true`；不足时返回 `STAGE_FLAGS_UNMET` 并列出缺口，且不改动任何状态。`direct-execution` 本身不清除标志，可重复开启。该校验只对主代理会话执行；simple 模式不校验。
    - 子代理（`READ_ONLY_SUBAGENT` 与 `READ_WRITE_SUBAGENT`，由 `station.policy(ctx)` 判定）不受顺序门禁约束：可在五个阶段之间任意切换、回退与重复开启，也不写 `stageFlags`。阶段标志只描述主代理当前代际，复用的是 relay 与 `todo` 早已使用的同一个策略门面。
    - 校验发生在任何 `closeScope` 之前，因此同消息 `end + begin` 失败时原 scope 保持打开。
 3. **免费工具扩充（`scope/budget.mjs`）**：
@@ -103,7 +103,7 @@
    - `handleScopeCall` 在任何状态变更之前校验：
      - 显式给出非 `"ro"` / `"rw"` 的值：`INVALID_ARGUMENT`。
      - `"rw"`（显式声明或缺省）且 `begin.stage === "decision-framing"`：`RW_IN_DECISION_FRAMING`。
-     - `"rw"`（显式声明或缺省）且 `station.relayOn(ctx)` 为真、`state.relay.firstEvaluation === null`：`RW_BEFORE_LEDGER`；`todo` 的 `view` 不算提交。
+     - `"rw"`（显式声明或缺省）且 `station.relayOn(ctx)` 为真、`state.relay.fullFlow === true`、`state.relay.firstEvaluation === null`：`RW_BEFORE_LEDGER`；`todo` 的 `view` 不算提交。simple 模式下放行 `"rw"`。
    - `"ro"` 永远放行且从不校验实际工具调用；缺省或 `null` 的 permission 按 `"rw"` 处理，漏填不会绕过门禁。
 
 ---
@@ -118,7 +118,7 @@
    - **`read` / `grep` / `edit` / `write`**：不做任何阶段级限制或读写追踪。
 2. **`onSessionStop` 与 `maybeNudge` 停止控制**：
    - 当 `state.herdMode === true` 时，`onSessionStop` 直接返回 `undefined`，`maybeNudge` 直接 `return` 不发 `steer`，允许模型在 `decision-framing` 对话中自然停下等待用户输入。
-   - 当 `state.herdMode === false` 时，`relay` 逻辑照旧运行（未完成账本或未晋升前禁止自然停止）。
+   - 当 `state.herdMode === false` 时，`relay` 逻辑照旧运行（未完成账本或未晋升前禁止自然停止）。simple 模式（`state.relay.fullFlow !== true`）不拦截自然停止，也不发 ledger 催促。
 
 ---
 

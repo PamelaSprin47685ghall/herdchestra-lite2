@@ -10,7 +10,7 @@ import {
 } from "../src/scope/index.mjs";
 
 function batch(fission, stage = "architecture-design") {
-  return { stage, elder_report: null, fission };
+  return { stage, elder_report: null, time: 60, fission };
 }
 
 function flow(intent, budget, permission = "ro") {
@@ -22,6 +22,7 @@ function open(state, budget) {
     intent: "parent",
     stage: "architecture-design",
     budget,
+    time: 60,
   });
   expect(result.ok).toBe(true);
   return result.scope;
@@ -97,6 +98,7 @@ describe("fission state", () => {
     ];
     for (const begin of invalid) {
       const state = createState();
+      state.relay = { ...state.relay, fullFlow: true };
       open(state, { read: 3 });
       const before = structuredClone(state);
       const options = { relayOn: true };

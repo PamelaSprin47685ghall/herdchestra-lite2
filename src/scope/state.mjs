@@ -53,12 +53,21 @@ function copyDefers(list) {
   }));
 }
 
-function makeScope(state, toolCallId, intent, stage, budget) {
+function makeScope(state, toolCallId, intent, stage, budget, timeBudgetMs = null) {
   const spent = {};
   for (const tool of Reflect.ownKeys(budget)) {
     if (typeof tool === "string") put(spent, tool, 0);
   }
+  const openedAt = Date.now();
   return {
+    timeBudgetMs:
+      Number.isFinite(timeBudgetMs) && timeBudgetMs > 0 ? timeBudgetMs : null,
+    openedAt,
+    deadlineAt:
+      Number.isFinite(timeBudgetMs) && timeBudgetMs > 0
+        ? openedAt + timeBudgetMs
+        : null,
+    overtimeAt: null,
     id: `scope-${++state.seq}`,
     boundary:
       Number.isInteger(state.relay?.generation) && state.relay.generation >= 0
@@ -94,6 +103,7 @@ function makeScope(state, toolCallId, intent, stage, budget) {
 export function createState() {
   return {
     version: VERSION,
+    startedAt: Date.now(),
     seq: 0,
     epoch: 0,
     scopes: [],
@@ -213,6 +223,17 @@ export function capCachePositions(state, maxPos) {
     }
   }
   return changed;
+}
+
+/** The tightest wall-clock deadline across the open scope stack, or null. */
+export function effectiveDeadline(state) {
+  let deadline = null;
+  for (const scope of state?.scopes ?? []) {
+    if (!Number.isFinite(scope?.deadlineAt)) continue;
+    deadline =
+      deadline === null ? scope.deadlineAt : Math.min(deadline, scope.deadlineAt);
+  }
+  return deadline;
 }
 
 export function currentScope(state) {

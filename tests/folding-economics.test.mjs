@@ -102,7 +102,15 @@ const assistant = (content, timestamp) => ({
 	content,
 	timestamp: timestamp ?? Date.now(),
 });
-const call = (id, name, args) => ({ type: "toolCall", id, name, arguments: args });
+const call = (id, name, args) => ({
+	type: "toolCall",
+	id,
+	name,
+	arguments:
+		name === "scope" && args?.begin && args.begin.time === undefined
+			? { ...args, begin: { ...args.begin, time: 60 } }
+			: args,
+});
 const toolResult = (id, name, text, isError = false) => ({
 	role: "toolResult",
 	toolCallId: id,
@@ -167,8 +175,8 @@ const texts = (messages) =>
 // The single-flow begin was removed; live scopes come from a fission batch
 // opened by the scheduler in a flow session. This file measures what happens
 // to a scope that is already open, so that history is seeded directly.
-function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { read: 1 } }) {
-	const opened = beginScope(stateFor(ctx).state, { toolCallId: id, intent, stage, budget });
+function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { read: 1 }, time = 60 }) {
+	const opened = beginScope(stateFor(ctx).state, { toolCallId: id, intent, stage, budget, time });
 	expect(opened.ok).toBe(true);
 	const manager = ctx.sessionManager;
 	manager.appendCustomEntry("scope.begin", { intent, stage, budget: { ...budget } });
@@ -458,7 +466,7 @@ describe("watermark response and measurement", () => {
 		expect(station.state.scopes[0].baseInputTokens).toBe(5000);
 		expect(station.state.scopes[1].baseInputTokens).toBe(4000);
 		expect(station.state.scopes[2].baseInputTokens).toBe(5000);
-		expect(station.lastTotalInput).toBe(5000);
+		expect(station.usage.lastTotalInput).toBe(5000);
 	});
 
 	function makeStation(manager) {

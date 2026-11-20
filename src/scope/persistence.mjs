@@ -89,6 +89,10 @@ function copyCollapse(collapse) {
 function measuredFields(source) {
   const out = {};
   for (const key of [
+    "timeBudgetMs",
+    "openedAt",
+    "deadlineAt",
+    "overtimeAt",
     "baseInputTokens",
     "preBeginInputTokens",
     "endInputTokens",
@@ -143,6 +147,7 @@ function copyModelRecovery(source) {
 export function serializeState(state) {
   return {
     version: VERSION,
+    startedAt: Number.isFinite(state.startedAt) ? state.startedAt : Date.now(),
     seq: state.seq ?? 0,
     scopes: (state.scopes ?? []).map((scope) => ({
       id: scope.id,
@@ -233,6 +238,12 @@ function validScope(scope) {
     return false;
   }
   if (typeof scope.beginToolCallId !== "string") return false;
+  for (const key of ["timeBudgetMs", "openedAt", "deadlineAt", "overtimeAt"]) {
+    if (scope[key] === undefined || scope[key] === null) continue;
+    if (typeof scope[key] !== "number" || !Number.isFinite(scope[key]) || scope[key] <= 0) {
+      return false;
+    }
+  }
   if (!validBudgetCounts(scope.budget)) return false;
   if (!validAmountCounts(scope.remaining)) return false;
   if (!validAmountCounts(scope.spent)) return false;
@@ -461,9 +472,7 @@ export function deserializeState(input) {
       return createState();
     }
     if (!validCharges(data.charges)) return createState();
-    // `regrets` was this field's name before the tool became `amend`. Read it
-    // once for saved state written by an older build, then carry it forward.
-    const amends = Array.isArray(data.amends) ? data.amends : data.regrets;
+    const amends = Array.isArray(data.amends) ? data.amends : [];
     if (!Array.isArray(amends) || !amends.every((key) => typeof key === "string")) {
       return createState();
     }
@@ -487,6 +496,7 @@ export function deserializeState(input) {
     }
     return {
       version: VERSION,
+      startedAt: Number.isFinite(data.startedAt) ? data.startedAt : Date.now(),
       seq: data.seq,
       epoch:
         Number.isInteger(data.epoch) && data.epoch >= 0 ? data.epoch : 0,

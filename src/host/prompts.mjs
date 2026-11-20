@@ -14,10 +14,6 @@ const vibe = loadDoc("vibe-mode");
 
 export const commonRulesText = system["common-rules"];
 
-export const languageSkill = system["language-skill"];
-
-export const outsideScopeInstruction = system["outside-scope"];
-
 const vibeModeReplacements = [
 	{
 		from: "drive two worker CLIs",

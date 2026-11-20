@@ -43,11 +43,17 @@ function advanceRelayForHandoff(station, options = {}) {
 }
 
 function recordLedgerEvaluation(station, phases, op, options = {}) {
-	const applied = applyLedgerEvaluation(station.state.relay, phases, {
+	const before = station.state.relay;
+	const applied = applyLedgerEvaluation(before, phases, {
 		op,
 		...options,
 	});
 	station.state.relay = applied.relay;
+	// Every full-flow transition starts a new line of work: evidence that the
+	// previous line's stages ran proves nothing about this one.
+	if ((before?.fullFlow === true) !== (applied.relay.fullFlow === true)) {
+		station.state.stageFlags = createStageFlags();
+	}
 	station.persist();
 	return applied;
 }
@@ -68,7 +74,7 @@ function commitSelfHandoff(station, ctx, report) {
 	const compacted = appendHandoffCompaction(
 		manager,
 		opening,
-		station.lastTotalInput ?? 0,
+		station.usage.lastTotalInput ?? 0,
 	);
 	if (!compacted && manager) {
 		appendHistoryMessage(

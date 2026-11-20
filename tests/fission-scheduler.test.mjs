@@ -208,6 +208,7 @@ function harness({ fission, budget = { read: 10, bash: 4 }, hooks = {}, seed }) 
 		intent: "owner",
 		stage: "architecture-design",
 		budget,
+		time: 60,
 	}).scope;
 	const ownerAgent = makeAgent("owner");
 	const ownerSession = {
@@ -264,7 +265,7 @@ function harness({ fission, budget = { read: 10, bash: 4 }, hooks = {}, seed }) 
 		},
 	});
 	ref.scheduler = scheduler;
-	const begin = { stage: "architecture-design", elder_report: null, fission };
+	const begin = { stage: "architecture-design", elder_report: null, time: 60, fission };
 	const totals = {};
 	for (const item of fission) {
 		for (const [tool, amount] of Object.entries(item.budget)) {
@@ -322,7 +323,7 @@ function totalsOf(flows) {
 async function startNested(h, { toolCallId, parentFlowId, fission }) {
 	const binding = h.bindings.find((item) => item.flowId === parentFlowId);
 	if (!binding) throw new Error(`no station bound for ${parentFlowId}`);
-	const begin = { stage: "architecture-design", elder_report: null, fission };
+	const begin = { stage: "architecture-design", elder_report: null, time: 60, fission };
 	const registered = h.scheduler.registerBatch({
 		toolCallId,
 		sessionManager: h.manager,
@@ -1147,6 +1148,7 @@ describe("fission scheduler", () => {
 		const begin = {
 			stage: "architecture-design",
 			elder_report: null,
+			time: 60,
 			fission: [{ intent: "nested hold", budget: { read: 1, bash: 1 }, permission: "ro" }],
 		};
 		const nested = h.scheduler.registerBatch({

@@ -7,8 +7,6 @@ import * as stagePrompts from "../src/host/stage-prompts.mjs";
 import {
 	commonRulesText,
 	injectSystemPrompt,
-	languageSkill,
-	outsideScopeInstruction,
 	persistentOperatingSkill,
 	stagePromptsBlock,
 } from "../src/host/prompts.mjs";
@@ -84,13 +82,17 @@ describe("tool contracts map to their documents", () => {
 		expect(todoTools.TODO_PHASE_DESCRIPTION).toBe(doc.phase);
 		expect(todoTools.TODO_ITEMS_DESCRIPTION).toBe(doc.items);
 		expect(todoTools.TODO_REASON_DESCRIPTION).toBe(doc.reason);
+		expect(doc.tool).toContain("An empty list counts as a submission too.");
+		expect(doc.tool).toContain(
+			"A later todo write after that (an empty list included) turns the full flow on again.",
+		);
 	});
 
 	test("schemas carry the mapped text", () => {
 		const scope = loadDoc("tools/scope");
 		const begin = scopeTools.scopeParameters.properties.begin;
 		expect(begin.description).toBe(scope.begin);
-		expect(begin.required).toEqual(["stage", "elder_report", "fission"]);
+		expect(begin.required).toEqual(["stage", "elder_report", "fission", "time"]);
 		expect(begin.properties.stage.description).toBe(scope["begin.stage"]);
 		expect(begin.properties.elder_report.description).toBe(scope["begin.elder_report"]);
 		expect(begin.properties).not.toHaveProperty("intent");
@@ -141,12 +143,43 @@ describe("stage and system prompts map to their documents", () => {
 		expect(stagePromptsBlock).not.toContain("[Stage: direct-execution]");
 	});
 
+	test("the header and the persistent rules state the full-flow execution gate", () => {
+		const doc = loadDoc("stages");
+		const gate =
+			"In the full flow, `direct-execution` opens only after `acceptance-cases`, `architecture-design`, and `orchestration-plan` have each run once";
+		expect(doc.header).not.toContain(
+			"The four working stages may open in any order, and no stage gates another",
+		);
+		expect(doc.header).toContain("In simple mode");
+		expect(doc.header).toContain(gate);
+		expect(persistentOperatingSkill).toContain(
+			"In the full flow, direct-execution opens only after acceptance-cases, architecture-design, and orchestration-plan have each run once; simple mode skips that gate.",
+		);
+		expect(doc.header).toContain(
+			"A later todo write after that turns the full flow on again.",
+		);
+		expect(persistentOperatingSkill).toContain(
+			"after that, another todo write (empty included) turns the full flow back on",
+		);
+	});
+
+	test("task nature chooses the flow by default", () => {
+		const doc = loadDoc("stages");
+		const texts = [doc.header, persistentOperatingSkill, todoTools.TODO_DESCRIPTION];
+		for (const text of texts) {
+			expect(text).toContain("Choose by task nature.");
+			expect(text).toContain("A refactor counts as development:");
+			expect(text).toContain("in principle submit a ledger");
+			expect(text).toContain("in principle do not submit one");
+			expect(text).toContain("let that judgment override the default");
+		}
+	});
+
 	test("system pieces", () => {
 		const doc = loadDoc("system");
 		expect(commonRulesText).toBe(doc["common-rules"]);
 		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
-		expect(languageSkill).toBe(doc["language-skill"]);
-		expect(outsideScopeInstruction).toBe(doc["outside-scope"]);
+		expect(persistentOperatingSkill).toContain("强制以简体中文");
 	});
 });
 
@@ -193,5 +226,14 @@ describe("injectSystemPrompt", () => {
 		const value = { prompt: "Host prompt." };
 		expect(injectSystemPrompt(value)).toBe(value);
 		expect(injectSystemPrompt(null)).toBe(null);
+	});
+});
+
+describe("scope schema", () => {
+	test("declares time as required and takes its text from the prompt document", () => {
+		const begin = scopeTools.scopeParameters.properties.begin;
+		expect(begin.required).toContain("time");
+		expect(begin.properties.time.type).toBe("number");
+		expect(begin.properties.time.description).toContain("Wall-clock budget");
 	});
 });

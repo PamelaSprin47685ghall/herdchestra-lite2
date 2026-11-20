@@ -48,7 +48,7 @@ stage "decision-framing" answers why, not what, so it cannot carry a write scope
 
 ## rw-before-ledger
 
-This generation has not submitted its first todo ledger yet, so permission "rw" is refused. Close all scopes and call todo with a write operation to submit the ledger (a todo view does not count), or declare permission: "ro" for a read-only scope. permission "ro" is trusted and never enforced. Submit the remaining work, or `todo({ op: "init", list: [] })` when no user-requested work remains: an empty ledger is a lawful submission.
+The full flow is on and this generation has not submitted its first todo ledger yet, so permission "rw" is refused. Close all scopes and call todo with a write operation to submit the ledger (a todo view does not count), or declare permission: "ro" for a read-only scope. permission "ro" is trusted and never enforced. Submit the remaining work, or `todo({ op: "init", list: [] })` when no user-requested work remains: an empty ledger is a lawful submission.
 
 ## herd-only-framing
 
@@ -80,4 +80,4 @@ WARNING: {{command}} failed: {{reason}}
 
 ## stage-flags-unmet
 
-stage "direct-execution" requires one run of each earlier stage. Missing: {{missing}}. Open each missing stage's scope before execution.
+The full flow requires one run of each earlier stage before "direct-execution". Missing: {{missing}}. Open each missing stage's scope before execution; simple mode has no such flag gate.

@@ -6,6 +6,7 @@ import { onSessionStop, onToolCall } from "../src/station/gates.mjs";
 const NESTED = {
 	stage: "acceptance-cases",
 	elder_report: null,
+	time: 60,
 	fission: [{ intent: "inner", budget: { read: 1 }, permission: "ro" }],
 };
 
@@ -17,6 +18,7 @@ function flowStation() {
 		intent: "flow",
 		stage: "architecture-design",
 		budget: { read: 4 },
+		time: 60,
 	});
 	expect(opened.ok).toBe(true);
 	return {

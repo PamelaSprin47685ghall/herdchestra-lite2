@@ -30,7 +30,21 @@ export function createRelay() {
 		handoffError: null,
 		lastLedger: null,
 		lastHandoff: null,
+		fullFlow: false,
 	};
+}
+
+function legacyFullFlow(source) {
+	if (typeof source.fullFlow === "boolean") return source.fullFlow;
+	// Older snapshots had no switch. A promoted holder had already finished its
+	// line; any line that started a generation, armed a handoff, or submitted a
+	// ledger was in the full flow.
+	if (source.canStop === true) return false;
+	return (
+		(nonNegativeInteger(source.generation) && source.generation > 0) ||
+		source.handoffPending === true ||
+		FIRST_EVALUATIONS.has(source.firstEvaluation)
+	);
 }
 
 function copyLedger(ledger) {
@@ -63,6 +77,7 @@ export function copyRelay(relay) {
 	const source = isPlainObject(relay) ? relay : createRelay();
 	return {
 		generation: nonNegativeInteger(source.generation) ? source.generation : 0,
+		fullFlow: legacyFullFlow(source),
 		firstEvaluation: FIRST_EVALUATIONS.has(source.firstEvaluation)
 			? source.firstEvaluation
 			: null,
@@ -79,6 +94,9 @@ export function copyRelay(relay) {
 export function isValidRelay(value) {
 	if (!isPlainObject(value)) return false;
 	if (!nonNegativeInteger(value.generation)) return false;
+	if (value.fullFlow !== undefined && typeof value.fullFlow !== "boolean") {
+		return false;
+	}
 	if (
 		value.firstEvaluation !== null &&
 		!FIRST_EVALUATIONS.has(value.firstEvaluation)

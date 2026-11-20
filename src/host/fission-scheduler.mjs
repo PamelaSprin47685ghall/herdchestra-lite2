@@ -1584,6 +1584,7 @@ export function createFissionScheduler(options = {}) {
 			intent: batch.intent,
 			stage: batch.stage,
 			budget: batch.totals,
+			time: batch.begin?.time,
 		});
 		if (!opened.ok) {
 			throw refusal(opened.code ?? "INVALID_FISSION", opened.reason, { batchId: batch.id });
@@ -2724,6 +2725,7 @@ export function createFissionScheduler(options = {}) {
 				intent: plan.item.intent,
 				stage: batch.stage,
 				budget: plan.item.budget,
+				time: batch.begin?.time,
 			});
 			if (!opened.ok) {
 				throw refusal(opened.code ?? "INVALID_FISSION", opened.reason, { flowId: plan.flowId });

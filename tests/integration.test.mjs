@@ -6,6 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import { activate } from "../src/main.mjs";
 import { stateFor } from "../src/station/index.mjs";
+import { createState } from "../src/scope/index.mjs";
+import { beginText, skillReceiptText } from "../src/station/texts.mjs";
 import { allStagesRan } from "./helpers/stage-flags.mjs";
 import { installVibeTools, rememberSession } from "../src/host/index.mjs";
 import { finishedReport } from "../src/transcript/index.mjs";
@@ -96,7 +98,11 @@ function assistant(content, timestamp) {
 }
 
 function call(id, name, args) {
-	return { type: "toolCall", id, name, arguments: args };
+	const withTime =
+		name === "scope" && args?.begin && args.begin.time === undefined
+			? { ...args, begin: { ...args.begin, time: 60 } }
+			: args;
+	return { type: "toolCall", id, name, arguments: withTime };
 }
 
 function toolResult(id, name, text, isError = false) {
@@ -191,8 +197,8 @@ function texts(messages) {
 // sessions. These fake-host tests cover what happens to a scope that is already
 // open, so a historical scope is seeded directly: its state entry, its
 // persisted boundary, and its begin call on the branch.
-function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { read: 1 } }) {
-	const opened = beginScope(stateFor(ctx).state, { toolCallId: id, intent, stage, budget });
+function seedScope(ctx, { id, intent, stage = "direct-execution", budget = { read: 1 }, time = 60 }) {
+	const opened = beginScope(stateFor(ctx).state, { toolCallId: id, intent, stage, budget, time });
 	expect(opened.ok).toBe(true);
 	const manager = ctx.sessionManager;
 	manager.appendCustomEntry("scope.begin", { intent, stage, budget: { ...budget } });
@@ -335,7 +341,8 @@ describe("scope lifecycle", () => {
 		expect(joined).not.toContain("read:config-two");
 		expect(joined).toContain("read:config-three");
 		expect(joined).toContain("You are outside all scopes.");
-		expect(joined).toContain("Before stopping, call todo to evaluate the ledger");
+		expect(joined).toContain("Simple mode: this task runs without a ledger");
+		expect(joined).not.toContain("no todo ledger");
 	});
 
 	test("collapses one scope behind across three scopes", async () => {
@@ -398,7 +405,7 @@ describe("scope lifecycle", () => {
 		);
 	});
 
-	test("nudges a final answer outside all scopes before any todo evaluation", async () => {
+	test("does not nudge a final answer outside all scopes in simple mode", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
 		await runAssistant(
@@ -406,11 +413,7 @@ describe("scope lifecycle", () => {
 			ctx,
 			assistant([{ type: "text", text: "Final answer." }]),
 		);
-		expect(host.steers.length).toBe(1);
-		expect(host.steers[0].text).toContain("evaluate the ledger with todo");
-		expect(host.steers[0].text).toContain(
-			"A natural stop is allowed only in one sequence",
-		);
+		expect(host.steers.length).toBe(0);
 	});
 
 	test("closing a parent collapses its elder sibling, not its child", async () => {
@@ -1029,11 +1032,85 @@ describe("herd mode", () => {
 		expect(read[0].result.content[0].text).toContain('Tool "read" has no budget left');
 	});
 
+	test("a begin without time is refused", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const refused = await runAssistant(host, ctx, assistant([
+			{ type: "toolCall", id: "nt1", name: "scope", arguments: { begin: { stage: "direct-execution", elder_report: null, fission: [{ intent: "no time", budget: {}, permission: "ro" }] } } },
+		]));
+		expect(JSON.stringify(refused)).toContain("INVALID_TIME");
+	});
+
+	test("a scope records a wall-clock deadline in its receipt", async () => {
+		const manager = makeManager();
+		const { ctx } = await start(manager);
+		const opened = beginScope(stateFor(ctx).state, {
+			toolCallId: "t1",
+			intent: "timed",
+			stage: "direct-execution",
+			budget: { read: 1 },
+			time: 5,
+		});
+		expect(opened.ok).toBe(true);
+		expect(beginText(opened.scope)).toContain("time 0:05/0:05");
+	});
+
+	test("kills a tool that overruns deadline+1s and replaces its result", async () => {
+		const manager = makeManager();
+		const { host, ctx } = await start(manager);
+		const session = {
+			agent: { beforeToolCall: async () => undefined },
+			sessionManager: manager,
+		};
+		rememberSession(session);
+		let sawSignal = null;
+		const slowExecute = (id, params, signal) => {
+			sawSignal = signal;
+			return new Promise((resolve) =>
+				setTimeout(
+					() => resolve({ content: [{ type: "text", text: "slow finished" }] }),
+					1300,
+				),
+			);
+		};
+		host.tools.set("slow", { name: "slow", execute: slowExecute });
+		const begin = {
+			stage: "direct-execution",
+			elder_report: null,
+			time: 0.1,
+			fission: [{ intent: "timed", budget: { slow: 1 }, permission: "ro" }],
+		};
+		const message = assistant([call("b2", "scope", { begin }), call("s1", "slow", {})]);
+		await emit(host.handlers, "assistant_message", { type: "assistant_message", message }, ctx);
+		seedScope(ctx, { id: "b2", intent: "timed", budget: { slow: 1 }, time: 0.1 });
+		const tool = host.tools.get("slow");
+		await session.agent.beforeToolCall(
+			{ assistantMessage: message, toolCall: { id: "s1", name: "slow" }, tool },
+			undefined,
+		);
+		const outcome = await tool
+			.execute("s1", {}, undefined, undefined, ctx)
+			.catch((error) => error);
+		expect(sawSignal?.aborted).toBe(true);
+		expect(outcome).toBeInstanceOf(Error);
+		expect(String(outcome?.message ?? outcome)).toContain("OVERTIME");
+	});
+
+	test("the per-turn skill receipt carries the UTC clock", () => {
+		const state = createState();
+		state.startedAt = Date.now() - 90_000;
+		const text = skillReceiptText(state, false);
+		expect(text).toMatch(/UTC now \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/);
+		expect(text).toContain("since this session began");
+		expect(text).toMatch(/1m3\ds/);
+		expect(text).toContain("强制以简体中文");
+	});
+
 	test("herd mode allows a text-only turn to stop naturally", async () => {
 		const manager = makeManager();
 		const { host, ctx } = await start(manager);
-		const nudged = await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx);
-		expect(nudged).not.toBeUndefined();
+		const simpleStop = await emit(host.handlers, "session_stop", { type: "session_stop" }, ctx);
+		expect(simpleStop).toBeUndefined();
 
 		await host.commands.get("herd").handler("", ctx);
 		const before = host.steers.length;

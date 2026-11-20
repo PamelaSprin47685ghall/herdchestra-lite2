@@ -64,6 +64,12 @@ export function validateFission(state, begin, options = {}) {
       (begin.elder_report !== null && typeof begin.elder_report !== "string")) {
     return failure("INVALID_ARGUMENT", "elder_report must be a string or null.");
   }
+  if (typeof begin.time !== "number" || !Number.isFinite(begin.time) || begin.time <= 0) {
+    return failure(
+      "INVALID_TIME",
+      "time is required and must be a positive number of seconds.",
+    );
+  }
   const items = [];
   const totals = {};
   for (const item of begin.fission) {
@@ -87,7 +93,12 @@ export function validateFission(state, begin, options = {}) {
     if (item.permission === "rw" && begin.stage === DECISION_FRAMING) {
       return failure("RW_IN_DECISION_FRAMING", "Write permission is unavailable in decision-framing.");
     }
-    if (item.permission === "rw" && options.relayOn && state.relay?.firstEvaluation === null) {
+    if (
+      item.permission === "rw" &&
+      options.relayOn &&
+      state.relay?.fullFlow === true &&
+      state.relay?.firstEvaluation === null
+    ) {
       return failure("RW_BEFORE_LEDGER", "Write permission requires the first ledger evaluation.");
     }
     for (const tool of Object.keys(budget)) {
@@ -101,7 +112,12 @@ export function validateFission(state, begin, options = {}) {
       (state.herdMode ? begin.stage !== DECISION_FRAMING : !NORMAL_STAGES.includes(begin.stage))) {
     return failure("INVALID_STAGE", "The stage is not available in this mode.");
   }
-  if (options.mainAgent && begin.stage === EXECUTION_STAGE && missingStages(state.stageFlags).length > 0) {
+  if (
+    options.mainAgent &&
+    state.relay?.fullFlow === true &&
+    begin.stage === EXECUTION_STAGE &&
+    missingStages(state.stageFlags).length > 0
+  ) {
     return failure("STAGE_FLAGS_UNMET", "Required workflow stages have not been opened.");
   }
   const parent = currentScope(state);
@@ -134,7 +150,7 @@ export function splitFissionBudget(state, begin, options = {}) {
 }
 
 export function beginScope(state, params) {
-  const { toolCallId, intent, stage, budget } = params || {};
+  const { toolCallId, intent, stage, budget, time } = params || {};
   if (!isNonEmptyString(intent)) {
     return failure("INVALID_INTENT", "intent must be a non-empty string.");
   }
@@ -148,7 +164,14 @@ export function beginScope(state, params) {
       "Budget must be a plain object of non-negative integer tool budgets.",
     );
   }
-  const scope = makeScope(state, toolCallId, intent, stage, normalized);
+  if (typeof time !== "number" || !Number.isFinite(time) || time <= 0) {
+    return failure(
+      "INVALID_TIME",
+      "time is required and must be a positive number of seconds.",
+    );
+  }
+  const timeBudgetMs = Math.round(time * 1000);
+  const scope = makeScope(state, toolCallId, intent, stage, normalized, timeBudgetMs);
   // Optional model identity: { modelSpec, modelKey, previousModelSpec,
   // previousModelKey, baseModelKey }. Strings or null only.
   const model = isPlainObject(params?.model) ? params.model : null;
@@ -409,7 +432,7 @@ export function findActivePools(state) {
     if ((record.epoch ?? 0) !== epoch) continue;
     const parentId = record.parentId ?? null;
     const boundary = record.boundary ?? 0;
-    const key = `${String(parentId)} ${boundary} ${epoch}`;
+    const key = JSON.stringify([parentId, boundary, epoch]);
     if (!levels.has(key)) levels.set(key, { parentId, boundary, epoch });
   }
   const groups = [];

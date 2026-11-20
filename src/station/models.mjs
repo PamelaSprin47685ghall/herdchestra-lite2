@@ -23,7 +23,7 @@ export function modelChoice(station, ctx, spec, key) {
 	const parsed = typeof spec === "string"
 		? preparseModelSpec(station.pricingCatalog, ctx, spec)
 		: null;
-	const live = actualModel(ctx) ?? station.lastCtxModel;
+	const live = actualModel(ctx) ?? station.usage.lastCtxModel;
 	// Only an exact resolution may name the model a later check expects. A
 	// fuzzy match only estimates size and price. The host resolves roles and
 	// aliases that the extension never sees.
@@ -56,7 +56,7 @@ export function observeActualModel(station, ctx) {
 	const live = actualModel(ctx);
 	const key = modelKey(live);
 	if (!key) return;
-	station.lastCtxModel = live;
+	station.usage.lastCtxModel = live;
 	const { state } = station;
 	if (state.modelRecovery || station.modelSwitchInFlight || station.pendingModelSwitch) return;
 	const scope = currentScope(state);
@@ -120,7 +120,7 @@ export function reconcileActualModel(station, ctx, req, outcome) {
 	if (station.modelSwitchInFlight === req) station.modelSwitchInFlight = null;
 	const scope = currentScope(station.state);
 	if ((scope?.id ?? null) !== req.scopeId || station.state.epoch !== req.epoch) return key;
-	if (live) station.lastCtxModel = live;
+	if (live) station.usage.lastCtxModel = live;
 	const observedSpec = key ? liveSelector(ctx, key) : null;
 	const spec = observedSpec && observedSpec !== key ? observedSpec :
 		outcome?.ok ? req.targetSpec : key === req.fallbackKey ? req.fallbackSpec : key;

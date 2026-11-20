@@ -12,40 +12,40 @@ import {
 import { controlsIn, parseArgs } from "./messages.mjs";
 
 function executeScope(station, toolCallId, params, ctx) {
-	const cached = station.handled.get(toolCallId);
+	const cached = station.processed.handledFor(toolCallId);
 	if (cached) return cached;
 	station.processControlsForTool(toolCallId);
-	const processed = station.handled.get(toolCallId);
+	const processed = station.processed.handledFor(toolCallId);
 	if (processed) return processed;
 	return directScope(station, toolCallId, params, ctx);
 }
 
 function executeAmend(station, toolCallId, params) {
-	const cached = station.handled.get(toolCallId);
+	const cached = station.processed.handledFor(toolCallId);
 	if (cached) return cached;
 	station.processControlsForTool(toolCallId);
-	const processed = station.handled.get(toolCallId);
+	const processed = station.processed.handledFor(toolCallId);
 	if (processed) return processed;
 	return directAmend(station, toolCallId, params);
 }
 
 function executeDefer(station, toolCallId, params) {
-	const cached = station.handled.get(toolCallId);
+	const cached = station.processed.handledFor(toolCallId);
 	if (cached) return cached;
 	station.processControlsForTool(toolCallId);
-	const processed = station.handled.get(toolCallId);
+	const processed = station.processed.handledFor(toolCallId);
 	if (processed) return processed;
 	return directDefer(station, toolCallId, params);
 }
 
 function executePin(station, toolCallId, params) {
-	const cached = station.handled.get(toolCallId);
+	const cached = station.processed.handledFor(toolCallId);
 	if (cached) return cached;
 	if (!station.state.herdMode && station.state.relay?.handoffPending) {
 		return errorResult("RELAY_HANDOFF_PENDING", handoffToolBlockedReason());
 	}
 	const result = handlePinCall(station, { id: toolCallId, arguments: params });
-	station.setHandled(toolCallId, result);
+	station.processed.setHandled(toolCallId, result);
 	return result;
 }
 
@@ -53,7 +53,7 @@ function directScope(station, toolCallId, params, ctx) {
 	const found = station.assistantForToolCall(toolCallId);
 	if (found) {
 		station.processAssistantMessage(found.message, { persisted: true });
-		const cached = station.handled.get(toolCallId);
+		const cached = station.processed.handledFor(toolCallId);
 		if (cached) return cached;
 	}
 	const currentMessage = found?.message ?? station.messageForToolCall(toolCallId)
@@ -73,8 +73,8 @@ function directScope(station, toolCallId, params, ctx) {
 		sameMessageBeginIds: beginIds,
 		ctx,
 	});
-	station.setHandled(toolCallId, result);
-	station.processedCalls.add(toolCallId);
+	station.processed.setHandled(toolCallId, result);
+	station.processed.markCall(toolCallId);
 	station.persist();
 	return result;
 }
@@ -83,7 +83,7 @@ function directAmend(station, toolCallId, params) {
 	const found = station.assistantForToolCall(toolCallId);
 	if (found) {
 		station.processAssistantMessage(found.message, { persisted: true });
-		const cached = station.handled.get(toolCallId);
+		const cached = station.processed.handledFor(toolCallId);
 		if (cached) return cached;
 	}
 	const base = found?.messages ?? station.contextMessages();
@@ -97,8 +97,8 @@ function directAmend(station, toolCallId, params) {
 		base,
 		index,
 	);
-	station.setHandled(toolCallId, result);
-	station.processedCalls.add(toolCallId);
+	station.processed.setHandled(toolCallId, result);
+	station.processed.markCall(toolCallId);
 	station.persist();
 	return result;
 }
@@ -107,12 +107,12 @@ function directDefer(station, toolCallId, params) {
 	const found = station.assistantForToolCall(toolCallId);
 	if (found) {
 		station.processAssistantMessage(found.message, { persisted: true });
-		const cached = station.handled.get(toolCallId);
+		const cached = station.processed.handledFor(toolCallId);
 		if (cached) return cached;
 	}
 	const result = handleDeferCall(station, { id: toolCallId, name: "defer", arguments: params });
-	station.setHandled(toolCallId, result);
-	station.processedCalls.add(toolCallId);
+	station.processed.setHandled(toolCallId, result);
+	station.processed.markCall(toolCallId);
 	station.persist();
 	return result;
 }

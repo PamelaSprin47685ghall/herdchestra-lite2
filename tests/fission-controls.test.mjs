@@ -10,7 +10,7 @@ const TWO_FLOWS = [
 ];
 
 function batchBegin(fission = TWO_FLOWS) {
-	return { stage: "architecture-design", elder_report: null, fission };
+	return { stage: "architecture-design", elder_report: null, time: 60, fission };
 }
 
 function openParent(state, budget = { read: 10, bash: 4 }) {
@@ -19,6 +19,7 @@ function openParent(state, budget = { read: 10, bash: 4 }) {
 		intent: "owner",
 		stage: "architecture-design",
 		budget,
+		time: 60,
 	});
 	expect(result.ok).toBe(true);
 	return result.scope;

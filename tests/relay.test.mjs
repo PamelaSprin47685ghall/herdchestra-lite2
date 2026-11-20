@@ -295,7 +295,9 @@ describe("relay text", () => {
 		expect(text).toContain("Never invent work");
 		expect(text).toContain(doc["stop-rule"]);
 
-		const idle = relayStatusText(createRelay(), null, { action: null });
+		const idle = relayStatusText({ ...createRelay(), fullFlow: true }, null, {
+			action: null,
+		});
 		expect(idle).toContain("list: []");
 	});
 });

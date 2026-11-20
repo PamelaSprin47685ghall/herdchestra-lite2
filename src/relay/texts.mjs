@@ -15,10 +15,16 @@ function evaluationLabel(relay) {
 	return L["evaluation-nonempty"];
 }
 
+function flowLabel(relay) {
+	return relay.fullFlow === true ? L["flow-full"] : L["flow-simple"];
+}
+
 function nextStepText(relay, stats, action) {
 	switch (action) {
 		case "promoted":
 			return R["next.promoted"];
+		case "reopened":
+			return R["next.reopened"];
 		case "handoff":
 			return R["next.handoff"];
 		case "rework":
@@ -28,6 +34,7 @@ function nextStepText(relay, stats, action) {
 		case "continue":
 			return R["next.continue"];
 		default:
+			if (relay.fullFlow !== true) return R["next.simple"];
 			return stats ? R["next.unchanged"] : R["next.none"];
 	}
 }
@@ -42,6 +49,7 @@ export function relayStatusText(relay, stats, options = {}) {
 			holder: current.generation === 0 ? "original holder" : "successor",
 		}),
 		render(R["status.evaluation"], { label: evaluationLabel(current) }),
+		render(R["status.flow"], { flow: flowLabel(current) }),
 	];
 	if (ledger) {
 		lines.push(

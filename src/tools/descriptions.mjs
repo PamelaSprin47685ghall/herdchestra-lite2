@@ -35,8 +35,13 @@ export const scopeParameters = {
 		begin: {
 			type: "object",
 			additionalProperties: false,
-			required: ["stage", "elder_report", "fission"],
+			required: ["stage", "elder_report", "fission", "time"],
 			properties: {
+				time: {
+					type: "number",
+					minimum: 0,
+					description: scope["begin.time"],
+				},
 				stage: {
 					type: "string",
 					enum: [...WORKFLOW_STAGES],

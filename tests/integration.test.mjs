@@ -1206,6 +1206,7 @@ describe("herd mode", () => {
 		expect(text).toMatch(/UTC now \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/);
 		expect(text).toContain("since this session began");
 		expect(text).toMatch(/1m3\ds/);
+		expect(text).toContain("强制以简体中文");
 	});
 
 	test("herd mode allows a text-only turn to stop naturally", async () => {

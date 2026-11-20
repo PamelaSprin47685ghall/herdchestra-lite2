@@ -142,6 +142,7 @@ export function skillReceiptText(state, relayOn = true) {
 			}),
 		]
 		: [T["receipt.outside"]];
+	lines.push(T["language"]);
 	lines.push(
 		render(T["receipt.herd"], { mode: state.herdMode ? "on" : "off" }),
 	);

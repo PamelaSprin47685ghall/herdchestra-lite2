@@ -166,6 +166,7 @@ describe("stage and system prompts map to their documents", () => {
 		const doc = loadDoc("system");
 		expect(commonRulesText).toBe(doc["common-rules"]);
 		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
+		expect(persistentOperatingSkill).toContain("强制以简体中文");
 	});
 });
 

@@ -181,3 +181,7 @@ Simple mode: this task runs without a ledger, so no relay applies. Finish the wo
 ## receipt.simple-outside
 
 Simple mode: this task runs without a ledger, so no relay applies. Write the final answer as ordinary assistant text. A todo write, even an empty list, turns on the full flow.
+
+## language
+
+(Routine reminder appended at the end of every turn; not a new user message.) 强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。

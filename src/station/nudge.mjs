@@ -3,6 +3,7 @@
 
 import { currentScope } from "../scope/index.mjs";
 import {
+	copyRelay,
 	firstEvaluationNudge,
 	handoffEmptyReportNudge,
 	openLedgerNudge,
@@ -22,8 +23,36 @@ export function nudgeDecision(state, { hasToolCalls, hasHandoffReport }) {
 	const relay = state.relay;
 	if (!relay) return { kind: "steer", text: firstEvaluationNudge() };
 	// Outside the full flow there is no ledger obligation: a finished scope may
-	// be followed by the final answer.
-	if (relay.fullFlow !== true) return { kind: "none" };
+	// be followed by the final answer. Two cases still owe one, and both used to
+	// go silent here:
+	//
+	// 1. A legacy snapshot omits `fullFlow`. Every other reader derives it
+	//    through `copyRelay`, so this reader must too; otherwise a restored
+	//    full-flow line stops being nudged at all.
+	// 2. A ledger is still on record. The obligation belongs to the ledger, not
+	//    to the switch: a non-empty ledger forbids a silent stop wherever the
+	//    holder stands.
+	const current = copyRelay(relay);
+	if (current.fullFlow !== true) {
+		// A holder that was already allowed to stop owes nothing, even when a
+		// stale ledger survived the promotion.
+		if (current.canStop) return { kind: "none" };
+		const ledger = current.lastLedger;
+		if (ledger && ledger.empty === false) {
+			return { kind: "steer", text: openLedgerNudge(current, ledger) };
+		}
+		return { kind: "none" };
+	}
+	return nextOutsideScopeNudge(current, hasHandoffReport);
+}
+
+/**
+ * The outside-scope decision once the relay is known to be in the full flow.
+ *
+ * Split out so the legacy and ledger fallbacks above ask the same questions
+ * instead of repeating them, and drifting from the answers.
+ */
+function nextOutsideScopeNudge(relay, hasHandoffReport) {
 	if (relay.canStop) return { kind: "none" };
 	if (relay.handoffPending) {
 		return hasHandoffReport

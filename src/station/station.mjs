@@ -759,7 +759,7 @@ export class SessionStation {
 	 * before extension context handlers run. Earlier receipts remain unchanged.
 	 */
 	skillReceipt(ctx) {
-		const text = skillReceiptText(this.state, this.relayOn(ctx));
+		const text = skillReceiptText(this.state, this.relayOn(ctx), this.clockBounded());
 		return {
 			role: "developer",
 			content: [{ type: "text", text }],
@@ -767,6 +767,11 @@ export class SessionStation {
 			timestamp: Date.now(),
 			herdSkill: true,
 		};
+	}
+
+	/** The clock port is the only owner of "does a time segment exist". */
+	clockBounded() {
+		return this.registry?.ports?.().clock !== "off";
 	}
 
 	prepareRequest(ctx, previous) {

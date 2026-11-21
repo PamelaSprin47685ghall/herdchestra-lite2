@@ -60,7 +60,8 @@ function handleAmendCall(station, call, base, currentIndex) {
   });
   if (!applied.ok) return errorResult(applied.code, applied.reason);
   applied.scope = currentScope(state);
-  return textResult(amendText(applied, reflection), { refunded: applied.refunded });
+  const bounded = typeof station.clockBounded === "function" ? station.clockBounded() : true;
+  return textResult(amendText(applied, reflection, bounded), { refunded: applied.refunded });
 }
 
 function handlePinCall(station, call) {
@@ -533,6 +534,7 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     remainingScope,
     station.relayReady() && !state.herdMode && state.relay?.fullFlow === true,
     state.herdMode,
+    typeof station.clockBounded === "function" ? station.clockBounded() : true,
   );
   queueModelSwitch(station, target, from, remainingScope?.id ?? null);
   return textResult(text, { scopeId: scope.id });

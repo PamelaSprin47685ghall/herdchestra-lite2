@@ -122,7 +122,7 @@ function formatClock(ms) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-export function budgetText(scope, now = Date.now()) {
+export function budgetText(scope, now = Date.now(), bounded = true) {
   if (!scope || !isPlainObject(scope.remaining)) return "";
   const entries = [];
   for (const tool of Reflect.ownKeys(scope.remaining).sort()) {
@@ -135,7 +135,7 @@ export function budgetText(scope, now = Date.now()) {
     );
   }
   const tools = entries.join(", ");
-  if (!Number.isFinite(scope.deadlineAt)) return tools;
+  if (!bounded || !Number.isFinite(scope.deadlineAt)) return tools;
   const left = Math.max(0, scope.deadlineAt - now);
   const timed =
     scope.overtimeAt !== null || left === 0

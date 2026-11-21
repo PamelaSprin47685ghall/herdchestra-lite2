@@ -13,12 +13,12 @@ function stageLine(scope) {
 	return render(T["stage-line"], { stage: scope.stage });
 }
 
-function beginText(scope) {
+function beginText(scope, bounded = true) {
 	const framing = scope.stage === DECISION_FRAMING;
 	return render(T.begin, {
 		intent: scope.intent,
 		stage_line: stageLine(scope),
-		budget: budgetText(scope) || "none",
+		budget: budgetText(scope, Date.now(), bounded) || "none",
 		closing_line: framing ? T["begin.herd"] : T["begin.close"],
 	});
 }
@@ -30,6 +30,7 @@ function endText(
 	remainingScope = null,
 	relayOn = true,
 	herdMode = false,
+	bounded = true,
 ) {
 	const lines = [];
 	if (transitioning) {
@@ -38,7 +39,7 @@ function endText(
 		lines.push(
 			render(T["end.inside"], {
 				intent: remainingScope.intent,
-				budget: budgetText(remainingScope) || "none",
+				budget: budgetText(remainingScope, Date.now(), bounded) || "none",
 			}),
 		);
 		if (remainingScope.stage) lines.push(stageLine(remainingScope));
@@ -66,7 +67,7 @@ function endText(
 	return lines.join("\n");
 }
 
-function amendText(applied, reflection = "") {
+function amendText(applied, reflection = "", bounded = true) {
 	const refunded = Number.isInteger(applied.refunded) ? applied.refunded : 0;
 	const residual = Array.isArray(applied.residualDefers)
 		? applied.residualDefers.length
@@ -81,7 +82,7 @@ function amendText(applied, reflection = "") {
 			? render(T["amend.refunded"], { count: refunded })
 			: T["amend.no-refund"],
 		render(T["amend.remaining"], {
-			budget: budgetText(applied.scope) || "none",
+			budget: budgetText(applied.scope, Date.now(), bounded) || "none",
 		}),
 	);
 	if (residual > 0) {
@@ -114,7 +115,7 @@ function clockLine(state, now = Date.now()) {
 	return `UTC now ${new Date(now).toISOString()}, ${minutes}m${String(seconds).padStart(2, "0")}s since this session began.`;
 }
 
-export function skillReceiptText(state, relayOn = true) {
+export function skillReceiptText(state, relayOn = true, bounded = true) {
 	const scope = currentScope(state);
 	const fullFlow = state.relay?.fullFlow === true;
 	const boundary = Number.isInteger(state.relay?.generation) && state.relay.generation >= 0
@@ -131,7 +132,7 @@ export function skillReceiptText(state, relayOn = true) {
 			render(T["receipt.inside"], {
 				level: state.scopes.length,
 				intent: JSON.stringify(scope.intent),
-				budget: budgetText(scope) || "none",
+				budget: budgetText(scope, Date.now(), bounded) || "none",
 			}),
 		]
 		: [T["receipt.outside"]];

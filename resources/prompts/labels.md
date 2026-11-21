@@ -20,4 +20,4 @@ the target model
 simple (this task runs without a ledger)
 
 ## flow-full
-full flow (five stages plus relay)
+full flow (acceptance-cases through direct-execution, plus relay)

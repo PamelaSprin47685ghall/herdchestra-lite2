@@ -4,7 +4,7 @@ The successor's first todo evaluation is an empty ledger. This promotion is the 
 
 ## next.reopened
 
-The ledger is empty again after your promotion. This submission turns the full flow back on: five stages and the relay apply to the next task, until two consecutive empty evaluations end it. You may still write the final answer now.
+The ledger is empty again after your promotion. This submission turns the full flow back on: the four working stages from acceptance-cases through direct-execution and the relay apply to the next task, until two consecutive empty evaluations end it. You may still write the final answer now.
 
 ## next.handoff
 

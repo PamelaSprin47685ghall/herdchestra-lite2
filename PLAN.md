@@ -52,9 +52,22 @@
 3. **不是另一态的子集开关**（不是“少做一点”的别名）。
 
 `relay` 的中间态不是猜的：`45376bc` 修的就是“账本非空而 `fullFlow` 不为真”——
-账本独立于交接存在，这是代码必须处理的真实状态，故 `relay` 取
-`HERD_RELAY=off|ledger|full`（这三档是义务递进，与 `scope` 的容器形态不同轴，
-所以不同构是故意的）。
+账本独立于交接存在，这是代码必须处理的真实状态。
+
+`relay` 的三档是**义务强度**，不是容器形态，所以名字按“这一档要求什么”取：
+
+| 名字 | 义务 |
+| :--- | :--- |
+| `none` | 不要求账本，也不交接 |
+| `ledger` | 要求账本、禁止静默停止，但不交接 |
+| `handoff` | 账本 + 交接 + 晋升 + 自压缩 |
+
+`HERD_RELAY=none|ledger|handoff`。三个都是名词，严格递进；`handoff` 命名了顶档
+新增的那件事，比 `full`（只说明“更多”）具体。不用 `off`：这个端口没有“关掉某物”，
+只有“欠不欠账”。
+
+与 `scope` 的 `bare` / `single` / `batch` 不同词根是故意的：两轴不同（容器形态 vs
+义务强度），硬凑同构会把 `bare` 这种词按到义务上，反而失准。
 
 `clock` 的“只显示 UTC 不设截止”看似第三态，但正确做法是把两件事拆清，不是加态。
 `stages` 的“只记录不门禁”靠读 relay 的 `fullFlow` 事实实现，属于分账，不是第三态。
@@ -131,7 +144,7 @@ export const scopeBeginTicket = {
 | 端口 | 职责 | 实现 | 为什么它是端口 |
 | :--- | :--- | :--- | :--- |
 | `scope` | 嵌套栈、预算、屏障 | `bare` / `single` / `batch` | 三版是三种容器形态，契约同形但行为可辨 |
-| `relay` | 账本、交接、自压缩 | `off` / `ledger` / `full` | 账本义务独立于交接，今天就在被使用 |
+| `relay` | 账本、交接、自压缩 | `none` / `ledger` / `handoff` | 账本义务独立于交接，今天就在被使用 |
 | `clock` | 墙钟预算、棋钟、UTC 时钟 | `on` / `off` | 截止算术与训斥是独立策略，回执单独一行 |
 | `stages` | 阶段记录与准入 | `on` / `off` | 阶段名进入提示词与回执，且有准入判断 |
 | `herd` | herdMode 与 ask 门禁 | `on` / `off` | 决定 decision-framing 是否存在 |
@@ -219,6 +232,7 @@ export const scopeBeginTicket = {
 ### 第 3 步：其余端口逐个归位
 
 顺序：`pin` → `amend` → `modelSwitch` → `stages` → `folding` → `herd` → `relay`
+（`none` → `ledger` → `handoff` 三档由低到高归位）
 → `status` → `observer`。每个端口四拍：
 
 1. 端口与契约测试（参数化到实现），补齐分账行；

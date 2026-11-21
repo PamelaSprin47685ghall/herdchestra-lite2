@@ -43,32 +43,73 @@ function toolCallIds(message) {
 	return ids;
 }
 
-/**
- * Remove a leading run of dead assistant/tool frames from uncommitted input.
- * A frame is one assistant message and the tool results it declares. The host
- * never committed these frames, so they must not become model input.
- */
-function isolateDeadFrames(pending) {
-	const recovered = [];
-	let index = 0;
-	while (index < pending.length && pending[index]?.role === "assistant") {
-		const frame = [pending[index]];
-		const ids = toolCallIds(pending[index]);
-		index += 1;
-		while (index < pending.length && pending[index]?.role === "toolResult") {
-			const id = pending[index]?.toolCallId;
-			if (typeof id !== "string" || !ids.has(id)) {
-				throw failure(
-					"CONTEXT_PREPARATION_HISTORY_MISMATCH",
-					"An uncommitted tool result does not belong to the assistant frame before it.",
-				);
-			}
-			frame.push(pending[index]);
-			index += 1;
-		}
-		recovered.push(...frame);
+function committedToolCallIds(prefix) {
+	for (let index = prefix.length - 1; index >= 0; index -= 1) {
+		const message = prefix[index];
+		if (message?.role === "assistant") return toolCallIds(message);
 	}
-	return { recovered, pending: pending.slice(index) };
+	return new Set();
+}
+
+/**
+ * Separate dead output from queued input.
+ *
+ * A frame is one assistant message and the tool results it declares. The host
+ * appends frames and results separately, so a frame can appear anywhere in the
+ * uncommitted tail, including after a queued steer. Those frames never became
+ * model input and are isolated.
+ *
+ * A tool result whose assistant frame is still in the committed prefix is a
+ * half-committed frame. Its request cannot take a receipt between the call and
+ * the result, so it is reported through `frameInFlight`; the caller defers
+ * preparation instead of aborting. A tool result that belongs to neither the
+ * pending frame nor the committed one is corruption and still throws.
+ */
+function partitionPending(pending, prefix) {
+	const recovered = [];
+	const kept = [];
+	let frame = null;
+	let sawInput = false;
+	let frameInFlight = false;
+	let committedIds = null;
+	for (const message of pending) {
+		const role = message?.role;
+		if (role === "assistant") {
+			frame = toolCallIds(message);
+			recovered.push(message);
+			continue;
+		}
+		if (role === "toolResult") {
+			const id = message?.toolCallId;
+			if (frame !== null && typeof id === "string" && frame.has(id)) {
+				recovered.push(message);
+				continue;
+			}
+			if (frame === null && !sawInput) {
+				committedIds ??= committedToolCallIds(prefix);
+				if (typeof id === "string" && committedIds.has(id)) {
+					frameInFlight = true;
+					recovered.push(message);
+					continue;
+				}
+			}
+			throw failure(
+				"CONTEXT_PREPARATION_HISTORY_MISMATCH",
+				"An uncommitted tool result does not belong to the assistant frame before it.",
+			);
+		}
+		if (INPUT_ROLES.has(role)) {
+			sawInput = true;
+			frame = null;
+			kept.push(message);
+			continue;
+		}
+		throw failure(
+			"CONTEXT_PREPARATION_HISTORY_MISMATCH",
+			"The live loop contains uncommitted output that cannot be aligned safely with the committed history.",
+		);
+	}
+	return { recovered, pending: kept, frameInFlight };
 }
 
 /** Separate committed history from input whose host events have not run yet. */
@@ -99,15 +140,14 @@ export function splitRequestHistory(messages, committed) {
 			throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "The live loop does not contain the last committed message.");
 		}
 	}
-	const isolated = isolateDeadFrames(messages.slice(end + 1));
-	const pending = isolated.pending;
-	if (pending.some((message) => !INPUT_ROLES.has(message?.role))) {
-		throw failure(
-			"CONTEXT_PREPARATION_HISTORY_MISMATCH",
-			"The live loop contains uncommitted output that cannot be aligned safely with the committed history.",
-		);
-	}
-	return { prefix: messages.slice(0, end + 1), pending, recovered: isolated.recovered };
+	const prefix = messages.slice(0, end + 1);
+	const partitioned = partitionPending(messages.slice(end + 1), prefix);
+	return {
+		prefix,
+		pending: partitioned.pending,
+		recovered: partitioned.recovered,
+		frameInFlight: partitioned.frameInFlight,
+	};
 }
 
 function commitPrepared(registration, binding, signal, context, request, receipt) {
@@ -145,6 +185,16 @@ function prepareState(registration, binding, signal, context, persistedStamp) {
 	const original = context.messages;
 	const items = original.slice();
 	const split = splitRequestHistory(original, messagesOf(binding.session));
+	if (split.frameInFlight) {
+		record("context", "Deferred request preparation for an in-flight tool frame.", {
+			count: split.recovered.length,
+			roles: [...new Set(split.recovered.map((message) => message?.role))],
+			toolCallIds: split.recovered
+				.filter((message) => message?.role === "toolResult")
+				.map((message) => message.toolCallId),
+		});
+		return;
+	}
 	if (split.recovered.length > 0) {
 		record("context", "Isolated uncommitted messages from the live loop.", {
 			count: split.recovered.length,

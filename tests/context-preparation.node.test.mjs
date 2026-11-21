@@ -402,6 +402,7 @@ test("the committed tail can identify a loop whose older interior is still unfol
 		prefix: [old, tail],
 		pending: [input],
 		recovered: [],
+		frameInFlight: false,
 	});
 	assert.deepEqual(splitRequestHistory([old, structuredClone(tail), input], [summary, tail]).pending, [input]);
 });
@@ -422,6 +423,7 @@ test("an uncommitted frame before new input is isolated instead of blocking it",
 		prefix: [user],
 		pending: [next],
 		recovered: [call, result],
+		frameInFlight: false,
 	});
 	const again = splitRequestHistory([user, structuredClone(call), structuredClone(result)], [user]);
 	assert.deepEqual(again.pending, []);
@@ -441,13 +443,53 @@ test("a tool result must belong to the frame before it", () => {
 	});
 });
 
-test("output that follows an input cannot be recovered", () => {
+test("output that follows an input is isolated instead of treated as queued input", () => {
 	const user = { role: "user", content: "start" };
 	const next = { role: "user", content: "later" };
 	const stray = { role: "assistant", content: "unfinished" };
-	assert.throws(() => splitRequestHistory([user, next, stray], [user]), {
-		code: "CONTEXT_PREPARATION_HISTORY_MISMATCH",
+	assert.deepEqual(splitRequestHistory([user, next, stray], [user]), {
+		prefix: [user],
+		pending: [next],
+		recovered: [stray],
+		frameInFlight: false,
 	});
+});
+
+test("a tool result whose frame is already committed is deferred, not refused", () => {
+	const user = { role: "user", content: "start" };
+	const call = { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }] };
+	const result = { role: "toolResult", toolCallId: "read-1", content: "done" };
+	assert.deepEqual(splitRequestHistory([user, call, result], [user, call]), {
+		prefix: [user, call],
+		pending: [],
+		recovered: [result],
+		frameInFlight: true,
+	});
+});
+
+test("a half-committed tool frame defers preparation and resumes after it settles", async () => {
+	const f = fixture();
+	installContextPreparation(f.session, f);
+	await f.prepare();
+	f.finishTurn(1);
+	const call = { role: "assistant", content: [{ type: "toolCall", id: "read-7", name: "read", arguments: {} }] };
+	const result = { role: "toolResult", toolCallId: "read-7", content: [{ type: "text", text: "ok" }] };
+	// The host commits the assistant frame first; the result is still live-only.
+	f.loop.messages.push(call, result);
+	f.session.agent.state.messages.push(call);
+	f.manager.appendMessage(call);
+	const before = f.loop.messages.slice();
+	await f.prepare();
+	assert.deepEqual(f.loop.messages, before);
+	assert.equal(f.receiptReads(), 1);
+	const records = snapshot().filter((entry) => entry.domain === "context");
+	assert.equal(records.at(-1).message.includes("in-flight"), true);
+	// Once the result is committed, the next preparation resumes normally.
+	f.session.agent.state.messages.push(result);
+	f.manager.appendMessage(result);
+	await f.prepare();
+	assert.equal(f.loop.messages.at(-1).herdSkill, true);
+	assert.equal(f.receiptReads(), 2);
 });
 
 test("a rejected tool turn does not block later requests and is recorded", async () => {

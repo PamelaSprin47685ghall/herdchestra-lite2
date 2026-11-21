@@ -388,7 +388,7 @@ function onSessionCompact(station, ctx) {
 
 function onBeforeAgentStart(station, event, ctx) {
 	const policy = station.policy(ctx);
-	const prompt = injectSystemPrompt(event?.systemPrompt);
+	const prompt = injectSystemPrompt(event?.systemPrompt, station.registry?.ports?.() ?? {});
 	const promptChanged = prompt !== event?.systemPrompt;
 	// Relay and `todo` share one verdict: `ensureTools` owns that rule, so no
 	// second `getActiveTools` check may live here.

@@ -82,6 +82,7 @@ export function validateFission(state, begin, options = {}) {
   }
   if (
     options.mainAgent &&
+    options.stagesOff !== true &&
     state.relay?.fullFlow === true &&
     begin.stage === EXECUTION_STAGE &&
     missingStages(state.stageFlags).length > 0

@@ -194,6 +194,7 @@ function handleFissionBegin(station, call, { args, ctx, base, currentMessage, cu
   const options = {
     mainAgent: station.policy(ctx) === MAIN_AGENT,
     relayOn: station.relayOn(ctx),
+    stagesOff: station.registry?.ports?.().stages === "off",
   };
   const validation = validateFission(state, begin, options);
   if (!validation.ok) {

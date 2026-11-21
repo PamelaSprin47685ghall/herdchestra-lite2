@@ -76,6 +76,16 @@ export function isFissionManager(value) {
 	if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
 	return value[FISSION_MANAGER] === true;
 }
+/**
+ * Unwrap a flow proxy to the shared SessionManager beneath it. Every flow
+ * carries its own manager proxy over one shared journal, so a lookup keyed by
+ * the manager must ask for the shared object, not the proxy. Returns null for
+ * a value that is neither object nor function, so callers can test the result.
+ */
+export function sharedManagerOf(value) {
+	if (!value || (typeof value !== "object" && typeof value !== "function")) return null;
+	return isFissionManager(value) ? value.shared ?? null : value;
+}
 
 const REQUIRED_METHODS = ["getLeafId", "getBranch", "branch", "resetLeaf", "seal", "close"];
 

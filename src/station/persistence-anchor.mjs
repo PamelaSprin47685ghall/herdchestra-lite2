@@ -39,8 +39,13 @@ export function createPersistenceAnchor({
 		}
 	}
 
+	/**
+	 * Write the pending state slice. Returns false only when the write was owed
+	 * and did not happen, so a caller can report a lost state write instead of
+	 * assuming success; "nothing to write" is a success.
+	 */
 	function persist() {
-		if (!manager || typeof manager.appendCustomEntry !== "function") return;
+		if (!manager || typeof manager.appendCustomEntry !== "function") return false;
 		try {
 			// Anything that rewrites the branch (a fold, an export, a future
 			// history tool) drops the entry that anchors `lastPersisted`. A
@@ -54,13 +59,15 @@ export function createPersistenceAnchor({
 			}
 			const next = serialize(state());
 			const entry = plan(lastPersisted, next, writes);
-			if (!entry) return;
+			if (!entry) return true;
 			const entryId = manager.appendCustomEntry(type, entry);
 			lastStateEntryId = typeof entryId === "string" ? entryId : null;
 			lastPersisted = next;
 			writes = entry.kind === "checkpoint" ? 0 : writes + 1;
+			return true;
 		} catch (error) {
 			noteError("persist", error);
+			return false;
 		}
 	}
 

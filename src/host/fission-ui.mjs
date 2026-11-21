@@ -94,7 +94,10 @@ export function installFissionUI(session, { hasBatch = () => false, broadcastPre
 		if (id !== owner && interrupted) return;
 		if (publishBroadcast(event)) return;
 		if (event.type === "agent_start") {
-			if (working && (id !== owner || hasBatch())) return;
+			// A start while the aggregate loader is already up must not push the
+			// owner's state again: the host reads that as a new turn beginning,
+			// and pairs it with a completion for work that has not finished.
+			if (working) return;
 			working = true;
 		}
 		if (event.type === "agent_end") {

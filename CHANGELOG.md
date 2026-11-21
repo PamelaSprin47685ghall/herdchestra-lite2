@@ -6,7 +6,27 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `HERD_DISABLE_STAGES=1` now really disables the stage feature. The scope gate skips
+  `STAGE_FLAGS_UNMET` for `direct-execution`, and the managed system prompt omits the
+  stage block instead of leaving rules whose enforcement is gone. The switch had been
+  parsed into `off` since the port work, but nothing read it at runtime.
+- `activate()` accepts the environment it resolves ports from, and the relay integration
+  harness passes an explicit one. Running the test suite from a shell that sets a herd
+  switch no longer flips default-behavior assertions.
+- With `clock=off`, begin/end/amend/skill receipts no longer print the wall-clock
+  segment. `budgetText()` takes the port's `bounded` answer; the scope record still
+  carries the numbers, so persistence is unchanged.
+
 ### Fixed
+
+- A live loop whose assistant frame is committed before its tool result no longer
+  aborts the next model call. `splitRequestHistory()` isolates dead assistant frames
+  anywhere in the pending tail and reports a committed frame's trailing result as
+  `frameInFlight`; the hook defers that one preparation without rewriting context or
+  writing a receipt. Orphan results, unknown roles, and a lost or ambiguous committed
+  tail still fail with `CONTEXT_PREPARATION_HISTORY_MISMATCH`.
 
 - Esc pauses active fission flows without closing their scopes. New input resumes the original flows. Pending broadcasts use omp's Steering panel, support Alt+Up and Esc restoration, and appear only once on first delivery.
 - An open flow that stops normally receives a steer to continue instead of crashing the batch. Recoverable external failures wait for user input; permanent per-flow failures no longer discard a completed sibling's work.

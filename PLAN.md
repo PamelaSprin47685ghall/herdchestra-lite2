@@ -4,7 +4,7 @@
 | :--- | :--- |
 | 起点 | `b33e76c` |
 | 上一版 | 16 站台 Ticket Station 重构，执行到 `99414ac` 后整体废弃 |
-| 本文版本 | v6：收回过度设计，按“开关=实现名、分账法、清理先行”重写 |
+| 本文版本 | v7：`scope` 三值按形态重新命名（`bare` / `single` / `batch`） |
 | 现状 | 分支 `feat/concurrent-fission` 以 `b33e76c` 为基，只保留可独立成立的行为修复与提示词改进 |
 
 旧计划原文（诊断、16 站台划分、五条机制）仍可从 `git show b33e76c:PLAN.md` 取回。
@@ -25,10 +25,25 @@
 ### 1.1 开关是“实现名集合”，不是布尔
 
 - 二值端口最常见：两个名字恒为 `on` / `off`，故 `HERD_DISABLE_<PORT>=1` 等价于选 `off`。
-- `scope` 是三值：`HERD_SCOPE=off|on|fission`。
-- `relay` 也是三值：`HERD_RELAY=off|ledger|full`。
+- 三值端口直接把开关值写成实现名。
 
-### 1.2 什么时候允许第三个态
+### 1.2 `scope` 的三个名字
+
+`scope` 不是“开与关”，而是**三种容器形态**，所以三个名字一律描述形态，不用 `on` / `off`：
+
+| 名字 | 形态 | 行为 |
+| :--- | :--- | :--- |
+| `bare` | 不装作用域机器 | 没有预算、没有屏障、没有回执；`scope()` 被拒绝 |
+| `single` | 一个容器，顺序 | 在当前会话压栈，一拍只做一件事 |
+| `batch` | 多个容器，并发 | 注册批次、扇出流、执行屏障、退场与收养 |
+
+`HERD_SCOPE=bare|single|batch`。
+
+三个名字同构：都回答“工作以什么容器形态存在”——没有容器 / 一个容器 / 多个容器。
+`single` 与 `batch` 是仓库既有语汇（单流模式、批次），不造新词；
+`bare` 比 `off` 准确，因为这里没有“关掉某个开关”，只有“不装那套机器”。
+
+### 1.3 什么时候允许第三个态
 
 三条同时成立才升格，缺一不升格：
 
@@ -37,8 +52,11 @@
 3. **不是另一态的子集开关**（不是“少做一点”的别名）。
 
 `relay` 的中间态不是猜的：`45376bc` 修的就是“账本非空而 `fullFlow` 不为真”——
-账本独立于交接存在，这是代码必须处理的真实状态。
-`clock` 的 “只显示 UTC 不设截止”看似第三态，但正确做法是把两件事拆清，不是加态。
+账本独立于交接存在，这是代码必须处理的真实状态，故 `relay` 取
+`HERD_RELAY=off|ledger|full`（这三档是义务递进，与 `scope` 的容器形态不同轴，
+所以不同构是故意的）。
+
+`clock` 的“只显示 UTC 不设截止”看似第三态，但正确做法是把两件事拆清，不是加态。
 `stages` 的“只记录不门禁”靠读 relay 的 `fullFlow` 事实实现，属于分账，不是第三态。
 
 提前造态与提前造词表是同一个错误，只是换了个位置。
@@ -51,7 +69,7 @@
 
 ```js
 export const scopeBeginTicket = {
-  uses: { scope: "fission" },   // 端口名 -> 实现名；未列出的取全局默认
+  uses: { scope: "batch" },     // 端口名 -> 实现名；未列出的取全局默认
   run: async ({ ports, ctx, args }) => {
     const plan = planScopeBegin(args);        // 纯领域决策
     if (!plan.ok) return refusal(plan);
@@ -60,11 +78,11 @@ export const scopeBeginTicket = {
 };
 ```
 
-- 工单里不出现 `features.on(...)`，也不出现 `if (scopeOff)`。
+- 工单里不出现 `features.on(...)`，也不出现 `if (scopeBare)`。
 - 解析在**工单构造期**完成，早于任何 `await`；选错不会留下半个批次：
 
 ```js
-{ code: "PORT_UNAVAILABLE", port: "scope", wanted: "fission", available: ["on"] }
+{ code: "PORT_UNAVAILABLE", port: "scope", wanted: "batch", available: ["single"] }
 ```
 
 三种拒绝：端口名不存在、该实现被当前配置禁用、工单要求与全局配置冲突。
@@ -98,11 +116,11 @@ export const scopeBeginTicket = {
 | `pin` × `folding` | 折叠不得丢 pin | `folding` | `pin` 只发布当前 pin 集合 |
 
 `scope` 的内部三版不算跨端口分账：预算归 `scope` 所有（三版都扣同一本账），
-回合边界由 `fission` 那版自己管。
+回合边界由 `batch` 那版自己管。
 
 ### 3.3 写表的时间
 
-工作台动工**之前**，不是之后补。先有表，才知道 `off` 那版暴露什么、`on` 那版接管什么。
+工作台动工**之前**，不是之后补。先有表，才知道第二版暴露什么、默认那版接管什么。
 
 ---
 
@@ -112,7 +130,7 @@ export const scopeBeginTicket = {
 
 | 端口 | 职责 | 实现 | 为什么它是端口 |
 | :--- | :--- | :--- | :--- |
-| `scope` | 嵌套栈、预算、屏障 | `off` / `on` / `fission` | 三版是三种不同执行形态，契约同形但行为可辨 |
+| `scope` | 嵌套栈、预算、屏障 | `bare` / `single` / `batch` | 三版是三种容器形态，契约同形但行为可辨 |
 | `relay` | 账本、交接、自压缩 | `off` / `ledger` / `full` | 账本义务独立于交接，今天就在被使用 |
 | `clock` | 墙钟预算、棋钟、UTC 时钟 | `on` / `off` | 截止算术与训斥是独立策略，回执单独一行 |
 | `stages` | 阶段记录与准入 | `on` / `off` | 阶段名进入提示词与回执，且有准入判断 |
@@ -135,10 +153,10 @@ export const scopeBeginTicket = {
 
 ### 4.3 为什么清单短了
 
-- `fission` 并入 `scope`：批次与单流共享栈、预算、屏障，是同一端口的两种形态。
-  拆成两个开关才会出现“`scope=on` 与 `fission` 同时开”的伪矛盾。
+- 批次形态并入 `scope`：它与单流共享栈、预算、屏障，是同一端口的第三种形态。
+  拆成两个开关才会出现“`scope=single` 与批次同时开”的伪矛盾。
 - `defer` 已删除（实际效果差），不在清单内。残留清理见第 0 步。
-- `timer` 不并入 `scope`，`defer` 与 `amend` 不互相合并，`stages` 与 `herd` 不合并，
+- `clock` 不并入 `scope`，`defer` 与 `amend` 不互相合并，`stages` 与 `herd` 不合并，
   `folding` 与 `modelSwitch` 不合并——各自的变更原因不同。
 
 ---
@@ -190,12 +208,12 @@ export const scopeBeginTicket = {
 
 ### 第 2 步：`scope` + `clock` 两端口试点
 
-- `scope` 三版归位：`off`（拒绝）、`on`（单流压栈）、`fission`（批次）。
+- `scope` 三版归位：`bare`（拒绝）、`single`（单流压栈）、`batch`（批次）。
 - `clock` 两版：截止算术与训斥在 `on`，`off` 时回执无 time 段。
 - `scope-begin` 工单可按需 `uses`；调用点删掉空值判断。
 
-**完成标准**：三版跑同一套契约测试；`off` 下不安装 UI/输入/dispose 桥；
-`fission` 行为与今天一致；`clock` 的分账行有测试。
+**完成标准**：三版跑同一套契约测试；`bare` 下不安装 UI/输入/dispose 桥；
+`batch` 行为与今天一致；`clock` 的分账行有测试。
 **回退点**：每版一个提交序列。
 
 ### 第 3 步：其余端口逐个归位
@@ -227,10 +245,10 @@ export const scopeBeginTicket = {
 1. **fork/adopt 的原型继承**：现状用 `Object.create(owner)` 共享 Session 级状态，
    `previousObservation` 因此读到过 owner 的槽位。各版实现必须显式声明共享/派生边界。
 2. **实现会分叉**：唯一护栏是同一套契约测试，以及“同一工单在各版下都跑”。
-3. **`off` 的三种形态容易被混用**：空对象、拒绝、直路；选择标准是“该端口关闭后，
+3. **第二版的形态容易被混用**：空对象、拒绝、直路；选择标准是“该端口换版后，
    调用方还需要完成什么”。
 4. **选择器滥用**：工单能选实现，不等于任何调用点都能选。默认那版，确有理由才声明。
 5. **持久化的双写期**：旧快照恢复必须有一次可验证的迁移测试。
 6. **判定顺序是语义**：`blockExternalFailure` 与可恢复错误的先后，决定 429 正文里
    出现 tool_choice 时的行为；各版实现必须一致，且有测试。
-7. **未决**：`clock` 关闭后，单流 scope 是否仍需要回执里的 UTC 时钟。
+7. **未决**：`clock` 关闭后，`single` 形态是否仍需要回执里的 UTC 时钟。

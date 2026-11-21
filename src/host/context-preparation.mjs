@@ -4,6 +4,7 @@
 import { rememberSession, sessionMatchesContext } from "./capture.mjs";
 import { messagesOf } from "./adapter.mjs";
 import { commitSkillReceipt, sameAssistantFrame } from "./hack-context.mjs";
+import { record } from "./diagnostics.mjs";
 import { isDeepStrictEqual } from "node:util";
 
 const PREPARATION = Symbol.for("herdchestra-lite2.context-preparation.v1");
@@ -30,6 +31,44 @@ function checkState(station, stamp) {
 	if (station.state !== stamp.state || station.state?.epoch !== stamp.epoch) {
 		throw failure("CONTEXT_PREPARATION_STALE", "The station state changed while the request was being prepared.");
 	}
+}
+
+function toolCallIds(message) {
+	const ids = new Set();
+	const content = message?.content;
+	if (!Array.isArray(content)) return ids;
+	for (const item of content) {
+		if (item?.type === "toolCall" && typeof item.id === "string") ids.add(item.id);
+	}
+	return ids;
+}
+
+/**
+ * Remove a leading run of dead assistant/tool frames from uncommitted input.
+ * A frame is one assistant message and the tool results it declares. The host
+ * never committed these frames, so they must not become model input.
+ */
+function isolateDeadFrames(pending) {
+	const recovered = [];
+	let index = 0;
+	while (index < pending.length && pending[index]?.role === "assistant") {
+		const frame = [pending[index]];
+		const ids = toolCallIds(pending[index]);
+		index += 1;
+		while (index < pending.length && pending[index]?.role === "toolResult") {
+			const id = pending[index]?.toolCallId;
+			if (typeof id !== "string" || !ids.has(id)) {
+				throw failure(
+					"CONTEXT_PREPARATION_HISTORY_MISMATCH",
+					"An uncommitted tool result does not belong to the assistant frame before it.",
+				);
+			}
+			frame.push(pending[index]);
+			index += 1;
+		}
+		recovered.push(...frame);
+	}
+	return { recovered, pending: pending.slice(index) };
 }
 
 /** Separate committed history from input whose host events have not run yet. */
@@ -60,11 +99,15 @@ export function splitRequestHistory(messages, committed) {
 			throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "The live loop does not contain the last committed message.");
 		}
 	}
-	const pending = messages.slice(end + 1);
+	const isolated = isolateDeadFrames(messages.slice(end + 1));
+	const pending = isolated.pending;
 	if (pending.some((message) => !INPUT_ROLES.has(message?.role))) {
-		throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "Uncommitted assistant or tool output cannot be treated as queued input.");
+		throw failure(
+			"CONTEXT_PREPARATION_HISTORY_MISMATCH",
+			"The live loop contains uncommitted output that cannot be aligned safely with the committed history.",
+		);
 	}
-	return { prefix: messages.slice(0, end + 1), pending };
+	return { prefix: messages.slice(0, end + 1), pending, recovered: isolated.recovered };
 }
 
 function commitPrepared(registration, binding, signal, context, request, receipt) {
@@ -102,6 +145,15 @@ function prepareState(registration, binding, signal, context, persistedStamp) {
 	const original = context.messages;
 	const items = original.slice();
 	const split = splitRequestHistory(original, messagesOf(binding.session));
+	if (split.recovered.length > 0) {
+		record("context", "Isolated uncommitted messages from the live loop.", {
+			count: split.recovered.length,
+			roles: [...new Set(split.recovered.map((message) => message?.role))],
+			toolCallIds: split.recovered
+				.filter((message) => message?.role === "toolResult")
+				.map((message) => message.toolCallId),
+		});
+	}
 	const receipt = station.prepareRequest(ctx, split.prefix.at(-1));
 	// Boundary observation can advance the epoch synchronously. Only later
 	// changes, while a restore ticket is pending, invalidate this request.

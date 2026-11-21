@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { rememberSession } from "../src/host/capture.mjs";
 import { installContextPreparation, splitRequestHistory } from "../src/host/context-preparation.mjs";
 import { commitSkillReceipt } from "../src/host/hack-context.mjs";
+import { reset, snapshot } from "../src/host/diagnostics.mjs";
 
 function fixture(id = "Main") {
 	const first = { role: "user", content: "Keep the request history stable." };
@@ -397,16 +398,82 @@ test("the committed tail can identify a loop whose older interior is still unfol
 	const summary = { role: "developer", content: "folded work" };
 	const tail = { role: "toolResult", toolCallId: "last", content: "done" };
 	const input = { role: "user", content: "continue" };
-	assert.deepEqual(splitRequestHistory([old, tail, input], [summary, tail]), { prefix: [old, tail], pending: [input] });
+	assert.deepEqual(splitRequestHistory([old, tail, input], [summary, tail]), {
+		prefix: [old, tail],
+		pending: [input],
+		recovered: [],
+	});
 	assert.deepEqual(splitRequestHistory([old, structuredClone(tail), input], [summary, tail]).pending, [input]);
 });
 
-test("missing committed tails and uncommitted outputs fail instead of becoming input", () => {
+test("committed history that the live loop lost is still rejected", () => {
 	const user = { role: "user", content: "start" };
 	const output = { role: "assistant", content: "unfinished" };
 	assert.throws(() => splitRequestHistory([user], [output]), { code: "CONTEXT_PREPARATION_HISTORY_MISMATCH" });
-	assert.throws(() => splitRequestHistory([user, output], [user]), { code: "CONTEXT_PREPARATION_HISTORY_MISMATCH" });
 	assert.throws(() => splitRequestHistory([{ role: "toolResult", toolCallId: "unknown" }], []), { code: "CONTEXT_PREPARATION_HISTORY_MISMATCH" });
+});
+
+test("an uncommitted frame before new input is isolated instead of blocking it", () => {
+	const user = { role: "user", content: "start" };
+	const call = { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }] };
+	const result = { role: "toolResult", toolCallId: "read-1", content: [{ type: "text", text: "denied" }] };
+	const next = { role: "user", content: "continue" };
+	assert.deepEqual(splitRequestHistory([user, call, result, next], [user]), {
+		prefix: [user],
+		pending: [next],
+		recovered: [call, result],
+	});
+	const again = splitRequestHistory([user, structuredClone(call), structuredClone(result)], [user]);
+	assert.deepEqual(again.pending, []);
+	assert.equal(again.recovered.length, 2);
+});
+
+test("a tool result must belong to the frame before it", () => {
+	const user = { role: "user", content: "start" };
+	const call = { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }] };
+	const foreign = { role: "toolResult", toolCallId: "read-2", content: "other" };
+	assert.throws(() => splitRequestHistory([user, call, foreign], [user]), {
+		code: "CONTEXT_PREPARATION_HISTORY_MISMATCH",
+	});
+	const answer = { role: "assistant", content: "done" };
+	assert.throws(() => splitRequestHistory([user, answer, foreign], [user]), {
+		code: "CONTEXT_PREPARATION_HISTORY_MISMATCH",
+	});
+});
+
+test("output that follows an input cannot be recovered", () => {
+	const user = { role: "user", content: "start" };
+	const next = { role: "user", content: "later" };
+	const stray = { role: "assistant", content: "unfinished" };
+	assert.throws(() => splitRequestHistory([user, next, stray], [user]), {
+		code: "CONTEXT_PREPARATION_HISTORY_MISMATCH",
+	});
+});
+
+test("a rejected tool turn does not block later requests and is recorded", async () => {
+	const f = fixture();
+	installContextPreparation(f.session, f);
+	await f.prepare();
+	const call = { role: "assistant", content: [{ type: "toolCall", id: "read-9", name: "read", arguments: {} }] };
+	const denied = { role: "toolResult", toolCallId: "read-9", content: [{ type: "text", text: "denied" }] };
+	f.loop.messages.push(call, denied);
+	for (let turn = 1; turn <= 3; turn += 1) {
+		const input = { role: "user", content: `continue-${turn}`, timestamp: 100 + turn };
+		f.loop.messages.push(input);
+		reset();
+		await f.prepare();
+		const records = snapshot().filter((entry) => entry.domain === "context");
+		assert.equal(records.length, turn === 1 ? 1 : 0);
+		if (turn === 1) {
+			assert.equal(records[0].detail.count, 2);
+			assert.deepEqual(records[0].detail.toolCallIds, ["read-9"]);
+		}
+		assert.equal(f.loop.messages.filter((message) => message === input).length, 1);
+		assert.equal(f.loop.messages.includes(call), false);
+		assert.equal(f.loop.messages.includes(denied), false);
+		assert.equal(f.loop.messages.at(-1), input);
+		f.finishTurn(turn + 1);
+	}
 });
 
 test("a live steer in the same loop follows the assistant frame despite host snapshot metadata", async () => {

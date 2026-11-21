@@ -4,7 +4,9 @@ Stage: {{stage}}. Follow the [Stage: {{stage}}] section in your system prompt; t
 
 ## stage-line.direct
 
-Stage: direct-execution. This stage has no stage prompt; follow the orchestration-plan artifact.
+Stage: direct-execution. This stage has no stage prompt of its own; follow the orchestration-plan artifact. Open each batch the plan specifies with all of its flows in one `scope({ begin })` call, fanning them at once. Never run a planned batch one flow after another. A flow that turns out to split into disjoint write sets may be split into further concurrent flows; a planned batch is never collapsed into a serial sequence.
+
+Serialization carries the burden of proof: parallel work needs only "no known suspicious sharing", while collapsing a batch into one flow needs a named coupling or an irreversible external effect. A suspected overlap is marked and run concurrently, with tests as the detector.
 
 ## begin
 

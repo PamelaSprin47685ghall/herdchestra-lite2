@@ -222,6 +222,21 @@ export function wireHooks(pi, registry) {
 	);
 	pi.on("before_agent_start", (event, ctx) => {
 		const station = bindDispatch(ctx);
+		// A batch that ended while this session kept talking leaves a stale
+		// descriptor and retirement record behind. Without this sweep the
+		// station refuses every later call for a batch nobody can see any more.
+		if (station && !station.fissionFlow) {
+			const port = registry.fissionScheduler?.();
+			const pending = station.pendingFission;
+			if (pending) {
+				if (!batchRunning(port, pending)) {
+					if (station.pendingFission === pending) station.pendingFission = null;
+					station.clearOwnerRetired?.(pending.batchId);
+				}
+			} else if (station.ownerRetired) {
+				station.clearOwnerRetired?.(station.ownerRetired.batchId);
+			}
+		}
 		return station.onBeforeAgentStart(event, ctx);
 	});
 	pi.on("session_stop", (event, ctx) => {
@@ -244,6 +259,9 @@ export function wireHooks(pi, registry) {
 			// so the normal stop gate decides instead of a stale batch.
 			const running = batchRunning(port, batch);
 			if (!running && station.pendingFission === batch) station.pendingFission = null;
+			// The descriptor is spent, so the retirement it named is spent too.
+			// Keeping the record would refuse this session forever.
+			if (!running) station.clearOwnerRetired?.(batch.batchId);
 			if (running) {
 				// A retired owner must never be woken up by a session_stop
 				// continuation turn; makePrompt's barrier holds the caller open.

@@ -3484,6 +3484,12 @@ export function createFissionScheduler(options = {}) {
 				scheduler.pauseAll();
 				return;
 			}
+			// A provider that rejects the tool name, the tool choice, or the
+			// argument schema has not failed the flow: the model can correct the
+			// call and continue. This must run before the external-failure test,
+			// because a 429 body can carry the same words.
+			if (flowMayRun(flow) && last !== before && last?.stopReason === "error" &&
+				recoverModelError(flow, stopErrorFromMessage(last))) return;
 			if (flowMayRun(flow) && last !== before && last?.stopReason === "error" &&
 				blockExternalFailure(flow, stopErrorFromMessage(last))) return;
 			if (flowMayRun(flow) && last !== before && last?.stopReason === "error") {
@@ -3492,6 +3498,8 @@ export function createFissionScheduler(options = {}) {
 			}
 			if (flowMayRun(flow) && flow.error && blockExternalFailure(flow, flow.error)) return;
 			if (flowMayRun(flow) && last !== before && last?.stopReason === "stop" && !flow.error) {
+				// The cap counts consecutive recoverable errors, not lifetime ones.
+				flow.modelErrorRetries = 0;
 				const text = FLOW_OPEN_NUDGE;
 				if (typeof flow.agent.continue === "function") {
 					flow.agent.steer({ role: "developer", content: [{ type: "text", text }], attribution: "agent", timestamp: Date.now() });
@@ -3523,6 +3531,36 @@ export function createFissionScheduler(options = {}) {
 		return [401, 402, 403, 404, 408, 409, 429].includes(status) ||
 			(status >= 500 && status < 600) || /^(?:ECONN|EAI_|ETIMEDOUT|ENET|EHOST|UND_ERR_)/.test(cause?.code ?? "") ||
 			/\b(?:api key|credentials?|authentication|unauthorized|rate.limit|quota|timed out|network|connection|overloaded|service unavailable)\b/i.test(cause?.message ?? "");
+	}
+
+	const MODEL_ERROR_MAX_RETRIES = 3;
+
+	function isModelRecoverableError(error) {
+		const cause = externalCause(error);
+		if (costCapError(error) || costCapError(cause)) return false;
+		const text = String(cause?.message ?? error?.message ?? "");
+		return /outside the tool choice|tool_choice|invalid.?tool.?call|invalid arguments|tool schema|schema validation|unknown tool|malformed.+tool|function.+not found/i.test(text);
+	}
+
+	// Steer the model back on its own error instead of settling the flow. The
+	// count lives on the flow, so a sibling flow's failures never consume this
+	// one's retries.
+	function recoverModelError(flow, error) {
+		if (!isModelRecoverableError(error)) return false;
+		const attempts = (flow.modelErrorRetries ?? 0) + 1;
+		if (attempts > MODEL_ERROR_MAX_RETRIES) return false;
+		flow.modelErrorRetries = attempts;
+		const text = `The previous model/tool call failed with a recoverable error: ${error.message}\nFix the tool name, tool choice, or argument schema and continue.`;
+		if (typeof flow.agent?.steer === "function") {
+			flow.agent.steer({
+				role: "developer",
+				content: [{ type: "text", text }],
+				attribution: "agent",
+				timestamp: Date.now(),
+			});
+		}
+		launchFlow(flow, text);
+		return true;
 	}
 
 	function stopErrorFromMessage(message) {

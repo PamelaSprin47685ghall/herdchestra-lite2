@@ -41,11 +41,15 @@ Required workflow stage for this scope. One stage covers the whole batch; a fiss
 
 ## begin.fission
 
-Required array with at least one item. Every item opens one flow at once, and the entire array must be valid before any flow starts: one invalid item rejects the whole batch and leaves no partially opened scope. There is no single-flow begin shape; to open one flow, pass a one-item array.
+Required array with at least one item. Every item opens one flow at once, and the entire array must be valid before any flow starts: one invalid item rejects the whole batch and leaves no partially opened scope. There is no single-flow begin shape; to open one flow, pass a one-item array. Within the Mythical Man-Month limit — no shared mutable state, no superlinear coordination cost — push concurrency as high as the independent work allows: unrelated closures that share no symbol, file, or ordering belong to the same array and advance at the same time, each closing its own goal inside its own flow. Balance the expected workload across tracks so no single heavy flow becomes a straggler, and choose scope sizes that fit the work instead of splitting it merely to raise the flow count.
 
 ## fission.intent
 
-A task of one flow: an outcome that can be completed and reviewed in a bounded stretch, plus the evidence that proves completion. As a heuristic for how much work one scope should hold, if the whole user request seems to need about n tool calls, a moderate scope covers roughly sqrt(n) of them; this is not a target for the call count and does not decide how many calls the task actually takes. Name the outcome and its proof, not a single file operation and not the whole user request. One to three sentences.
+A task of one flow: one unit of work that closes on itself, plus the evidence that proves it closed. Every scope reaches a semantic closure, not a waypoint on the road to one. The test is what the next scope may assume: after this one closes, its goal is done and reviewable, not "understood and still pending". A scope that can only report what it read, found, or gathered has not closed; it has moved a closure that belongs elsewhere one scope later, and that is the defect this rule exists to prevent. A read-only scope closes the same way, by answering its question or pinning its finding so no later scope repeats the investigation.
+
+Size the closure to one bounded stretch, because a closure that cannot finish inside the scope is not a closure. A closure is an outcome, not an action: writing into a file is not one, while a complete repair confined to one file is. When the request is itself one closure, one scope completes it. When the request holds several closures, open one flow for each — in the same batch when they are independent, so the extra begins cost no concurrency. Never split one closure across scopes to keep each scope small, and never pack several closures into one scope to save a begin: the first leaves every scope half-finished, the second hides a failure until the end.
+
+As a rough guide, if the whole user request seems to need about n tool calls, one closure covers roughly sqrt(n) of them. The guide never overrides the rule that each scope closes its goal. Describe the closure and its proof in one to three sentences.
 
 ## fission.budget
 
@@ -85,7 +89,7 @@ Reach for it whenever the last beat was merely not good, not only when it was cl
 
 Rules: only inside a scope; the target must come after the current scope's begin; a beat containing a scope call cannot be amended away; a beat paid by an outer scope cannot be amended; a closed nested scope is a boundary, so do not amend across it. Defer calls in the amended beat are withdrawn from the pending list, but their text remains valid and is still delivered when the scope ends.
 
-Reflection is required, is the only cost, and is the replacement itself: it is the text the record keeps where the beat used to be. Say what you were attempting, why that attempt did not fit the task, and what the next attempt must do instead. Do not use amend to hide evidence or to skip the difficult part of the work; use it to replace work that was wrong, not work that was hard.
+Reflection is required, is the only cost, and is the replacement itself: it is the text the record keeps where the beat used to be. Say what you were attempting, why that attempt did not fit the task, and what the next attempt must do instead. Use amend often, and use it early: one honest sentence buys a clean history and returns the budget, so there is no reason to carry a beat that no longer earns its place. Do not use amend to hide evidence or to skip the difficult part of the work; use it to replace work that was wrong, not work that was hard.
 
 ## amend.reflection
 

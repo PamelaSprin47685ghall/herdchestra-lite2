@@ -50,6 +50,13 @@ export {
   MAX_DELTA_OPS,
   MAX_DELTA_BYTES,
 } from "./persistence.mjs";
+export {
+  FULL_CONTEXT_EFFICIENCY,
+  contextEfficiency,
+  turnOverheadCost,
+  poolTurnRent,
+  futureFoldSavings,
+} from "./degradation.mjs";
 export { createUsageLedger } from "./usage-ledger.mjs";
 export {
   createStageFlags,

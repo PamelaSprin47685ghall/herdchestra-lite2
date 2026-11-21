@@ -15,6 +15,10 @@ import { usageField, usageSnapshot } from "./usage.mjs";
 const FALLBACK = Object.freeze({
 	pHit: 1e-6,
 	pMiss: 10e-6,
+	// The same dimensionless 1 : 10 : 50 ratio drives the degradation term
+	// when no catalog entry exists. Output often costs more than the cached
+	// context read, so leaving this at zero would understate extra turns.
+	pOut: 50e-6,
 	contextWindow: null,
 	knownPricing: false,
 	label: "fallback",
@@ -232,9 +236,11 @@ function policyFromCatalogEntry(entry) {
 	const writeSource =
 		asPositiveNumber(cost.cacheWrite) !== null ? cost.cacheWrite : cost.input;
 	const pMiss = numOrZero(writeSource) / 1e6;
+	const pOut = numOrZero(cost.output) / 1e6;
 	return {
 		pHit,
 		pMiss,
+		pOut,
 		contextWindow: asPositiveNumber(entry.contextWindow),
 		knownPricing: true,
 		label: entry.label ?? entry.id ?? "model",
@@ -258,9 +264,15 @@ function policyFromUsage(usage) {
 	} else if (snapshot.input > 0 && asPositiveNumber(inputCost) !== null) {
 		pMiss = inputCost / snapshot.input;
 	}
+	const outputCost = usageField(cost, COST_KEYS.output);
+	const pOut =
+		snapshot.output > 0 && asPositiveNumber(outputCost) !== null
+			? outputCost / snapshot.output
+			: 0;
 	return {
 		pHit,
 		pMiss,
+		pOut,
 		contextWindow: null,
 		knownPricing: true,
 		label: "usage-derived",

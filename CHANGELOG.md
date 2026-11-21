@@ -6,6 +6,22 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Folding economics now prices context-bloat degradation. Effective work per turn
+  falls linearly from 1 to 1/2 across the context window, so a fold is credited
+  not only with the bytes it stops re-reading but with the extra turns it removes:
+  the full context re-read, the model's output, and the cache write of each new
+  turn. `src/scope/degradation.mjs` holds the pure arithmetic; the usage ledger
+  accrues the same amount as sunk rent per actual turn, and the Bellman identity
+  `N_keep * rent === N_fold * pHit * B + degradationValue` keeps history and the
+  forward decision on one ruler. Unknown windows reduce byte-for-byte to the old
+  model.
+- Pricing policies carry `pOut`, and the usage ledger smooths measured output and
+  per-turn context growth, so reasoning models no longer look cheap per turn.
+  `pricingHint()` now forwards the token counts alongside the charge, which lets
+  usage-derived prices work at all.
+
 ### Changed
 
 - `HERD_DISABLE_STAGES=1` now really disables the stage feature. The scope gate skips
@@ -21,6 +37,12 @@ All notable changes to this extension. The format follows
 
 ### Fixed
 
+- `HERD_DISABLE_COMMON_RULES=1`, `HERD_DISABLE_CHINESE_REMINDER=1` and
+  `HERD_DISABLE_VIBE_COMPAT=1` now remove their prompt fragments. The switches
+  were dropped when features became ports, so the managed prompt assembled every
+  fragment unconditionally. Boolean disable names also keep their word
+  boundaries now, so camelCase ports such as `modelSwitch` accept
+  `HERD_DISABLE_MODEL_SWITCH`.
 - A live loop whose assistant frame is committed before its tool result no longer
   aborts the next model call. `splitRequestHistory()` isolates dead assistant frames
   anywhere in the pending tail and reports a committed frame's trailing result as

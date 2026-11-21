@@ -48,6 +48,7 @@ describe("resolveModelPolicy", () => {
 		expect(policy).toEqual({
 			pHit: 1e-6,
 			pMiss: 10e-6,
+			pOut: 50e-6,
 			contextWindow: null,
 			knownPricing: false,
 			label: "fallback",
@@ -65,6 +66,7 @@ describe("resolveModelPolicy", () => {
 		}, {});
 		expect(policy.pHit).toBeCloseTo(0.3e-6);
 		expect(policy.pMiss).toBeCloseTo(3.75e-6);
+		expect(policy.pOut).toBeCloseTo(15e-6);
 		expect(policy.contextWindow).toBe(200000);
 		expect(policy.knownPricing).toBe(true);
 	});
@@ -94,12 +96,13 @@ describe("resolveModelPolicy", () => {
 				cacheRead: 200,
 				cacheWrite: 50,
 				output: 10,
-				cost: { cacheRead: 0.02, cacheWrite: 0.01, input: 0.01 },
+				cost: { cacheRead: 0.02, cacheWrite: 0.01, input: 0.01, output: 0.02 },
 			},
 		});
 		expect(policy.knownPricing).toBe(true);
 		expect(policy.pHit).toBeCloseTo(0.02 / 200);
 		expect(policy.pMiss).toBeCloseTo(0.01 / 50);
+		expect(policy.pOut).toBeCloseTo(0.02 / 10);
 		expect(policy.contextWindow).toBeNull();
 		expect(policy.label).toBe("usage-derived");
 	});

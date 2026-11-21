@@ -24,6 +24,7 @@ import {
 	markSubsumedDescendants,
 	modelCacheFor,
 } from "../scope/index.mjs";
+import { futureFoldSavings, turnOverheadCost } from "../scope/degradation.mjs";
 
 const WATERMARK_ECONOMIC = 0.82;
 const WATERMARK_EMERGENCY = 0.9;
@@ -149,6 +150,30 @@ function cacheView(state, key, now, fallbackTpc) {
 	return { pos, tpc, fresh };
 }
 
+/**
+ * Per-turn cost that a smaller context cannot shrink: output plus the
+ * dialogue delta written to cache. Both averages are measured by the usage
+ * ledger; an unknown shape contributes nothing rather than a guessed number.
+ */
+function nonContextCost(pricing, usageSnapshot) {
+	const usage =
+		usageSnapshot && typeof usageSnapshot === "object" ? usageSnapshot : null;
+	const outputTokens = Number.isFinite(usage?.avgOutput)
+		? usage.avgOutput
+		: Number.isFinite(usage?.lastOutput)
+			? usage.lastOutput
+			: 0;
+	const turnGrowthTokens = Number.isFinite(usage?.avgTurnGrowth)
+		? usage.avgTurnGrowth
+		: 0;
+	return turnOverheadCost({
+		pMiss: pricing?.pMiss,
+		pOut: pricing?.pOut,
+		outputTokens,
+		turnGrowthTokens,
+	});
+}
+
 /** Normalize an outer-model descriptor's pricing defensively. */
 function outerPricing(descriptor, fallback) {
 	const raw = descriptor && typeof descriptor === "object" ? descriptor.pricing : null;
@@ -198,6 +223,7 @@ function shouldFoldPoolMulti({
 	emergency = false,
 	modelKey,
 	outerModels,
+	usageSnapshot = null,
 	now,
 }) {
 	const records = (Array.isArray(pool) ? pool : []).filter(
@@ -259,10 +285,17 @@ function shouldFoldPoolMulti({
 	const uncachedB = Math.max(0, B_pool - cachedB);
 
 	const nHat = budgetSteps(budget);
-	const value =
-		A_paid +
-		nHat * pHit * cachedB +
-		(pMiss + (nHat - 1) * pHit) * uncachedB;
+	const savings = futureFoldSavings({
+		nominalWork: nHat,
+		poolTokens: B_pool,
+		uncachedTokens: uncachedB,
+		contextTokens,
+		contextWindow: cw,
+		pHit,
+		pMiss,
+		nonContextTurnCost: nonContextCost(pricing, usageSnapshot),
+	});
+	const value = A_paid + savings.total;
 
 	// Cost: every distinct cache among target + still-returnable outer
 	// models pays the miss-hit gap once on the retained cached tail. The
@@ -326,6 +359,13 @@ function shouldFoldPoolMulti({
 		perModel,
 		pHit,
 		pMiss,
+		directValue: savings.directValue,
+		degradationValue: savings.degradationValue,
+		etaKeep: savings.etaKeep,
+		etaFold: savings.etaFold,
+		nKeep: savings.nKeep,
+		nFold: savings.nFold,
+		savedTurns: savings.savedTurns,
 		mode: "multi-model",
 	};
 }
@@ -368,6 +408,7 @@ export function shouldFoldPool({
 			emergency,
 			modelKey,
 			outerModels,
+			usageSnapshot,
 			now,
 		});
 	}
@@ -427,10 +468,38 @@ export function shouldFoldPool({
 	}
 
 	const nHat = budgetSteps(budget);
-	const value = A_paid + nHat * B_pool * pHit;
+	const savings = futureFoldSavings({
+		nominalWork: nHat,
+		poolTokens: B_pool,
+		uncachedTokens: 0,
+		contextTokens,
+		contextWindow: cw,
+		pHit,
+		pMiss,
+		nonContextTurnCost: nonContextCost(pricing, usageSnapshot),
+	});
+	const value = A_paid + savings.total;
 	const cost = Math.max(0, pMiss - pHit) * M_after;
 	const fold = value > cost;
-	return { fold, reason: fold ? "economics" : "hold", B_pool, A_paid, M_after, nHat, value, cost, pHit, pMiss };
+	return {
+		fold,
+		reason: fold ? "economics" : "hold",
+		B_pool,
+		A_paid,
+		M_after,
+		nHat,
+		value,
+		cost,
+		pHit,
+		pMiss,
+		directValue: savings.directValue,
+		degradationValue: savings.degradationValue,
+		etaKeep: savings.etaKeep,
+		etaFold: savings.etaFold,
+		nKeep: savings.nKeep,
+		nFold: savings.nFold,
+		savedTurns: savings.savedTurns,
+	};
 }
 
 /** Persisted tail boundary: a live unpersisted last message is replayed separately. */

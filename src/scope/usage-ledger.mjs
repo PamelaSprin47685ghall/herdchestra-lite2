@@ -12,6 +12,7 @@
 // without inverting a dependency.
 
 import { findActivePools } from "./accounting.mjs";
+import { poolTurnRent, turnOverheadCost } from "./degradation.mjs";
 import { modelCacheFor, touchModelCache } from "./state.mjs";
 import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
 import { charsToTokens } from "../host/pricing.mjs";
@@ -21,6 +22,11 @@ import { createHash } from "node:crypto";
 const FALLBACK_TOKENS_PER_CHAR = 0.3;
 const MIN_TOKENS_PER_CHAR = 0.15;
 const MAX_TOKENS_PER_CHAR = 0.8;
+// Weight of one fresh sample in the per-turn shape averages. Fast enough to
+// follow a model switch, slow enough that a single short turn cannot erase
+// the estimate.
+const SMOOTH_ALPHA = 0.3;
+const SMOOTH_SAMPLES = 8;
 
 function digest(value) {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -37,6 +43,23 @@ function headerSummary(header) {
 function extendsMessages(previous, next) {
 	if (!Array.isArray(previous) || !Array.isArray(next) || next.length < previous.length) return false;
 	return previous.every((hash, index) => hash === next[index]);
+}
+
+function smooth(previous, sample, alpha = SMOOTH_ALPHA) {
+	if (!Number.isFinite(sample) || sample <= 0) return previous;
+	return Number.isFinite(previous)
+		? previous * (1 - alpha) + sample * alpha
+		: sample;
+}
+
+/** Keep only the token counts a pricing policy can read back. */
+function tokenFields(snap) {
+	return {
+		input: snap.input,
+		cacheRead: snap.cacheRead,
+		cacheWrite: snap.cacheWrite,
+		output: snap.output,
+	};
 }
 
 /**
@@ -76,6 +99,14 @@ export function createUsageLedger(options) {
 		lastUsageCost: null,
 		lastCtxModel: null,
 		lastUsageModelKey: null,
+		// The raw payload that produced `lastUsageCost`. `pricingHint` hands
+		// it back to `policyFromUsage`, which needs the token counts as much
+		// as the charge: a cost alone cannot derive a unit price.
+		lastUsageSnapshot: null,
+		// Smoothed per-turn shape. Without these the non-context part of a
+		// turn is zero, and degradation rent only counts the cache re-read.
+		avgOutputTokens: null,
+		avgTurnGrowthTokens: null,
 		received: new WeakSet(),
 		sentContext: null,
 		contextRevision: 0,
@@ -115,27 +146,39 @@ export function createUsageLedger(options) {
 		try {
 			const branch = manager?.getBranch?.();
 			if (!Array.isArray(branch)) return;
+			const samples = [];
 			for (let index = branch.length - 1; index >= 0; index -= 1) {
 				const entry = branch[index];
-				const message = entry?.message;
 				const usage = entryUsage(entry);
 				if (!usage) continue;
-				const snap = usageSnapshot(usage);
-				const tIn = totalInput(snap);
-				ledger.lastTotalInput = tIn;
-				ledger.lastUsageModelKey = modelKeyOf(message);
-				ledger.lastOutputTokens = snap.output;
-				ledger.lastUsageCost = usage.cost ?? null;
-				for (const scope of state.scopes ?? []) {
-					if (
-						scope.baseInputTokens === null ||
-						scope.baseInputTokens === undefined
-					) {
-						scope.baseInputTokens = tIn;
-						scope.baseModelKey = ledger.lastUsageModelKey;
-					}
+				samples.push({ entry, usage, snap: usageSnapshot(usage) });
+				if (samples.length >= SMOOTH_SAMPLES) break;
+			}
+			if (samples.length === 0) return;
+			const latest = samples[0];
+			const tIn = totalInput(latest.snap);
+			ledger.lastTotalInput = tIn;
+			ledger.lastUsageModelKey = modelKeyOf(latest.entry?.message);
+			ledger.lastOutputTokens = latest.snap.output;
+			ledger.lastUsageCost = latest.usage.cost ?? null;
+			ledger.lastUsageSnapshot = tokenFields(latest.snap);
+			// Warm the output average oldest-first so a reloaded session
+			// enters its first fold decision with the same shape a live one
+			// learned, instead of treating output as free.
+			for (const sample of samples.slice().reverse()) {
+				ledger.avgOutputTokens = smooth(
+					ledger.avgOutputTokens,
+					sample.snap.output,
+				);
+			}
+			for (const scope of state.scopes ?? []) {
+				if (
+					scope.baseInputTokens === null ||
+					scope.baseInputTokens === undefined
+				) {
+					scope.baseInputTokens = tIn;
+					scope.baseModelKey = ledger.lastUsageModelKey;
 				}
-				break;
 			}
 		} catch (error) {
 			// A host without a branch keeps the null baseline. The loss is
@@ -177,6 +220,10 @@ export function createUsageLedger(options) {
 			ledger.lastTotalInput = tIn;
 			ledger.lastOutputTokens = snap.output;
 			ledger.lastUsageCost = message.usage.cost ?? null;
+			ledger.lastUsageSnapshot = tokenFields(snap);
+			// Output arrives on every measured turn, cached or not, so this
+			// average needs no alignment proof.
+			ledger.avgOutputTokens = smooth(ledger.avgOutputTokens, snap.output);
 			if (key) {
 				const messages = contextMessages();
 				const index = messages.findLastIndex(
@@ -222,6 +269,14 @@ export function createUsageLedger(options) {
 					const slope =
 						(tIn - prior.totalInput) / (measured - prior.chars);
 					if (Number.isFinite(slope) && slope > 0) {
+						// The same aligned delta measures how many tokens one
+						// turn appends to the context. That growth is written
+						// to the cache once, so it is part of every extra
+						// turn a bloated context forces.
+						ledger.avgTurnGrowthTokens = smooth(
+							ledger.avgTurnGrowthTokens,
+							tIn - prior.totalInput,
+						);
 						const sample = Math.min(
 							MAX_TOKENS_PER_CHAR,
 							Math.max(MIN_TOKENS_PER_CHAR, slope),
@@ -405,9 +460,13 @@ export function createUsageLedger(options) {
 	}
 
 	function pricingHint() {
-		return ledger.lastUsageCost
-			? { usage: { cost: ledger.lastUsageCost } }
-			: undefined;
+		if (!ledger.lastUsageCost) return undefined;
+		return {
+			usage: {
+				...(ledger.lastUsageSnapshot ?? {}),
+				cost: ledger.lastUsageCost,
+			},
+		};
 	}
 
 	function resetWatermark() {
@@ -496,21 +555,50 @@ export function createUsageLedger(options) {
 		if (pools.length === 0) return false;
 		const tpc = tokensPerCharFor(key);
 		const pHit = Number.isFinite(pricing?.pHit) ? Math.max(0, pricing.pHit) : 1e-6;
-		let dirty = false;
-		for (const group of pools) {
-			for (const record of group.pool) {
-				const rent = netRemovableTokens(record, tpc, key) * pHit;
-				if (rent > 0) {
-					record.paidRentCost =
-						(Number.isFinite(record.paidRentCost) ? record.paidRentCost : 0) +
-						rent;
-					dirty = true;
-				}
-			}
-		}
+		const pMiss = Number.isFinite(pricing?.pMiss) ? Math.max(0, pricing.pMiss) : pHit;
+		const pOut = Number.isFinite(pricing?.pOut) ? Math.max(0, pricing.pOut) : 0;
 		const cw = Number.isFinite(pricing?.contextWindow)
 			? pricing.contextWindow
 			: null;
+		const nonContextTurnCost = turnOverheadCost({
+			pMiss,
+			pOut,
+			outputTokens: Number.isFinite(ledger.avgOutputTokens)
+				? ledger.avgOutputTokens
+				: ledger.lastOutputTokens,
+			turnGrowthTokens: Number.isFinite(ledger.avgTurnGrowthTokens)
+				? ledger.avgTurnGrowthTokens
+				: 0,
+		});
+		let dirty = false;
+		for (const group of pools) {
+			// Rent is a property of the level, not of one record: the
+			// degradation surcharge depends on the whole pool's size against
+			// the context it sits in. Distribute it by bytes so each record
+			// still carries its own share of the sunk cost.
+			const weights = group.pool.map((record) => ({
+				record,
+				tokens: netRemovableTokens(record, tpc, key),
+			}));
+			const groupTokens = weights.reduce((sum, item) => sum + item.tokens, 0);
+			if (!(groupTokens > 0)) continue;
+			const groupRent = poolTurnRent({
+				poolTokens: groupTokens,
+				contextTokens,
+				contextWindow: cw,
+				pHit,
+				nonContextTurnCost,
+			}).total;
+			if (!(groupRent > 0)) continue;
+			for (const { record, tokens } of weights) {
+				if (!(tokens > 0)) continue;
+				const share = groupRent * (tokens / groupTokens);
+				record.paidRentCost =
+					(Number.isFinite(record.paidRentCost) ? record.paidRentCost : 0) +
+					share;
+				dirty = true;
+			}
+		}
 		const emergency =
 			cw && Number.isFinite(contextTokens) && contextTokens >= 0.9 * cw;
 		if (emergency) {

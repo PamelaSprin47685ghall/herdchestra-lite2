@@ -570,6 +570,8 @@ function foldEligiblePool(station, { state, parentId, boundary, epoch, base, cur
       : {
           lastTotalInput: lastIn,
           lastOutput: Number.isFinite(station.usage.lastOutputTokens) ? station.usage.lastOutputTokens : 0,
+          avgOutput: Number.isFinite(station.usage.avgOutputTokens) ? station.usage.avgOutputTokens : null,
+          avgTurnGrowth: Number.isFinite(station.usage.avgTurnGrowthTokens) ? station.usage.avgTurnGrowthTokens : null,
           cost: station.usage.lastUsageCost ?? null,
           modelKey: station.usage.lastUsageModelKey,
         };

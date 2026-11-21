@@ -462,11 +462,18 @@ export function installFissionInput(session, scheduler) {
 			const [text] = args;
 			if (!active || !inBatchWindow()) {
 				const result = await callOriginal("prompt", this, args);
-				// A batch may have opened during this turn. Keep the host from
-				// selecting the retired owner's abort as its final answer before
-				// the flows finish and the heir is adopted.
-				if (active && batchIsLive(scheduler)) {
-					await createDisposeBarrier({ scheduler }).wait({ untilPaused: true });
+				// A batch (or a sequence of batches across post-scope turns) may
+				// open during this prompt. Hold the caller open until every batch
+				// has settled and the owner's post-scope continuation is idle,
+				// stopping early only on an explicit pause or barrier exit.
+				//
+				// One wait is not enough: the host resolves its own turn as soon
+				// as prompt() returns, and a batch still running at that moment
+				// reads as a completed turn - the desktop notification fires while
+				// the flows are only half done.
+				while (active && batchIsLive(scheduler)) {
+					const outcome = await createDisposeBarrier({ scheduler }).wait({ untilPaused: true });
+					if (outcome !== "quiescent") break;
 					if (typeof this?.waitForIdle === "function") {
 						await this.waitForIdle();
 					}
@@ -489,8 +496,15 @@ export function installFissionInput(session, scheduler) {
 			// A fresh interactive submission temporarily owns the native loader.
 			// Returning while a resumed leaf is still preparing its first response
 			// would let the host tear that loader down: its own agent is idle.
-			if (outcome.resumed && batchIsLive(scheduler)) {
-				await createDisposeBarrier({ scheduler }).wait({ untilPaused: true });
+			if (outcome.resumed) {
+				// Same rule as the idle branch: stay parked while any batch lives.
+				while (active && batchIsLive(scheduler)) {
+					const waited = await createDisposeBarrier({ scheduler }).wait({ untilPaused: true });
+					if (waited !== "quiescent") break;
+					if (typeof this?.waitForIdle === "function") {
+						await this.waitForIdle();
+					}
+				}
 			}
 			// The owner produced no turn. The broadcast itself is displayed once
 			// by the multiplexer under its broadcastId.
@@ -989,15 +1003,18 @@ export function installDisposeBarrier(session, scheduler, options = {}) {
 			const receiver = this ?? session;
 			disposeCall = (async () => {
 				try {
-					if (scheduler.hasPausedWork?.() && !disposalReason(args[0])) {
-						await barrier.wait({ reason: "Session disposed" });
-					} else {
-						await barrier.wait(args[0]);
-					}
-					// The barrier never replaces the host's dispose. If it cannot
-					// decide, the caller still receives the teardown it asked for.
-					if (!disposalReason(args[0]) && typeof receiver?.waitForIdle === "function") {
-						await receiver.waitForIdle();
+					for (;;) {
+						const outcome = scheduler.hasPausedWork?.() && !disposalReason(args[0])
+							? await barrier.wait({ reason: "Session disposed" })
+							: await barrier.wait(args[0]);
+						// The barrier never replaces the host's dispose. If it cannot
+						// decide, the caller still receives the teardown it asked for.
+						if (!disposalReason(args[0]) && typeof receiver?.waitForIdle === "function") {
+							await receiver.waitForIdle();
+						}
+						if (disposalReason(args[0]) || outcome !== "quiescent" || !batchIsLive(scheduler)) {
+							break;
+						}
 					}
 				} catch (error) {
 					record("fission", error, { barrier: "dispose", optional: true });

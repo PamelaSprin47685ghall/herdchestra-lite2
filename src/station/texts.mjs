@@ -26,9 +26,6 @@ function beginText(scope) {
 function endText(
 	report,
 	foldedReport,
-	deferredCount,
-	steerText,
-	steerSent,
 	transitioning = false,
 	remainingScope = null,
 	relayOn = true,
@@ -52,17 +49,6 @@ function endText(
 		lines.push(render(T["end.elder-folded"], { report: foldedReport }));
 	}
 	lines.push(T["end.keeps-turns"]);
-	if (deferredCount > 0) {
-		lines.push(
-			render(
-				steerSent ? T["end.defers-delivered"] : T["end.defers-follow"],
-				{ count: deferredCount },
-			),
-		);
-		lines.push(steerText);
-	} else {
-		lines.push(T["end.no-defers"]);
-	}
 	if (relayOn) {
 		lines.push(remainingScope ? T["end.todo-inside"] : T["end.todo-outside"]);
 	}

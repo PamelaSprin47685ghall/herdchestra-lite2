@@ -45,18 +45,6 @@ Your elder sibling scope at this level was collapsed; its begin receipt now read
 
 This scope stays visible verbatim as the hot workbench. Summarize it in begin.elder_report only if you later open another sibling at this level.
 
-## end.defers-delivered
-
-{{count}} deferred finding(s) were delivered as a steering user message:
-
-## end.defers-follow
-
-{{count}} deferred finding(s) follow:
-
-## end.no-defers
-
-No deferred findings were recorded in this scope.
-
 ## end.todo-inside
 
 todo cannot be called inside any scope. Before finishing, close every enclosing scope, then call todo to update the ledger. A non-empty ledger forbids stopping; an empty ledger triggers the relay handoff protocol.
@@ -100,10 +88,6 @@ No tool budget was refunded by that beat.
 ## amend.remaining
 
 Remaining: {{budget}}.
-
-## amend.residual
-
-{{count}} defer finding(s) from that beat were withdrawn but remain valid; they will still be delivered when this scope ends.
 
 ## leave-framing
 

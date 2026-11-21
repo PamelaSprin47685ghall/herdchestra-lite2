@@ -345,14 +345,6 @@ export async function amendTicket(station, toolCallId, params) {
 	}
 }
 
-export async function deferTicket(station, toolCallId, params) {
-	try {
-		return station.executeDefer(toolCallId, params);
-	} catch (error) {
-		return errorResult("DEFER_INTERNAL_ERROR", String(error?.message ?? error));
-	}
-}
-
 export async function pinTicket(station, toolCallId, params) {
 	try {
 		return station.executePin(toolCallId, params);

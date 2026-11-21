@@ -1792,14 +1792,6 @@ export function createFissionScheduler(options = {}) {
 		if (!Array.isArray(scopes) || scopes.at(-1)?.id !== flow.scopeId) return;
 		try {
 			const closed = closeScope(flow.state);
-			if (closed?.ok && closed.defers?.length > 0) {
-				batchWarning(
-					flow.batch,
-					"DEFERS_DISCARDED",
-					new Error(`${closed.defers.length} undelivered defers were discarded`),
-					flow,
-				);
-			}
 			if (closed?.ok) {
 				// The closed scope is now an elder at its own level. Seal its
 				// children before recording it, so a nested batch that already

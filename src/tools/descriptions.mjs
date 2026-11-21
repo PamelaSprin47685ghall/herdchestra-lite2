@@ -19,8 +19,6 @@ export const END_DESCRIPTION = scope.end;
 export const ELDER_REPORT_DESCRIPTION = scope["begin.elder_report"];
 export const AMEND_DESCRIPTION = scope["amend.tool"];
 export const REFLECTION_DESCRIPTION = scope["amend.reflection"];
-export const DEFER_DESCRIPTION = scope["defer.tool"];
-export const DEFER_INTENT_DESCRIPTION = scope["defer.intent"];
 export const PIN_DESCRIPTION = scope["pin.tool"];
 export const PIN_ASSUMPTION_DESCRIPTION = scope["pin.assumption"];
 export const PIN_DEDUCTION_DESCRIPTION = scope["pin.deduction"];
@@ -84,15 +82,6 @@ export const amendParameters = {
 	required: ["reflection"],
 	properties: {
 		reflection: { type: "string", minLength: 1, description: REFLECTION_DESCRIPTION },
-	},
-};
-
-export const deferParameters = {
-	type: "object",
-	additionalProperties: false,
-	required: ["intent"],
-	properties: {
-		intent: { type: "string", minLength: 1, description: DEFER_INTENT_DESCRIPTION },
 	},
 };
 

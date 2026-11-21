@@ -4,7 +4,6 @@ import { findToolCallIndex } from "../transcript/index.mjs";
 import { handoffToolBlockedReason } from "../relay/index.mjs";
 import { errorResult } from "../tools/results.mjs";
 import {
-	handleDeferCall,
 	handlePinCall,
 	handleAmendCall,
 	handleScopeCall,
@@ -35,11 +34,6 @@ function executeScope(station, toolCallId, params, ctx) {
 function executeAmend(station, toolCallId, params) {
 	return withProcessedCache(station, toolCallId, () =>
 		directAmend(station, toolCallId, params));
-}
-
-function executeDefer(station, toolCallId, params) {
-	return withProcessedCache(station, toolCallId, () =>
-		directDefer(station, toolCallId, params));
 }
 
 function executePin(station, toolCallId, params) {
@@ -107,26 +101,10 @@ function directAmend(station, toolCallId, params) {
 	return result;
 }
 
-function directDefer(station, toolCallId, params) {
-	const found = station.assistantForToolCall(toolCallId);
-	if (found) {
-		station.processAssistantMessage(found.message, { persisted: true });
-		const cached = station.processed.handledFor(toolCallId);
-		if (cached) return cached;
-	}
-	const result = handleDeferCall(station, { id: toolCallId, name: "defer", arguments: params });
-	station.processed.setHandled(toolCallId, result);
-	station.processed.markCall(toolCallId);
-	station.persist();
-	return result;
-}
-
 export {
 	executeScope,
 	executeAmend,
-	executeDefer,
 	executePin,
 	directScope,
 	directAmend,
-	directDefer,
 };

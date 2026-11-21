@@ -6,7 +6,7 @@ import { createStageFlags } from "./stage-flags.mjs";
 
 const VERSION = 2;
 
-const CONTROL_TOOLS = new Set(["scope", "amend", "defer", "pin"]);
+const CONTROL_TOOLS = new Set(["scope", "amend", "pin"]);
 
 /** Provider prompt-cache entries live for five minutes. */
 export const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -45,14 +45,6 @@ function copyCounts(source) {
   return out;
 }
 
-function copyDefers(list) {
-  if (!Array.isArray(list)) return [];
-  return list.map((item) => ({
-    toolCallId: item.toolCallId,
-    intent: item.intent,
-  }));
-}
-
 function makeScope(state, toolCallId, intent, stage, budget, timeBudgetMs = null) {
   const spent = {};
   for (const tool of Reflect.ownKeys(budget)) {
@@ -81,8 +73,6 @@ function makeScope(state, toolCallId, intent, stage, budget, timeBudgetMs = null
     budget: copyCounts(budget),
     remaining: copyCounts(budget),
     spent,
-    defers: [],
-    residualDefers: [],
     // Measured token accounting for the strict open interior of this scope.
     // null until a real usage message establishes an baseline.
     baseInputTokens: null,
@@ -268,6 +258,5 @@ export {
   failure,
   put,
   copyCounts,
-  copyDefers,
   makeScope,
 };

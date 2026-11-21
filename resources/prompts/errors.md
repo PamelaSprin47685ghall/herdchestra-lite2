@@ -10,10 +10,6 @@ amend is only allowed inside a scope.
 
 amend is only allowed inside a scope with a visible beat history.
 
-## defer-intent
-
-defer.intent must be a non-empty string.
-
 ## scope-model
 
 scope.begin.model must be a non-empty string or null.
@@ -88,7 +84,7 @@ The full flow requires one run of each earlier stage before "direct-execution". 
 
 ## not-in-scope
 
-Outside all scopes, only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, time, fission: [{ intent, budget, permission }] } }); one flow is a one-item fission array, and every item must declare permission. Time is required in seconds.
+Outside all scopes, only todo and the free control tools (scope, amend, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, time, fission: [{ intent, budget, permission }] } }); one flow is a one-item fission array, and every item must declare permission. Time is required in seconds.
 
 ## scope-in-fission
 

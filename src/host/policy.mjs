@@ -5,7 +5,7 @@
 // `readOnly` is the host's own verdict on the agent definition
 // (task/read-only-policy.ts), and it is authoritative. `tools` records every
 // tool the session was granted, including extension-owned tools (`scope`,
-// `amend`, `defer`, `pin`), so it must never be read as a capability list on
+// `amend`, `pin`), so it must never be read as a capability list on
 // its own. A read-only subagent gets no scope or relay enforcement and keeps
 // no `todo`: the host strips `todo` from spawned subagents
 // (task/executor.ts). A read-write subagent keeps the relay protocol and must
@@ -33,7 +33,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
 // Tools this extension registers itself. They record bookkeeping, not file
 // writes, so they must not turn a read-only agent into a read-write one when
 // only the legacy `tools` list is available.
-const NEUTRAL_TOOL_NAMES = new Set(["scope", "amend", "defer", "pin"]);
+const NEUTRAL_TOOL_NAMES = new Set(["scope", "amend", "pin"]);
 
 function isReadTier(name) {
 	return READ_ONLY_TOOL_NAMES.has(name) || NEUTRAL_TOOL_NAMES.has(name);

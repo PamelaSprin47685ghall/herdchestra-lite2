@@ -8,7 +8,6 @@ import {
   closeScope,
   createState,
   currentScope,
-  deferIntent,
   deserializeState,
   findActivePools,
   findFoldablePool,
@@ -111,7 +110,6 @@ describe("handoff boundaries", () => {
       toolName: "read",
       beatTools: ["read"],
     });
-    deferIntent(state, { toolCallId: "defer_inner", intent: "keep me" });
 
     expect(truncateForHostBoundary(state)).toBe(true);
 
@@ -121,9 +119,6 @@ describe("handoff boundaries", () => {
     expect(state.scopes[0].epoch).toBe(1);
     expect(state.charges.outer_charge).toBeDefined();
     expect(state.charges.inner_charge).toBeUndefined();
-    expect(state.scopes[0].defers).toEqual([
-      { toolCallId: "defer_inner", intent: "keep me" },
-    ]);
   });
 
   test("elder siblings never match across a truncation epoch", () => {
@@ -221,8 +216,6 @@ describe("beginScope", () => {
       budget: { read: 7, bash: 6 },
       remaining: { read: 7, bash: 6 },
       spent: { read: 0, bash: 0 },
-      defers: [],
-      residualDefers: [],
       baseInputTokens: null,
       preBeginInputTokens: null,
       endInputTokens: null,
@@ -448,7 +441,7 @@ describe("chargeTool", () => {
 
   test("never charges control tools", () => {
     const { state, scope } = openScope("work", { bash: 1 });
-    for (const [index, toolName] of ["scope", "amend", "defer", "pin"].entries()) {
+    for (const [index, toolName] of ["scope", "amend", "pin"].entries()) {
       const result = chargeTool(state, {
         toolCallId: `call_free_${index}`,
         toolName,
@@ -548,7 +541,7 @@ describe("beatShares", () => {
 
   test("ignores free tools and normalizes apply_patch", () => {
     expect(
-      beatShares(["scope", "defer", "pin", "todo", "ask", "wait", "apply_patch"]),
+      beatShares(["scope", "pin", "todo", "ask", "wait", "apply_patch"]),
     ).toEqual({ edit: 1 });
     expect(beatShares([])).toEqual({});
   });
@@ -560,44 +553,6 @@ describe("beatShares", () => {
     expect(
       beatShares([{ name: "write", free: false }, { name: "bash", free: false }]),
     ).toEqual({ write: 0.5, bash: 0.5 });
-  });
-});
-
-describe("deferIntent", () => {
-  test("rejects a defer outside a scope", () => {
-    const state = createState();
-    const result = deferIntent(state, {
-      toolCallId: "call_defer",
-      intent: "Check logs",
-    });
-    expect(result).toMatchObject({ ok: false, code: "NOT_IN_SCOPE" });
-  });
-
-  test("rejects a missing or empty intent", () => {
-    const { state } = openScope("work", {});
-    for (const intent of [undefined, "", "   ", null]) {
-      const result = deferIntent(state, {
-        toolCallId: "call_defer",
-        intent,
-      });
-      expect(result).toMatchObject({ ok: false, code: "INVALID_INTENT" });
-    }
-    expect(currentScope(state).defers).toEqual([]);
-  });
-
-  test("records a trimmed defer without charging", () => {
-    const { state, scope } = openScope("work", { bash: 1 });
-    const result = deferIntent(state, {
-      toolCallId: "call_defer",
-      intent: "  Check logs  ",
-    });
-    expect(result).toEqual({ ok: true });
-    expect(scope.defers).toEqual([
-      { toolCallId: "call_defer", intent: "Check logs" },
-    ]);
-    expect(scope.remaining).toEqual({ bash: 1 });
-    expect(scope.spent).toEqual({ bash: 0 });
-    expect(state.charges).toEqual({});
   });
 });
 
@@ -617,7 +572,6 @@ describe("applyAmend", () => {
     expect(result).toEqual({
       ok: true,
       refunded: 2,
-      residualDefers: [],
       remaining: { bash: 3, read: 1 },
     });
     expect(scope.spent).toEqual({ bash: 0, read: 0 });
@@ -670,36 +624,6 @@ describe("applyAmend", () => {
     expect(state.charges.call_inner_charge).toBeUndefined();
   });
 
-  test("withdraws a defer and keeps it as a residual defer", () => {
-    const { state, scope } = openScope("triage", { bash: 1 });
-    deferIntent(state, { toolCallId: "call_d1", intent: "Check A" });
-    deferIntent(state, { toolCallId: "call_d2", intent: "Check B" });
-    const result = applyAmend(state, {
-      scopeId: scope.id,
-      beat: { key: "tc:call_d1", toolCallIds: ["call_d1"] },
-      toolCalls: [
-        { id: "call_d1", name: "defer", arguments: { intent: "Check A" } },
-      ],
-    });
-    expect(scope.defers).toEqual([
-      { toolCallId: "call_d2", intent: "Check B" },
-    ]);
-    expect(scope.residualDefers).toEqual([
-      { toolCallId: "call_d1", intent: "Check A" },
-    ]);
-    expect(result.residualDefers).toEqual([
-      { toolCallId: "call_d1", intent: "Check A" },
-    ]);
-    expect(result.refunded).toBe(0);
-    expect(result.remaining).toEqual({ bash: 1 });
-    applyAmend(state, {
-      scopeId: scope.id,
-      beat: { key: "tc:call_d1_again", toolCallIds: ["call_d1"] },
-      toolCalls: [{ id: "call_d1", name: "defer", arguments: {} }],
-    });
-    expect(scope.residualDefers).toHaveLength(1);
-  });
-
   test("records a beat even without charges", () => {
     const { state, scope } = openScope("think", {});
     const result = applyAmend(state, {
@@ -710,7 +634,6 @@ describe("applyAmend", () => {
     expect(result).toEqual({
       ok: true,
       refunded: 0,
-      residualDefers: [],
       remaining: {},
     });
     expect(state.amends).toEqual(["msg:1700000000000:abc123"]);
@@ -788,31 +711,6 @@ describe("closeScope", () => {
         amount: 1,
       },
     });
-    expect(result.defers).toEqual([]);
-    expect(result.steerText).toBe("");
-  });
-
-  test("delivers active and residual defers once each", () => {
-    const { state, scope } = openScope("triage", {});
-    deferIntent(state, { toolCallId: "call_d1", intent: "Check A" });
-    deferIntent(state, { toolCallId: "call_d2", intent: "Check B" });
-    deferIntent(state, { toolCallId: "call_d3", intent: "  Check B  " });
-    applyAmend(state, {
-      scopeId: scope.id,
-      beat: { key: "tc:call_d1", toolCallIds: ["call_d1"] },
-      toolCalls: [{ id: "call_d1", name: "defer", arguments: {} }],
-    });
-    const result = closeScope(state, {
-      toolCallId: "call_end",
-      report: "done",
-    });
-    expect(result.defers).toEqual([
-      { toolCallId: "call_d2", intent: "Check B" },
-      { toolCallId: "call_d1", intent: "Check A" },
-    ]);
-    expect(result.steerText).toBe(
-      `${STEER_HEADER}\n- Check B\n- Check A`,
-    );
   });
 
   test("keeps the outer scope open after an inner close", () => {
@@ -883,10 +781,6 @@ describe("serializeState and deserializeState", () => {
       toolCallId: "call_outer_charge",
       toolName: "bash",
     });
-    deferIntent(state, {
-      toolCallId: "call_outer_defer",
-      intent: "Check logs",
-    });
     applyAmend(state, {
       scopeId: outer.id,
       beat: {
@@ -906,10 +800,6 @@ describe("serializeState and deserializeState", () => {
     chargeTool(state, {
       toolCallId: "call_inner_charge",
       toolName: "read",
-    });
-    deferIntent(state, {
-      toolCallId: "call_inner_defer",
-      intent: "Check tests",
     });
     state.collapses.push({
       beginToolCallId: "call_old_begin",
@@ -933,16 +823,11 @@ describe("serializeState and deserializeState", () => {
 
   test("serializes detached copies", () => {
     const { state, scope } = openScope("work", { bash: 1 });
-    deferIntent(state, { toolCallId: "call_defer", intent: "Check A" });
     const payload = serializeState(state);
     payload.scopes[0].remaining.bash = 0;
-    payload.scopes[0].defers.push({ toolCallId: "x", intent: "y" });
     payload.charges.extra = { scopeId: "x", tool: "bash", amount: 1 };
     payload.amends.push("beat");
     expect(scope.remaining).toEqual({ bash: 1 });
-    expect(scope.defers).toEqual([
-      { toolCallId: "call_defer", intent: "Check A" },
-    ]);
     expect(state.charges).toEqual({});
     expect(state.amends).toEqual([]);
   });
@@ -954,10 +839,8 @@ describe("serializeState and deserializeState", () => {
       stage: "direct-execution",
       budget: { bash: 1 },
     });
-    deferIntent(state, { intent: "Check A" });
     const payload = serializeState(state);
     expect(payload.scopes[0].beginToolCallId).toBe("");
-    expect(payload.scopes[0].defers[0].toolCallId).toBe("");
     expect(deserializeState(JSON.parse(JSON.stringify(payload)))).toEqual(
       payload,
     );

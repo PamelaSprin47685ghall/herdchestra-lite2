@@ -63,8 +63,6 @@ describe("tool contracts map to their documents", () => {
 		expect(scopeTools.ELDER_REPORT_DESCRIPTION).toBe(doc["begin.elder_report"]);
 		expect(scopeTools.AMEND_DESCRIPTION).toBe(doc["amend.tool"]);
 		expect(scopeTools.REFLECTION_DESCRIPTION).toBe(doc["amend.reflection"]);
-		expect(scopeTools.DEFER_DESCRIPTION).toBe(doc["defer.tool"]);
-		expect(scopeTools.DEFER_INTENT_DESCRIPTION).toBe(doc["defer.intent"]);
 		expect(scopeTools.PIN_DESCRIPTION).toBe(doc["pin.tool"]);
 		expect(scopeTools.PIN_ASSUMPTION_DESCRIPTION).toBe(doc["pin.assumption"]);
 		expect(scopeTools.PIN_DEDUCTION_DESCRIPTION).toBe(doc["pin.deduction"]);
@@ -109,9 +107,6 @@ describe("tool contracts map to their documents", () => {
 		expect(item.properties.model.description).toBe(scope["fission.model"]);
 		expect(scopeTools.amendParameters.properties.reflection.description).toBe(
 			scope["amend.reflection"],
-		);
-		expect(scopeTools.deferParameters.properties.intent.description).toBe(
-			scope["defer.intent"],
 		);
 		const todo = loadDoc("tools/todo");
 		expect(

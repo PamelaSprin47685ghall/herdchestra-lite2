@@ -983,13 +983,12 @@ describe("relay integration", () => {
 			}
 		}
 		installVibeTools(Session);
-		const session = new Session(["read", "scope", "amend", "defer", "pin", "todo"]);
+		const session = new Session(["read", "scope", "amend", "pin", "todo"]);
 		await session.activateVibeTools(["read"]);
 		expect(session.active).toEqual([
 			"read",
 			"scope",
 			"amend",
-			"defer",
 			"pin",
 			"todo",
 			"task",

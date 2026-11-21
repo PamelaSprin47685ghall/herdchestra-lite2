@@ -26,7 +26,6 @@ export {
   splitFissionBudget,
   closeScope,
   chargeTool,
-  deferIntent,
   applyAmend,
   findElderSibling,
   sealClosedParentChildren,

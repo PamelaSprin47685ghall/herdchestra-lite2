@@ -366,7 +366,7 @@ export function boundaryText(customType, data) {
 		return [
 			closed,
 			"You are at the top level: no scope is open.",
-			"Only todo and the free control tools (scope, amend, defer, pin) may be called until the next scope opens.",
+			"Only todo and the free control tools (scope, amend, pin) may be called until the next scope opens.",
 		].join(" ");
 	}
 	const back = intent

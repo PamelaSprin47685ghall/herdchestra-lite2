@@ -60,6 +60,10 @@ export async function runCase(portName, implName, caseName, fn, ctx = fakeCtx())
 /**
  * Run one contract suite against every implementation.
  *
+ * One implementation instance is shared by every case of that implementation.
+ * A case must therefore assert the direction of the behaviour, not a count
+ * that depends on how many cases ran before it.
+ *
  * `cases` are named functions `(impl, ctx) => void | Promise<void>`; each runs
  * once per implementation. A failure is re-thrown with the implementation name
  * prefixed, because "the scope contract failed" without saying which

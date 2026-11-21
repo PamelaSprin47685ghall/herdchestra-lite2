@@ -13,7 +13,7 @@ Execution barrier:
 
 Inside a flow:
 - Your initial scope is already open. Call `scope({ end: true })` when complete or permanently blocked, or open a nested fission batch to delegate completion.
-- Available options while working: `amend` the previous beat to keep context clean and refund budget; open a nested fission batch for independent sub-slices; `defer` actionable side findings for scope exit; `pin` durable artifacts and conclusions; dispatch `task` subagents when zero shared history is better.
+- Available options while working: `amend` the previous beat to keep context clean and refund budget; open a nested fission batch for independent sub-slices; `pin` durable artifacts and conclusions; dispatch `task` subagents when zero shared history is better.
 - `todo` is forbidden inside any scope.
 
 Workbench and folding:
@@ -21,7 +21,7 @@ Workbench and folding:
 
 The innermost scope determines the current stage; outside all scopes there is no stage. Only the user toggles herd mode with /herd; while it is on, only decision-framing opens and `ask` is allowed there. `wait` is valid only inside a scope. `todo` is the only functional tool outside all scopes and is forbidden inside every scope. Per-turn sharing, free tools, unlisted tools, nesting, and permission refusals are defined once in `fission.budget` and `fission.permission`; do not restate them here.
 
-Plan budget use with each tool's own guidance: `amend` retracts the last beat, a nested scope carries its own budget, `defer` records side findings for exit, and `task` covers independent slices. Close with scope({ end: true }) when the task is complete or permanently blocked.
+Plan budget use with each tool's own guidance: `amend` retracts the last beat, a nested scope carries its own budget, and `task` covers independent slices. Close with scope({ end: true }) when the task is complete or permanently blocked.
 
 Call scope({ end: true }) only when the current task is complete or permanently blocked. Closing writes no report and asks for no summary. The most recently closed scope at a level stays fully visible as the hot workbench. When you later open another sibling scope at that level, pass the prior scope's summary in begin.elder_report: a non-empty string to archive it, or null when no elder is pending. A closed scope whose elder_report is never written is sealed without a report; its deletable interior may be folded once economics or the watermark allows. Write the user-facing answer as ordinary assistant text only when you are outside all scopes. Inside any scope, keep working or close the scope with scope({ end: true }); do not present the final user-facing conclusion.
 
@@ -95,17 +95,9 @@ Reflection is required, is the only cost, and is the replacement itself: it is t
 
 The text that replaces the beat: what you were attempting, why it did not fit the task, and what the next attempt must do instead. Must not be empty.
 
-## defer.tool
-
-Record a finding that should be handled later without spending budget now. Only inside a scope. Returns OK immediately and costs no budget. When the current scope ends, every finding deferred in that scope is delivered as one steering user message, so you can request a new scope with enough budget to address it. A nested scope's findings are delivered when that scope ends, even if its enclosing scope is still active; treat them as work inside the enclosing scope. Use defer for real budget triage: something important you discovered, but not worth the remaining calls in this scope. Do not use it to avoid required work.
-
-## defer.intent
-
-What must be done later and why it matters. Must be specific, actionable, and non-empty.
-
 ## pin.tool
 
-Record a durable reasoning note. pin costs no budget, has no call limit, and always returns OK; call it inside or outside a scope. Every field is optional Markdown. Pins survive scope collapse and all historical pins are passed to the successor at relay handoff. After saving a stage artifact, pin its path and key conclusions. Use pin for durable assumptions, deductions, inductions, findings, and conclusions; use defer for work that must be done later.
+Record a durable reasoning note. pin costs no budget, has no call limit, and always returns OK; call it inside or outside a scope. Every field is optional Markdown. Pins survive scope collapse and all historical pins are passed to the successor at relay handoff. After saving a stage artifact, pin its path and key conclusions. Use pin for durable assumptions, deductions, inductions, findings, and conclusions.
 
 ## pin.assumption
 

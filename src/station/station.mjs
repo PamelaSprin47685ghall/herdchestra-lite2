@@ -27,7 +27,6 @@
 import {
 	createUsageLedger,
 	currentScope,
-	deferIntent,
 	effectiveDeadline,
 	planStateEntry,
 	serializeState,
@@ -54,15 +53,10 @@ import {
 	createEmptyCatalog,
 	resolveModelPolicy,
 } from "../host/pricing.mjs";
+import { handleAmendCall } from "./controls.mjs";
 import {
-	handleDeferCall,
-	handleAmendCall,
-} from "./controls.mjs";
-import {
-	directDefer,
 	directAmend,
 	directScope,
-	executeDefer,
 	executePin,
 	executeAmend,
 	executeScope,
@@ -544,10 +538,6 @@ export class SessionStation {
 		return findAmendTarget(this.state, base, currentIndex, scope);
 	}
 
-	deferIntent(toolCallId, intent) {
-		return deferIntent(this.state, { toolCallId, intent });
-	}
-
 	// -- Message processing ----------------------------------------------------
 
 	processAssistantMessage(message, { persisted = false } = {}) {
@@ -572,17 +562,6 @@ export class SessionStation {
 			if (this.processed.hasCall(call.id)) continue;
 			this.processed.setHandled(call.id, handleAmendCall(this, call, base, currentIndex));
 			changed = true;
-		}
-
-		for (const call of earlyControls) {
-			if (call.name === "amend") continue;
-			if (this.processed.hasCall(call.id)) continue;
-			if (call.name === "defer") {
-				this.processed.setHandled(call.id, handleDeferCall(this, call));
-				this.processed.markCall(call.id);
-				changed = true;
-				continue;
-			}
 		}
 
 		for (const call of earlyControls) {

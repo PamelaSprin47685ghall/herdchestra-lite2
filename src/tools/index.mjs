@@ -9,8 +9,6 @@ export {
 	ELDER_REPORT_DESCRIPTION,
 	AMEND_DESCRIPTION,
 	REFLECTION_DESCRIPTION,
-	DEFER_DESCRIPTION,
-	DEFER_INTENT_DESCRIPTION,
 	PIN_DESCRIPTION,
 	PIN_ASSUMPTION_DESCRIPTION,
 	PIN_DEDUCTION_DESCRIPTION,
@@ -19,7 +17,6 @@ export {
 	PIN_CONCLUSION_DESCRIPTION,
 	scopeParameters,
 	amendParameters,
-	deferParameters,
 	pinParameters,
 } from "./descriptions.mjs";
 export {
@@ -27,7 +24,6 @@ export {
 	activateToolsTicket,
 	scopeTicket,
 	amendTicket,
-	deferTicket,
 	pinTicket,
 } from "./tickets.mjs";
 export {

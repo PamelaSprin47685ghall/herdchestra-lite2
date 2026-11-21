@@ -1,4 +1,4 @@
-// Station control handlers: scope, amend, defer, and pin arguments.
+// Station control handlers: scope, amend, and pin arguments.
 // Plain synchronous functions. The station owns the state; this module owns
 // the argument validation and the resulting text.
 
@@ -61,17 +61,6 @@ function handleAmendCall(station, call, base, currentIndex) {
   if (!applied.ok) return errorResult(applied.code, applied.reason);
   applied.scope = currentScope(state);
   return textResult(amendText(applied, reflection), { refunded: applied.refunded });
-}
-
-function handleDeferCall(station, call) {
-  const args = parseArgs(call);
-  const intent = trimText(args.intent);
-  if (!intent) {
-    return errorResult("INVALID_ARGUMENT", E["defer-intent"], { field: "intent" });
-  }
-  const out = station.deferIntent(call.id, intent);
-  if (!out.ok) return errorResult(out.code, out.reason);
-  return textResult("OK");
 }
 
 function handlePinCall(station, call) {
@@ -535,25 +524,17 @@ function handleScopeCall(station, call, { base, currentMessage, currentPersisted
     });
   }
 
-  const deferred = closed.defers ?? [];
-  const steerSent = station.deliverSteer(closed.steerText);
   const remainingScope = currentScope(state);
   const text = endText(
     "",
     null,
-    deferred.length,
-    closed.steerText,
-    steerSent,
     false,
     remainingScope,
     station.relayReady() && !state.herdMode && state.relay?.fullFlow === true,
     state.herdMode,
   );
   queueModelSwitch(station, target, from, remainingScope?.id ?? null);
-  return textResult(text, {
-    scopeId: scope.id,
-    deferred: deferred.length,
-  });
+  return textResult(text, { scopeId: scope.id });
 }
 
 function floodBatch(state) {
@@ -645,4 +626,4 @@ function foldEligiblePool(station, { state, parentId, boundary, epoch, base, cur
   return folded;
 }
 
-export { handleAmendCall, handleDeferCall, handlePinCall, handleScopeCall };
+export { handleAmendCall, handlePinCall, handleScopeCall };

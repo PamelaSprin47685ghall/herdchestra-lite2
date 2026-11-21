@@ -29,7 +29,7 @@ You are in repo-aware mode. Obey the following repo-aware rules (AGENTS.md) as m
 <skill version="1.0">Persistent operating rules (unchanged every turn):
 - `scope` is an execution barrier: calls before it run in the outer context; calls after `scope({ begin })` in the same message execute once and their results are shared with every flow in the batch.
 - `amend` is available inside every scope, including fission flows. `todo` is forbidden inside any scope and is the only functional tool outside all scopes.
-- Only the innermost scope budget is used. scope, amend, defer and pin are free; the write that resolves a staged ast_edit preview (path xd://resolve or xd://reject) is free; todo is allowed only outside all scopes.
+- Only the innermost scope budget is used. scope, amend and pin are free; the write that resolves a staged ast_edit preview (path xd://resolve or xd://reject) is free; todo is allowed only outside all scopes.
 - One assistant message spends at most one unit, split across its tool calls by count. A tool whose balance runs out is blocked while the rest of the message still runs.
 - Never write the final user-facing answer while inside a scope. Close every scope first.
 - Close a scope with scope({ end: true }). Pass the previous scope summary in the next sibling begin.elder_report.

@@ -657,36 +657,6 @@ describe("amend", () => {
 	});
 });
 
-describe("defer", () => {
-	test("delivers deferred findings as a steering prompt and keeps residual defers", async () => {
-		const manager = makeManager();
-		const { host, ctx } = await start(manager);
-		seedScope(ctx, { id: "b1", intent: "limited work" });
-		await runAssistant(
-			host,
-			ctx,
-			assistant([
-				call("d1", "defer", { intent: "fix the docs later" }),
-			]),
-		);
-		await runAssistant(
-			host,
-			ctx,
-			assistant([call("g1", "amend", { reflection: "the defer beat was premature" })]),
-		);
-		const end = await runAssistant(
-			host,
-			ctx,
-			assistant([call("e1", "scope", { end: true })]),
-		);
-		expect(end[0].blocked).toBe(false);
-		expect(host.steers.length).toBe(1);
-		expect(host.steers[0].text).toContain("fix the docs later");
-		expect(host.steers[0].options).toEqual({ deliverAs: "steer" });
-		expect(end[0].output.content[0].text).toContain("fix the docs later");
-	});
-});
-
 describe("pin", () => {
 	function hasCall(message, id) {
 		return (
@@ -827,9 +797,9 @@ describe("vibe mode", () => {
 		}
 		installVibeTools(Session);
 		installVibeTools(Session);
-		const session = new Session(["read", "scope", "amend", "defer", "pin"]);
+		const session = new Session(["read", "scope", "amend", "pin"]);
 		await session.activateVibeTools(["read", "scope"]);
-		expect(session.active).toEqual(["read", "scope", "amend", "defer", "pin", "task"]);
+		expect(session.active).toEqual(["read", "scope", "amend", "pin", "task"]);
 		const other = new Session(["read"]);
 		await other.activateVibeTools(["read"]);
 		expect(other.active).toEqual(["read", "task"]);

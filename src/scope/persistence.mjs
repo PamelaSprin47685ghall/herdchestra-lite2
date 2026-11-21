@@ -7,7 +7,6 @@ import {
   isNonEmptyString,
   put,
   copyCounts,
-  copyDefers,
   createState,
 } from "./state.mjs";
 import { copyRelay, createRelay, isValidRelay } from "../relay/state.mjs";
@@ -163,8 +162,6 @@ export function serializeState(state) {
       budget: copyCounts(scope.budget),
       remaining: copyCounts(scope.remaining),
       spent: copyCounts(scope.spent),
-      defers: copyDefers(scope.defers),
-      residualDefers: copyDefers(scope.residualDefers),
       ...measuredFields(scope),
     })),
     charges: copyCharges(state.charges),
@@ -187,16 +184,6 @@ export function serializeState(state) {
     modelCaches: copyModelCaches(state.modelCaches),
     stageFlags: copyStageFlags(state.stageFlags),
   };
-}
-
-function validDefers(value) {
-  if (!Array.isArray(value)) return false;
-  for (const item of value) {
-    if (!isPlainObject(item)) return false;
-    if (typeof item.toolCallId !== "string") return false;
-    if (!isNonEmptyString(item.intent)) return false;
-  }
-  return true;
 }
 
 function validBudgetCounts(value) {
@@ -247,8 +234,6 @@ function validScope(scope) {
   if (!validBudgetCounts(scope.budget)) return false;
   if (!validAmountCounts(scope.remaining)) return false;
   if (!validAmountCounts(scope.spent)) return false;
-  if (!validDefers(scope.defers)) return false;
-  if (!validDefers(scope.residualDefers)) return false;
   // Optional measured fields must stay type-correct when present; their
   // absence is allowed so legacy snapshots migrate cleanly.
   for (const key of ["baseInputTokens", "preBeginInputTokens", "endInputTokens"]) {
@@ -514,8 +499,6 @@ export function deserializeState(input) {
         budget: copyCounts(scope.budget),
         remaining: copyCounts(scope.remaining),
         spent: copyCounts(scope.spent),
-        defers: copyDefers(scope.defers),
-        residualDefers: copyDefers(scope.residualDefers),
         ...measuredFields(scope),
       })),
       charges: copyCharges(data.charges),

@@ -1,4 +1,4 @@
-// Scope accounting: open, close, charge, defer, amend, and host boundaries.
+// Scope accounting: open, close, charge, amend, and host boundaries.
 // Every function mutates the state object it receives. No I/O.
 
 import {
@@ -22,38 +22,6 @@ import {
 } from "./budget.mjs";
 import { DECISION_FRAMING, NORMAL_STAGES, WORKFLOW_STAGES } from "./stages.mjs";
 import { EXECUTION_STAGE, missingStages } from "./stage-flags.mjs";
-
-const STEER_HEADER =
-  "You deferred the following findings in this scope. Address them now:";
-
-function collectDefers(scope) {
-  const seen = new Set();
-  const out = [];
-  for (const item of [...scope.defers, ...scope.residualDefers]) {
-    const intent = item.intent.trim();
-    if (seen.has(intent)) continue;
-    seen.add(intent);
-    out.push({ toolCallId: item.toolCallId, intent });
-  }
-  return out;
-}
-
-function steerText(defers) {
-  if (defers.length === 0) return "";
-  const lines = defers.map((item) => `- ${item.intent}`);
-  return [STEER_HEADER, ...lines].join("\n");
-}
-
-function withdrawDefer(scope, toolCallId) {
-  const index = scope.defers.findIndex((item) => item.toolCallId === toolCallId);
-  if (index === -1) return;
-  const [item] = scope.defers.splice(index, 1);
-  if (scope.residualDefers.some((entry) => entry.toolCallId === toolCallId)) return;
-  scope.residualDefers.push({
-    toolCallId: item.toolCallId,
-    intent: item.intent,
-  });
-}
 
 /** Validate the whole batch without changing state. */
 export function validateFission(state, begin, options = {}) {
@@ -201,8 +169,7 @@ export function closeScope(state, params) {
   for (const key of Object.keys(state.charges)) {
     if (state.charges[key]?.scopeId === scope.id) delete state.charges[key];
   }
-  const defers = collectDefers(scope);
-  return { ok: true, scope, defers, steerText: steerText(defers) };
+  return { ok: true, scope };
 }
 
 function groupAlreadyCharged(state, scopeId, tool, groupKey) {
@@ -227,7 +194,7 @@ export function chargeTool(state, params) {
   if (!scope) {
     return failure(
       "NOT_IN_SCOPE",
-      "Outside all scopes, only todo and the free control tools (scope, amend, defer, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, time, fission: [{ intent, budget, permission }] } }).",
+      "Outside all scopes, only todo and the free control tools (scope, amend, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, time, fission: [{ intent, budget, permission }] } }).",
     );
   }
   if (isFreeCall(toolName, input)) {
@@ -277,22 +244,6 @@ export function chargeTool(state, params) {
   return { ok: true, remaining: copyCounts(scope.remaining) };
 }
 
-export function deferIntent(state, params) {
-  const { toolCallId, intent } = params || {};
-  const scope = currentScope(state);
-  if (!scope) {
-    return failure("NOT_IN_SCOPE", "defer is only allowed inside a scope.");
-  }
-  if (!isNonEmptyString(intent)) {
-    return failure("INVALID_INTENT", "intent must be a non-empty string.");
-  }
-  scope.defers.push({
-    toolCallId: typeof toolCallId === "string" ? toolCallId : "",
-    intent: intent.trim(),
-  });
-  return { ok: true };
-}
-
 export function applyAmend(state, params) {
   const { scopeId, beat, toolCalls } = params || {};
   const scope = currentScope(state);
@@ -323,12 +274,10 @@ export function applyAmend(state, params) {
       }
       delete state.charges[call.id];
     }
-    withdrawDefer(scope, call.id);
   }
   return {
     ok: true,
     refunded,
-    residualDefers: scope.residualDefers.slice(),
     remaining: copyCounts(scope.remaining),
   };
 }
@@ -521,21 +470,6 @@ export function truncateForHostBoundary(state) {
   if (charges && typeof charges === "object") {
     for (const key of Object.keys(charges)) {
       if (charges[key]?.scopeId !== kept.id) delete charges[key];
-    }
-  }
-  if (dropped.length > 0) {
-    const seen = new Set(
-      (kept.defers ?? []).map((item) => item.toolCallId),
-    );
-    for (const scope of dropped) {
-      for (const item of [...(scope.defers ?? []), ...(scope.residualDefers ?? [])]) {
-        if (seen.has(item.toolCallId)) continue;
-        seen.add(item.toolCallId);
-        kept.defers.push({
-          toolCallId: item.toolCallId,
-          intent: item.intent,
-        });
-      }
     }
   }
   return true;

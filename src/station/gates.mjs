@@ -236,8 +236,6 @@ function onToolCall(station, event, ctx, atDispatch = false) {
 			if (!station.processed.hasHandled(toolCallId)) {
 				if (toolName === "amend") {
 					station.directAmend(toolCallId, args);
-				} else if (toolName === "defer") {
-					station.directDefer(toolCallId, args);
 				}
 			}
 			return undefined;

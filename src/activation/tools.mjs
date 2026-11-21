@@ -2,8 +2,6 @@
 // to a ticket.
 
 import {
-	DEFER_DESCRIPTION,
-	deferParameters,
 	PIN_DESCRIPTION,
 	pinParameters,
 	AMEND_DESCRIPTION,
@@ -13,7 +11,6 @@ import {
 } from "../tools/descriptions.mjs";
 import {
 	amendTicket,
-	deferTicket,
 	pinTicket,
 	scopeTicket,
 } from "../tools/tickets.mjs";
@@ -42,15 +39,6 @@ export function wireTools(pi, registry) {
 		executionMode: "sequential",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 			amendTicket(registry.stationFor(ctx), toolCallId, params),
-	});
-	pi.registerTool({
-		name: "defer",
-		label: "Defer",
-		description: DEFER_DESCRIPTION,
-		parameters: deferParameters,
-		executionMode: "sequential",
-		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-			deferTicket(registry.stationFor(ctx), toolCallId, params),
 	});
 	pi.registerTool({
 		name: "pin",

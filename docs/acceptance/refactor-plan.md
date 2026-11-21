@@ -165,3 +165,33 @@ git log --oneline -12
 预期：全绿、状态干净、每个切片一个提交，提交信息能独立解释理由。
 
 硬失败：把多个切片的改动塞进一个提交。
+
+## 7. 执行记录（2026-11-21）
+
+逐条实跑的结果。偏差写明，不修饰。
+
+| 条目 | 命令 | 结果 |
+| :--- | :--- | :--- |
+| G1 契约逐实现 | `bun test tests/contract` | 99 用例通过（8 个文件） |
+| G2 缺省环境 | `env -u HERD_SCOPE -u HERD_RELAY bun test tests` | 1005 用例通过 |
+| G3 禁用不可重开 | `bun -e 'resolvePorts({clock:"on"},{HERD_DISABLE_CLOCK:"1"})'` | `{"ok":false,"code":"PORT_UNAVAILABLE","port":"clock","wanted":"on","available":["off"]}` |
+| E0a/E0b 清理 | `grep -rn defer src resources tests` | 仅剩 `"deferred preflight"` 语意的方法名（`deferPreflight` / `deferScopePreflight`）与 “deferred” 普通用词；defer **工具**与状态零命中 |
+| S1–S8 领域无开关 | 对 11 个 `src/features/*` 逐个 grep `features.on\|HERD_DISABLE` | 全部 0 命中 |
+| I1 组合根唯一决策 | `grep -rn 'HERD_DISABLE\|features.on' src | grep -v core/ports` | 0 命中 |
+| I2 提示词不判断开关 | `bun test tests/prompts.test.mjs` | 18 用例通过 |
+| 收尾全量 | `bun test tests` | 1005 用例 / 74 文件 / 0 失败 |
+| 工作区 | `git status --short` | 干净 |
+
+**偏差与遗留（如实记录）**
+
+1. **E0c 的“删掉全部 defer 断言”没有按原样执行**：与 defer 同名的 `deferPreflight` 是
+   “把 preflight 延后到派发时”的意思，不是 defer 工具。删除时曾误改其名，导致 55 个用例
+   失败，已回退。命名保留现状，并在 §2 的验收里注明这个歧义。
+2. **`src/features/**` 已存在但尚未接到运行路径**：本轮交付的是端口、实现与契约；
+   `src/activation` 目前只解析端口表并交给 registry，尚未用这些实现替换现有 station 行为。
+   这是计划里 I1 的边界（“组合根是唯一决策点”），但不等于“运行期已切换实现”。
+   下一步是逐端口把调用点指向 `ports.<name>`。
+3. **clock 的两版没有接到回执渲染**：`bounded()` 已提供判断依据，但 `budgetText` 仍读
+   scope 记录。属于 S2 的后续接线。
+4. **S8 的 batch 实现未与 fission 调度器对接**：它接受 `registerBatch` 构造参数，接线时
+   由组合根传入现有批次入口；当前默认（不传）会拒绝，因此不会误报成功。

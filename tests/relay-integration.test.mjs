@@ -296,7 +296,7 @@ async function start(options = {}) {
 			return result;
 		},
 	};
-	await activate(host.pi);
+	await activate(host.pi, options.env ?? {});
 	installBuiltinSlashExecutor(async (text, runtime) => {
 		const parsed = parseSlashCommand(text);
 		if (!parsed) return false;

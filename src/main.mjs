@@ -11,7 +11,7 @@ import { installStatus, loadPricingCatalog } from "./host/index.mjs";
 import { total as diagnosticsTotal } from "./host/diagnostics.mjs";
 import { preloadDocs } from "./prompts/index.mjs";
 
-export async function activate(pi) {
+export async function activate(pi, env = process.env) {
 	preloadDocs();
 	// Broadcasts are custom messages; register before startup so transcript
 	// replay and live streams use the same readable presentation.
@@ -36,7 +36,7 @@ export async function activate(pi) {
 	}
 	const diagnosis = await installCapture(pi, builtinExecutor);
 	const pricingCatalog = await loadPricingCatalog();
-	wireExtension(pi, pricingCatalog, diagnosis);
+	wireExtension(pi, pricingCatalog, diagnosis, env);
 	installStatus(pi, { diagnostics: { total: diagnosticsTotal } });
 }
 

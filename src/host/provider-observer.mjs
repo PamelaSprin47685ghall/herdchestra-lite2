@@ -162,19 +162,19 @@ function historyRevision(station) {
 	try {
 		const state = station.state ?? {};
 		const epoch = state.epoch ?? 0;
-		const collapses = Array.isArray(state.collapses) ? state.collapses : [];
 		return hash({
 			epoch,
 			generation: state.relay?.generation ?? 0,
 			hostBoundary: station.hostBoundaryKey ?? null,
 			amends: Array.isArray(state.amends) ? state.amends : [],
-			collapses: collapses
-				.filter((item) => item?.collapsed !== false && (item?.epoch ?? 0) === epoch)
-				.map((item) => ({
-					begin: item.beginToolCallId ?? null,
-					end: item.endToolCallId ?? null,
-					report: item.report ?? null,
-				})),
+			receipts: Array.isArray(state.receipts)
+				? state.receipts.map((item) => ({
+						fork: item.forkToolCallId ?? null,
+						close: item.closeToolCallId ?? null,
+						report: item.report ?? null,
+						collapsed: item.collapsed === true,
+					}))
+				: [],
 		});
 	} catch {
 		return null;

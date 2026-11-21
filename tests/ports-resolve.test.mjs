@@ -12,8 +12,8 @@ import { readSwitch, resolvePorts } from "../src/core/ports/resolve.mjs";
 const EMPTY = {};
 
 describe("port registry", () => {
-	test("fourteen ports, each with a default that is one of its implementations", () => {
-		expect(PORT_NAMES).toHaveLength(14);
+	test("thirteen ports, each with a default that is one of its implementations", () => {
+		expect(PORT_NAMES).toHaveLength(13);
 		for (const port of PORT_NAMES) {
 			const entry = PORTS[port];
 			expect(entry.implementations.length).toBeGreaterThanOrEqual(2);
@@ -21,8 +21,10 @@ describe("port registry", () => {
 		}
 	});
 
-	test("scope and relay are the only three-implementation ports", () => {
-		expect(PORTS.scope.implementations).toEqual(["bare", "single", "batch"]);
+	test("scope keeps two implementations, relay three", () => {
+		// `single` was the retired one-container protocol. The scope port now
+		// only names fork/join being available (`batch`) or not (`bare`).
+		expect(PORTS.scope.implementations).toEqual(["bare", "batch"]);
 		expect(PORTS.relay.implementations).toEqual(["none", "ledger", "handoff"]);
 		expect([...NAMED_SWITCHES]).toEqual(["scope", "relay"]);
 	});
@@ -72,7 +74,7 @@ describe("environment resolution", () => {
 			code: "PORT_UNAVAILABLE",
 			port: "scope",
 			wanted: "fission",
-			available: ["bare", "single", "batch"],
+			available: ["bare", "batch"],
 		});
 	});
 
@@ -102,10 +104,22 @@ describe("environment resolution", () => {
 
 describe("ticket uses", () => {
 	test("nothing asked means the environment wins everywhere", () => {
-		const resolved = resolvePorts({}, { HERD_SCOPE: "single" });
+		const resolved = resolvePorts({}, { HERD_SCOPE: "bare" });
 		expect(resolved.ok).toBe(true);
-		expect(resolved.ports.scope).toBe("single");
+		expect(resolved.ports.scope).toBe("bare");
 		expect(resolved.ports.relay).toBe("handoff");
+	});
+
+	test("a retired implementation is refused with the available list", () => {
+		// `single` was the one-container begin/end protocol. Asking for it now
+		// is a configuration error, not a silent fallback to `batch`.
+		expect(resolvePorts({}, { HERD_SCOPE: "single" })).toEqual({
+			ok: false,
+			code: "PORT_UNAVAILABLE",
+			port: "scope",
+			wanted: "single",
+			available: ["bare", "batch"],
+		});
 	});
 
 	test("a ticket may pick another implementation when the environment said nothing", () => {
@@ -115,12 +129,12 @@ describe("ticket uses", () => {
 	});
 
 	test("an explicit environment choice beats the ticket", () => {
-		expect(resolvePorts({ scope: "batch" }, { HERD_SCOPE: "single" })).toEqual({
+		expect(resolvePorts({ scope: "batch" }, { HERD_SCOPE: "bare" })).toEqual({
 			ok: false,
 			code: "PORT_UNAVAILABLE",
 			port: "scope",
 			wanted: "batch",
-			available: ["single"],
+			available: ["bare"],
 		});
 	});
 

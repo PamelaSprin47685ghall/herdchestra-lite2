@@ -328,7 +328,7 @@ describe("one ledger per session, shared across extension instances", () => {
 		const ownerCtx = { hasUI: true, ui, sessionManager: manager };
 		emit(owner.handlers, "session_start", {}, ownerCtx);
 
-		// A fission flow loads the extension again: its own runtime, its own
+		// A fork child loads the extension again: its own runtime, its own
 		// handlers, and `hasUI: false`. The usage must still land on the owner's
 		// line, and the owner must never be the one counted twice.
 		const flow = makeHost();

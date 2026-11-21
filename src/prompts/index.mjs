@@ -104,9 +104,9 @@ export const DOCUMENTS = [
 	"labels",
 	"receipts/relay",
 	"receipts/scope",
-	"stages",
 	"system",
-	"tools/scope",
+	"tools/fork-join",
+	"tools/notes",
 	"tools/todo",
 	"vibe-mode",
 ];

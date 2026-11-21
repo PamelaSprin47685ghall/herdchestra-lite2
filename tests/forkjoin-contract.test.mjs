@@ -1,0 +1,251 @@
+// Contract edges that the blueprint names explicitly and the happy-path tests
+// do not reach: adoption follows the current receiver and a lost bracket never
+// parks its child forever.
+
+import { describe, expect, test } from "bun:test";
+
+import {
+  BLOCKED,
+  createBracketLedger,
+  forkOf,
+  markReady,
+  openChildren,
+  readyChildren,
+  registerFork,
+  reparentOrphans,
+} from "../src/scope/forkjoin.mjs";
+import {
+  addReceipt,
+  attachReport,
+  createReceiptRecord,
+} from "../src/scope/receipts.mjs";
+import {
+  handleForkCall,
+  handleJoinCall,
+  handleReturnCall,
+} from "../src/station/fork-controls.mjs";
+import {
+  createForkRegistry,
+  ledgerFor,
+  notifyWaiters,
+  waitForJoin,
+} from "../src/host/fork-registry.mjs";
+
+function state() {
+  return { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } };
+}
+
+function stationFor(ledger, identity = null) {
+  return {
+    state: state(),
+    forkLedgerPort: () => ledger,
+    forkIdentityPort: () => identity,
+  };
+}
+
+describe("adoption follows the current receiver", () => {
+  test("a reparented branch hands its children to its current parent", () => {
+    const ledger = createBracketLedger();
+    registerFork(ledger, { forkId: "p", ownerId: "root", intent: "parent", depth: 0 });
+    registerFork(ledger, { forkId: "c", ownerId: "p", intent: "child", depth: 1 });
+    // p itself was adopted by g before it returns.
+    // The grandparent adopts p, and p still owns c.
+    reparentOrphans(ledger, "root", "g");
+    expect(forkOf(ledger, "p").ownerId).toBe("g");
+
+    const out = handleReturnCall(
+      stationFor(ledger, { forkId: "p", parentOwnerId: "root" }),
+      { id: "r", arguments: {} },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(out.details.receiver).toBe("g");
+    expect(forkOf(ledger, "c").ownerId).toBe("g");
+    expect(out.content[0].text).toContain("queued for scope");
+  });
+
+  test("blocked entries move with the plan they belong to", () => {
+    const ledger = createBracketLedger();
+    registerFork(ledger, {
+      forkId: "later",
+      ownerId: "p",
+      intent: "needs a decision",
+      depth: 1,
+      blocked: true,
+    });
+    const moved = reparentOrphans(ledger, "p", "g");
+    expect(moved).toEqual({ ok: true, moved: 1, transferred: 0 });
+    expect(forkOf(ledger, "later").ownerId).toBe("g");
+    expect(forkOf(ledger, "later").status).toBe(BLOCKED);
+    expect(openChildren(ledger, "g")).toEqual([]);
+  });
+});
+
+describe("a lost bracket never parks its child", () => {
+  test("waitForJoin returns when the bracket was abandoned", async () => {
+    const registry = createForkRegistry();
+    const ledger = ledgerFor(registry, "lost");
+    registerFork(ledger, { forkId: "c", ownerId: "root", intent: "child", depth: 0 });
+    markReady(ledger, "c");
+    forkOf(ledger, "c").status = "failed";
+    const waited = await waitForJoin(registry, ledger, "c");
+    expect(waited.ok).toBe(false);
+    expect(waited.code).toBe("RETURN_REJECTED");
+  });
+});
+
+describe("an idle join answers instead of waiting", () => {
+  test("no running and no ready child refuses", () => {
+    const ledger = createBracketLedger();
+    const out = handleJoinCall(stationFor(ledger), {
+      id: "j",
+      arguments: { elder_report: null },
+    });
+    expect(out.isError).toBe(true);
+    expect(out.details.active).toBe(0);
+  });
+});
+
+describe("a batch projects one item into each child", () => {
+  test("each child's start receipt names only its own fork", () => {
+    const ledger = createBracketLedger();
+    const specs = [];
+    const station = stationFor(ledger);
+    station.childSpawnPort = () => (spec) => specs.push(spec);
+    const out = handleForkCall(station, {
+      id: "fb",
+      arguments: {
+        forks: [
+          { scopeId: "one", intent: "one", budget: { read: 1 }, time: 60, permission: "ro", blocked: false },
+          { scopeId: "two", intent: "two", budget: { read: 1 }, time: 60, permission: "ro", blocked: false },
+        ],
+      },
+    });
+    expect(out.isError).toBeUndefined();
+    expect(specs.map((spec) => spec.forkId)).toEqual(["fb:0", "fb:1"]);
+    expect(specs[0].receipt).toContain("You are the child of fork one");
+    expect(specs[0].receipt).toContain("Intent: one");
+    expect(specs[0].receipt).toContain("User messages go to the stable root");
+    expect(specs[0].receipt).toContain("Only scope_return submits your full record");
+    expect(specs[0].receipt).not.toContain("Intent: two");
+    expect(specs[1].receipt).toContain("You are the child of fork two");
+    expect(specs[1].receipt).toContain("Intent: two");
+    expect(specs[1].receipt).not.toContain("Intent: one");
+  });
+});
+
+describe("repeated right brackets do not double-count", () => {
+  test("a second scope_return is refused and moves no bracket", () => {
+    const ledger = createBracketLedger();
+    registerFork(ledger, { forkId: "p", ownerId: "root", intent: "parent", depth: 0 });
+    registerFork(ledger, { forkId: "c", ownerId: "p", intent: "child", depth: 1 });
+    const station = stationFor(ledger, { forkId: "p", parentOwnerId: "root" });
+    const first = handleReturnCall(station, { id: "r1", arguments: {} });
+    expect(first.isError).toBeUndefined();
+    expect(forkOf(ledger, "p").status).toBe("ready");
+    const second = handleReturnCall(station, { id: "r2", arguments: {} });
+    expect(second.isError).toBe(true);
+    expect(second.details.code).toBe("FORK_NOT_RUNNING");
+    // The still-running child was not handed over twice.
+    expect(openChildren(ledger, "root")).toEqual(["c"]);
+    expect(readyChildren(ledger, "root")).toEqual(["p"]);
+  });
+
+  test("a second join finds nothing to take", () => {
+    const ledger = createBracketLedger();
+    registerFork(ledger, { forkId: "f1", ownerId: "root", intent: "child", depth: 0 });
+    markReady(ledger, "f1");
+    const station = stationFor(ledger);
+    const first = handleJoinCall(station, { id: "j1", arguments: { elder_report: null } });
+    expect(first.isError).toBeUndefined();
+    const second = handleJoinCall(station, { id: "j2", arguments: { elder_report: "the first child summarized its parser findings" } });
+    expect(second.isError).toBe(true);
+    expect(second.details.code).toBe("NO_READY_CHILD");
+  });
+});
+
+describe("the report obligation survives a reload", () => {
+  test("a persisted receipt still demands its summary", () => {
+    const ledger = createBracketLedger();
+    registerFork(ledger, { forkId: "f2", ownerId: "root", intent: "second", depth: 0 });
+    markReady(ledger, "f2");
+    const station = stationFor(ledger);
+    // No in-memory owner map: this is a fresh process reading a restored state.
+    station.state.receipts = [
+      createReceiptRecord({
+        forkToolCallId: "f1",
+        closeToolCallId: "j1",
+        levelKey: "root|0|0",
+        closedOrder: 1,
+        report: null,
+      }),
+    ];
+    // The persisted surface the real station exposes: the summary attaches to
+    // the previous receipt, and the new join appends its own.
+    station.recordJoinReceipt = (spec) => {
+      let receipts = station.state.receipts;
+      if (spec.pending) {
+        receipts = attachReport(receipts, spec.pending.closeToolCallId, spec.elderReport);
+      }
+      receipts = addReceipt(
+        receipts,
+        createReceiptRecord({
+          forkToolCallId: spec.forkId,
+          closeToolCallId: spec.closeToolCallId,
+          levelKey: spec.levelKey,
+          closedOrder: spec.closedOrder,
+          report: null,
+        }),
+      );
+      station.state.receipts = receipts;
+    };
+    const refused = handleJoinCall(station, { id: "j2", arguments: { elder_report: null } });
+    expect(refused.isError).toBe(true);
+    expect(refused.details.code).toBe("INVALID_ELDER_REPORT");
+    // The refusal must not consume the ready child.
+    expect(readyChildren(ledger, "root")).toEqual(["f2"]);
+
+    const accepted = handleJoinCall(station, {
+      id: "j2",
+      arguments: { elder_report: "f1 measured 42 and left the parser path open" },
+    });
+    expect(accepted.isError).toBeUndefined();
+    expect(station.state.receipts[0].report).toBe(
+      "f1 measured 42 and left the parser path open",
+    );
+  });
+});
+
+describe("a join leaves the parent where it was", () => {
+  test("receives a child without moving the parent's level, model or budget", () => {
+    const ledger = createBracketLedger();
+    registerFork(ledger, { forkId: "f1", ownerId: "root", intent: "child", depth: 0 });
+    markReady(ledger, "f1");
+    const station = stationFor(ledger);
+    station.state = {
+      scopes: [
+        {
+          id: "s1",
+          intent: "parent work",
+          budget: { read: 3, bash: 1 },
+          remaining: { read: 2, bash: 1 },
+          modelKey: "parent-model",
+        },
+      ],
+      modelCaches: { "parent-model": { cachedUntilPos: 5, chars: 900 } },
+      herdMode: false,
+      relay: { generation: 0, fullFlow: false, canStop: false },
+      pins: [],
+      receipts: [],
+    };
+    const before = structuredClone(station.state);
+    const out = handleJoinCall(station, { id: "j1", arguments: { elder_report: null } });
+    expect(out.isError).toBeUndefined();
+    expect(out.details.forkId).toBe("f1");
+    expect(out.details.joined).toBe(true);
+    // The child merged into the parent: the parent's level, its model key,
+    // its cache ledger and its remaining budget are byte-identical. Only the
+    // receipt chain may grow, and this station has no receipt writer.
+    expect(station.state).toEqual(before);
+    expect(ledger.order).toContain("f1");
+  });
+});

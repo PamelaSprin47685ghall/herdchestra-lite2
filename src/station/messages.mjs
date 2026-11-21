@@ -1,8 +1,9 @@
 // Station message helpers: argument parsing and transcript keys. Pure.
 
 import { toolCalls } from "../transcript/index.mjs";
-
-const CONTROL_TOOLS = new Set(["scope", "amend", "pin"]);
+// One definition, in the domain layer. The station re-exports it so callers
+// keep a single import site and a single membership rule.
+import { CONTROL_TOOLS } from "../scope/state.mjs";
 
 function parseArgs(call) {
 	const raw = call?.arguments;
@@ -51,7 +52,7 @@ function finishedResultMessage(toolCallId, report, finishedReport) {
 	return {
 		role: "toolResult",
 		toolCallId,
-		toolName: "scope",
+		toolName: "scope_join",
 		content: [{ type: "text", text: finishedReport(report) }],
 		isError: false,
 		timestamp: Date.now(),

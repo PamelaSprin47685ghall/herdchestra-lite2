@@ -2,11 +2,6 @@
 
 export { textResult, errorResult, continueFeedback } from "./results.mjs";
 export {
-	SCOPE_DESCRIPTION,
-	BEGIN_INTENT_DESCRIPTION,
-	BUDGET_DESCRIPTION,
-	END_DESCRIPTION,
-	ELDER_REPORT_DESCRIPTION,
 	AMEND_DESCRIPTION,
 	REFLECTION_DESCRIPTION,
 	PIN_DESCRIPTION,
@@ -15,14 +10,21 @@ export {
 	PIN_INDUCTION_DESCRIPTION,
 	PIN_FINDING_DESCRIPTION,
 	PIN_CONCLUSION_DESCRIPTION,
-	scopeParameters,
+	forkParameters,
+	joinParameters,
+	returnParameters,
+	FORK_DESCRIPTION,
+	JOIN_DESCRIPTION,
+	RETURN_DESCRIPTION,
 	amendParameters,
 	pinParameters,
 } from "./descriptions.mjs";
 export {
 	sendSteerTicket,
 	activateToolsTicket,
-	scopeTicket,
+	forkTicket,
+	joinTicket,
+	returnTicket,
 	amendTicket,
 	pinTicket,
 } from "./tickets.mjs";

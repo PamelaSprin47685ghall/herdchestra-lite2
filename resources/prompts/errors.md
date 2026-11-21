@@ -1,131 +1,35 @@
-## pin-unavailable
-
-The pin port is disabled (HERD_DISABLE_PIN=1). No note was kept.
-
-## amend-unavailable
-
-The amend port is disabled (HERD_DISABLE_AMEND=1). No beat was retracted.
-
 ## amend-reflection
 
-amend.reflection must be a non-empty string.
+Provide a non-empty `reflection` to replace the beat.
 
 ## amend-scope
 
-amend is only allowed inside a scope.
+Select a beat in this branch after its latest `scope_fork`, `scope_join`, or `scope_return`.
 
-## amend-history
+## amend-unavailable
 
-amend is only allowed inside a scope with a visible beat history.
+Amend is unavailable. The record is unchanged.
 
-## scope-model
+## pin-unavailable
 
-scope.begin.model must be a non-empty string or null.
-
-## scope-end-type
-
-scope.end must be the boolean true; closing a scope no longer takes a report.
-
-## scope-end-false
-
-scope.end:false does not close a scope; provide begin or end:true.
-
-## scope-neither
-
-Provide begin, end, or both.
-
-## scope-elder-report
-
-scope.begin.elder_report must be a non-empty string or null.
-
-## scope-handoff-pending
-
-A relay handoff is pending. Do not open a new scope; wait for the successor.
-
-## scope-permission
-
-scope.begin.permission must be "ro" or "rw".
-
-## rw-decision-framing
-
-stage "decision-framing" answers why, not what, so it cannot carry a write scope. Declare permission: "ro" (trusted, never enforced), or open the write scope in a later stage.
-
-## rw-before-ledger
-
-The full flow is on and this generation has not submitted its first todo ledger yet, so permission "rw" is refused. Close all scopes and call todo with a write operation to submit the ledger (a todo view does not count), or declare permission: "ro" for a read-only scope. permission "ro" is trusted and never enforced. Submit the remaining work, or `todo({ op: "init", list: [] })` when no user-requested work remains: an empty ledger is a lawful submission.
-
-## herd-only-framing
-
-Herd mode is on. Only stage: "{{stage}}" can open.
-
-## normal-stage
-
-Herd mode is off. Choose a stage: {{stages}}.
-
-## missing-elder-report
-
-An unarchived elder scope is pending at this level. Pass its summary in begin.elder_report.
-
-## scope-end-outside
-
-scope end is only allowed inside a scope.
-
-## same-message
-
-A scope cannot begin and end in the same assistant message. Begin it in one message, do the work, then end it in a later message.
-
-## context-exceeded
-
-The retained context is estimated at {{tokens}} tokens; {{model}} has a {{window}}-token window.
-
-## context-estimate-unavailable
-
-Cannot estimate the target model's complete request size because its system prompt and tool definitions are unavailable. Restore the request header before opening this flow.
-
-## model-switch-warning
-
-WARNING: {{command}} failed: {{reason}}
-
-## stage-flags-unmet
-
-The full flow requires one run of each earlier stage before "direct-execution". Missing: {{missing}}. Open each missing stage's scope before execution; simple mode has no such flag gate.
-
-## not-in-scope
-
-Outside all scopes, only todo and the free control tools (scope, amend, pin) may be called. Open a scope with scope({ begin: { stage, elder_report, time, fission: [{ intent, budget, permission }] } }); one flow is a one-item fission array, and every item must declare permission. Time is required in seconds.
-
-## scope-in-fission
-
-Use scope({ end: true }) to finish this flow, or open a nested fission batch. A flow cannot open an ordinary scope.
-
-## invalid-begin-shape
-
-A begin requires stage, elder_report, time, and fission. The single-flow begin shape no longer exists; to open one flow, pass a one-item fission array.
-
-## fission-with-end
-
-A fission begin cannot also close a scope. Close the open scope first with a plain end: true call, then open the batch in a following call.
-
-## fission-unavailable
-
-Fission cannot start: the host exposes no abort() for owner retirement, or no scheduler is attached to the station registry.
-
-## fission-pending
-
-A fission batch from this agent has not retired yet; wait for its receipt before opening another.
-
-## todo-inside-scope
-
-todo is forbidden inside any active scope. Close every scope first; todo only works outside all scopes.
+Pin is unavailable. Note not saved.
 
 ## ask-blocked
 
-ask is allowed only when the user has enabled /herd and the current scope has stage: "decision-framing".
+Herd mode is off. Only the user can enable `ask` with `/herd`.
 
-## flow-open
+## model-switch-warning
 
-This flow is still open. Continue the unfinished work now. Once the work is complete, call scope({ end: true }).
+Could not verify {{command}}: {{reason}}. Use the model the host reports.
+
+## context-exceeded
+
+The child record exceeds this model's context window. It stays available. Use a larger model or return the work in files and a short record.
+
+## context-estimate-unavailable
+
+Cannot estimate request size for this model. Fit is unverified.
 
 ## overtime-killed
 
-OVERTIME: that tool ran {{elapsed}}ms in the chess-clock phase, past its {{limit}}ms limit, and was killed. Its result is gone. You are out of normal time: shrink the work, close the scope, or hand off now.
+Tool stopped at the branch deadline. Calls now get one second each. Use `scope_return` when ready.

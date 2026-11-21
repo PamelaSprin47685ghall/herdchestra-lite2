@@ -6,10 +6,11 @@
 // todoTicket is the async ticket: it awaits the native invokeTool, then performs
 // every relay state transition through the SessionStation's synchronous methods.
 
-import { currentScope } from "../scope/index.mjs";
 import { errorResult } from "./results.mjs";
 import {
 	handoffToolBlockedReason,
+	inScopeTodoText,
+	isTodoView,
 	relayStatusText,
 } from "../relay/index.mjs";
 
@@ -55,6 +56,7 @@ function relayDetails(relay) {
 		canStop: relay.canStop,
 		handoffPending: relay.handoffPending,
 		promotionInvalidated: relay.promotionInvalidated,
+		viewRequired: relay.viewRequired,
 		handoffError: relay.handoffError,
 		lastHandoff: relay.lastHandoff,
 		lastLedger: relay.lastLedger,
@@ -69,16 +71,22 @@ function relayDetails(relay) {
  * untouched. This ticket adds no fields and never mutates details.phases.
  */
 export async function todoTicket(station, params, ctx) {
-	if (currentScope(station.state)) {
-		return errorResult(
-			"TODO_OUTSIDE_SCOPE_ONLY",
-			"todo is forbidden inside any active scope. Close every scope first, then call todo outside all scopes.",
-		);
-	}
+	const ownerId =
+		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
 	if (!station.state.herdMode && station.state.relay?.handoffPending) {
 		return errorResult(
 			"RELAY_HANDOFF_PENDING",
 			handoffToolBlockedReason(),
+		);
+	}
+	// An inherited non-empty ledger is read before it is rewritten. A view is
+	// free: it submits nothing, so requiring one costs the successor no budget.
+	// Only the root branch owes this read; a fork child has its own history and
+	// never evaluates the inherited relay state.
+	if (!ownerId && station.state.relay?.viewRequired && !isTodoView(params)) {
+		return errorResult(
+			"INHERITED_LEDGER_UNVIEWED",
+			"The previous generation retired with open work, so its ledger is yours to read first. Call todo({ op: \"view\" }) once. It is free and does not submit a ledger; then write your own.",
 		);
 	}
 	if (typeof ctx?.invokeTool !== "function") {
@@ -107,6 +115,17 @@ export async function todoTicket(station, params, ctx) {
 	// the user has paused relay with /herd. Check after the native await too.
 	if (station.state.herdMode) return native;
 
+	// A fork child has its own history. Its ledger write is real work, but the
+	// relay is a root protocol: a child must not arm a handoff or clear the
+	// inherited-ledger debt. Say so, so the model never mistakes a child's
+	// write for a submitted evaluation.
+	if (ownerId) {
+		if (native.isError === true) return native;
+		const depth =
+			typeof station.forkDepthPort === "function" ? station.forkDepthPort() : 1;
+		return appended(native, inScopeTodoText(depth));
+	}
+
 	const isError = native.isError === true;
 	let details = native.details;
 	let phases = Array.isArray(details?.phases) ? details.phases : null;
@@ -120,7 +139,10 @@ export async function todoTicket(station, params, ctx) {
 	}
 
 	if (isError) {
-		const text = `RELAY STATE\nThis todo call failed, so it did not advance the relay evaluation and did not change the ledger.\n${relayStatusText(station.state.relay, station.state.relay.lastLedger, { action: null, error: "native todo returned an error" })}`;
+		const text = relayStatusText(station.state.relay, station.state.relay.lastLedger, {
+			action: null,
+			error: "Native todo failed. The ledger and relay state are unchanged.",
+		});
 		if (details && typeof details === "object") {
 			details = { ...details };
 		}
@@ -135,9 +157,11 @@ export async function todoTicket(station, params, ctx) {
 	}
 
 	const applied = station.recordLedgerEvaluation(phases, op, { isError: false });
+	if (op === "view" || isTodoView(params)) station.markInheritedLedgerViewed();
 
 	const text = relayStatusText(applied.relay, applied.stats, {
 		action: applied.action,
+		unreceived: applied.unreceived,
 	});
 	if (applied.action === "handoff") {
 		station.armHandoff(ctx);

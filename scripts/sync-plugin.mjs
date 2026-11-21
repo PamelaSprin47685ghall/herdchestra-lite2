@@ -12,7 +12,15 @@
  * Exit code is 0 only when every runtime file matches and the installed build
  * carries the current feature fingerprints.
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -21,25 +29,26 @@ const TARGET = resolve(
   process.env.HERDCHESTRA_PLUGIN_DIR ??
     join(homedir(), ".omp/plugins/node_modules/herdchestra-lite2"),
 );
-const RUNTIME_DIRS = ["src", "resources"];
+const RUNTIME_DIRS = ["src", "resources", "skills"];
 const FINGERPRINTS = [
   { file: "src/relay/texts.mjs", needle: "status.flow", min: 1 },
   { file: "src/relay/texts.mjs", needle: 'case "reopened"', min: 1 },
-  // The `rw` gate moved into fission validation: accounting.mjs owns the two
-  // refusals (before the first ledger, and in decision-framing), while
-  // controls.mjs keeps the single end-of-scope relay check. Counting two in
-  // controls.mjs described a shape the file no longer has.
-  { file: "src/scope/accounting.mjs", needle: "state.relay?.fullFlow === true", min: 2 },
-  { file: "src/station/controls.mjs", needle: "state.relay?.fullFlow === true", min: 1 },
+  // The scope protocol is the three fork/join/return tools. These needles
+  // prove the installed copy registers that face and keeps the receipt chain;
+  // counting an old fullFlow snippet only described a retired code shape.
+  { file: "src/activation/tools.mjs", needle: 'name: "scope_fork"', min: 1 },
+  { file: "src/activation/tools.mjs", needle: 'name: "scope_join"', min: 1 },
+  { file: "src/activation/tools.mjs", needle: 'name: "scope_return"', min: 1 },
+  { file: "src/scope/receipts.mjs", needle: "foldableReceipts", min: 1 },
 ];
 const checkOnly = process.argv.includes("--check");
 
-function filesUnder(dir) {
+function filesUnder(dir, base = ROOT) {
   const found = [];
-  for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+  for (const entry of readdirSync(join(base, dir), { withFileTypes: true })) {
     const rel = join(dir, entry.name);
     if (entry.isDirectory()) {
-      found.push(...filesUnder(rel));
+      found.push(...filesUnder(rel, base));
     } else if (entry.isFile()) {
       found.push(rel);
     } else {
@@ -67,6 +76,37 @@ function copyAll(drift) {
   }
 }
 
+/**
+ * Files the installed plugin still carries that this package no longer ships.
+ * Copying alone can add and overwrite, so a renamed or deleted skill would
+ * stay discoverable under its old name until the target is pruned.
+ */
+function extraUnder() {
+  return RUNTIME_DIRS.flatMap((dir) => {
+    if (!existsSync(join(TARGET, dir))) return [];
+    return filesUnder(dir, TARGET).filter((rel) => !existsSync(join(ROOT, rel)));
+  });
+}
+
+function pruneAll(extra) {
+  for (const rel of extra) rmSync(join(TARGET, rel), { force: true });
+  const dirs = [...new Set(extra.map((rel) => dirname(rel)))].sort((a, b) => b.length - a.length);
+  for (const start of dirs) {
+    let current = start;
+    for (;;) {
+      if (RUNTIME_DIRS.includes(current)) break;
+      try {
+        rmdirSync(join(TARGET, current));
+      } catch {
+        break;
+      }
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+}
+
 function fingerprintProblems() {
   return FINGERPRINTS.map(({ file, needle, min }) => {
     const path = join(TARGET, file);
@@ -76,7 +116,9 @@ function fingerprintProblems() {
 }
 
 function driftUnder(root) {
-  return RUNTIME_DIRS.flatMap(filesUnder).filter((rel) => !identical(join(root, rel), join(TARGET, rel)));
+  return RUNTIME_DIRS.flatMap((dir) => filesUnder(dir)).filter((rel) =>
+    !identical(join(root, rel), join(TARGET, rel)),
+  );
 }
 
 if (!existsSync(TARGET)) {
@@ -87,14 +129,23 @@ if (!existsSync(TARGET)) {
 
 console.log(`sync-plugin: ${ROOT} -> ${TARGET}`);
 const drift = driftUnder(ROOT);
+const extra = extraUnder();
 
 for (const rel of drift) console.log(`  drift  ${rel}`);
+for (const rel of extra) console.log(`  extra  ${rel}`);
 
 if (checkOnly) {
   const problems = fingerprintProblems();
   for (const line of problems) console.log(`  stale  ${line}`);
-  if (drift.length === 0 && problems.length === 0) console.log("in sync; fingerprints ok");
-  process.exit(drift.length === 0 && problems.length === 0 ? 0 : 1);
+  if (drift.length === 0 && extra.length === 0 && problems.length === 0) {
+    console.log("in sync; fingerprints ok");
+  }
+  process.exit(drift.length === 0 && extra.length === 0 && problems.length === 0 ? 0 : 1);
+}
+
+if (extra.length > 0) {
+  pruneAll(extra);
+  console.log(`pruned ${extra.length} file(s)`);
 }
 
 if (drift.length > 0) {

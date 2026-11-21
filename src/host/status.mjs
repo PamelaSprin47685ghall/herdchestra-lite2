@@ -20,7 +20,7 @@ import {
 	zeroUsage,
 } from "./usage.mjs";
 import { record } from "./diagnostics.mjs";
-import { findFissionManager, isFissionManager } from "./fission-manager.mjs";
+import { findBranchManager, isBranchManager } from "./branch-manager.mjs";
 
 function freshSession() {
 	return {
@@ -34,16 +34,16 @@ function freshSession() {
 }
 
 /**
- * The fission proxy a context writes through, or null.
+ * The branch proxy a context writes through, or null.
  *
- * A flow owns a per-flow proxy over the batch's one shared manager, and the
- * host may expose either the proxy it was handed or only the raw manager.
- * Both forms are resolved here by the flow identity the scheduler assigns.
+ * A forked child owns its own proxy over the shared manager, and the host may
+ * expose either the proxy it was handed or only the raw manager. Both forms
+ * are resolved here by the agent identity.
  */
-function fissionProxyFor(ctx) {
+function branchProxyFor(ctx) {
 	const declared = ctx?.sessionManager ?? null;
 	if (!declared) return null;
-	if (isFissionManager(declared)) return declared;
+	if (isBranchManager(declared)) return declared;
 	const agent = ctx?.agent;
 	const identities = [
 		agent?.id,
@@ -55,7 +55,7 @@ function fissionProxyFor(ctx) {
 		ctx?.label,
 	];
 	for (const identity of identities) {
-		const proxy = findFissionManager(declared, identity);
+		const proxy = findBranchManager(declared, identity);
 		if (proxy) return proxy;
 	}
 	return null;
@@ -64,10 +64,10 @@ function fissionProxyFor(ctx) {
 function isSubagent(ctx) {
 	const agent = ctx?.agent;
 	if (!agent) return false;
-	// A fission flow is a parallel worker of this session, not a sub agent.
+	// A forked child is a parallel worker of this session, not a sub agent.
 	// The host marks it from `parentAgentId`, which is exactly the mark that
 	// would silence the status line; the proxy is what says otherwise.
-	if (fissionProxyFor(ctx)) return false;
+	if (branchProxyFor(ctx)) return false;
 	if (agent.kind === "sub" || agent.kind === "subagent") return true;
 	return typeof agent.depth === "number" && agent.depth > 0;
 }
@@ -93,7 +93,7 @@ function hostLabelFromProcess() {
 /**
  * One ledger per process, not one per extension instance.
  *
- * Every fission flow builds its own extension instance, and therefore its own
+ * Every fork branch builds its own extension instance, and therefore its own
  * status runtime. A runtime-local ledger would split the session's totals once
  * per flow and leave the owner's widget blind to every request a flow made:
  * the line would sit at 0.0k while the flows spent real tokens. The key is
@@ -138,11 +138,11 @@ export function createStatusRuntime(options = {}) {
 	}
 
 	function keyFor(ctx) {
-		// One record per session, not per flow. Every fission flow writes
+		// One record per session, not per flow. Every fork branch writes
 		// through its own proxy, but all of them share one manager and one
 		// journal; keying on the proxy would split the accumulated totals N
 		// ways and give every flow a private `last`.
-		const proxy = fissionProxyFor(ctx);
+		const proxy = branchProxyFor(ctx);
 		const key = proxy?.shared ?? ctx?.sessionManager ?? ctx;
 		return key && (typeof key === "object" || typeof key === "function") ? key : shared.orphanKey;
 	}
@@ -200,7 +200,7 @@ export function createStatusRuntime(options = {}) {
 	/**
 	 * The whole session tree's running total.
 	 *
-	 * Σ is not one manager's spend: a root session, its fission flows, and any
+	 * Σ is not one manager's spend: a root session, its fork branches, and any
 	 * child session that shares the tree all draw on the same budget, so the
 	 * line reports what the tree spent. A genuinely new root session starts a
 	 * fresh ledger and clears this map, so nothing older leaks in.

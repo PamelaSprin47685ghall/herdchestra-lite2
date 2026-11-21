@@ -4,9 +4,7 @@ import {
 	applyLedgerEvaluation,
 	beginGenerationAfterHandoff,
 	createRelay,
-	firstEvaluationNudge,
 	handoffFailureNudge,
-	handoffFocus,
 	invalidatePromotion,
 	ledgerStats,
 	recordHandoffFailure,
@@ -253,52 +251,47 @@ describe("relay text", () => {
 		expect(text).toContain(doc["next.promoted"]);
 	});
 
-	test("handoff text is assembled from the document sections", () => {
+	test("a successor receives the prior report, evidence, and first-write rules", () => {
 		const relay = { ...createRelay(), generation: 2 };
-		const text = handoffFocus(relay);
-		for (const key of [
-			"successor-rule",
-			"stop-rule",
-			"successor-mandate",
-			"requirements-reminder",
-			"pinned-reading",
-		]) {
-			expect(text).toContain(doc[key]);
-		}
-		expect(text).toContain(doc["handoff-focus.lead"].split("{{")[0].trim());
-		expect(handoffFailureNudge("boom")).toContain("HANDOFF FAILED: boom");
+		const report = "The original analysis is complete.";
+		const pin = "Verification output: local://relay-check.log";
+		const text = successorOpeningText(relay, report, [pin]);
+		expect(text.startsWith(report)).toBe(true);
+		expect(text).toContain("Generation 3 (from 2)");
+		expect(text).toContain("user's original request");
+		expect(text).toContain("first root todo write");
+		expect(text).toContain('permission: "ro"');
+		expect(text).toContain("Pinned Context");
+		expect(text).toContain(pin);
+		expect(text).not.toContain('todo({ op: "view" })');
 	});
 
-	test("the handoff argument carries the successor mandate and opening tail", () => {
-		const relay = { ...createRelay(), generation: 2 };
-		const texts = [handoffFocus(relay), successorOpeningText(relay, "Report body")];
-		for (const text of texts) {
-			expect(text).toContain(doc["successor-mandate"]);
-			expect(text).toContain(doc["requirements-reminder"]);
-		}
-		expect(successorStartNudge(relay)).toContain(doc["successor-start"].split("{{")[0].trim());
-		expect(firstEvaluationNudge()).toContain(doc["stop-rule"]);
-		expect(
-			relayStatusText({ ...createRelay(), generation: 2 }, null, {
-				action: "handoff",
-			}),
-		).toContain(doc["next.handoff"]);
+	test("a successor with inherited open work is told to read it before writing", () => {
+		const relay = { ...createRelay(), viewRequired: true };
+		const text = successorOpeningText(relay, "Report body");
+		expect(text).toContain('todo({ op: "view" }) before writing');
 	});
 
-	test("the no-ledger nudge names both lawful ledger shapes", () => {
-		// A model with nothing to do receives this nudge four times in the stop
-		// path. When it named only the non-empty shape, the model invented work
-		// and burned the turn instead of submitting an empty ledger.
-		const text = firstEvaluationNudge();
-		expect(text).toContain('todo({ op: "init", list: [] })');
-		expect(text).toContain('todo({ op: "init", list: [{ phase:');
-		expect(text).toContain("Never invent work");
-		expect(text).toContain(doc["stop-rule"]);
+	test("handoff feedback explains how to proceed when the relay needs a report", () => {
+		const relay = { ...createRelay(), generation: 2 };
+		expect(successorStartNudge(relay)).toContain("Generation 2");
+		const failed = handoffFailureNudge("boom");
+		expect(failed).toContain("HANDOFF FAILED: boom");
+		expect(failed).toContain("report again in your message body");
+		const next = relayStatusText(relay, null, { action: "handoff" });
+		expect(next).toContain("do not call tools");
+		expect(next).toContain("work completed, verification evidence, and remaining gaps or risks");
+	});
 
+	test("the no-ledger status names both lawful ledger shapes", () => {
+		// A model with nothing to do must see that `list: []` is a submission.
+		// When the status named only the non-empty shape, the model invented
+		// work and burned the turn instead of submitting an empty ledger.
 		const idle = relayStatusText({ ...createRelay(), fullFlow: true }, null, {
 			action: null,
 		});
 		expect(idle).toContain("list: []");
+		expect(idle).toContain("list the work that does");
 	});
 });
 

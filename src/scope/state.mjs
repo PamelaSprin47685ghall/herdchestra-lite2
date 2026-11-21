@@ -2,14 +2,22 @@
 // Pure data. No I/O.
 
 import { createRelay } from "../relay/state.mjs";
-import { createStageFlags } from "./stage-flags.mjs";
+import { createBracketLedger } from "./forkjoin.mjs";
 
 const VERSION = 2;
 
-const CONTROL_TOOLS = new Set(["scope", "amend", "pin"]);
+const CONTROL_TOOLS = new Set([
+  "scope_fork",
+  "scope_join",
+  "scope_return",
+  "amend",
+  "pin",
+]);
 
-/** Provider prompt-cache entries live for five minutes. */
-export const CACHE_TTL_MS = 5 * 60 * 1000;
+// Local cache-freshness estimate, not a provider guarantee. The blueprint
+// fixes it at four minutes; longer values count savings on a cache that the
+// provider may already have dropped.
+export const CACHE_TTL_MS = 4 * 60 * 1000;
 
 function isPlainObject(value) {
   if (typeof value !== "object" || value === null) return false;
@@ -45,61 +53,22 @@ function copyCounts(source) {
   return out;
 }
 
-function makeScope(state, toolCallId, intent, stage, budget, timeBudgetMs = null) {
-  const spent = {};
-  for (const tool of Reflect.ownKeys(budget)) {
-    if (typeof tool === "string") put(spent, tool, 0);
-  }
-  const openedAt = Date.now();
-  return {
-    timeBudgetMs:
-      Number.isFinite(timeBudgetMs) && timeBudgetMs > 0 ? timeBudgetMs : null,
-    openedAt,
-    deadlineAt:
-      Number.isFinite(timeBudgetMs) && timeBudgetMs > 0
-        ? openedAt + timeBudgetMs
-        : null,
-    overtimeAt: null,
-    id: `scope-${++state.seq}`,
-    boundary:
-      Number.isInteger(state.relay?.generation) && state.relay.generation >= 0
-        ? state.relay.generation
-        : 0,
-    epoch:
-      Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
-    intent: intent.trim(),
-    stage,
-    beginToolCallId: typeof toolCallId === "string" ? toolCallId : "",
-    budget: copyCounts(budget),
-    remaining: copyCounts(budget),
-    spent,
-    // Measured token accounting for the strict open interior of this scope.
-    // null until a real usage message establishes an baseline.
-    baseInputTokens: null,
-    preBeginInputTokens: null,
-    endInputTokens: null,
-    endInputTokensPending: false,
-    beginResultChars: 0,
-    // Model identity fields. Populated by the host integration through
-    // beginScope's optional `model` argument; strings or null.
-    modelSpec: null,
-    modelKey: null,
-    previousModelSpec: null,
-    previousModelKey: null,
-    baseModelKey: null,
-  };
-}
-
 export function createState() {
   return {
     version: VERSION,
     startedAt: Date.now(),
     seq: 0,
     epoch: 0,
-    scopes: [],
     charges: {},
     amends: [],
-    collapses: [],
+    // Fork/join receipts of this branch, in the order `scope_join` committed
+    // them. Each record names both brackets and may carry the summary of the
+    // receipt before it. See receipts.mjs for the fold gates.
+    receipts: [],
+    // The bracket tree itself: fork ids, owners, budgets, ready order and the
+    // frozen record of every child that returned. It is persisted with the
+    // state because a reload must be able to close or explain every bracket.
+    brackets: createBracketLedger(),
     herdMode: false,
     pins: [],
     relay: createRelay(),
@@ -120,17 +89,18 @@ export function createState() {
     // come from the dialogue at all (system prompt plus tool schemas).
     // Persisted with the snapshot.
     modelCaches: {},
-    // Boolean stage flags: S2/S3/S4 start false, S5 requires all three true,
-    // and opening S1 clears them.
-    stageFlags: createStageFlags(),
   };
 }
 
 /** Make a flow-local view while keeping session fields shared with its owner. */
 export function createFlowState(base) {
   const flow = createState();
-  const shared = new Set(["herdMode", "relay", "stageFlags", "pins"]);
+  const shared = new Set(["herdMode", "relay", "pins", "brackets"]);
+  // A child starts its own receive chain: the parent's receipts belong to the
+  // parent's level and must not be folded twice from a child's projection.
+  const local = new Set(["receipts"]);
   for (const key of Object.keys(base)) {
+    if (local.has(key)) continue;
     if (shared.has(key)) {
       Object.defineProperty(flow, key, {
         enumerable: true,
@@ -226,28 +196,9 @@ export function capCachePositions(state, maxPos) {
   return changed;
 }
 
-/** The tightest wall-clock deadline across the open scope stack, or null. */
-export function effectiveDeadline(state) {
-  let deadline = null;
-  for (const scope of state?.scopes ?? []) {
-    if (!Number.isFinite(scope?.deadlineAt)) continue;
-    deadline =
-      deadline === null ? scope.deadlineAt : Math.min(deadline, scope.deadlineAt);
-  }
-  return deadline;
-}
-
-export function currentScope(state) {
-  if (!state || !Array.isArray(state.scopes) || state.scopes.length === 0) {
-    return null;
-  }
-  return state.scopes[state.scopes.length - 1];
-}
-
-/** Return a scope's creation order, derived from its generated id. */
-export function scopeOrder(scope) {
-  const match = /^scope-(\d+)$/.exec(String(scope?.id ?? ""));
-  return match ? Number(match[1]) : 0;
+/** The tightest wall-clock deadline across the branch's own fork, or null. */
+export function branchDeadline(record) {
+  return record && Number.isFinite(record.deadlineAt) ? record.deadlineAt : null;
 }
 
 export {
@@ -258,5 +209,4 @@ export {
   failure,
   put,
   copyCounts,
-  makeScope,
 };

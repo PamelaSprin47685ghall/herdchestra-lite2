@@ -13,7 +13,11 @@
 /** Port name -> { implementations: readonly string[], fallback: string }. */
 export const PORTS = Object.freeze({
 	scope: Object.freeze({
-		implementations: Object.freeze(["bare", "single", "batch"]),
+		// `single` was the one-container begin/end protocol. It is retired: the
+		// scope port now only names whether fork/join exists (`batch`) or not
+		// (`bare`). An explicit `single` is refused by the resolver with the
+		// available list, which is the retirement notice.
+		implementations: Object.freeze(["bare", "batch"]),
 		fallback: "batch",
 	}),
 	relay: Object.freeze({
@@ -24,7 +28,6 @@ export const PORTS = Object.freeze({
 	commonRules: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	chineseReminder: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	vibeCompat: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
-	stages: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	herd: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	pin: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	amend: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),

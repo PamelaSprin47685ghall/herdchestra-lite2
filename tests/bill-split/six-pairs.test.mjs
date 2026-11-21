@@ -39,22 +39,7 @@ function expectPublisherUntouched(other, before) {
 }
 
 describe("bill-split directions", () => {
-	test("relay × stages: stages judges validity; relay only publishes the generation", () => {
-		const relay = publisher({ generation: 2, fullFlow: true });
-		const stages = decider({ generation: 1, flags: { acceptance: true } }, (mine, fact) =>
-			fact.generation === mine.generation ? mine.flags : { acceptance: false },
-		);
-		const before = snapshot(relay.state);
-
-		// A stale generation invalidates the flags without clearing them in place.
-		expect(stages.judge(relay.publish())).toEqual({ acceptance: false });
-		// Adopting the fact is the owner's own write; the publisher is untouched.
-		stages.state.generation = 2;
-		expect(stages.judge(relay.publish())).toEqual({ acceptance: true });
-
-		expectPublisherUntouched(relay, before);
-	});
-
+	
 	test("amend × folding: amend owns the retired keys; folding only asks", () => {
 		const amend = publisher({ retired: ["beat-1"] });
 		const folding = decider({ rewritten: [] }, (mine, fact) => {
@@ -79,22 +64,7 @@ describe("bill-split directions", () => {
 		expectPublisherUntouched(scope, before);
 	});
 
-	test("herd × stages: stages owns admission; herd only publishes the mode", () => {
-		const herd = publisher({ mode: "off" });
-		const stages = decider({ allowed: [] }, (mine, fact) => {
-			mine.allowed = fact.mode === "on" ? ["decision-framing"] : [];
-			return mine.allowed;
-		});
-		const before = snapshot(herd.state);
-
-		expect(stages.judge(herd.publish())).toEqual([]);
-		herd.state.mode = "on";
-		expect(stages.judge(herd.publish())).toEqual(["decision-framing"]);
-
-		// The owner never wrote the publishing side: only the test changed mode.
-		expect(herd.state).toEqual({ mode: "on" });
-	});
-
+	
 	test("relay × herd: relay owns progression; herd only publishes the mode", () => {
 		const herd = publisher({ mode: "on" });
 		const relay = decider({ progressed: [] }, (mine, fact) => {
@@ -126,16 +96,13 @@ describe("bill-split directions", () => {
 });
 
 describe("the pair list itself", () => {
-	test("the six pairs of PLAN §3.2 are the ones covered", () => {
+	test("the remaining four port pairs are the ones covered", () => {
 		const covered = [
-			"relay × stages",
 			"amend × folding",
 			"clock × scope",
-			"herd × stages",
 			"relay × herd",
 			"pin × folding",
 		];
-		expect(covered).toHaveLength(6);
-		expect(new Set(covered).size).toBe(6);
-	});
-});
+		expect(covered).toHaveLength(4);
+		expect(new Set(covered).size).toBe(4);
+	});});

@@ -8,11 +8,12 @@
  */
 
 import { createHeadlessTuiContext } from "./headless-tui.mjs";
+import { captureTranscriptSubscriptions } from "./child-display.mjs";
 
 const STATE_KEY = Symbol.for("herdchestra-lite2.session-capture.v2");
 const VIBE_PATCH = Symbol.for("herdchestra-lite2.vibe-tools.v2");
 const RUNNER_GETTER_PATCH = Symbol.for("herdchestra-lite2.runner-getter.v2");
-const SCOPE_TOOLS = ["scope", "amend", "pin", "todo"];
+const SCOPE_TOOLS = ["scope_fork", "scope_join", "scope_return", "amend", "pin", "todo"];
 
 function patchMethod(prototype, name, marker, createWrapper) {
 	if (!prototype || Object.hasOwn(prototype, marker)) return false;
@@ -321,6 +322,7 @@ export function installRunnerCapture(AgentSession) {
 		return captureDiagnosis();
 	}
 	const prototype = AgentSession.prototype;
+	captureTranscriptSubscriptions(prototype);
 	const descriptor = Object.getOwnPropertyDescriptor(prototype, "extensionRunner");
 	if (!descriptor || typeof descriptor.get !== "function") {
 		captured.error = "AgentSession.prototype.extensionRunner getter is unavailable";

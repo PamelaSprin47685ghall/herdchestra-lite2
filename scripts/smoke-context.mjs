@@ -10,12 +10,12 @@
  */
 
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { installContextPreparation, splitRequestHistory } from "../src/host/context-preparation.mjs";
 import { contextHeaderOf } from "../src/host/adapter.mjs";
+import { stopAfterScopeReturn } from "../src/host/branch-context.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const TOOL_ROUNDS = 4;
@@ -181,6 +181,43 @@ async function exerciseHost(host, start) {
 	}
 }
 
+async function checkReturnStop({ Agent, createMockModel, type }) {
+	const mock = createMockModel({ responses: [
+		{ content: [{ type: "toolCall", id: "refused-return", name: "scope_return", arguments: {} }] },
+		{ content: [{ type: "toolCall", id: "accepted-return", name: "scope_return", arguments: {} }] },
+		{ content: ["this request must never be sent"] },
+	] });
+	const agent = new Agent({
+		initialState: {
+			model: mock.model,
+			systemPrompt: ["Test scope_return."],
+			tools: [{
+				name: "scope_return",
+				label: "Return",
+				description: "Return the child's work.",
+				parameters: type({}),
+				execute: async (id) => id === "accepted-return"
+					? { content: [{ type: "text", text: "Parent accepted" }], details: { accepted: true } }
+					: { content: [{ type: "text", text: "Not accepted" }], details: {}, isError: true },
+			}],
+		},
+		streamFn: mock.stream,
+	});
+	const detach = stopAfterScopeReturn(agent);
+	try {
+		await agent.prompt({ role: "user", content: "Return this result.", timestamp: Date.now() });
+		assert.equal(mock.calls.length, 2, "a refused return must continue; an accepted return must stop");
+		assert.equal(agent.state.error, undefined);
+		assert.equal(agent.state.messages.at(-1)?.role, "toolResult");
+		assert.equal(agent.state.messages.at(-1)?.toolCallId, "accepted-return");
+		assert.equal(agent.state.messages.at(-1)?.isError, false);
+		assert.equal(agent.state.messages.some((message) => message.stopReason === "aborted"), false);
+		console.log("PASS scope_return: accepted tool result is retained; no extra provider call or aborted assistant frame");
+	} finally {
+		detach();
+	}
+}
+
 async function checkMarkerControl(host) {
 	const { ExtensionRunner, createMockModel, isPerCallContextMessage } = host;
 	const message = { role: "user", content: "control", timestamp: 1 };
@@ -197,13 +234,12 @@ async function checkMarkerControl(host) {
 
 try {
 	if (typeof Bun === "undefined") throw new Error("This check requires Bun and the host's installed dependencies.");
-	const requireHost = createRequire(resolve(HOST, "package.json"));
 	const [{ Agent }, { createMockModel }, { ExtensionRunner }, { isPerCallContextMessage }, { type }] = await Promise.all([
 		hostModule("packages/agent/src/agent.ts"),
 		hostModule("packages/ai/src/providers/mock.ts"),
 		hostModule("packages/coding-agent/src/extensibility/extensions/runner.ts"),
 		hostModule("packages/ai/src/utils/block-symbols.ts"),
-		import(pathToFileURL(requireHost.resolve("@oh-my-pi/omptype")).href),
+		hostModule("packages/omptype/src/index.ts"),
 	]);
 	for (const [name, value] of Object.entries({ Agent, createMockModel, ExtensionRunner, isPerCallContextMessage, type })) {
 		assert.equal(typeof value, "function", `The host export ${name} is unavailable.`);
@@ -212,6 +248,7 @@ try {
 	await checkMarkerControl(host);
 	await exerciseHost(host, "prompt");
 	await exerciseHost(host, "continue");
+	await checkReturnStop(host);
 	console.log("PASS context smoke: real host loop and runner; no network API or cache-hit claim");
 } catch (error) {
 	console.error(`FAIL context smoke: ${error?.stack ?? error}`);

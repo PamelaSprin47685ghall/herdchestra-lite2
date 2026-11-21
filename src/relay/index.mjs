@@ -5,19 +5,18 @@ export {
 	isTodoView,
 	ledgerStats,
 	applyLedgerEvaluation,
+	applyNaturalStop,
+	applyRetirement,
 	beginGenerationAfterHandoff,
 	invalidatePromotion,
 	recordHandoffFailure,
 } from "./ledger.mjs";
 export {
 	relayStatusText,
-	handoffFocus,
-	firstEvaluationNudge,
+	inScopeTodoText,
+	handoffDemand,
 	handoffToolBlockedReason,
-	handoffEmptyReportNudge,
 	successorOpeningText,
 	successorStartNudge,
-	openLedgerNudge,
-	handoffPendingNudge,
 	handoffFailureNudge,
 } from "./texts.mjs";

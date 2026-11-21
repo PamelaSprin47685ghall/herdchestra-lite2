@@ -1,14 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
-	applyCollapses,
 	beatKey,
 	exitBeat,
 	filterAmends,
 	findBegin,
 	findAmendTarget,
 	findToolCallIndex,
-	finishedReport,
-	isCollapsed,
 	rewriteVibeMessage,
 	toolCalls,
 } from "../src/transcript/index.mjs";
@@ -247,7 +244,7 @@ describe("findAmendTarget", () => {
 			charges: { call_bash: { scopeId: "scope-1", tool: "bash", amount: 1 } },
 		});
 
-		const target = findAmendTarget(state, messages, 5, scope);
+		const target = findAmendTarget(state, messages, 5, { ownerId: null, afterToolCallId: null });
 		expect(target.ok).toBe(true);
 		expect(target.beat.key).toBe("tc:call_bash");
 		expect(target.beat.toolCallIds).toEqual(["call_bash"]);
@@ -268,63 +265,9 @@ describe("findAmendTarget", () => {
 		];
 		const state = newState({ amends: [textBeat("newer assistant", 111)] });
 
-		const target = findAmendTarget(state, messages, 5, scope);
+		const target = findAmendTarget(state, messages, 5, { ownerId: null, afterToolCallId: null });
 		expect(target.ok).toBe(true);
 		expect(target.beat.key).toBe("tc:call_bash");
-	});
-
-	test("rejects a candidate at the scope begin assistant", () => {
-		const messages = [
-			textMessage("older assistant", 5),
-			beginAssistant(),
-			beginResult(),
-			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
-		];
-
-		const target = findAmendTarget(newState(), messages, 3, scope);
-		expect(target.ok).toBe(false);
-		expect(target.code).toBe("SCOPE_BOUNDARY");
-	});
-
-	test("rejects a candidate that contains a scope call", () => {
-		const messages = [
-			beginAssistant(),
-			beginResult(),
-			endAssistant(),
-			toolResultMessage(END_ID, "scope"),
-			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
-		];
-
-		const target = findAmendTarget(newState(), messages, 4, scope);
-		expect(target.ok).toBe(false);
-		expect(target.code).toBe("SCOPE_BOUNDARY");
-	});
-
-	test("rejects a candidate with a charge from another scope", () => {
-		const messages = [
-			beginAssistant(),
-			beginResult(),
-			callMessage(
-				[
-					{ id: "call_here", name: "bash", arguments: {} },
-					{ id: "call_other", name: "read", arguments: {} },
-				],
-				[],
-				110,
-			),
-			toolResultMessage("call_other", "read", { timestamp: 111 }),
-			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
-		];
-		const state = newState({
-			charges: {
-				call_here: { scopeId: "scope-1", tool: "bash", amount: 1 },
-				call_other: { scopeId: "scope-0", tool: "read", amount: 1 },
-			},
-		});
-
-		const target = findAmendTarget(state, messages, 4, scope);
-		expect(target.ok).toBe(false);
-		expect(target.code).toBe("OUTSIDE_SCOPE");
 	});
 
 	test("accepts uncharged calls in the candidate", () => {
@@ -347,21 +290,59 @@ describe("findAmendTarget", () => {
 	test("rejects NO_BEAT when no earlier assistant exists", () => {
 		const messages = [beginAssistant()];
 
-		const target = findAmendTarget(newState(), messages, 0, scope);
+		const target = findAmendTarget(newState(), messages, 0, { ownerId: null, afterToolCallId: null });
 		expect(target.ok).toBe(false);
 		expect(target.code).toBe("NO_BEAT");
 	});
 
-	test("rejects when the scope begin message is absent", () => {
-		const messages = [textMessage("anything", 1), textMessage("current", 2)];
+	test("requires the candidate to be after the branch's structural call", () => {
+		const messages = [
+			callMessage([{ id: "call_fork", name: "scope_fork", arguments: {} }], [], 100),
+			toolResultMessage("call_fork", "scope_fork", { timestamp: 101 }),
+			textMessage("before the join", 110),
+			callMessage([{ id: "call_join", name: "scope_join", arguments: {} }], [], 120),
+			toolResultMessage("call_join", "scope_join", { timestamp: 121 }),
+			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 130),
+		];
 
-		const target = findAmendTarget(newState(), messages, 1, scope);
+		const target = findAmendTarget(newState(), messages, 5, {
+			ownerId: null,
+			afterToolCallId: "call_join",
+		});
 		expect(target.ok).toBe(false);
-		expect(target.code).toBe("SCOPE_BOUNDARY");
+		expect(target.code).toBe("STRUCTURAL_BOUNDARY");
 	});
 
-	test("requires an active scope", () => {
-		const target = findAmendTarget(newState(), [textMessage("x", 1)], 1, null);
+	test("a structural call is never an amend target", () => {
+		const messages = [
+			callMessage([{ id: "call_bash", name: "bash", arguments: {} }], [], 100),
+			toolResultMessage("call_bash", "bash", { timestamp: 101 }),
+			callMessage([{ id: "call_return", name: "scope_return", arguments: {} }], [], 110),
+			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
+		];
+
+		const target = findAmendTarget(newState(), messages, 3, {
+			ownerId: null,
+			afterToolCallId: null,
+		});
+		expect(target.ok).toBe(false);
+		expect(target.code).toBe("STRUCTURAL_BOUNDARY");
+	});
+
+	test("a charge owned by another branch is out of reach", () => {
+		const messages = [
+			callMessage([{ id: "call_other", name: "read", arguments: {} }], [], 110),
+			toolResultMessage("call_other", "read", { timestamp: 111 }),
+			callMessage([{ id: "call_amend", name: "amend", arguments: {} }], [], 120),
+		];
+		const state = newState({
+			charges: { call_other: { ownerId: "f-1", tool: "read", amount: 1 } },
+		});
+
+		const target = findAmendTarget(state, messages, 2, {
+			ownerId: "f-2",
+			afterToolCallId: null,
+		});
 		expect(target.ok).toBe(false);
 		expect(target.code).toBe("OUTSIDE_SCOPE");
 	});
@@ -417,331 +398,6 @@ describe("filterAmends", () => {
 
 		expect(filtered).toEqual(messages);
 		expect(filtered).not.toBe(messages);
-	});
-});
-
-describe("applyCollapses", () => {
-	function collapsedFixture() {
-		return [
-			{ role: "user", content: "start", timestamp: 99 },
-			beginAssistant(),
-			beginResult({ isError: true }),
-			callMessage([{ id: "call_bash", name: "bash", arguments: {} }], [], 110),
-			toolResultMessage("call_bash", "bash", { timestamp: 111 }),
-			endAssistant(),
-			toolResultMessage(END_ID, "scope", { timestamp: 201 }),
-		];
-	}
-
-	test("replaces the begin result and removes messages strictly between", () => {
-		const messages = collapsedFixture();
-		const collapse = {
-			beginToolCallId: BEGIN_ID,
-			endToolCallId: END_ID,
-			report: "all green",
-			createdAt: 300,
-		};
-
-		const out = applyCollapses(messages, [collapse]);
-
-		expect(out).toHaveLength(5);
-		expect(out[0]).toBe(messages[0]);
-		expect(out[1]).toBe(messages[1]);
-		expect(out[2]).toEqual({
-			...messages[2],
-			content: [{ type: "text", text: finishedReport("all green") }],
-			isError: false,
-		});
-		expect(out[2].toolCallId).toBe(BEGIN_ID);
-		expect(out[2].toolName).toBe("scope");
-		expect(out[2].timestamp).toBe(101);
-		expect(out[2].details).toEqual({ scopeId: "scope-1" });
-		expect(out[3]).toBe(messages[5]);
-		expect(out[4]).toBe(messages[6]);
-
-		expect(messages[2].content).toEqual([{ type: "text", text: "You are now inside this scope." }]);
-		expect(messages).toHaveLength(7);
-	});
-
-	test("does not collapse across a handoff boundary", () => {
-		const boundaries = [
-			{
-				role: "custom",
-				customType: "handoff",
-				display: true,
-				content: "<handoff-context>\nprevious work\n</handoff-context>",
-				timestamp: 150,
-			},
-			{
-				role: "custom",
-				customType: "herd-relay-handoff",
-				display: true,
-				content: [{ type: "text", text: "Handoff complete" }],
-				timestamp: 150,
-			},
-		];
-		const collapse = {
-			beginToolCallId: BEGIN_ID,
-			endToolCallId: END_ID,
-			report: "across",
-		};
-		for (const boundary of boundaries) {
-			const messages = collapsedFixture();
-			messages.splice(4, 0, boundary);
-			const out = applyCollapses(messages, [collapse]);
-			expect(out).toEqual(messages);
-			expect(out).not.toBe(messages);
-		}
-	});
-
-	test("does nothing when the end assistant is before the begin result", () => {
-		const messages = [beginAssistant(), endAssistant(), beginResult()];
-		const collapse = { beginToolCallId: BEGIN_ID, endToolCallId: END_ID, report: "late" };
-
-		const out = applyCollapses(messages, [collapse]);
-
-		expect(out).toEqual(messages);
-		expect(out).not.toBe(messages);
-	});
-
-	test("does not apply a collapse record from an older epoch", () => {
-		const messages = collapsedFixture();
-		const collapse = {
-			beginToolCallId: BEGIN_ID,
-			endToolCallId: END_ID,
-			report: "old epoch",
-			epoch: 0,
-		};
-
-		const out = applyCollapses(messages, [collapse], 1);
-
-		expect(out).toEqual(messages);
-		expect(out).not.toBe(messages);
-		expect(applyCollapses(messages, [collapse], 0)[2].content).toEqual([
-			{ type: "text", text: finishedReport("old epoch") },
-		]);
-	});
-
-	test("does nothing when the end assistant is absent", () => {
-		const messages = [
-			{ role: "user", content: "start", timestamp: 1 },
-			beginAssistant(),
-			beginResult(),
-		];
-		const collapse = { beginToolCallId: BEGIN_ID, endToolCallId: END_ID, report: "gone" };
-
-		const out = applyCollapses(messages, [collapse]);
-
-		expect(out).toEqual(messages);
-		expect(out[2].content).toEqual(messages[2].content);
-	});
-
-	test("is idempotent", () => {
-		const collapse = {
-			beginToolCallId: BEGIN_ID,
-			endToolCallId: END_ID,
-			report: "all green",
-		};
-		const once = applyCollapses(collapsedFixture(), [collapse]);
-		const twice = applyCollapses(once, [collapse]);
-
-		expect(twice).toEqual(once);
-		expect(twice[2].content).toEqual([
-			{ type: "text", text: finishedReport("all green") },
-		]);
-	});
-
-	test("applies multiple collapses in order", () => {
-		const firstBeginId = "call_begin_one";
-		const firstEndId = "call_end_one";
-		const secondBeginId = "call_begin_two";
-		const secondEndId = "call_end_two";
-		const messages = [
-			{ role: "user", content: "start", timestamp: 1 },
-			callMessage([{ id: firstBeginId, name: "scope", arguments: {} }], [], 2),
-			toolResultMessage(firstBeginId, "scope", { timestamp: 3 }),
-			callMessage([{ id: "call_one", name: "bash", arguments: {} }], [], 4),
-			toolResultMessage("call_one", "bash", { timestamp: 5 }),
-			callMessage([{ id: firstEndId, name: "scope", arguments: {} }], [], 6),
-			toolResultMessage(firstEndId, "scope", { timestamp: 7 }),
-			callMessage([{ id: secondBeginId, name: "scope", arguments: {} }], [], 8),
-			toolResultMessage(secondBeginId, "scope", { timestamp: 9 }),
-			callMessage([{ id: "call_two", name: "read", arguments: {} }], [], 10),
-			toolResultMessage("call_two", "read", { timestamp: 11 }),
-			callMessage([{ id: secondEndId, name: "scope", arguments: {} }], [], 12),
-			toolResultMessage(secondEndId, "scope", { timestamp: 13 }),
-		];
-		const collapses = [
-			{ beginToolCallId: firstBeginId, endToolCallId: firstEndId, report: "one" },
-			{ beginToolCallId: secondBeginId, endToolCallId: secondEndId, report: "two" },
-		];
-
-		const out = applyCollapses(messages, collapses);
-
-		expect(out).toHaveLength(9);
-		expect(out[2].content).toEqual([{ type: "text", text: finishedReport("one") }]);
-		expect(out[6].content).toEqual([{ type: "text", text: finishedReport("two") }]);
-		expect(out.some((message) => message.role === "toolResult" && message.toolCallId === "call_one")).toBe(
-			false,
-		);
-		expect(out.some((message) => message.role === "toolResult" && message.toolCallId === "call_two")).toBe(
-			false,
-		);
-		expect(out.some((message) => message.toolCallId === firstEndId)).toBe(true);
-		expect(out.some((message) => message.toolCallId === secondEndId)).toBe(true);
-	});
-
-	test("applies only records marked as collapsed", () => {
-		const firstBeginId = "call_begin_one";
-		const firstEndId = "call_end_one";
-		const secondBeginId = "call_begin_two";
-		const secondEndId = "call_end_two";
-		const messages = [
-			{ role: "user", content: "start", timestamp: 1 },
-			callMessage([{ id: firstBeginId, name: "scope", arguments: {} }], [], 2),
-			toolResultMessage(firstBeginId, "scope", { timestamp: 3 }),
-			callMessage([{ id: "call_one", name: "bash", arguments: {} }], [], 4),
-			toolResultMessage("call_one", "bash", { timestamp: 5 }),
-			callMessage([{ id: firstEndId, name: "scope", arguments: {} }], [], 6),
-			toolResultMessage(firstEndId, "scope", { timestamp: 7 }),
-			callMessage([{ id: secondBeginId, name: "scope", arguments: {} }], [], 8),
-			toolResultMessage(secondBeginId, "scope", { timestamp: 9 }),
-			callMessage([{ id: "call_two", name: "read", arguments: {} }], [], 10),
-			toolResultMessage("call_two", "read", { timestamp: 11 }),
-			callMessage([{ id: secondEndId, name: "scope", arguments: {} }], [], 12),
-			toolResultMessage(secondEndId, "scope", { timestamp: 13 }),
-		];
-		const collapses = [
-			{
-				beginToolCallId: firstBeginId,
-				endToolCallId: firstEndId,
-				report: "one",
-				collapsed: true,
-			},
-			{
-				beginToolCallId: secondBeginId,
-				endToolCallId: secondEndId,
-				report: "two",
-				collapsed: false,
-			},
-		];
-
-		const out = applyCollapses(messages, collapses);
-
-		expect(out).toHaveLength(11);
-		expect(out[2].content).toEqual([{ type: "text", text: finishedReport("one") }]);
-		expect(out.some((message) => message.toolCallId === "call_one")).toBe(false);
-		expect(out.some((message) => message.toolCallId === "call_two")).toBe(true);
-		expect(out.find((message) => message.toolCallId === secondBeginId)?.content).toEqual([
-			{ type: "text", text: "result" },
-		]);
-	});
-
-	test("isCollapsed matches only the report already on the receipt", () => {
-		const collapse = { beginToolCallId: BEGIN_ID, endToolCallId: END_ID, report: "all green" };
-		expect(isCollapsed(collapsedFixture(), collapse)).toBe(false);
-
-		const collapsed = applyCollapses(collapsedFixture(), [collapse]);
-		expect(isCollapsed(collapsed, collapse)).toBe(true);
-		expect(isCollapsed(collapsed, { ...collapse, report: "other" })).toBe(false);
-	});
-});
-
-describe("applyCollapses with pins", () => {
-	const PIN_ID = "call_pin";
-	const BASH_ID = "call_bash";
-	const collapse = {
-		beginToolCallId: BEGIN_ID,
-		endToolCallId: END_ID,
-		report: "all green",
-	};
-
-	function pinnedFixture() {
-		return [
-			{ role: "user", content: "start", timestamp: 99 },
-			beginAssistant(),
-			beginResult(),
-			callMessage(
-				[
-					{ id: PIN_ID, name: "pin", arguments: { assumption: "A", conclusion: "C" } },
-					{ id: BASH_ID, name: "bash", arguments: { command: "ls" } },
-				],
-				[{ type: "text", text: "reasoning note" }],
-				110,
-			),
-			toolResultMessage(PIN_ID, "pin", { timestamp: 111 }),
-			toolResultMessage(BASH_ID, "bash", { timestamp: 112 }),
-			endAssistant(),
-			toolResultMessage(END_ID, "scope", { timestamp: 201 }),
-		];
-	}
-
-	test("keeps pin calls and results after the collapsed scope end beat", () => {
-		const messages = pinnedFixture();
-
-		const out = applyCollapses(messages, [collapse]);
-
-		expect(out).toHaveLength(7);
-		const pinAssistant = out.find(
-			(message) =>
-				message.role === "assistant" &&
-				toolCalls(message).some((call) => call.id === PIN_ID),
-		);
-		expect(pinAssistant).toBeDefined();
-		expect(toolCalls(pinAssistant)).toEqual([
-			{ id: PIN_ID, name: "pin", arguments: { assumption: "A", conclusion: "C" } },
-		]);
-		expect(
-			pinAssistant.content.some(
-				(block) => block.type === "text" && block.text === "reasoning note",
-			),
-		).toBe(true);
-		const pinResultIndex = out.findIndex((message) => message.toolCallId === PIN_ID);
-		expect(pinResultIndex).toBeGreaterThan(-1);
-		expect(out.some((message) => message.toolCallId === BASH_ID)).toBe(false);
-		const endResultIndex = out.findIndex((message) => message.toolCallId === END_ID);
-		expect(out.indexOf(pinAssistant)).toBeGreaterThan(endResultIndex);
-		expect(pinResultIndex).toBe(out.indexOf(pinAssistant) + 1);
-	});
-
-	test("does not duplicate a pin result in the begin beat", () => {
-		const messages = [
-			{ role: "user", content: "start", timestamp: 99 },
-			callMessage(
-				[
-					{ id: BEGIN_ID, name: "scope", arguments: {} },
-					{ id: PIN_ID, name: "pin", arguments: { finding: "F" } },
-				],
-				[],
-				100,
-			),
-			beginResult(),
-			toolResultMessage(PIN_ID, "pin", { timestamp: 102 }),
-			callMessage([{ id: BASH_ID, name: "bash", arguments: {} }], [], 110),
-			toolResultMessage(BASH_ID, "bash", { timestamp: 111 }),
-			endAssistant(),
-			toolResultMessage(END_ID, "scope", { timestamp: 201 }),
-		];
-
-		const out = applyCollapses(messages, [collapse]);
-
-		expect(out.filter((message) => message.toolCallId === PIN_ID)).toHaveLength(1);
-		expect(out.some((message) => message.toolCallId === BASH_ID)).toBe(false);
-	});
-
-	test("is idempotent with pins", () => {
-		const once = applyCollapses(pinnedFixture(), [collapse]);
-		const twice = applyCollapses(once, [collapse]);
-
-		expect(twice).toEqual(once);
-	});
-});
-
-describe("finishedReport", () => {
-	test("uses the exact report sentence", () => {
-		expect(finishedReport("all green")).toBe(
-			"You have finished this scope. Here is your report: all green",
-		);
 	});
 });
 

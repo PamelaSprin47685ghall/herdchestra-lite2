@@ -91,41 +91,10 @@ function restoreState(manager) {
 				return createState();
 			}
 			{
-				const restored = deserializeState(folded);
-				// A crash can leave an active scope whose begin message never
-				// reached the transcript. Drop such scopes instead of charging
-				// every later tool call to a scope that can never be closed.
-				if (restored.scopes.length > 0 || restored.collapses.length > 0) {
-					try {
-						const context = manager.buildSessionContext?.();
-						const messages = Array.isArray(context?.messages) ? context.messages : [];
-						const visible = new Set();
-						for (const message of messages) {
-							if (message?.role !== "assistant") continue;
-							for (const call of toolCalls(message)) visible.add(call.id);
-						}
-						// A scope whose begin left the branch can never be closed
-						// or folded. Drop it instead of charging later calls to it.
-						restored.scopes = restored.scopes.filter((scope) =>
-							visible.has(scope.beginToolCallId),
-						);
-						// A pending elder whose begin left the branch can never be
-						// archived: seal it so no new scope asks for its report.
-						// Other lost records are folded as before.
-						for (const record of restored.collapses) {
-							if (record?.collapsed === false && !visible.has(record.beginToolCallId)) {
-								if (record.report === null && record.sealed !== true) {
-									record.sealed = true;
-								} else {
-									record.collapsed = true;
-								}
-							}
-						}
-					} catch {
-						// Keep the restored state when the host cannot expose context.
-					}
-				}
-				return restored;
+				// A snapshot never carries a working-level stack or interval
+				// collapses. Both are retired history: deserializeState drops
+				// them, so there is nothing to prune here.
+				return deserializeState(folded);
 			}
 		}
 	} catch (error) {

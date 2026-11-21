@@ -8,6 +8,8 @@
  */
 
 import { errorResult, textResult } from "./results.mjs";
+import { levelKeyOf, ownerIdOf, returnAcceptedText, admitJoin } from "../station/fork-controls.mjs";
+import { notifyWaiters, waitForJoin, waitForReady } from "../host/fork-registry.mjs";
 import { sendSlashPrompt, sessionFor } from "../host/capture.mjs";
 import { modelFrom, modelOf, thinkingFrom, thinkingOf } from "../host/adapter.mjs";
 import { record } from "../host/diagnostics.mjs";
@@ -314,27 +316,153 @@ function appendModelSwitchWarning(result, req, outcome) {
 	};
 }
 
-export async function scopeTicket(station, toolCallId, params, ctx) {
-	let result;
-	try {
-		result = station.executeScope(toolCallId, params, ctx);
-	} catch (error) {
-		result = errorResult("SCOPE_INTERNAL_ERROR", String(error?.message ?? error));
-	}
+/**
+ * Apply a pending user model switch, if the host queued one.
+ *
+ * The switch used to be applied by the old scope ticket alone. Both the
+ * working-level scope and `scope_fork` now route through this helper, so a
+ * `/model` choice lands on the next request whichever control tool comes
+ * first.
+ */
+async function applyPendingModelSwitch(station, ctx, result) {
 	const req =
 		typeof station?.takePendingModelSwitch === "function"
 			? station.takePendingModelSwitch(ctx)
 			: null;
-	if (req) {
-		const outcome = await switchModelTicket(station.pi, ctx, req);
-		try {
-			station.reconcileActualModel?.(ctx, req, outcome);
-		} catch (error) {
-			station.lastError = String(error?.message ?? error);
-		}
-		if (!outcome?.ok) result = appendModelSwitchWarning(result, req, outcome);
+	if (!req) return result;
+	const outcome = await switchModelTicket(station.pi, ctx, req);
+	try {
+		station.reconcileActualModel?.(ctx, req, outcome);
+	} catch (error) {
+		station.lastError = String(error?.message ?? error);
 	}
-	return result;
+	return outcome?.ok ? result : appendModelSwitchWarning(result, req, outcome);
+}
+
+/**
+ * Open one child scope. The station finishes every state transition before
+ * this ticket is called, so the parent's receipt is already correct when the
+ * host persists it. Child assembly belongs to the host wiring.
+ */
+export async function forkTicket(station, toolCallId, params, ctx) {
+	let result;
+	try {
+		result = station.executeFork(toolCallId, params, ctx);
+	} catch (error) {
+		return errorResult("FORK_INTERNAL_ERROR", String(error?.message ?? error));
+	}
+	return applyPendingModelSwitch(station, ctx, result);
+}
+
+/**
+ * Receive one returning child. The station takes a ready record in one
+ * synchronous beat; when none is ready this ticket parks until one is. The
+ * station never waits, so its own state stays atomic.
+ */
+export async function joinTicket(station, toolCallId, params, ctx, signal = null) {
+	try {
+		const wait = station.forkWaitPort?.() ?? null;
+		const first = station.executeJoin(toolCallId, params, ctx);
+		if (first?.details?.code !== "NO_READY_CHILD") {
+			// A take closes one bracket. The child parked in scope_return is
+			// waiting for exactly that fact, so wake it before answering.
+			if (first?.details?.joined && wait) notifyWaiters(wait.registry);
+			return first;
+		}
+		// The binding the model saw when it called. `null` is a binding too: a
+		// receipt that appears during the wait must not be skipped, because
+		// this join carries no summary for it.
+		const pending = first?.details?.pending ?? null;
+		if (!wait) return first;
+		// Nothing running and nothing ready means no receipt can ever arrive
+		// for this owner. Parking here would wait forever for work that does
+		// not exist, so the call answers instead of blocking.
+		if (first?.details?.active === 0) {
+			return errorResult(
+				"NO_UNRECEIVED_WORK",
+				"This branch owns no unreceived work. This call created no receipt and any elder_report it carried was not committed. Fork a child, or continue your own scope.",
+				{ ownerId: ownerIdOf(station) },
+			);
+		}
+		const waited = await (async () => {
+			// The parent's own clock stops while it waits for a child. Hiring
+			// people does not spend the manager's personal time budget.
+			station.noteRootWait?.(1);
+			station.pauseBranchClock?.();
+			try {
+				return await waitForReady(wait.registry, wait.ledger, {
+					ownerId: ownerIdOf(station),
+					levelKey: levelKeyOf(station),
+					signal,
+					// A summary binds to one receipt. Re-check before every take,
+					// so a concurrent commit cannot make this join file its
+					// summary against a receipt the model never read.
+					canTake: () =>
+						typeof station.joinBindingGuard === "function"
+							? station.joinBindingGuard(pending)
+							: { ok: true },
+					// Capacity belongs to this model and this record. The record
+					// stays ready when it cannot fit, and the ticket answers
+					// instead of parking for an event that cannot change it.
+					admit: (record) => admitJoin(station, record),
+				});
+			} finally {
+				station.noteRootWait?.(-1);
+				station.resumeBranchClock?.();
+			}
+		})();
+		if (!waited.ok) {
+			return errorResult(waited.code, waited.reason, {
+				blocked: waited.blocked ?? [],
+			});
+		}
+		// waitForReady already took the child. Rendering it here keeps the
+		// single take: calling executeJoin again would find an empty queue.
+		const taken = station.finalizeJoin(toolCallId, waited.fork, ctx, params, pending);
+		if (taken?.details?.joined) notifyWaiters(wait.registry);
+		return taken;
+	} catch (error) {
+		record("fork", error, { phase: "join", toolCallId, stack: error?.stack });
+		return errorResult("JOIN_INTERNAL_ERROR", String(error?.message ?? error));
+	}
+}
+
+/**
+ * Hand the child's record back, then wait until the parent takes it. The
+ * station queues the record in one synchronous beat; the wait belongs here,
+ * and the accepted receipt is written only after the take is real.
+ */
+export async function returnTicket(station, toolCallId, params, ctx, signal = null) {
+	try {
+		const queued = station.executeReturn(toolCallId, params, ctx);
+		if (queued?.details?.awaitingReceipt !== true) return queued;
+		const wait = station.forkWaitPort?.() ?? null;
+		if (!wait) return queued;
+		notifyWaiters(wait.registry);
+		const waited = await (async () => {
+			// The child has finished its work. Waiting for the parent to take
+			// the record is not the child's own time, so its clock stops.
+			station.pauseBranchClock?.();
+			// A child that has returned still waits for the parent to take the
+			// record, but its card is already settled.
+			try {
+				return await waitForJoin(wait.registry, wait.ledger, queued.details.forkId, {
+					signal,
+				});
+			} finally {
+				station.resumeBranchClock?.();
+			}
+		})();
+		if (!waited.ok) return errorResult(waited.code, waited.reason);
+		const { receiver, receiverText, scopeId } = queued.details;
+		return textResult(returnAcceptedText(scopeId, receiverText ?? receiver), {
+			...queued.details,
+			awaitingReceipt: false,
+			accepted: true,
+		});
+	} catch (error) {
+		return errorResult("RETURN_INTERNAL_ERROR", String(error?.message ?? error));
+	}
 }
 
 export async function amendTicket(station, toolCallId, params) {

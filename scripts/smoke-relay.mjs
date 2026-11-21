@@ -5,7 +5,7 @@
  *
  * The unit suite proves the relay's own transitions. This script proves what a
  * session actually reads: the `RELAY STATE` text a tool returns, and the gate
- * the `scope` tool applies. It fails when
+ * the fork/join tools apply. It fails when
  *
  *   - the build is stale: the status text carries no `Flow:` line, or
  *   - simple mode gates `direct-execution`, or
@@ -23,7 +23,11 @@
 import { activate } from "../src/main.mjs";
 import { stateFor } from "../src/station/index.mjs";
 import { beginGenerationAfterHandoff } from "../src/relay/ledger.mjs";
-import { beginScope } from "../src/scope/index.mjs";
+
+// The smoke must test the shipped default, not whatever the developer's shell
+// exports. A leaked HERD_DISABLE_RELAY would skip the very relay debt this
+// script exists to check.
+delete process.env.HERD_DISABLE_RELAY;
 
 function memoryManager() {
 	const entries = [];
@@ -98,46 +102,16 @@ const ctx = {
 	sessionManager: manager,
 	agentMessages: [],
 	invokeTool: (params) => native.execute(params),
-	// A fission begin refuses to start without a host abort path.
+	// A host abort path exists so a blocked control tool can be cancelled.
 	abort() {},
 };
 const station = stateFor(ctx);
 
 /**
- * The smallest scheduler port that lets a `scope({ begin })` call succeed.
- *
- * This fake host spawns no flows, so the port opens the batch scope itself and
- * reports a registered batch. `retireOwner` keeps the owner alive instead of
- * aborting it, because the smoke drives the tools directly and never runs a
- * turn to abort. `handleFissionBegin` sets `station.pendingFission` after
- * `registerBatch` returns, and `call()` below clears that descriptor, since a
- * batch that never starts must not refuse the next begin.
+ * The smallest host surface that lets the relay checks run. The fork tools
+ * need a ledger and a spawner; this fake host supplies neither, so their
+ * refusal is itself a checkable contract.
  */
-const scheduler = {
-	registerBatch(request) {
-		const opened = beginScope(request.station.state, {
-			toolCallId: request.toolCallId,
-			intent: "smoke batch",
-			stage: request.stage,
-			budget: { ...request.totals },
-			time: request.begin?.time,
-		});
-		if (!opened.ok) {
-			return { ok: false, code: opened.code, reason: opened.reason };
-		}
-		return {
-			ok: true,
-			batchId: "smoke-batch",
-			batch: { id: "smoke-batch" },
-			batchBeginId: "smoke-begin",
-		};
-	},
-	cancelBatch() {},
-	retireOwner() {
-		return { ok: true, abort: false };
-	},
-};
-station.registry?.setFissionScheduler?.(scheduler);
 
 let callSeq = 0;
 
@@ -146,9 +120,6 @@ async function call(name, args) {
 	const tool = host.tools.get(name);
 	if (!tool) throw new Error(`${name} is not registered`);
 	const output = await tool.execute(id, args, undefined, undefined, ctx);
-	// A batch registered here never spawns a flow, so its pending descriptor is
-	// spent as soon as the call returns.
-	if (name === "scope" && args?.begin) station.pendingFission = null;
 	return {
 		text: (output.content ?? []).map((part) => part.text ?? "").join(""),
 		code: output.details?.code,
@@ -174,14 +145,72 @@ function expectLine(text, line, name) {
 	expect(text.includes(line), `${name}: missing ${JSON.stringify(line)} in:\n${text}`);
 }
 
-const S5 = {
+// The retired container's shape. It must be refused because no tool by that
+// name exists, not because a handler rejects it.
+const RETIRED_SCOPE_ARGS = {
 	begin: {
-		stage: "direct-execution",
-		elder_report: null,
+		intent: "smoke the relay gates",
+		budget: { read: 1 },
 		time: 60,
-		fission: [{ intent: "smoke", budget: { read: 1 }, permission: "rw" }],
 	},
 };
+
+await check("the registry exposes three fork/join tools", async () => {
+	for (const name of ["scope_fork", "scope_join", "scope_return"]) {
+		expect(host.tools.has(name), `${name} is not registered`);
+	}
+	// The retired working-level container has no registration, no schema and
+	// no handler: a configuration cannot fall back to it.
+	expect(!host.tools.has("scope"), "the retired scope tool is still registered");
+});
+
+await check("the retired one-container backend is refused", async () => {
+	// `single` is not in the port table any more, so asking for it is a
+	// configuration error instead of a silent fallback to `batch`.
+	const { readSwitch } = await import("../src/core/ports/resolve.mjs");
+	const setting = readSwitch("scope", { HERD_SCOPE: "single" });
+	expect(!setting.ok, "the retired backend was accepted");
+	expect(setting.code === "PORT_UNAVAILABLE", `wrong refusal code: ${setting.code}`);
+	expect(
+		setting.available.join(",") === "bare,batch",
+		`wrong available list: ${setting.available.join(",")}`,
+	);
+});
+
+await check("scope_fork refuses without a child spawner", async () => {
+	const out = await call("scope_fork", {
+		forks: [
+			{
+				scopeId: "probe", intent: "probe",
+				blocked: false,
+				budget: { read: 1 },
+				time: 30,
+				permission: "ro",
+			},
+		],
+	});
+	expect(out.isError, "scope_fork should report the missing spawner");
+	expect(out.code === "CHILD_SPAWNER_UNAVAILABLE", `got ${out.code ?? out.text.split("\n")[0]}`);
+});
+
+await check("scope_join refuses work this branch does not own", async () => {
+	const out = await call("scope_join", { elder_report: null });
+	expect(out.isError, "scope_join should refuse an idle branch");
+	const code = out.code ?? "";
+	expect(
+		code === "NO_UNRECEIVED_WORK" || code === "FORK_LEDGER_UNAVAILABLE",
+		`got ${code || out.text.split("\n")[0]}`,
+	);
+});
+
+await check("scope_return refuses the stable root", async () => {
+	const out = await call("scope_return", {});
+	expect(out.isError, "scope_return should refuse the root");
+	expect(
+		String(out.code) === "NOT_A_CHILD" || String(out.code) === "FORK_LEDGER_UNAVAILABLE",
+		`got ${out.code ?? out.text.split("\n")[0]}`,
+	);
+});
 
 await check("status names the flow before any ledger", async () => {
 	const view = await call("todo", { op: "view" });
@@ -190,22 +219,24 @@ await check("status names the flow before any ledger", async () => {
 	expect(!view.isError, "view reported an error");
 });
 
-await check("simple mode opens direct-execution without a ledger", async () => {
-	const opened = await call("scope", S5);
-	expect(!/^(STAGE_FLAGS_UNMET|RW_BEFORE_LEDGER)/.test(opened.text), `refused: ${opened.text.split("\n")[0]}`);
-	const closed = await call("scope", { end: true });
-	expect(!closed.isError, `close refused: ${closed.text.split("\n")[0]}`);
+await check("simple mode has no working-level container to open", async () => {
+	expect(!host.tools.has("scope"), "the retired scope tool is still registered");
+	// The host refuses an unregistered name before any handler runs. That
+	// refusal is the proof that no fallback path exists.
+	let refused = false;
+	try {
+		const out = await call("scope", RETIRED_SCOPE_ARGS);
+		refused = out?.isError === true || out?.unknown === true;
+	} catch {
+		refused = true;
+	}
+	expect(refused, "the retired scope call was accepted");
 });
 
 await check("a non-empty ledger turns the full flow on", async () => {
 	const wrote = await call("todo", { op: "init", list: [{ phase: "work", items: ["A"] }] });
 	expectLine(wrote.text, "Flow: full flow", "init");
 	expect(station.state.relay.fullFlow, "relay.fullFlow did not turn on");
-});
-
-await check("the full flow gates direct-execution", async () => {
-	const refused = await call("scope", S5);
-	expect(refused.code === "STAGE_FLAGS_UNMET", `expected STAGE_FLAGS_UNMET, got ${refused.code ?? refused.text.split("\n")[0]}`);
 });
 
 await check("an empty ledger arms a relay handoff", async () => {
@@ -223,19 +254,21 @@ await check("the successor's first empty ledger ends the flow", async () => {
 	expect(!station.state.relay.fullFlow, "the promoted relay kept the full flow on");
 });
 
-await check("the promoted session opens direct-execution again", async () => {
-	const opened = await call("scope", S5);
-	expect(!/^(STAGE_FLAGS_UNMET|RW_BEFORE_LEDGER)/.test(opened.text), `refused: ${opened.text.split("\n")[0]}`);
-	const closed = await call("scope", { end: true });
-	expect(!closed.isError, `close refused: ${closed.text.split("\n")[0]}`);
+await check("the promoted session still has the three tools", async () => {
+	for (const name of ["scope_fork", "scope_join", "scope_return"]) {
+		expect(host.tools.has(name), `${name} is not registered after promotion`);
+	}
+	const out = await call("scope_join", { elder_report: null });
+	expect(out.isError, "scope_join should still refuse an idle branch");
 });
 
 await check("a write after promotion turns the full flow on again", async () => {
 	const wrote = await call("todo", { op: "init", list: [{ phase: "next", items: ["B"] }] });
 	expectLine(wrote.text, "Flow: full flow", "reopen");
 	expectLine(wrote.text, "Promotion invalidated: yes", "reopen");
-	const refused = await call("scope", S5);
-	expect(refused.code === "STAGE_FLAGS_UNMET", `expected STAGE_FLAGS_UNMET, got ${refused.code ?? refused.text.split("\n")[0]}`);
+	// A write after promotion re-arms the full flow: the relay forbids the next
+	// stop until another ledger evaluation empties it again.
+	expect(station.state.relay.fullFlow === true, "full flow did not turn back on");
 });
 
 let failed = 0;

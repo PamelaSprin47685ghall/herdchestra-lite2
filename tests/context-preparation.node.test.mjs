@@ -563,3 +563,25 @@ test("structural tail matches must be unique and known input roles remain pendin
 	const pending = [{ role: "fileMention", content: "file" }, { role: "hookMessage", content: "legacy note" }];
 	assert.deepEqual(splitRequestHistory(pending, []).pending, pending);
 });
+
+test("a receipt whose branch journal disagrees degrades instead of killing the turn", async () => {
+	// A fork child inherits the parent's prefix, while its own branch journal
+	// starts at the fork. The receipt cannot be placed, but the request is
+	// still valid: the hook must record the refusal and leave the context as
+	// it found it, or the child sits on "Working…" forever.
+	reset();
+	const f = fixture("child-a");
+	// The journal ends at a different message than the live request, which is
+	// exactly the prefix check's refusal.
+	f.entries.length = 0;
+	f.entries.push({ type: "message", message: { role: "user", content: "inherited prompt" } });
+	const before = f.loop.messages.slice();
+	installContextPreparation(f.session, f);
+	await f.prepare();
+	assert.deepEqual(f.loop.messages, before);
+	assert.equal(f.loop.messages.some((message) => message.herdSkill === true), false);
+	const records = snapshot();
+	assert.ok(records.some((entry) =>
+		String(entry.message).includes("Context skill commit failed") &&
+		entry.detail?.tolerated === true));
+});

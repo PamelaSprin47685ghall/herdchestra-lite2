@@ -1,15 +1,10 @@
 // Prompt text and prompt injection. Text comes from resources/prompts/.
+//
+// Inject operating rules. Load stage skills separately from skills/.
 
-import {
-	acceptanceCasesPrompt,
-	architectureDesignPrompt,
-	decisionFramingPrompt,
-	orchestrationPlanPrompt,
-} from "./stage-prompts.mjs";
 import { loadDoc } from "../prompts/index.mjs";
 
 const system = loadDoc("system");
-const stages = loadDoc("stages");
 const vibe = loadDoc("vibe-mode");
 
 export const commonRulesText = system["common-rules"];
@@ -39,25 +34,6 @@ const systemPromptEnd = "<!-- /herdchestra-lite2:system-prompt -->";
 
 export const persistentOperatingSkill = system["persistent-rules"];
 
-export const stagePromptsStart = "<!-- herdchestra-lite2:stage-prompts v1 -->";
-export const stagePromptsEnd = "<!-- /herdchestra-lite2:stage-prompts -->";
-
-// The four stage sections live in the stable prefix so providers can reuse
-// their prompt cache. direct-execution has no section.
-export const stagePromptsBlock = [
-	stagePromptsStart,
-	stages.header,
-	decisionFramingPrompt,
-	acceptanceCasesPrompt,
-	architectureDesignPrompt,
-	orchestrationPlanPrompt,
-	stagePromptsEnd,
-].join("\n\n");
-
-function stageBlock(options) {
-	return options?.stages === "off" ? "" : stagePromptsBlock;
-}
-
 // The repo-aware rules are one switchable block, not a fixed prefix: the
 // commonRules port decides whether it is assembled at all. Everything else in
 // the managed block stays, so turning it off removes only that section.
@@ -78,111 +54,68 @@ function persistentRulesBlock(options) {
 		.join("\n");
 }
 
-function managedBlock(options = {}) {
+/**
+ * Build the managed block. `includeCommon` is false when the host prompt
+ * already carries the repo-aware rules from AGENTS.md: the section is the same
+ * text, and shipping it twice only spends context.
+ */
+function managedBlock(options = {}, includeCommon = true) {
 	const sections = [];
-	const rules = commonRulesBlock(options);
-	if (rules !== "") sections.push(rules);
-	sections.push(persistentRulesBlock(options));
-	const block = stageBlock(options);
-	if (block !== "") sections.push(block);
-	return `${systemPromptStart}\n${sections.join("\n\n")}\n${systemPromptEnd}`;
-}
-
-function replaceManaged(text, options = {}) {
-	const start = text.indexOf(systemPromptStart);
-	if (start < 0) return text;
-	const end = text.indexOf(systemPromptEnd, start + systemPromptStart.length);
-	if (end < 0) return text;
-	return text.slice(0, start) + managedBlock(options) + text.slice(end + systemPromptEnd.length);
-}
-
-function hasStagePrompts(text) {
-	return typeof text === "string" && text.includes(stagePromptsStart);
-}
-
-function replaceStagePrompts(text, options = {}) {
-	const start = text.indexOf(stagePromptsStart);
-	if (start < 0) return text;
-	const end = text.indexOf(stagePromptsEnd, start + stagePromptsStart.length);
-	if (end < 0) return text;
-	const replacement = stageBlock(options);
-	if (replacement !== "") {
-		return text.slice(0, start) + replacement + text.slice(end + stagePromptsEnd.length);
+	if (includeCommon) {
+		const rules = commonRulesBlock(options);
+		if (rules !== "") sections.push(rules);
 	}
-	const before = text.slice(0, start).replace(/\n+$/, "");
-	const after = text.slice(end + stagePromptsEnd.length).replace(/^\n+/, "");
-	return after === "" ? before : `${before}\n\n${after}`;
+	sections.push(persistentRulesBlock(options));
+	return `${systemPromptStart}\n${sections.join("\n\n")}\n${systemPromptEnd}`;
 }
 
 function hasRules(text) {
 	return typeof text === "string" && text.includes("# Repo-aware Rules");
 }
 
+function replaceManaged(text, options = {}, includeCommon = true) {
+	const start = text.indexOf(systemPromptStart);
+	if (start < 0) return text;
+	const end = text.indexOf(systemPromptEnd, start + systemPromptStart.length);
+	if (end < 0) return text;
+	return (
+		text.slice(0, start) +
+		managedBlock(options, includeCommon) +
+		text.slice(end + systemPromptEnd.length)
+	);
+}
+
+function outside(text) {
+	const start = text.indexOf(systemPromptStart);
+	if (start < 0) return text;
+	const end = text.indexOf(systemPromptEnd, start + systemPromptStart.length);
+	if (end < 0) return text;
+	return text.slice(0, start) + text.slice(end + systemPromptEnd.length);
+}
+
 function injectIntoString(text, options = {}) {
-	if (text.includes(systemPromptStart)) return replaceManaged(text, options);
-	if (hasRules(text)) {
-		if (hasStagePrompts(text)) {
-			return stageBlock(options) === "" ? replaceStagePrompts(text, options) : text;
-		}
-		const block = stageBlock(options);
-		return block === "" ? text : `${block}\n\n${text}`;
+	if (text.includes(systemPromptStart)) {
+		return replaceManaged(text, options, !hasRules(outside(text)));
 	}
-	return `${managedBlock(options)}\n\n${text}`;
+	return `${managedBlock(options, !hasRules(text))}\n\n${text}`;
 }
 
 function injectIntoArray(prompt, options = {}) {
-	const off = stageBlock(options) === "";
 	const markerIndex = prompt.findIndex(
 		(block) => typeof block === "string" && block.includes(systemPromptStart),
 	);
 	if (markerIndex >= 0) {
 		const old = prompt[markerIndex];
-		const next = replaceManaged(old, options);
-		const stageIndex = prompt.findIndex(
-			(block) => typeof block === "string" && block.includes(stagePromptsStart),
-		);
-		if (next !== old) {
-			const copy = [];
-			for (let index = 0; index < prompt.length; index += 1) {
-				if (index === markerIndex) copy.push(next);
-				else if (off && index === stageIndex) continue;
-				else if (index === stageIndex) copy.push(stagePromptsBlock);
-				else copy.push(prompt[index]);
-			}
-			return copy;
-		}
-		if (stageIndex >= 0) {
-			if (off) return prompt.filter((_, index) => index !== stageIndex);
-			const oldStage = prompt[stageIndex];
-			const nextStage = replaceStagePrompts(oldStage, options);
-			if (nextStage === oldStage) return prompt;
-			const copy = prompt.slice();
-			copy[stageIndex] = nextStage;
-			return copy;
-		}
-		if (off) return prompt;
+		const includeCommon = !hasRules(outside(old)) &&
+			!prompt.some((block, index) => index !== markerIndex && hasRules(block));
+		const next = replaceManaged(old, options, includeCommon);
+		if (next === old) return prompt;
 		const copy = prompt.slice();
-		copy.splice(markerIndex + 1, 0, stagePromptsBlock);
+		copy[markerIndex] = next;
 		return copy;
 	}
-	const stageIndex = prompt.findIndex(
-		(block) => typeof block === "string" && hasStagePrompts(block),
-	);
-	if (prompt.some(hasRules)) {
-		if (stageIndex >= 0) {
-			if (off) return prompt.filter((_, index) => index !== stageIndex);
-			const nextStage = replaceStagePrompts(prompt[stageIndex], options);
-			if (nextStage === prompt[stageIndex]) return prompt;
-			const copy = prompt.slice();
-			copy[stageIndex] = nextStage;
-			return copy;
-		}
-		if (off) return prompt;
-		const copy = prompt.slice();
-		copy.unshift(stagePromptsBlock);
-		return copy;
-	}
-	return [managedBlock(options), ...prompt];
+	const includeCommon = !prompt.some(hasRules);
+	return [managedBlock(options, includeCommon), ...prompt];
 }
 
 export function injectSystemPrompt(prompt, options = {}) {

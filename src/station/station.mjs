@@ -25,18 +25,25 @@
  */
 
 import {
+	createBracketLedger,
 	createUsageLedger,
-	currentScope,
-	effectiveDeadline,
+	pauseClock,
 	planStateEntry,
+	resumeClock,
 	serializeState,
+	unreceivedChildren,
 } from "../scope/index.mjs";
 import {
-	applyCollapses,
-	beatKey,
+	adoptLedger,
+	conversationKeyOf,
+	ledgerFor,
+} from "../host/fork-registry.mjs";
+import {
 	filterAmends,
 	findAmendTarget,
 	findToolCallIndex,
+	applyReceiptFolds,
+	lastStructuralCallId,
 	rewriteVibeMessage,
 	toolCalls,
 } from "../transcript/index.mjs";
@@ -49,34 +56,35 @@ import {
 import { sessionFor, setAgentMessages } from "../host/capture.mjs";
 import { contextHeaderOf } from "../host/adapter.mjs";
 import { record } from "../host/diagnostics.mjs";
-import {
-	createEmptyCatalog,
-	resolveModelPolicy,
-} from "../host/pricing.mjs";
+import { createEmptyCatalog } from "../host/pricing.mjs";
 import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
 import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
 import { createPinOff, createPinOn } from "../features/pin/index.mjs";
 import { handleAmendCall } from "./controls.mjs";
 import {
 	directAmend,
-	directScope,
 	executePin,
 	executeAmend,
-	executeScope,
+	executeFork,
+	executeJoin,
+	executeReturn,
 } from "./execute.mjs";
+import { checkJoinBinding, commitJoin, renderJoinResult } from "./fork-controls.mjs";
 import {
-	findBeginEntry,
-	foldBatch as foldBatchInBranch,
-	foldElder as foldElderInBranch,
-	netRemovableTokens,
-	sliceChars,
-} from "./fold.mjs";
+	addReceipt,
+	attachReport,
+	createReceiptRecord,
+	foldableReceipts,
+	markCollapsed,
+} from "../scope/receipts.mjs";
 import {
 	advanceRelayForHandoff,
 	armHandoff,
 	captureHandoffReport,
 	commitSelfHandoff,
+	markInheritedLedgerViewed,
 	recordLedgerEvaluation,
+	recordNaturalStop,
 } from "./handoff-state.mjs";
 import {
 	onAssistantMessage,
@@ -90,7 +98,7 @@ import {
 	onToolCall,
 	prepareRequest,
 } from "./gates.mjs";
-import { CONTROL_TOOLS, controlsIn, processedKey, sameTail } from "./messages.mjs";
+import { controlsIn, processedKey, sameTail } from "./messages.mjs";
 import {
 	modelKey,
 	actualModel,
@@ -109,11 +117,6 @@ import { createDispatchTracker } from "./dispatch-tracker.mjs";
 import { createPersistenceAnchor } from "./persistence-anchor.mjs";
 import { createProcessedLedger } from "./processed-ledger.mjs";
 import { nudgeDecision } from "./nudge.mjs";
-import {
-	clearOwnerRetired as clearOwnerRetirement,
-	markOwnerRetired as markOwnerRetirement,
-	ownerRetirement,
-} from "./retirement.mjs";
 
 export function receiptTextOf(message) {
 	const content = message?.content;
@@ -156,20 +159,42 @@ export class SessionStation {
 		this.lastError = null;
 		this.hostBoundaryKey = null;
 		this.agentPolicy = null;
-		this.ownerRetired = null;
 		this.handoffReport = null;
 		this.relayState = true;
 		this.todoGrantKey = null;
 		this.pendingModelSwitch = null;
 		this.modelSwitchInFlight = null;
+		// The bracket ledger is session-wide: parent and child live in
+		// different agents and must see the same pairing. The scope state owns
+		// the tree so a reload restores it, while the registry indexes the live
+		// object: a running tree wins, a restored non-empty tree wins over an
+		// empty index, and two fresh stations of one conversation share one
+		// empty ledger instead of growing two.
+		const forkWiring = registry?.forkWiring?.() ?? null;
+		this.forkWiring = forkWiring;
+		const key = conversationKeyOf(manager ?? null);
+		const indexed = forkWiring ? ledgerFor(forkWiring.registry, key) : null;
+		const restored = this.state.brackets ?? null;
+		const indexedLive = (indexed?.order?.length ?? 0) > 0;
+		const restoredLive = (restored?.order?.length ?? 0) > 0;
+		this.brackets = indexedLive
+			? indexed
+			: restoredLive
+				? restored
+				: (indexed ?? restored ?? createBracketLedger());
+		if (forkWiring && !indexedLive) adoptLedger(forkWiring.registry, key, this.brackets);
+		this.state.brackets = this.brackets;
+		// Attached by the host wiring; null means this station cannot wait.
+		this.forkWaitPort = null;
+		this.forkReports = new Map();
+		this.ownerId = null;
+		this.selfForkId = null;
+		this.parentOwnerId = null;
 		this.usage = createUsageLedger({
 			state: this.state,
 			contextMessages: () => this.contextMessages(),
 			persist: () => this.persist(),
-			foldBatch: (args) => this.foldBatch(args),
 			noteError: (domain, error) => this.noteError(domain, error),
-			sliceChars,
-			netRemovableTokens,
 			modelKeyOf: (message) => modelKey(message),
 			actualModelOf: (ctx) => actualModel(ctx),
 		});
@@ -196,21 +221,15 @@ export class SessionStation {
 		view.lastError = null;
 		view.hostBoundaryKey = null;
 		view.agentPolicy = null;
-		view.ownerRetired = null;
 		view.handoffReport = null;
 		view.todoGrantKey = null;
 		view.pendingModelSwitch = null;
 		view.modelSwitchInFlight = null;
-		view.fissionFlow = null;
-		view.pendingFission = null;
 		view.usage = createUsageLedger({
 			state: view.state,
 			contextMessages: () => view.contextMessages(),
 			persist: () => view.persist(),
-			foldBatch: (args) => view.foldBatch(args),
 			noteError: (domain, error) => view.noteError(domain, error),
-			sliceChars,
-			netRemovableTokens,
 			modelKeyOf: (message) => modelKey(message),
 			actualModelOf: (ctx) => actualModel(ctx),
 		});
@@ -230,7 +249,9 @@ export class SessionStation {
 	// -- Persistence ---------------------------------------------------------
 
 	persist() {
-		this.anchor.persist();
+		// A false answer is a lost state write, not "nothing to do": the anchor
+		// returns true when there was nothing owed.
+		return this.anchor.persist();
 	}
 
 	/**
@@ -246,7 +267,6 @@ export class SessionStation {
 	// -- Policy --------------------------------------------------------------
 
 	policy(ctx) {
-		if (this.fissionFlow) return MAIN_AGENT;
 		if (this.agentPolicy !== null) return this.agentPolicy;
 		const policy = agentPolicy(ctx);
 		// Freeze only a verdict backed by the host's persisted contract. The
@@ -379,27 +399,17 @@ export class SessionStation {
 			this.assistantForToolCall(toolCallId)?.message;
 	}
 
-	prepareScopeDispatch(message, id, name) {
-		const afterScope = this.dispatch.prepare(message, id, name);
-		return afterScope && !CONTROL_TOOLS.has(name) && name !== "todo";
+	prepareToolDispatch(message, id, name) {
+		this.dispatch.prepare(message, id, name);
+		// Waiting on the other bracket is not this branch's work. A join or a
+		// return may block for as long as the counterpart needs, so it never
+		// carries the branch clock's limit.
+		if (name === "scope_join" || name === "scope_return") return false;
+		return this.toolTimeLimit() !== null;
 	}
 
-	deferScopePreflight(id, name) {
-		return this.dispatch.deferPreflight(id, name);
-	}
-
-	admitScopeDispatch(id, name, ctx, receipt = null) {
+	admitToolDispatch(id, name, ctx, receipt = null) {
 		if (receipt) {
-			const scope = currentScope(this.state);
-			const deadline = effectiveDeadline(this.state);
-			if (
-				scope &&
-				deadline !== null &&
-				Date.now() >= deadline &&
-				scope.overtimeAt === null
-			) {
-				scope.overtimeAt = Date.now();
-			}
 			if (receipt.limitMs > 0 && receipt.elapsedMs > receipt.limitMs) {
 				return {
 					block: true,
@@ -411,48 +421,40 @@ export class SessionStation {
 			}
 			return undefined;
 		}
-		if (!this.deferScopePreflight(id, name)) return undefined;
-		const verdict = onToolCall(this, { toolCallId: id, toolName: name }, ctx, true);
+		const verdict = onToolCall(this, { toolCallId: id, toolName: name }, ctx);
 		if (verdict) return verdict;
-			const barrierLimit = this.barrierToolLimit(id);
-			if (barrierLimit !== null) return { limitMs: barrierLimit };
+		if (name === "scope_join" || name === "scope_return") return undefined;
 		const limitMs = this.toolTimeLimit();
 		return limitMs === null ? undefined : { limitMs };
 	}
 
-	/**
-	 * The barrier's own wall clock, not the enclosing scope's. A trailing call
-	 * is the shared first beat of every flow in the batch, so it pays the
-	 * batch's `time`, not the scope the owner was already inside.
-	 */
-	barrierToolLimit(toolCallId) {
-		const batch = this.pendingFission;
-		if (!batch || batch.retired === true) return null;
-		const ids = batch.trailingCallIds;
-		if (!Array.isArray(ids) || !ids.includes(toolCallId)) return null;
-		if (!Number.isFinite(batch.deadlineAt)) return null;
-		const now = Date.now();
-		return now < batch.deadlineAt ? batch.deadlineAt - now + 1000 : 1000;
+	/** The fork record of this branch, or null at the root. */
+	branchRecord() {
+		const ledger =
+			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+		const ownerId =
+			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+		return ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null;
 	}
 
-	/** 1000 ms once the innermost scope's deadline has passed, else null. */
+	/**
+	 * Freeze this branch's clock while it waits on another bracket. The root
+	 * owns no record, so it has nothing to pause.
+	 */
+	pauseBranchClock() {
+		return pauseClock(this.branchRecord());
+	}
+
+	/** Resume the clock and give back exactly the paused span. */
+	resumeBranchClock() {
+		return resumeClock(this.branchRecord());
+	}
+
+	/** 1000 ms once this branch's deadline has passed, else null. */
 	toolTimeLimit() {
-		const scope = currentScope(this.state);
-		const pending = this.pendingFission;
-		const trailingDeadline =
-			pending &&
-			pending.retired !== true &&
-			pending.remainingTrailingIds instanceof Set &&
-			pending.remainingTrailingIds.size > 0 &&
-			Number.isFinite(pending.deadlineAt)
-				? pending.deadlineAt
-				: null;
-		const scopeDeadline = scope ? effectiveDeadline(this.state) : null;
-		const deadlines = [scopeDeadline, trailingDeadline].filter((value) =>
-			Number.isFinite(value),
-		);
-		if (deadlines.length === 0) return null;
-		const deadline = Math.min(...deadlines);
+		const record = this.branchRecord();
+		const deadline = record?.deadlineAt;
+		if (!Number.isFinite(deadline)) return null;
 		const now = Date.now();
 		if (now < deadline) {
 			// A tool started in normal time may run only up to the deadline
@@ -460,61 +462,10 @@ export class SessionStation {
 			// exactly deadline + 1s.
 			return deadline - now + 1000;
 		}
-		if (scope && scope.overtimeAt === null) scope.overtimeAt = now;
+		if (record.overtimeAt === null || record.overtimeAt === undefined) {
+			record.overtimeAt = now;
+		}
 		return 1000;
-	}
-
-	findBeginEntry(beginToolCallId) {
-		return findBeginEntry(this.manager, beginToolCallId);
-	}
-
-	foldElder(args) {
-		const folded = foldElderInBranch({ manager: this.manager, state: this.state, ...args });
-		if (folded.rebased) {
-			this.anchor.rebase();
-		}
-		return folded;
-	}
-
-	/** Fold a whole elder pool in one branch operation. */
-	foldBatch(args) {
-		// `folding=off` means the port folds nothing and keeps nothing. The
-		// station is the only writer of collapse records, so refusing here
-		// covers every call site (flood, economics, model change) without
-		// teaching each one to ask a switch.
-		if (this.registry?.ports?.().folding === "off") {
-			return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
-		}
-		const folded = foldBatchInBranch({
-			manager: this.manager,
-			state: this.state,
-			tokensPerChar: this.tokensPerCharFor(this.usage.lastUsageModelKey),
-			...args,
-		});
-		if (folded.rebased) {
-			this.pruneAmends();
-			const sent = this.usage.sentContext;
-			if (sent) sent.frontier = Math.min(sent.frontier, folded.foldStartIdx ?? 0);
-			this.anchor.rebase();
-		}
-		return folded;
-	}
-
-	/**
-	 * Drop amend keys whose assistant beat is no longer on the branch. A fold
-	 * removes whole beats, so a dead key would otherwise ride every checkpoint
-	 * for the rest of the session.
-	 */
-	pruneAmends() {
-		if (this.state.amends.length === 0) return 0;
-		const live = new Set();
-		for (const message of this.contextMessages()) {
-			if (message?.role === "assistant") live.add(beatKey(message));
-		}
-		const kept = this.state.amends.filter((key) => live.has(key));
-		const dropped = this.state.amends.length - kept.length;
-		if (dropped > 0) this.state.amends = kept;
-		return dropped;
 	}
 
 	/** Observed token density, clamped to a safe band. */
@@ -540,18 +491,30 @@ export class SessionStation {
 		this.usage.resetWatermark();
 	}
 
-	/** After a fold, shift younger baselines down by the reclaimed tokens. */
-	rebaseBaselines(folded) {
-		this.usage.rebase(folded);
+	findAmendTarget(base, currentIndex, boundary = null) {
+		return findAmendTarget(
+			this.state,
+			base,
+			currentIndex,
+			boundary ?? this.amendBoundary(currentIndex),
+		);
 	}
 
-	/** Accrue per-step cache rent and flood the pools at the 90% watermark. */
-	accrueRentAndFlood(original, pricing, contextTokens, key) {
-		return this.usage.accrue(original, pricing, contextTokens, key);
-	}
-
-	findAmendTarget(base, currentIndex, scope) {
-		return findAmendTarget(this.state, base, currentIndex, scope);
+	/** The branch boundary an amend may reach, with its ledger and owner. */
+	amendBoundary(currentIndex, currentMessage = null) {
+		const ledger =
+			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+		const ownerId =
+			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+		const messages = this.contextMessages();
+		const boundary = {
+			ownerId,
+			ledger,
+			afterToolCallId: lastStructuralCallId(messages, currentIndex) ?? null,
+			record: ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null,
+		};
+		if (currentMessage) boundary.currentMessage = currentMessage;
+		return boundary;
 	}
 
 	// -- Message processing ----------------------------------------------------
@@ -569,14 +532,16 @@ export class SessionStation {
 		const base = currentPersisted ? existing : [...existing, message];
 		const currentIndex = currentPersisted ? firstIndex : base.length - 1;
 		const calls = toolCalls(message);
-		const barrier = calls.findIndex((call) => call.name === "scope");
-		const earlyControls = barrier < 0 ? controls :
-			calls.slice(0, barrier).filter((call) => CONTROL_TOOLS.has(call.name));
+		const earlyControls = controls;
 		let changed = false;
 		for (const call of earlyControls) {
 			if (call.name !== "amend") continue;
 			if (this.processed.hasCall(call.id)) continue;
-			this.processed.setHandled(call.id, handleAmendCall(this, call, base, currentIndex));
+			const boundary = this.amendBoundary(currentIndex, message);
+			this.processed.setHandled(
+				call.id,
+				handleAmendCall(this, call, base, currentIndex, boundary),
+			);
 			changed = true;
 		}
 
@@ -594,8 +559,40 @@ export class SessionStation {
 
 	// -- Execute cores (called by tickets) -------------------------------------
 
-	executeScope(toolCallId, params, ctx) {
-		return executeScope(this, toolCallId, params, ctx);
+	executeFork(toolCallId, params, ctx) {
+		return executeFork(this, toolCallId, params, ctx);
+	}
+
+	executeJoin(toolCallId, params, ctx) {
+		return executeJoin(this, toolCallId, params, ctx);
+	}
+
+	/**
+	 * Finish a join whose record was already taken by the waiting ticket.
+	 * The station caches the result, so a later replay of the same call sees
+	 * the same answer instead of looking for a child that is already closed.
+	 */
+	finalizeJoin(toolCallId, record, ctx, params = {}, pending = undefined) {
+		const elderReport =
+			typeof params?.elder_report === "string" ? params.elder_report.trim() : null;
+		// The binding travels with the waiting ticket, not from a second read of
+		// the chain: a join that waited must file its summary against the
+		// receipt the model saw, or refuse.
+		commitJoin(this, record, toolCallId, elderReport, pending);
+		const result = renderJoinResult(this, record, { closeToolCallId: toolCallId });
+		this.processed.setHandled(toolCallId, result);
+		this.processed.markCall(toolCallId);
+		this.persist();
+		return result;
+	}
+
+	/** The guard a waiting join runs before every take. */
+	joinBindingGuard(expected) {
+		return checkJoinBinding(this, expected);
+	}
+
+	executeReturn(toolCallId, params, ctx) {
+		return executeReturn(this, toolCallId, params, ctx);
 	}
 
 	executeAmend(toolCallId, params) {
@@ -628,8 +625,8 @@ export class SessionStation {
 			: createHerdOn(this.state);
 	}
 
-	directScope(toolCallId, params, ctx) {
-		return directScope(this, toolCallId, params, ctx);
+	directAmend(toolCallId, params) {
+		return directAmend(this, toolCallId, params);
 	}
 
 	observeActualModel(ctx) {
@@ -648,26 +645,18 @@ export class SessionStation {
 		return directAmend(this, toolCallId, params);
 	}
 
-	directDefer(toolCallId, params) {
-		return directDefer(this, toolCallId, params);
-	}
-
 	// -- Nudge -----------------------------------------------------------------
 
 	maybeNudge(message, ctx) {
 		if (!message || message.role !== "assistant") return;
 		if (message.stopReason === "aborted" || message.stopReason === "error") return;
-		// Flow completion is managed by the fission scheduler, not the relay.
-		if (this.fissionFlow) return;
 		if (!this.relayOn(ctx)) return;
 		if (this.nudged.has(message)) return;
 		const decision = nudgeDecision(this.state, {
 			hasToolCalls: toolCalls(message).length > 0,
-			hasHandoffReport: Boolean(this.handoffReport),
 		});
 		if (decision.kind === "none") return;
 		this.nudged.add(message);
-		if (decision.kind === "handoff") this.armHandoff(ctx);
 		this.deliverSteer(decision.text);
 	}
 
@@ -680,26 +669,58 @@ export class SessionStation {
 		if (setAgentMessages(ctx, tree)) this.anchor.clearRebase();
 	}
 
+	// -- Fork/join receipts (sync) ----------------------------------------------
+
+	/**
+	 * Record one successful join. The pending receipt gets the summary this
+	 * join carried; the new receipt becomes the newest one at its level.
+	 * Both facts live in the persisted scope state, so a reload keeps the
+	 * difference between an elder record and the newest one.
+	 */
+	recordJoinReceipt(entry) {
+		const spec = entry && typeof entry === "object" ? entry : {};
+		let receipts = Array.isArray(this.state.receipts) ? this.state.receipts : [];
+		const pending = spec.pending && typeof spec.pending === "object" ? spec.pending : null;
+		if (pending && typeof pending.closeToolCallId === "string") {
+			receipts = attachReport(receipts, pending.closeToolCallId, spec.elderReport);
+		}
+		const record = createReceiptRecord({
+			forkToolCallId: spec.forkId,
+			...(spec.scopeId ? { scopeId: spec.scopeId } : {}),
+			closeToolCallId: spec.closeToolCallId,
+			levelKey: spec.levelKey,
+			closedOrder: spec.closedOrder,
+		});
+		if (record) receipts = addReceipt(receipts, record);
+		this.state.receipts = receipts;
+		return record;
+	}
+
+	/** Mark the receipts whose text the projection has shortened. */
+	settleReceiptFolds(closeToolCallIds) {
+		let receipts = this.state.receipts;
+		for (const id of Array.isArray(closeToolCallIds) ? closeToolCallIds : []) {
+			receipts = markCollapsed(receipts, id);
+		}
+		this.state.receipts = receipts;
+	}
+
 	// -- Context transform (sync) -----------------------------------------------
 
 	transformContext(original, ctx) {
 		try {
 			const model = actualModel(ctx);
 			const key = modelKey(model);
-			const pricing = resolveModelPolicy(
-				this.pricingCatalog,
-				model ? { model } : ctx,
-				key === this.usage.lastUsageModelKey ? this.usagePricingHint() : undefined,
-			);
-			const contextTokens = this.currentContextTokens(original, key);
-			const contextWindow = model?.contextWindow ?? pricing.contextWindow;
-			this.accrueRentAndFlood(original, { ...pricing, contextWindow }, contextTokens, key);
 			let messages = filterAmends(original, this.state.amends);
-			messages = applyCollapses(
-				messages,
-				this.state.collapses,
-				this.state.epoch,
-			);
+			// Receipts are the only fold target. The projection shortens an old
+			// right bracket without removing its left bracket, so the structure
+			// of every fork stays readable and restorable.
+			const foldable = foldableReceipts(this.state.receipts);
+			if (foldable.length > 0) {
+				const folded = applyReceiptFolds(messages, this.state.receipts, { foldable });
+				messages = folded.messages;
+				if (folded.collapsed.length > 0) this.settleReceiptFolds(folded.collapsed);
+			}
 			// `messages` is the outbound list: amends removed entries and
 			// collapses replaced whole intervals, so its length is not a
 			// position in the branch. The economics compare a cache's
@@ -758,18 +779,14 @@ export class SessionStation {
 		return recordLedgerEvaluation(this, phases, op, options);
 	}
 
-	// -- Owner retirement gate ------------------------------------------------
-
-	markOwnerRetired(request) {
-		return markOwnerRetirement(this, request);
+	/** A natural stop is an empty-ledger submission; this records it as one. */
+	recordNaturalStop(ctx) {
+		return recordNaturalStop(this, ctx);
 	}
 
-	clearOwnerRetired(batchId) {
-		return clearOwnerRetirement(this, batchId);
-	}
-
-	ownerRetirement(ctx) {
-		return ownerRetirement(this, ctx);
+	/** The successor has looked at the inherited ledger; the requirement ends. */
+	markInheritedLedgerViewed() {
+		return markInheritedLedgerViewed(this);
 	}
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------
@@ -794,8 +811,20 @@ export class SessionStation {
 	 * Build one Skill for the next request. The before-model adapter commits it
 	 * before extension context handlers run. Earlier receipts remain unchanged.
 	 */
-	skillReceipt(ctx) {
-		const text = skillReceiptText(this.state, this.relayOn(ctx), this.clockBounded());
+	skillReceipt(ctx, demandVisible) {
+		const ledger =
+			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+		const ownerId =
+			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+		const branch = ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null;
+		const open = ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0;
+		const text = skillReceiptText(
+			this.state,
+			this.relayOn(ctx),
+			branch,
+			open,
+			demandVisible,
+		);
 		return {
 			role: "developer",
 			content: [{ type: "text", text }],
@@ -805,13 +834,8 @@ export class SessionStation {
 		};
 	}
 
-	/** The clock port is the only owner of "does a time segment exist". */
-	clockBounded() {
-		return this.registry?.ports?.().clock !== "off";
-	}
-
-	prepareRequest(ctx, previous) {
-		return prepareRequest(this, ctx, previous);
+	prepareRequest(ctx, previous, history) {
+		return prepareRequest(this, ctx, previous, history);
 	}
 
 	onContext(messages, ctx) {

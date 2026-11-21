@@ -17,6 +17,21 @@ export function isFreeTool(name) {
   return CONTROL_TOOLS.has(name) || name === "todo" || name === "ask" || name === "wait";
 }
 
+// Reading a skill is instruction reading, not project work, so it is free at
+// every level. The rule reads the call, not the scope: the same path gets the
+// same verdict wherever it runs.
+const SKILL_READ_PREFIX = "skill://";
+
+export function isSkillRead(toolName, input) {
+  return (
+    toolName === "read" &&
+    input !== null &&
+    typeof input === "object" &&
+    typeof input.path === "string" &&
+    input.path.startsWith(SKILL_READ_PREFIX)
+  );
+}
+
 // Resolving a staged ast_edit preview is a bookkeeping write, not work: the
 // harness refuses to run any other tool until it lands. Charging it would let a
 // scope with no write budget deadlock on its own proposal.
@@ -32,7 +47,11 @@ export function isResolutionWrite(toolName, input) {
 }
 
 export function isFreeCall(toolName, input) {
-  return isFreeTool(toolName) || isResolutionWrite(toolName, input);
+  return (
+    isFreeTool(toolName) ||
+    isSkillRead(toolName, input) ||
+    isResolutionWrite(toolName, input)
+  );
 }
 
 function validBudget(budget) {
@@ -115,33 +134,6 @@ export function beatShares(items) {
     put(shares, tool, roundAmount(shares[tool] / CHARGE_SCALE));
   }
   return shares;
-}
-
-function formatClock(ms) {
-  const total = Math.max(0, Math.ceil(ms / 1000));
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-}
-
-export function budgetText(scope, now = Date.now(), bounded = true) {
-  if (!scope || !isPlainObject(scope.remaining)) return "";
-  const entries = [];
-  for (const tool of Reflect.ownKeys(scope.remaining).sort()) {
-    if (typeof tool !== "string") continue;
-    const remaining = scope.remaining[tool];
-    const budget = scope.budget[tool];
-    if (budget === undefined) continue;
-    entries.push(
-      `${tool} ${formatAmount(remaining)}/${formatAmount(budget)}`,
-    );
-  }
-  const tools = entries.join(", ");
-  if (!bounded || !Number.isFinite(scope.deadlineAt)) return tools;
-  const left = Math.max(0, scope.deadlineAt - now);
-  const timed =
-    scope.overtimeAt !== null || left === 0
-      ? "time OVERTIME (1s per tool)"
-      : `time ${formatClock(left)}/${formatClock(scope.timeBudgetMs)}`;
-  return tools === "" ? timed : `${tools}, ${timed}`;
 }
 
 export { CHARGE_SCALE, validBudget, normalizeBudget };

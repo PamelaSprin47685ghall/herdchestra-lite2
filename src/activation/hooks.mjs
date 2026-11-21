@@ -4,112 +4,12 @@ import { sessionFor } from "../host/capture.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { installContextPreparation } from "../host/context-preparation.mjs";
 import { wireProviderObservation } from "../host/provider-observer.mjs";
-import { installScopeDispatch } from "../host/scope-dispatch.mjs";
+import { installToolDispatch } from "../host/tool-dispatch.mjs";
 
 /**
- * Mark the owner's registered batch as retiring and end its run. The host
- * emits `tool_result` inside the tool's own execute (wrapper.ts:541), before
- * agent-loop emits and commits the result message. The abort is still safe:
- * the loop commits a completed tool's real result even when the signal
- * aborted (agent-loop.ts `completedToolExecution` path); only the next model
- * call is cancelled. The scheduler starts the flows at `agent_end`, after it
- * awaits the owner session's `settleInFlightMessagePersistence()`.
- */
-function retirePendingBatch(station, registry, ctx, toolCallId) {
-	const batch = station?.pendingFission;
-	if (!batch || batch.retired === true) return false;
-	// A flow-owned station may itself have opened an inner batch, so the
-	// pending descriptor, not the flow flag, decides who retires.
-	//
-	// The scope call opens an execution barrier: every call after it in the
-	// same assistant message runs exactly once in the owner's context, and its
-	// result is copied into every flow. Retirement is therefore deferred until
-	// both the scope receipt and every trailing result have arrived. Aborting on
-	// the scope receipt alone would cancel the trailing calls the barrier
-	// promised, and the batch would start with unanswered tool calls.
-	if (batch.remainingTrailingIds instanceof Set && batch.remainingTrailingIds.has(toolCallId)) {
-		batch.remainingTrailingIds.delete(toolCallId);
-	} else if (batch.toolCallId === toolCallId) {
-		batch.scopeResultSeen = true;
-	} else {
-		return false;
-	}
-	const ready =
-		batch.scopeResultSeen === true &&
-		(!(batch.remainingTrailingIds instanceof Set) || batch.remainingTrailingIds.size === 0);
-	if (!ready) return false;
-	batch.retired = true;
-	// Arm the station's own gate before the scheduler or the host sees the
-	// abort: a started turn can deliver its next tool call immediately.
-	station?.markOwnerRetired?.({
-		batchId: batch.batchId,
-		toolCallId,
-		identity: ctx?.agent ?? null,
-	});
-	// The descriptor is the station's stop guard, not the scheduler's batch
-	// object. Only the id crosses the port; the scheduler resolves its own
-	// record from it.
-	const port = registry.fissionScheduler?.();
-	let outcome;
-	try {
-		outcome = port?.retireOwner?.({ batchId: batch.batchId, station, ctx });
-	} catch (error) {
-		const detail = { fission: batch.batchId, retire: true };
-		if (typeof station?.noteError === "function") {
-			station.noteError("hooks", error, detail);
-		} else {
-			if (station) station.lastError = String(error?.message ?? error);
-			record("hooks", error, detail);
-		}
-	}
-	// `ctx.agent` is only an ExtensionAgentIdentity, so the abort goes through
-	// the context operation itself. The owner must not continue even when the
-	// scheduler cannot witness it: running on would execute the work twice.
-	if (outcome?.abort !== false) {
-		try {
-			ctx.abort();
-		} catch (error) {
-			record("hooks", error, { fission: batch.batchId, missing: ["ctx.abort"] });
-		}
-	}
-	return true;
-}
-
-// A batch is live until the scheduler reports a terminal status. Prefer the
-// per-batch probe: some schedulers implement `hasRunningFlows` process-wide
-// and ignore the batch id, which would let an unrelated batch block this
-// session's stop. A batch the scheduler no longer knows is finished.
-const LIVE_BATCH_STATUSES = new Set([
-	"registered",
-	"starting",
-	"running",
-	"finalizing",
-]);
-
-function batchRunning(port, batch) {
-	if (typeof port?.batchStatus === "function") {
-		const status = port.batchStatus(batch.batchId)?.status;
-		if (typeof status === "string") return LIVE_BATCH_STATUSES.has(status);
-		return false;
-	}
-	if (typeof port?.hasRunningFlows === "function") {
-		return port.hasRunningFlows(batch.batchId) === true;
-	}
-	// No port exposes a per-batch probe. The descriptor itself decides.
-	//
-	// A retired descriptor is an owner that deliberately stopped its run: the
-	// host must not wake it with a continuation, so it counts as live and the
-	// stop stays open. Anything else is a descriptor nobody can witness any
-	// more; calling it live would return `undefined` from every later
-	// session_stop and silence the scope nudge for the rest of the process.
-	return batch.retired === true;
-}
-
-/**
- * The capture map is keyed by the session manager, and fission flows share one
- * manager. Patching a session whose own agent id is a different flow would
- * route another flow's scope barrier, so the identity must agree before the
- * seam is installed. An unknown id keeps the existing session path.
+ * The capture map is keyed by the session manager. A forked child has its own
+ * manager proxy, so the identity must agree before the seam is installed. An
+ * unknown id keeps the existing session path.
  */
 function dispatchSession(ctx) {
 	const session = sessionFor(ctx);
@@ -138,16 +38,17 @@ export function wireHooks(pi, registry) {
 	const bindDispatch = (ctx) => {
 		const station = registry.stationFor(ctx);
 		const session = dispatchSession(ctx);
-		installScopeDispatch(
+		installToolDispatch(
 			session,
-			(message, id, name) => station.prepareScopeDispatch(message, id, name),
+			(message, id, name) => station.prepareToolDispatch(message, id, name),
 			(id, name, toolCtx, receipt) =>
-				station.admitScopeDispatch(id, name, toolCtx, receipt),
+				station.admitToolDispatch(id, name, toolCtx, receipt),
 		);
 		if (session) installContextPreparation(session, { station, ctx });
 		return station;
 	};
 	wireProviderObservation(pi, registry);
+	pi.on("before_provider_request", (_event, ctx) => registry.stationFor(ctx).noteScopeRequest?.());
 	pi.on("session_start", (_event, ctx) => {
 		bindDispatch(ctx);
 	});
@@ -199,131 +100,18 @@ export function wireHooks(pi, registry) {
 	pi.on("tool_call", (event, ctx) =>
 		registry.stationFor(ctx).onToolCall(event, ctx),
 	);
-	// `tool_result` is emitted inside the tool's own execute (wrapper.ts:541),
-	// before agent-loop emits and commits this result. Aborting here cancels
-	// the next model call; the loop still commits the completed tool's real
-	// result (agent-loop.ts completedToolExecution path). Retirement therefore
-	// never needs the Agent instance behind `ctx.agent`; the context aborts
-	// its own operation.
-	try {
-		pi.on("tool_result", (event, ctx) => {
-			const station = registry.stationFor(ctx);
-			if (station?.fissionFlow?.endToolCallId === event?.toolCallId) {
-				registry.fissionScheduler?.()?.retireEndedFlow?.(station.fissionFlow.id);
-			}
-			retirePendingBatch(station, registry, ctx, event?.toolCallId);
-		});
-	} catch (error) {
-		record("hooks", error, { missing: ["tool_result"], optional: true });
-	}
 	pi.on(
 		"context",
 		(event, ctx) => bindDispatch(ctx).onContext(event?.messages, ctx),
 	);
-	pi.on("before_agent_start", (event, ctx) => {
-		const station = bindDispatch(ctx);
-		// A batch that ended while this session kept talking leaves a stale
-		// descriptor and retirement record behind. Without this sweep the
-		// station refuses every later call for a batch nobody can see any more.
-		if (station && !station.fissionFlow) {
-			const port = registry.fissionScheduler?.();
-			const pending = station.pendingFission;
-			if (pending) {
-				if (!batchRunning(port, pending)) {
-					if (station.pendingFission === pending) station.pendingFission = null;
-					station.clearOwnerRetired?.(pending.batchId);
-				}
-			} else if (station.ownerRetired) {
-				station.clearOwnerRetired?.(station.ownerRetired.batchId);
-			}
-		}
-		return station.onBeforeAgentStart(event, ctx);
-	});
+	pi.on("before_agent_start", (event, ctx) =>
+		bindDispatch(ctx).onBeforeAgentStart(event, ctx),
+	);
 	pi.on("session_stop", (event, ctx) => {
 		const reason = event?.last_assistant_message?.stopReason;
 		if (event?.signal?.aborted || reason === "aborted" || reason === "error") return undefined;
-		const station = registry.stationForStop(ctx);
-		if (station?.pendingFission && !station.fissionFlow) {
-			const batch = station.pendingFission;
-			const port = registry.fissionScheduler?.();
-			let handled;
-			try {
-				handled = port?.onOwnerStop?.({ batchId: batch.batchId, station, ctx });
-			} catch (error) {
-				record("hooks", error, { fission: batch.batchId, stop: true });
-			}
-			if (handled !== undefined) return handled;
-			// A batch is not complete while any flow runs. Saying so here keeps
-			// the relay and the host from treating the owner's stop as the end.
-			// Once the scheduler reports no live status the descriptor is spent,
-			// so the normal stop gate decides instead of a stale batch.
-			const running = batchRunning(port, batch);
-			if (!running && station.pendingFission === batch) station.pendingFission = null;
-			// The descriptor is spent, so the retirement it named is spent too.
-			// Keeping the record would refuse this session forever.
-			if (!running) station.clearOwnerRetired?.(batch.batchId);
-			if (running) {
-				// A retired owner must never be woken up by a session_stop
-				// continuation turn; makePrompt's barrier holds the caller open.
-				return undefined;
-			}
-		}
-		if (station?.ownerRetirement?.(ctx)) {
-			return undefined;
-		}
-		return station.onSessionStop(ctx);
+		return registry.stationForStop(ctx).onSessionStop(ctx);
 	});
-	// The host may expose `agent_end`; when it does, the scheduler starts the
-	// flows only after the owner's receipt has been committed. A missing event
-	// is not fatal, because the scheduler may subscribe to the agent itself.
-	try {
-		pi.on("agent_end", (event, ctx) => {
-			const station = registry.stationFor(ctx);
-			if (!station?.pendingFission || station.fissionFlow) return undefined;
-			const batch = station.pendingFission;
-			if (batch.retired !== true) {
-				// The turn can end before a trailing call ever produced its
-				// result (a host abort, a killed tool, a refused call the host
-				// never answered). The barrier promised only the calls that
-				// actually ran, so settle that subset now; otherwise the batch
-				// would wait for a retirement that can no longer arrive.
-				const owed =
-					batch.remainingTrailingIds instanceof Set &&
-					batch.remainingTrailingIds.size > 0;
-				if (!owed) return undefined;
-				batch.retired = true;
-				station.markOwnerRetired?.({
-					batchId: batch.batchId,
-					toolCallId: batch.toolCallId,
-					identity: ctx?.agent ?? null,
-				});
-				try {
-					registry.fissionScheduler?.()?.retireOwner?.({
-						batchId: batch.batchId,
-						station,
-						ctx,
-					});
-				} catch (error) {
-					record("hooks", error, { fission: batch.batchId, retire: true });
-				}
-			}
-			const port = registry.fissionScheduler?.();
-			if (typeof port?.onOwnerEnd !== "function") return undefined;
-			let outcome;
-			try {
-				outcome = port.onOwnerEnd({ batchId: batch.batchId, station, ctx, event });
-			} catch (error) {
-				record("hooks", error, { fission: batch.batchId, spawn: true });
-				return undefined;
-			}
-			// The descriptor stays while the batch runs: `session_stop` needs it
-			// to keep the owner's relay from finishing early, and clears it once
-			// the scheduler reports no live status.
-			return outcome;
-		});
-	} catch (error) {
-		record("hooks", error, { missing: ["agent_end"], optional: true });
-	}
 	pi.on("session_switch", (event, ctx) => {
 		const result = registry.stationForStop(ctx).onSessionSwitch(event, ctx);
 		bindDispatch(ctx);

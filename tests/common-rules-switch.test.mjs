@@ -27,10 +27,10 @@ test("commonRules off omits the repo-aware block and keeps the rest", () => {
 	expect(on).toContain("# Repo-aware Rules");
 });
 
-test("commonRules switches off without touching the stage block", () => {
-	const on = injectSystemPrompt("plain prompt", { commonRules: "on", stages: "on" });
-	const off = injectSystemPrompt(on, { commonRules: "off", stages: "on" });
+test("commonRules switches off without touching the persistent rules", () => {
+	const on = injectSystemPrompt("plain prompt", { commonRules: "on" });
+	const off = injectSystemPrompt(on, { commonRules: "off" });
 	expect(off).not.toContain("# Repo-aware Rules");
-	expect(off).toContain("herdchestra-lite2:stage-prompts");
+	expect(off).toContain("herdchestra-lite2:system-prompt");
 	expect(off).toContain("plain prompt");
 });

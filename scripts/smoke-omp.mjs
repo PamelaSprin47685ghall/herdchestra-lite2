@@ -18,14 +18,14 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { SessionStation } from "../src/station/station.mjs";
 import { restoreState } from "../src/station/restore.mjs";
 import { captureDiagnosis, installRunnerCapture } from "../src/host/capture.mjs";
 
-const HOST = process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi";
+const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const AGENT_SESSION = join(HOST, "packages/coding-agent/src/session/agent-session.ts");
-const REQUIRED_TOOLS = ["scope", "amend", "defer", "pin", "todo"];
+const REQUIRED_TOOLS = ["scope_fork", "scope_join", "scope_return", "amend", "pin", "todo"];
 const STRICT = process.env.OMP_SMOKE_STRICT === "1";
 
 const results = [];
@@ -275,7 +275,7 @@ await check("activate() completes", async () => {
 	return "no throw";
 });
 
-await check("all five tools register", () => {
+await check("all six control tools register", () => {
 	const missing = REQUIRED_TOOLS.filter((name) => !harness.tools.has(name));
 	assert(missing.length === 0, `not registered: ${missing.join(", ")}`);
 	return REQUIRED_TOOLS.join(", ");
@@ -287,14 +287,14 @@ await check("hooks bind to host events", () => {
 });
 
 /**
- * A2: check `deriveFissionConfig` with an owner fixture that has the host's
+ * A2: check `deriveBranchConfig` with an owner fixture that has the host's
  * shape. Compare tool names, system prompt input, and prompt cache key by
  * SHA-256. This checks construction inputs; it does not compare full tool
  * schemas or observe a provider payload. Any input mismatch fails the check.
  */
 await check("flow construction inputs match the owner fixture", async () => {
-	const { deriveFissionConfig, compareFissionFrames } = await import(
-		"../src/host/fission-session.mjs"
+	const { deriveBranchConfig, compareBranchFrames } = await import(
+		"../src/host/branch-session.mjs"
 	);
 	const prompt = ["You are the owner.", "Managed block."];
 	const owner = {
@@ -305,8 +305,8 @@ await check("flow construction inputs match the owner fixture", async () => {
 		settings: {},
 		asyncJobManager: {},
 		costGate: {},
-		getEnabledToolNames: () => ["read", "scope", "todo"],
-		getActiveToolNames: () => ["read", "scope"],
+		getEnabledToolNames: () => ["read", "scope_fork", "todo"],
+		getActiveToolNames: () => ["read", "scope_fork"],
 		getMountedXdevToolNames: () => [],
 		preparedExtensions: ["prepared"],
 		extensionPaths: [],
@@ -319,13 +319,13 @@ await check("flow construction inputs match the owner fixture", async () => {
 		getArtifactsDir: () => "/virtual/artifacts",
 		getHeader: () => ({}),
 	};
-	const derived = deriveFissionConfig({
+	const derived = deriveBranchConfig({
 		session: owner,
 		sessionManager: manager,
 		flowId: "flow-smoke-1",
 	});
 	assert(derived.ok === true, `derive refused: ${derived.reason ?? derived.detail}`);
-	const comparison = compareFissionFrames(owner, derived.config);
+	const comparison = compareBranchFrames(owner, derived.config);
 	assert(
 		comparison.mismatches.length === 0,
 		`construction-input mismatch: ${comparison.mismatches.join(", ")}`,

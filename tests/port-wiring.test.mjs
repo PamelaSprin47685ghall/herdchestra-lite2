@@ -93,18 +93,6 @@ test("observer off binds no provider hook", () => {
 	expect(events).toEqual([]);
 });
 
-test("folding off folds nothing and reports the empty result", () => {
-	const station = stationWith({ folding: "off" });
-	const folded = station.foldBatch({ manager: null, state: station.state, batch: [] });
-	expect(folded).toEqual({
-		foldedCount: 0,
-		savedTokens: 0,
-		rebased: false,
-		maxOrder: -1,
-		foldStartIdx: -1,
-	});
-});
-
 test("modelSwitch off never queues a switch", () => {
 	const station = stationWith({ modelSwitch: "off" }, { epoch: 0 });
 	queueModelSwitch(

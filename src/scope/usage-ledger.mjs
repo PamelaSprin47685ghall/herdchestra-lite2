@@ -11,12 +11,10 @@
 // station owns one ledger and passes it the callbacks it cannot import
 // without inverting a dependency.
 
-import { findActivePools } from "./accounting.mjs";
-import { poolTurnRent, turnOverheadCost } from "./degradation.mjs";
 import { modelCacheFor, touchModelCache } from "./state.mjs";
 import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
 import { charsToTokens } from "../host/pricing.mjs";
-import { toolCalls } from "../transcript/index.mjs";
+import { sliceChars, toolCalls } from "../transcript/index.mjs";
 import { createHash } from "node:crypto";
 
 const FALLBACK_TOKENS_PER_CHAR = 0.3;
@@ -70,11 +68,7 @@ function tokenFields(snap) {
  *   adjusts scope baselines; the station remains the single owner.
  * @param {() => object[]} options.contextMessages Current transcript messages.
  * @param {() => void} options.persist Record the new state in the session.
- * @param {(args: object) => object} options.foldBatch Fold a pool batch.
  * @param {(domain: string, error: unknown) => void} options.noteError
- * @param {(messages: object[]) => number} options.sliceChars Character weight.
- * @param {(record: object, tpc: number, key: string|null) => number}
- *   options.netRemovableTokens Tokens a collapse can still reclaim.
  * @param {(message: object) => string|null} options.modelKeyOf
  * @param {(ctx: object) => object|null} options.actualModelOf
  */
@@ -83,10 +77,7 @@ export function createUsageLedger(options) {
 		state,
 		contextMessages,
 		persist,
-		foldBatch,
 		noteError,
-		sliceChars,
-		netRemovableTokens,
 		modelKeyOf,
 		actualModelOf,
 	} = options;
@@ -171,15 +162,8 @@ export function createUsageLedger(options) {
 					sample.snap.output,
 				);
 			}
-			for (const scope of state.scopes ?? []) {
-				if (
-					scope.baseInputTokens === null ||
-					scope.baseInputTokens === undefined
-				) {
-					scope.baseInputTokens = tIn;
-					scope.baseModelKey = ledger.lastUsageModelKey;
-				}
-			}
+			// Receipt projection owns baselines now; a restored branch reads its
+			// usage snapshot and derives them from the live request.
 		} catch (error) {
 			// A host without a branch keeps the null baseline. The loss is
 			// recorded because every later scope baseline then starts from the
@@ -327,45 +311,6 @@ export function createUsageLedger(options) {
 							: (previous?.fixedOverheadTokens ?? null),
 				});
 			}
-			const callIds = new Set(toolCalls(message).map((call) => call.id));
-			for (const scope of state.scopes ?? []) {
-				if (callIds.has(scope.beginToolCallId)) continue;
-				if (
-					scope.baseInputTokens === null ||
-					scope.baseInputTokens === undefined
-				) {
-					scope.baseInputTokens = tIn;
-					scope.baseModelKey = key;
-				}
-			}
-			// A tool_call may close a scope before its assistant usage arrives.
-			// Complete the deferred measured interior once usage is visible.
-			const collapses = state.collapses ?? [];
-			for (let index = collapses.length - 1; index >= 0; index -= 1) {
-				const record = collapses[index];
-				if (record.endInputTokensPending !== true) continue;
-				if (!callIds.has(record.endToolCallId)) continue;
-				record.endInputTokens = tIn;
-				const base = record.baseInputTokens;
-				record.measuredModelKey = key;
-				record.interiorTokens =
-					key && typeof base === "number" && record.baseModelKey === key
-						? Math.max(0, tIn - base)
-						: Number.isFinite(record.interiorChars)
-							? Math.ceil(
-									charsToTokens(record.interiorChars, tokensPerCharFor(key)),
-								)
-							: null;
-				record.endInputTokensPending = false;
-				for (const scope of state.scopes ?? []) {
-					if (
-						scope.preBeginInputTokens === null ||
-						scope.preBeginInputTokens === undefined
-					) {
-						scope.preBeginInputTokens = tIn;
-					}
-				}
-			}
 			persist();
 		} catch (error) {
 			noteError("usage", error);
@@ -494,135 +439,9 @@ export function createUsageLedger(options) {
 		const saved = Number.isFinite(folded.savedChars)
 			? charsToTokens(Math.max(0, folded.savedChars), tokensPerCharFor(ledger.lastUsageModelKey))
 			: folded.savedTokens;
-		for (const scope of state.scopes ?? []) {
-			const orderMatch = /^scope-(\d+)$/.exec(String(scope.id ?? ""));
-			const order = orderMatch ? Number(orderMatch[1]) : 0;
-			if (Number.isInteger(folded.maxOrder) && order <= folded.maxOrder) {
-				continue;
-			}
-			if (
-				ledger.lastUsageModelKey &&
-				scope.baseModelKey === ledger.lastUsageModelKey &&
-				Number.isFinite(scope.baseInputTokens)
-			) {
-				scope.baseInputTokens = Math.max(0, scope.baseInputTokens - saved);
-			}
-		}
-		// The hot workbench is not an open scope: it is a closed record whose
-		// begin still stands after the fold. Its base was measured before the
-		// reclaimed bytes disappeared, so it has to move down with the branch.
-		// Without this, the next fold of that record computes
-		// `lastTotalInput - baseInputTokens` against a base that still counts
-		// the previous fold's content, and M_after collapses towards zero.
-		for (const record of state.collapses ?? []) {
-			if (!record || record.collapsed !== false) continue;
-			if (
-				Number.isInteger(folded.maxOrder) &&
-				Number.isInteger(record.order) &&
-				record.order <= folded.maxOrder
-			) {
-				continue;
-			}
-			if (
-				ledger.lastUsageModelKey &&
-				record.baseModelKey === ledger.lastUsageModelKey
-			) {
-				if (Number.isFinite(record.baseInputTokens)) {
-					record.baseInputTokens = Math.max(0, record.baseInputTokens - saved);
-				}
-				if (Number.isFinite(record.preBeginInputTokens)) {
-					record.preBeginInputTokens = Math.max(
-						0,
-						record.preBeginInputTokens - saved,
-					);
-				}
-			}
-			if (
-				(record.measuredModelKey ?? record.baseModelKey) === ledger.lastUsageModelKey &&
-				Number.isFinite(record.endInputTokens)
-			) {
-				record.endInputTokens = Math.max(0, record.endInputTokens - saved);
-			}
-		}
 		if (Number.isFinite(ledger.lastTotalInput)) {
 			ledger.lastTotalInput = Math.max(0, ledger.lastTotalInput - saved);
 		}
-	}
-
-	/** Accrue per-step cache rent and flood the pools at the 90% watermark. */
-	function accrue(original, pricing, contextTokens, key) {
-		const pools = findActivePools(state);
-		if (pools.length === 0) return false;
-		const tpc = tokensPerCharFor(key);
-		const pHit = Number.isFinite(pricing?.pHit) ? Math.max(0, pricing.pHit) : 1e-6;
-		const pMiss = Number.isFinite(pricing?.pMiss) ? Math.max(0, pricing.pMiss) : pHit;
-		const pOut = Number.isFinite(pricing?.pOut) ? Math.max(0, pricing.pOut) : 0;
-		const cw = Number.isFinite(pricing?.contextWindow)
-			? pricing.contextWindow
-			: null;
-		const nonContextTurnCost = turnOverheadCost({
-			pMiss,
-			pOut,
-			outputTokens: Number.isFinite(ledger.avgOutputTokens)
-				? ledger.avgOutputTokens
-				: ledger.lastOutputTokens,
-			turnGrowthTokens: Number.isFinite(ledger.avgTurnGrowthTokens)
-				? ledger.avgTurnGrowthTokens
-				: 0,
-		});
-		let dirty = false;
-		for (const group of pools) {
-			// Rent is a property of the level, not of one record: the
-			// degradation surcharge depends on the whole pool's size against
-			// the context it sits in. Distribute it by bytes so each record
-			// still carries its own share of the sunk cost.
-			const weights = group.pool.map((record) => ({
-				record,
-				tokens: netRemovableTokens(record, tpc, key),
-			}));
-			const groupTokens = weights.reduce((sum, item) => sum + item.tokens, 0);
-			if (!(groupTokens > 0)) continue;
-			const groupRent = poolTurnRent({
-				poolTokens: groupTokens,
-				contextTokens,
-				contextWindow: cw,
-				pHit,
-				nonContextTurnCost,
-			}).total;
-			if (!(groupRent > 0)) continue;
-			for (const { record, tokens } of weights) {
-				if (!(tokens > 0)) continue;
-				const share = groupRent * (tokens / groupTokens);
-				record.paidRentCost =
-					(Number.isFinite(record.paidRentCost) ? record.paidRentCost : 0) +
-					share;
-				dirty = true;
-			}
-		}
-		const emergency =
-			cw && Number.isFinite(contextTokens) && contextTokens >= 0.9 * cw;
-		if (emergency) {
-			// Always fold against the persisted tree. `original` is the live
-			// message array and may carry an unpushed tail, so slicing it and
-			// writing the result back to the branch would splice history the
-			// SessionManager never held.
-			void original;
-			const tree = contextMessages();
-			const batch = pools
-				.flatMap(({ pool }) => pool)
-				.sort((a, b) => a.order - b.order);
-			const folded = foldBatch({
-				batch,
-				base: tree,
-				epoch: state.epoch,
-			});
-			if (folded.rebased) {
-				rebase(folded);
-				dirty = true;
-			}
-		}
-		if (dirty) persist();
-		return dirty;
 	}
 
 	return Object.assign(ledger, {
@@ -637,6 +456,5 @@ export function createUsageLedger(options) {
 		pricingHint,
 		resetWatermark,
 		rebase,
-		accrue,
 	});
 }

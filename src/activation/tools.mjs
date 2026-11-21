@@ -6,13 +6,19 @@ import {
 	pinParameters,
 	AMEND_DESCRIPTION,
 	amendParameters,
-	SCOPE_DESCRIPTION,
-	scopeParameters,
+	FORK_DESCRIPTION,
+	forkParameters,
+	JOIN_DESCRIPTION,
+	joinParameters,
+	RETURN_DESCRIPTION,
+	returnParameters,
 } from "../tools/descriptions.mjs";
 import {
 	amendTicket,
+	forkTicket,
+	joinTicket,
 	pinTicket,
-	scopeTicket,
+	returnTicket,
 } from "../tools/tickets.mjs";
 import {
 	TODO_DESCRIPTION,
@@ -21,22 +27,38 @@ import {
 } from "../tools/index.mjs";
 
 export function wireTools(pi, registry) {
+	// The fork/join face: one left bracket and the two right brackets that close
+	// it. Every call mutates one session-wide ledger, so a parent and its
+	// children agree on which bracket is still open.
 	pi.registerTool({
-		name: "scope",
-		label: "Scope",
-		description: SCOPE_DESCRIPTION,
-		parameters: scopeParameters,
-		executionMode: "sequential",
-		concurrency: "exclusive",
-		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-			scopeTicket(registry.stationFor(ctx), toolCallId, params, ctx),
+		name: "scope_fork",
+		label: "Fork Scope",
+		description: FORK_DESCRIPTION,
+		parameters: forkParameters,
+		execute: (toolCallId, params, signal, _onUpdate, ctx) =>
+			forkTicket(registry.stationFor(ctx), toolCallId, params, ctx, signal),
+	});
+	pi.registerTool({
+		name: "scope_join",
+		label: "Join Child",
+		description: JOIN_DESCRIPTION,
+		parameters: joinParameters,
+		execute: (toolCallId, params, signal, _onUpdate, ctx) =>
+			joinTicket(registry.stationFor(ctx), toolCallId, params, ctx, signal),
+	});
+	pi.registerTool({
+		name: "scope_return",
+		label: "Return Scope",
+		description: RETURN_DESCRIPTION,
+		parameters: returnParameters,
+		execute: (toolCallId, params, signal, _onUpdate, ctx) =>
+			returnTicket(registry.stationFor(ctx), toolCallId, params, ctx, signal),
 	});
 	pi.registerTool({
 		name: "amend",
 		label: "Amend",
 		description: AMEND_DESCRIPTION,
 		parameters: amendParameters,
-		executionMode: "sequential",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 			amendTicket(registry.stationFor(ctx), toolCallId, params),
 	});
@@ -45,7 +67,6 @@ export function wireTools(pi, registry) {
 		label: "Pin",
 		description: PIN_DESCRIPTION,
 		parameters: pinParameters,
-		executionMode: "sequential",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 			pinTicket(registry.stationFor(ctx), toolCallId, params),
 	});
@@ -57,8 +78,6 @@ export function wireTools(pi, registry) {
 		label: "Todo",
 		description: TODO_DESCRIPTION,
 		parameters: TODO_PARAMETERS,
-		executionMode: "sequential",
-		concurrency: "exclusive",
 		strict: true,
 		lenientArgValidation: true,
 		loadMode: "essential",

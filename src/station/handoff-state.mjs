@@ -4,10 +4,13 @@ import { appendHandoffCompaction } from "../handoff/session.mjs";
 import { setAgentMessages } from "../host/capture.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
 import { record } from "../host/diagnostics.mjs";
-import { createStageFlags, truncateForHostBoundary } from "../scope/index.mjs";
+import { truncateForHostBoundary, openChildren, readyChildren } from "../scope/index.mjs";
 import {
 	applyLedgerEvaluation,
+	applyRetirement,
 	beginGenerationAfterHandoff,
+	handoffDemand,
+	ledgerStats,
 	successorOpeningText,
 } from "../relay/index.mjs";
 
@@ -40,13 +43,23 @@ function advanceRelayForHandoff(station, options = {}) {
 		at: Number.isFinite(options.at) ? options.at : Date.now(),
 		fromGeneration: relay.generation,
 	});
-	// A new generation starts a new line of work. The predecessor's S2/S3/S4
-	// runs prove nothing about what the successor intends, so every gated stage
-	// flag returns to false in the same transaction: `direct-execution` is
-	// gated again until this holder opens all three stages itself.
-	station.state.stageFlags = createStageFlags();
 	station.persist();
 	return true;
+}
+
+/**
+ * How many fork results this station still owes a receive. A running child and
+ * a returned child that no join has taken are both unreceived. A child branch
+ * never evaluates the relay, so only the root counts here.
+ */
+function unreceivedChildren(station) {
+	const ownerId =
+		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
+	if (ownerId !== null) return 0;
+	const ledger =
+		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
+	if (!ledger) return 0;
+	return openChildren(ledger, "root").length + readyChildren(ledger, "root").length;
 }
 
 function recordLedgerEvaluation(station, phases, op, options = {}) {
@@ -61,18 +74,86 @@ function recordLedgerEvaluation(station, phases, op, options = {}) {
 		};
 	}
 	const before = station.state.relay;
+	const stats = ledgerStats(phases);
+	// An empty ledger is a claim that nothing remains. While this root still
+	// owns an unreceived child, that claim is false: the write is accepted and
+	// reported, but the relay does not advance, no handoff is armed, and no
+	// stop is allowed. The tool itself stays available.
+	if (options.isError !== true && op !== "view" && stats.empty) {
+		const unreceived = unreceivedChildren(station);
+		if (unreceived > 0) {
+			return { relay: before, stats, action: "held", changed: false, unreceived };
+		}
+	}
 	const applied = applyLedgerEvaluation(before, phases, {
 		op,
 		...options,
 	});
 	station.state.relay = applied.relay;
-	// Every full-flow transition starts a new line of work: evidence that the
-	// previous line's stages ran proves nothing about this one.
-	if ((before?.fullFlow === true) !== (applied.relay.fullFlow === true)) {
-		station.state.stageFlags = createStageFlags();
-	}
 	station.persist();
 	return applied;
+}
+
+/**
+ * Record one natural stop as the empty-ledger submission it is.
+ *
+ * A stop outside every scope is not a violation to correct: it is the same
+ * evaluation a holder would submit with `todo({ list: [] })`. The transition
+ * decides the outcome. When the stop arms a handoff, the demand goes out as a
+ * user prompt carrying the same text the todo result carries, so the holder
+ * writes the report immediately instead of receiving a second wording.
+ */
+function recordRetirement(station) {
+	// `none` owes nothing, so a retirement must not arm a handoff either.
+	if (station.registry?.ports?.().relay === "none") return null;
+	const applied = applyRetirement(station.state.relay);
+	station.state.relay = applied.relay;
+	station.persist();
+	return applied;
+}
+
+/**
+ * Record one natural stop outside every scope.
+ *
+ * A stop is a submission, never a violation. With a non-empty ledger it is a
+ * retirement: the holder is exhausted, the ledger is inherited, and the next
+ * generation continues the work. Otherwise it is the empty evaluation the same
+ * holder would have submitted with `todo({ list: [] })`. Either way the
+ * transition decides, and a handoff it arms sends the one demand as a user
+ * prompt.
+ */
+function recordNaturalStop(station, ctx) {
+	if (station.registry?.ports?.().relay === "none") return null;
+	const relay = station.state.relay;
+	if (!relay || relay.handoffPending || relay.canStop) return null;
+	// After a handoff the recorded ledger belongs to the predecessor; the
+	// successor's own stop is its first evaluation, so it is judged as empty.
+	const beforeFirstEvaluation =
+		relay.generation > 0 && relay.firstEvaluation === null;
+	const retired = !beforeFirstEvaluation && relay.lastLedger?.empty === false;
+	const applied = retired
+		? recordRetirement(station)
+		: recordLedgerEvaluation(station, [], "natural-stop");
+	if (!applied || applied.action === null) return applied;
+	if (applied.action !== "handoff" && applied.action !== "retire") return applied;
+	if (!armHandoff(station, ctx)) return applied;
+	// The demand rides the prompt. If the next request cannot see it, the
+	// context receipt supplies it instead.
+	if (!station.deliverUserMessage(handoffDemand())) {
+		record("handoff", new Error("the handoff demand could not be sent as a prompt"), {
+			stage: "natural-stop-prompt",
+		});
+	}
+	return applied;
+}
+
+/** Clear the inherited-ledger requirement once the successor has looked. */
+function markInheritedLedgerViewed(station) {
+	const relay = station.state.relay;
+	if (!relay?.viewRequired) return false;
+	station.state.relay = { ...relay, viewRequired: false };
+	station.persist();
+	return true;
 }
 
 function captureHandoffReport(station, text) {
@@ -137,4 +218,6 @@ export {
 	commitSelfHandoff,
 	advanceRelayForHandoff,
 	recordLedgerEvaluation,
+	recordNaturalStop,
+	markInheritedLedgerViewed,
 };

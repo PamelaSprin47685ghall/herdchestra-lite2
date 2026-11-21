@@ -1,200 +1,87 @@
-// Station texts: every model-facing scope string. The prose lives in
+// Station texts: every model-facing receipt string. The prose lives in
 // resources/prompts/receipts/scope.md; this module chooses and composes it.
 
-import { budgetText, currentScope, findPendingReportElder } from "../scope/index.mjs";
-import { DECISION_FRAMING } from "../scope/stages.mjs";
-import { handoffToolBlockedReason } from "../relay/index.mjs";
+import { forkBudgetText } from "../scope/index.mjs";
+import { handoffDemand } from "../relay/index.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
+
+function hasDemand(message, demand, exact) {
+	if (message?.excludeFromContext === true) return false;
+	const { content } = message;
+	const matches = (text) => typeof text === "string" &&
+		(exact ? text === demand : text.includes(demand));
+	return typeof content === "string" ? matches(content) :
+		Array.isArray(content) && content.some((block) => block?.type === "text" && matches(block.text));
+}
+
+export function handoffDemandVisible(relay, history) {
+	if (!relay?.handoffPending || !history) return false;
+	const demand = handoffDemand();
+	for (const message of history.pending) {
+		if (message?.role === "user" && hasDemand(message, demand, true)) return true;
+	}
+	// A natural-stop prompt in committed history must be new input, not a
+	// prompt the model has answered. A todo result identifies its generation.
+	let newInput = true;
+	for (let index = history.prefix.length - 1; index >= 0; index -= 1) {
+		const message = history.prefix[index];
+		if (message?.role === "assistant") newInput = false;
+		if (message?.role === "user" && newInput && hasDemand(message, demand, true)) return true;
+		const reported = message?.details?.relay;
+		if (message?.role === "toolResult" && message.toolName === "todo" && message.isError !== true &&
+			reported?.generation === relay.generation && reported.handoffPending === true &&
+			reported.lastLedger?.at === relay.lastLedger?.at && hasDemand(message, demand, false)) return true;
+	}
+	return false;
+}
 
 const T = loadDoc("receipts/scope");
 
-function stageLine(scope) {
-	if (scope.stage === "direct-execution") return T["stage-line.direct"];
-	return render(T["stage-line"], { stage: scope.stage });
+function branchBudget(record) {
+	return forkBudgetText(record) || "none";
 }
 
-function beginText(scope, bounded = true) {
-	const framing = scope.stage === DECISION_FRAMING;
-	return render(T.begin, {
-		intent: scope.intent,
-		stage_line: stageLine(scope),
-		budget: budgetText(scope, Date.now(), bounded) || "none",
-		closing_line: framing ? T["begin.herd"] : T["begin.close"],
-	});
-}
-
-function endText(
-	report,
-	foldedReport,
-	transitioning = false,
-	remainingScope = null,
-	relayOn = true,
-	herdMode = false,
-	bounded = true,
-) {
-	const lines = [];
-	if (transitioning) {
-		lines.push(T["end.transitioning"]);
-	} else if (remainingScope) {
-		lines.push(
-			render(T["end.inside"], {
-				intent: remainingScope.intent,
-				budget: budgetText(remainingScope, Date.now(), bounded) || "none",
-			}),
-		);
-		if (remainingScope.stage) lines.push(stageLine(remainingScope));
-	} else {
-		lines.push(T["end.outside"]);
-	}
-	if (foldedReport !== null) {
-		lines.push(render(T["end.elder-folded"], { report: foldedReport }));
-	}
-	lines.push(T["end.keeps-turns"]);
-	if (relayOn) {
-		lines.push(remainingScope ? T["end.todo-inside"] : T["end.todo-outside"]);
-	}
-	if (!transitioning) {
-		if (herdMode) {
-			lines.push(T["end.herd"]);
-		} else if (remainingScope) {
-			lines.push(T["end.continue-inside"]);
-		} else if (relayOn) {
-			lines.push(T["end.promoted"]);
-		} else {
-			lines.push(T["end.finish"]);
-		}
-	}
-	return lines.join("\n");
-}
-
-function amendText(applied, reflection = "", bounded = true) {
+function amendText(applied, record = null) {
 	const refunded = Number.isInteger(applied.refunded) ? applied.refunded : 0;
-	const residual = Array.isArray(applied.residualDefers)
-		? applied.residualDefers.length
-		: 0;
+	const text = render(T["amend.undone"], { refunded });
+	return record ? `${text}\n${render(T["amend.remaining"], { budget: branchBudget(record) })}` : text;
+}
+
+/** A steer when a branch tries to stop with unreceived work. */
+export function insideScopeNudge(openCount) {
+	return render(T["scope.stop-blocked"], { count: openCount });
+}
+
+export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false) {
 	const lines = [];
-	if (reflection !== "") {
-		lines.push(render(T["amend.replaced"], { text: reflection }));
+	if (branch) {
+		lines.push(render(T["receipt.branch"], { budget: branchBudget(branch) }));
 	}
-	lines.push(
-		T["amend.undone"],
-		refunded > 0
-			? render(T["amend.refunded"], { count: refunded })
-			: T["amend.no-refund"],
-		render(T["amend.remaining"], {
-			budget: budgetText(applied.scope, Date.now(), bounded) || "none",
-		}),
-	);
-	if (residual > 0) {
-		lines.push(render(T["amend.residual"], { count: residual }));
+	if (openCount > 0) {
+		lines.push(render(T["scope.unreceived"], { count: openCount }));
 	}
-	return lines.join("\n");
-}
-
-function leaveFramingText(scope) {
-	return scope.stage === DECISION_FRAMING ? ` ${T["leave-framing"]}` : "";
-}
-
-function insideScopeNudge(state) {
-	const scope = currentScope(state);
-	if (!scope) return "";
-	const fullFlow = state.relay?.fullFlow === true;
-	return render(fullFlow ? T["inside-nudge"] : T["inside-nudge.simple"], {
-		level: state.scopes.length,
-		intent: JSON.stringify(scope.intent),
-		leave_framing: leaveFramingText(scope),
-	});
-}
-
-/** Dynamic, persistent receipt. Appended to history only when text changes. */
-function clockLine(state, now = Date.now()) {
-	const started = Number.isFinite(state?.startedAt) ? state.startedAt : now;
-	const elapsed = Math.max(0, now - started);
-	const minutes = Math.floor(elapsed / 60000);
-	const seconds = Math.floor((elapsed % 60000) / 1000);
-	return `UTC now ${new Date(now).toISOString()}, ${minutes}m${String(seconds).padStart(2, "0")}s since this session began.`;
-}
-
-export function skillReceiptText(state, relayOn = true, bounded = true) {
-	const scope = currentScope(state);
-	const fullFlow = state.relay?.fullFlow === true;
-	const boundary = Number.isInteger(state.relay?.generation) && state.relay.generation >= 0
-		? state.relay.generation
-		: 0;
-	const pendingElder = findPendingReportElder(
-		state,
-		scope?.id ?? null,
-		boundary,
-		Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
-	);
-	const lines = scope
-		? [
-			render(T["receipt.inside"], {
-				level: state.scopes.length,
-				intent: JSON.stringify(scope.intent),
-				budget: budgetText(scope, Date.now(), bounded) || "none",
-			}),
-		]
-		: [T["receipt.outside"]];
-	lines.push(T["language"]);
-	lines.push(
-		render(T["receipt.herd"], { mode: state.herdMode ? "on" : "off" }),
-	);
-	if (scope?.stage) {
-		lines.push(render(T["receipt.stage"], { stage: scope.stage }));
+	const relay = state.relay;
+	const fullFlow = relayOn && relay?.fullFlow === true;
+	if (fullFlow && relay.firstEvaluation === null) {
+		lines.push(T["receipt.no-ledger"]);
 	}
-	// `begin.elder_report` tells the model to summarize the pending elder, but
-	// only this receipt knows whether one exists. Naming it here is what keeps
-	// that parameter honest; a generic reminder would be ignored.
-	lines.push(
-		pendingElder
-			? render(T["receipt.pending-elder"], {
-				intent: JSON.stringify(pendingElder.intent ?? ""),
-			})
-			: T["receipt.no-pending-elder"],
-	);
-	lines.push(clockLine(state));
+	if (!branch && relayOn && relay?.viewRequired && (state.herdMode || !relay.handoffPending)) {
+		lines.push(T["receipt.view-required"]);
+	}
 	if (state.herdMode) {
-		lines.push(T["receipt.herd-rules"]);
-	} else if (relayOn && fullFlow) {
-		if (state.relay?.firstEvaluation === null) {
-			lines.push(T["receipt.no-ledger"]);
+		lines.push(T["receipt.herd"]);
+	} else {
+		lines.push(T["receipt.herd-off"]);
+	}
+	if (!state.herdMode && !branch && relayOn) {
+		if (relay?.handoffPending) {
+			if (openCount > 0) lines.push(T["receipt.close-handoff"]);
+			else if (!demandVisible) lines.push(handoffDemand());
+		} else if (openCount === 0) {
+			lines.push(T[relay?.canStop ? "receipt.can-stop" : fullFlow ? "receipt.todo" : "receipt.simple-outside"]);
 		}
-		if (scope?.stage === DECISION_FRAMING) {
-			lines.push(T["receipt.close-framing"]);
-		}
-		if (state.relay?.handoffPending) {
-			lines.push(
-				scope ? T["receipt.close-handoff"] : handoffToolBlockedReason(),
-			);
-		} else if (!scope && state.relay?.canStop) {
-			lines.push(T["receipt.can-stop"]);
-		} else {
-			lines.push(T["receipt.todo"]);
-		}
-	} else if (relayOn) {
-		lines.push(scope ? T["receipt.simple-inside"] : T["receipt.simple-outside"]);
-	} else if (!scope) {
-		lines.push(T["receipt.finish"]);
 	}
 	return `<skill version="1.0">${lines.join(" ")}</skill>`;
 }
 
-function insideScopeText(state) {
-	const scope = currentScope(state);
-	if (!scope) return "";
-	const fullFlow = state.relay?.fullFlow === true;
-	return render(fullFlow ? T["inside-text"] : T["inside-text.simple"], {
-		level: state.scopes.length,
-		intent: JSON.stringify(scope.intent),
-		leave_framing: leaveFramingText(scope),
-	});
-}
-
-export {
-	beginText,
-	endText,
-	amendText,
-	insideScopeNudge,
-	insideScopeText,
-};
+export { amendText };

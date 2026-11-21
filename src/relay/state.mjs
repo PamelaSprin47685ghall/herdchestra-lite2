@@ -30,6 +30,7 @@ export function createRelay() {
 		handoffError: null,
 		lastLedger: null,
 		lastHandoff: null,
+		viewRequired: false,
 		fullFlow: false,
 	};
 }
@@ -88,6 +89,7 @@ export function copyRelay(relay) {
 			typeof source.handoffError === "string" ? source.handoffError : null,
 		lastLedger: copyLedger(source.lastLedger),
 		lastHandoff: copyLastHandoff(source.lastHandoff),
+		viewRequired: source.viewRequired === true,
 	};
 }
 
@@ -106,6 +108,9 @@ export function isValidRelay(value) {
 	if (typeof value.canStop !== "boolean") return false;
 	if (typeof value.handoffPending !== "boolean") return false;
 	if (typeof value.promotionInvalidated !== "boolean") return false;
+	if (value.viewRequired !== undefined && typeof value.viewRequired !== "boolean") {
+		return false;
+	}
 	if (
 		value.handoffError !== null &&
 		typeof value.handoffError !== "string"

@@ -92,17 +92,22 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 	const at = finiteNumber(options.at) ? options.at : Date.now();
 	const lastLedger = { ...stats, at };
 	const first = current.firstEvaluation === null;
+	// Ending takes two empty evaluations: the one that armed this handoff, and
+	// this generation's first. A handoff armed by a retirement carries the
+	// non-empty ledger forward, so the stop it allows is another retirement, not
+	// an end. A session with no ledger at all has nothing outstanding, so it
+	// reads as empty here.
+	const incomingEmpty = current.lastLedger === null || current.lastLedger.empty === true;
 	if (stats.empty) {
 		// The successor's FIRST empty evaluation ends the chain and returns the
 		// session to simple mode. A later empty write by that promoted holder is
 		// a new ledger submission: it must not force another handoff, but it
 		// turns the full flow back on. The holder keeps `canStop`, so it may
 		// still write the final answer; a new scope invalidates the promotion
-		// and the stage gate applies again.
 		const promoted =
 			current.generation > 0 &&
 			!current.promotionInvalidated &&
-			(first || current.canStop === true);
+			(first ? incomingEmpty : current.canStop === true);
 		if (promoted) {
 			const terminating = first;
 			return {
@@ -114,6 +119,7 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 					promotionInvalidated: false,
 					handoffError: null,
 					lastLedger,
+					viewRequired: false,
 					fullFlow: !terminating,
 				},
 				stats,
@@ -128,6 +134,9 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 				canStop: false,
 				handoffPending: true,
 				lastLedger,
+				// A handoff does not prove the inherited ledger was read. Only a
+				// view clears that debt, so it survives to the next holder.
+				viewRequired: current.viewRequired,
 				fullFlow: true,
 			},
 			stats,
@@ -148,6 +157,35 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 		},
 		stats,
 		action: first ? "rework" : "continue",
+		changed: true,
+	};
+}
+
+/**
+ * A natural stop outside every scope is an empty-ledger submission, not a
+ * violation. It runs the same transition as `todo({ list: [] })`, so ending a
+ * session still takes two empty evaluations: the stop that arms the handoff,
+ * and the successor's first evaluation.
+ */
+export function applyNaturalStop(relay, options = {}) {
+	return applyLedgerEvaluation(relay, [], { ...options, op: "natural-stop" });
+}
+
+/**
+ * A stop with a non-empty ledger is a retirement, not a violation: the holder
+ * is exhausted, the ledger stays on record, and the next generation continues
+ * the work. A retirement is not an empty evaluation, so it never promotes.
+ */
+export function applyRetirement(relay) {
+	const current = copyRelay(relay);
+	const stats = current.lastLedger;
+	if (current.canStop || current.handoffPending) {
+		return { relay: current, stats, action: null, changed: false };
+	}
+	return {
+		relay: { ...current, handoffPending: true, fullFlow: true, viewRequired: true },
+		stats,
+		action: "retire",
 		changed: true,
 	};
 }

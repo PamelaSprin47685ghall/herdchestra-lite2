@@ -1,7 +1,6 @@
 import { preparseModelSpec } from "../host/pricing.mjs";
 import { capabilities, modelOf, thinkingOf } from "../host/adapter.mjs";
 import { record } from "../host/diagnostics.mjs";
-import { currentScope } from "../scope/index.mjs";
 
 export function modelKey(model) {
 	const id = model?.id ?? model?.model;
@@ -60,20 +59,9 @@ export function observeActualModel(station, ctx) {
 	station.usage.lastCtxModel = live;
 	const { state } = station;
 	if (state.modelRecovery || station.modelSwitchInFlight || station.pendingModelSwitch) return;
-	const scope = currentScope(state);
 	const spec = liveSelector(ctx, key);
-	const currentKey = scope ? scope.modelKey : state.baseModelKey;
-	const currentSpec = scope ? scope.modelSpec : state.baseModelSpec;
-	if (currentKey === key && (spec === key || currentSpec === spec)) return;
-	if (!state.baseModelKey && scope && !scope.previousModelKey) {
-		state.baseModelKey = key;
-		state.baseModelSpec = spec;
-		for (const active of state.scopes) {
-			active.previousModelKey ??= key;
-			active.previousModelSpec ??= spec;
-		}
-	}
-	setChoice(state, scope, spec, key);
+	if (state.baseModelKey === key && (spec === key || state.baseModelSpec === spec)) return;
+	setChoice(state, null, spec, key);
 	station.persist();
 }
 
@@ -107,7 +95,7 @@ export function takePendingModelSwitch(station, ctx) {
 			} else {
 				queueModelSwitch(station,
 					{ spec: recovery.targetSpec, key: recovery.expectedKey }, { spec, key },
-					currentScope(station.state)?.id ?? null, true);
+					null, true);
 			}
 		}
 	}
@@ -121,13 +109,12 @@ export function reconcileActualModel(station, ctx, req, outcome) {
 	const live = outcome?.actualModel ?? outcome?.model ?? actualModel(ctx);
 	const key = modelKey(live) ?? req.fallbackKey;
 	if (station.modelSwitchInFlight === req) station.modelSwitchInFlight = null;
-	const scope = currentScope(station.state);
-	if ((scope?.id ?? null) !== req.scopeId || station.state.epoch !== req.epoch) return key;
+	if (station.state.epoch !== req.epoch) return key;
 	if (live) station.usage.lastCtxModel = live;
 	const observedSpec = key ? liveSelector(ctx, key) : null;
 	const spec = observedSpec && observedSpec !== key ? observedSpec :
 		outcome?.ok ? req.targetSpec : key === req.fallbackKey ? req.fallbackSpec : key;
-	if (key) setChoice(station.state, scope, spec ?? key, key);
+	if (key) setChoice(station.state, null, spec ?? key, key);
 	station.state.modelRecovery = null;
 	station.persist();
 	return key ?? "unknown";

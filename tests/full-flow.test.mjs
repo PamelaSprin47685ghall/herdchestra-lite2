@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { createRelay, copyRelay, isValidRelay } from "../src/relay/state.mjs";
 import {
 	applyLedgerEvaluation,
+	applyNaturalStop,
+	applyRetirement,
 	beginGenerationAfterHandoff,
 	invalidatePromotion,
 } from "../src/relay/ledger.mjs";
@@ -13,6 +15,38 @@ const EMPTY = [];
 function write(relay, phases, op = "init") {
 	return applyLedgerEvaluation(relay, phases, { op, at: 1 });
 }
+
+describe("retirement hands the ledger to a successor", () => {
+	test("a retirement keeps the ledger and never promotes", () => {
+		const retired = applyRetirement(write(createRelay(), WORK).relay);
+		expect(retired.action).toBe("retire");
+		expect(retired.relay.handoffPending).toBe(true);
+		expect(retired.relay.viewRequired).toBe(true);
+		expect(retired.relay.lastLedger.empty).toBe(false);
+		expect(retired.relay.lastLedger.open).toBe(1);
+	});
+
+	test("the successor of a retirement must empty twice before it may stop", () => {
+		const retired = applyRetirement(write(createRelay(), WORK).relay);
+		const carried = {
+			...retired.relay,
+			generation: 1,
+			handoffPending: false,
+			firstEvaluation: null,
+		};
+		// The stop is an empty evaluation, but the inherited ledger is not empty,
+		// so it hands off again instead of ending the chain.
+		const first = applyNaturalStop(carried, { at: 2 });
+		expect(first.action).toBe("handoff");
+		expect(first.relay.canStop).toBe(false);
+		const second = applyNaturalStop(
+			{ ...first.relay, generation: 2, handoffPending: false, firstEvaluation: null },
+			{ at: 3 },
+		);
+		expect(second.action).toBe("promoted");
+		expect(second.relay.canStop).toBe(true);
+	});
+});
 
 describe("full flow switch", () => {
 	test("starts simple and a non-empty ledger turns the full flow on", () => {
@@ -136,11 +170,9 @@ describe("full flow switch", () => {
 			}),
 		).toContain("Flow: full flow");
 		const promoted = { ...createRelay(), generation: 2, canStop: true };
-		expect(relayStatusText(promoted, null, { action: null })).toContain(
-			"Flow: simple",
-		);
-		expect(relayStatusText(promoted, null, { action: null })).not.toContain(
-			"no ledger",
-		);
+		const text = relayStatusText(promoted, null, { action: null });
+		expect(text).toContain("Flow: simple");
+		expect(text).toContain("Can stop now: yes");
+		expect(text).toContain("Next: Write the final answer.");
 	});
 });

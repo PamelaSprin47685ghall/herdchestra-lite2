@@ -204,7 +204,7 @@ function prepareState(registration, binding, signal, context, persistedStamp) {
 				.map((message) => message.toolCallId),
 		});
 	}
-	const receipt = station.prepareRequest(ctx, split.prefix.at(-1));
+	const receipt = station.prepareRequest(ctx, split.prefix.at(-1), split);
 	// Boundary observation can advance the epoch synchronously. Only later
 	// changes, while a restore ticket is pending, invalidate this request.
 	const request = { original, items, split, stamp: stateStamp(station) };
@@ -216,17 +216,49 @@ function prepareState(registration, binding, signal, context, persistedStamp) {
 	return commitPrepared(registration, binding, signal, context, request, receipt);
 }
 
+/**
+ * A receipt commit can fail its prefix check when the journal and the live
+ * request end at different messages — a fork child inherits the parent's
+ * prefix while its own branch journal starts at the fork. The receipt only
+ * de-duplicates the skill injection; the request itself is still valid. Fail
+ * the request open, record why, and let the host's context stand: a dead turn
+ * (the screen sits on "Working…" forever) is worse than a missing receipt.
+ */
+function tolerateCommitFailure(error) {
+	if (error?.code !== "CONTEXT_SKILL_COMMIT_FAILED") return false;
+	record("context", error, { phase: error.phase ?? "commit", tolerated: true });
+	return true;
+}
+
+/** Run one preparation step; a receipt-commit failure degrades instead of throwing. */
+function guardedCommit(action) {
+	try {
+		const result = action();
+		if (result && typeof result.then === "function") {
+			return result.catch((error) => {
+				if (!tolerateCommitFailure(error)) throw error;
+			});
+		}
+		return result;
+	} catch (error) {
+		if (!tolerateCommitFailure(error)) throw error;
+		return undefined;
+	}
+}
+
 function prepare(registration, signal, context) {
 	checkSignal(signal);
 	const binding = registration.binding;
 	const settle = binding.session.settleInFlightMessagePersistence;
 	if (typeof settle === "function") {
 		const stamp = stateStamp(binding.station);
-		return Promise.resolve(settle.call(binding.session)).then(() =>
-			prepareState(registration, binding, signal, context, stamp),
+		return guardedCommit(() =>
+			Promise.resolve(settle.call(binding.session)).then(() =>
+				prepareState(registration, binding, signal, context, stamp),
+			),
 		);
 	}
-	return prepareState(registration, binding, signal, context);
+	return guardedCommit(() => prepareState(registration, binding, signal, context));
 }
 
 /** Install one removable hook per agent. Later calls update its binding. */

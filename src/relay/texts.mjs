@@ -19,14 +19,20 @@ function flowLabel(relay) {
 	return relay.fullFlow === true ? L["flow-full"] : L["flow-simple"];
 }
 
-function nextStepText(relay, stats, action) {
+function nextStepText(relay, stats, action, options = {}) {
 	switch (action) {
 		case "promoted":
 			return R["next.promoted"];
 		case "reopened":
 			return R["next.reopened"];
 		case "handoff":
-			return R["next.handoff"];
+			return handoffDemand();
+		case "retire":
+			return R["next.retire"];
+		case "held":
+			return render(R["next.held-children"], {
+				open: Number.isInteger(options.unreceived) ? options.unreceived : 0,
+			});
 		case "rework":
 			return relay.generation === 0
 				? R["next.rework-first"]
@@ -34,6 +40,9 @@ function nextStepText(relay, stats, action) {
 		case "continue":
 			return R["next.continue"];
 		default:
+			if (relay.handoffPending) return handoffDemand();
+			if (relay.canStop) return R["next.finish"];
+			if (relay.viewRequired) return R["inherited-ledger"];
 			if (relay.fullFlow !== true) return R["next.simple"];
 			return stats ? R["next.unchanged"] : R["next.none"];
 	}
@@ -80,31 +89,29 @@ export function relayStatusText(relay, stats, options = {}) {
 	}
 	lines.push(
 		render(R["status.next"], {
-			next: nextStepText(current, ledger, options.action ?? null),
+			next: nextStepText(current, ledger, options.action ?? null, options),
 		}),
 	);
 	return lines.join("\n");
 }
 
-export function handoffFocus(relay) {
-	const current = copyRelay(relay);
-	return [
-		render(R["handoff-focus.lead"], { next: current.generation + 1 }),
-		R["successor-rule"],
-		R["stop-rule"],
-		R["successor-mandate"],
-		R["requirements-reminder"],
-		R["pinned-reading"],
-		render(R["handoff-focus.tail"], { prev: current.generation }),
-	].join("\n");
+/** What one deep todo call did, and what it did not do. */
+export function inScopeTodoText(level) {
+	return render(R["next.inside-scope"], {
+		level: Number.isInteger(level) && level > 0 ? level : 1,
+	});
+}
+
+/**
+ * The todo result and the natural-stop prompt use this same demand. A context
+ * receipt supplies it only when the primary copy is not visible.
+ */
+export function handoffDemand() {
+	return R["handoff-demand"];
 }
 
 export function handoffToolBlockedReason() {
 	return R["handoff-blocked"];
-}
-
-export function handoffEmptyReportNudge() {
-	return R["handoff-empty-report"];
 }
 
 export function successorOpeningText(relay, report, pins = []) {
@@ -112,21 +119,20 @@ export function successorOpeningText(relay, report, pins = []) {
 	const trimmed = typeof report === "string" ? report.trim() : "";
 	return [
 		trimmed,
-		"",
 		"---",
 		render(R["successor-opening.head"], {
 			next: current.generation + 1,
 			prev: current.generation,
 		}),
+		R["successor-mandate"],
+		current.viewRequired ? R["inherited-ledger"] : null,
 		R["successor-rule"],
 		R["stop-rule"],
-		R["successor-mandate"],
-		R["requirements-reminder"],
-		R["pinned-reading"],
-		render(R["successor-opening.tail"], {
+		pins.length > 0 ? R["pinned-reading"] : null,
+		render(R["successor-opening.pins"], {
 			pins: pins.length > 0 ? pins.join("\n\n---\n\n") : L["no-pins"],
 		}),
-	].join("\n");
+	].filter(Boolean).join("\n\n");
 }
 
 export function successorStartNudge(relay) {
@@ -134,24 +140,7 @@ export function successorStartNudge(relay) {
 	return render(R["successor-start"], { generation: current.generation });
 }
 
-export function firstEvaluationNudge() {
-	return render(R["first-evaluation"], { stop_rule: R["stop-rule"] });
-}
-
-export function openLedgerNudge(relay, stats) {
-	return render(R["open-ledger"], { status: relayStatusText(relay, stats) });
-}
-
-export function handoffPendingNudge(relay) {
-	return render(R["handoff-pending-nudge"], {
-		status: relayStatusText(relay, relay?.lastLedger ?? null),
-	});
-}
-
 export function handoffFailureNudge(error) {
 	const message = String(error?.message ?? error ?? L["unknown-error"]);
-	return render(R["handoff-failure"], {
-		message,
-		stop_rule: R["stop-rule"],
-	});
+	return render(R["handoff-failure"], { message });
 }

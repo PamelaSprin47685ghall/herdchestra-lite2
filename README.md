@@ -1,127 +1,78 @@
 # Herdchestra Lite 2
 
-Herdchestra Lite 2 adds budgeted work scopes to omp. A scope opens as a fission batch of one or more flows, controls which tools can run and how many times they can run in each flow, and closes with `scope({ end: true })`.
+Herdchestra Lite 2 gives omp parallel work that returns to the branch that asked for it. A parent calls `scope_fork` with one item per child; each child works in its own scope with its own budget, time and model, then `scope_return` submits its record. The parent calls `scope_join` to receive one finished child as a tool receipt. The parent keeps its own model, context and message line; it never becomes the child and the child never becomes the parent.
 
-When a scope folds, its user messages move before its opening `scope` call. Their content and order stay intact. The scope summary records outcomes and remaining work without repeating those messages.
+## Fork, join and return
 
-## Fission batches
+`scope_fork({ forks: [...] })` declares what remains and starts every item marked `blocked: false`. Each item carries `scopeId`, `intent`, `blocked`, `budget`, `time`, `permission`, and an optional `model`. `blocked: true` records a checkpoint only: it starts nothing, spends nothing, and is never woken later — the next `scope_fork` declares it again. One invalid item rejects the whole call before any child starts; an array may hold several items, and one assistant message may hold several `scope_fork` calls.
 
-`scope({ begin: { stage, elder_report, fission: [{ intent, budget, permission }] } })` opens one batch of flows. `begin.fission` is a non-empty array; there is no single-flow begin shape, so one flow is a one-item array. `begin.stage` covers the whole batch, `begin.elder_report` is required (a string or `null`), and each item carries its own `intent`, `budget`, `permission`, and optional `model`. The entire array is validated before any flow starts: one invalid item rejects the whole batch and opens nothing.
+`scope_join({ elder_report })` receives one eligible child result. In a message with other calls, place it last: its result is a whole working record and reads best after the other results. No tool is exclusive; the runtime does not reject a mixed message. Pass `null` when no earlier receipt is pending. The receipt keeps every fork line, pin and adoption note; only a later join's `elder_report` may shorten an older receipt's work text, and the newest receipt always stays complete. `scope_join` has no time limit: while it waits, the parent's wall clock stops and the wait is added back to its deadline. `scope_return` gets the same treatment while the parent has not yet taken the record. A manager's time budget does not include the people it hired; tool budget and time budget stay independent.
 
-A fission begin currently cannot also close a scope. `scope({ begin, end: true })` is refused before any state change; close the open scope with a plain `scope({ end: true })` call, then open the batch in a following call. A flow does not open or close its own scope — the scheduler writes both ends.
+`scope_return({})` submits the child's own record. In a message with other calls, place it last: the record is a whole working result and reads best after the other results. No tool is exclusive. A child may return while it still has unreceived children: those children move to the child's current parent, keep their identities and budgets, and are received there by `scope_join`.
 
-`scope({ begin })` is also an execution barrier. Tool calls listed after it in the same assistant message run once on the owner, and their results are copied into every flow in the batch; calls listed before it run first in the outer context. `amend` is available inside every flow: it edits that flow's own record, refunds its budget, and never rewrites the shared journal. A beat revoked by `amend` is not copied into a sibling flow, and a flow cannot amend across its own begin or a closed sibling boundary.
+A branch's tool budget and wall clock come from the `scope_fork` item that created it. The parent's balance never funds a child and never shrinks when a child starts. The root branch has no tool budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `scope_return`, `amend`, `pin`, `todo`, `ask`, `wait`), a `read` of a `skill://` path, and the write that resolves a staged ast_edit preview stay available at the root. `amend` may not retract a beat at or before the branch's most recent structural call.
 
-During a batch, **Esc** pauses the running flows without closing their scopes. The next ordinary message broadcasts to all unfinished leaves and wakes those that were paused. Until the first copy is delivered, a broadcast appears once in omp's native **Steering** panel: **Alt+Up** takes it back, and **Esc** returns undelivered input to the editor. Later copies reach their flows without another transcript echo.
+The root (`Root`) keeps its native transcript and input stream. Descendants at every depth appear in the main transcript as labelled message and tool components; full records arrive through `scope_join`. Root and descendants compete equally for one streaming slot: the first stream holds it through completion, and an overlapping stream appears as a single block after it ends. The native working row displays `[Busy: X, Idle: Y]` and the path to the latest requesting scope, omitting `Root`. Each fork item supplies a short `scopeId` such as `oh-my-pie`, displayed as `Oh My Pie`. Only explicit tool prompts and approvals can use the root UI. An accepted `scope_return` ends the child loop at the tool-result boundary, without an extra model request or an interruption message.
 
-A flow that stops normally without `scope({ end: true })` gets a steer to continue. A recoverable provider or startup error instead waits for your input: fix the external issue and send `继续` (or another ordinary message). A permanent failure is reported separately; a healthy sibling can still complete and take over the conversation.
-
-Pause, resume, and takeover do not rebuild the flow's message prefix. Actual cache hits still depend on the provider and request headers: a model switch, a compaction, or the host's different tool definitions for interactive and headless sessions can change cache eligibility.
+The three tools exist in every supported configuration. There is no `scope` tool, no `begin`/`end` argument, no alias and no fallback: a configuration that cannot support fork/join refuses the call instead of registering the retired tool.
 
 ## Running from source
 
 omp loads the installed copy at `~/.omp/plugins/node_modules/herdchestra-lite2`, not this working tree, so an edit here does not reach a running session by itself. After changing `src/` or `resources/`:
 
 ```sh
-bun run sync:plugin                    # copy src/ and resources/ into the installed plugin
+bun run sync:plugin                    # copy src/, resources/, and skills/ into the installed plugin
 bun scripts/sync-plugin.mjs --check    # report drift without copying
-bun run smoke:relay                    # prove the current build's tool text and gates
+bun run smoke:relay                    # check relay behavior in this working tree
 ```
 
 Restart the session afterwards; modules load at process start. A `todo` result that shows a `Flow:` line comes from the current build, so a missing `Flow:` line means the session is still running an older copy.
 
-`bun run smoke:relay` answers that question without a restart. It loads this
-working tree, activates the extension against a fake host, and drives the
-registered `todo` and `scope` tools: it asserts the `Flow:` lines, the empty
-ledger's relay handoff, the promoted successor's return to simple mode, and both
-directions of the `direct-execution` gate. A build that emits no `Flow:` line
-exits non-zero, so a stale copy cannot pass quietly.
+`bun run smoke:relay` tests the working tree against a fake host. It checks fork/join registration and refusals, the `todo` status, and the relay transitions into and out of full flow. It does not test the installed copy.
 
-## Stages
+## Stage skills
 
-Every `scope({ begin })` batch names one `begin.stage`, shared by all its flows. The innermost open scope determines the current stage; outside all scopes there is no stage.
+Guidance ships as ordinary omp skills under `skills/`. Direct execution needs no skill.
 
-## Design records
+| Skill | Question |
+|---|---|
+| `decision-framing` | Why: intent, non-goals, the decision and its bounds |
+| `tdd-crowdsource` | What and who: contracts, test seams, and a rolling dispatch plan |
 
-The contract lives here. The reasoning behind it lives in three places:
+Read `skill://<name>` when that stage's discipline is needed, or invoke `/skill:<name>`. The runtime enforces no order between them: there is no stage argument on any scope tool, no stage flag, and no execution gate. The stages are a discipline the model reads, not a state machine the extension enforces.
 
-- [Stage design](docs/design/stages.md) — why the five stages exist, and the line between designing the artifact and designing the work.
-- [ADR 0001: stage names](docs/adr/0001-stage-names.md) — the S1–S5 renaming, kept as history only.
-- [Changelog](CHANGELOG.md) — what changed and how to migrate.
-
-| Stage | Question | Allowed when |
-|---|---|---|
-| `decision-framing` | Why: intent, non-goals, the decision and its bounds | Herd mode only |
-| `acceptance-cases` | Experience: what the user will live through, as cases with a 0-100 rubric | Default mode |
-| `architecture-design` | What: the artifact's structure, boundaries, and contracts | Default mode |
-| `orchestration-plan` | How: the process of completing the work, as literate pseudocode | Default mode |
-| `direct-execution` | Do: implement, run the real checks, accept, deliver | Default mode |
-
-In default mode the four non-framing stages may be opened in any order, repeated, or revisited; no stage gates another. While herd mode is on, only `decision-framing` may open.
-
-### Stage flags
-
-`acceptance-cases`, `architecture-design`, and `orchestration-plan` each start
-false. Opening one turns its flag true. In the full flow, `direct-execution` may
-open only when all three are true; it never clears them, so execution may run
-again. Opening
-`decision-framing` clears all three, because a new decision starts a new line of
-work. A relay handoff also clears all three, in the same transaction that
-advances the generation: a successor must run the stages itself, because the
-predecessor's runs prove nothing about its intent. The flags persist with the
-session and survive compaction, but never a handoff.
+Red contracts may be written by the lead or delegated. As contracts become ready, pin the current dispatch plan instead of running Red, then start the corresponding Green slices without waiting for the rest. A child may pin unrun checks for its parent; only checks that ran count as verification. Keep stage artifacts as skills under `.agent/skills/<name>/SKILL.md`.
 
 ### Full flow and simple mode
 
-A session starts simple: a clear task that needs no orchestration opens
-`direct-execution` directly, with `"rw"` and without the stage flags. The first
-submitted `todo` ledger, empty or not, turns the full flow on: the stage flags,
-the five-stage protocol, and the relay all apply from then on. The flow stays on
-across handoffs; only the promoted second empty evaluation ends it. After that a
-new task is simple again, until another ledger is submitted, empty or not; that
-submission turns the full flow back on without re-arming a handoff. A `todo`
-view never turns the flow on.
+A session starts simple: a clear task finishes and answers. The first submitted `todo` ledger, empty or not, turns the full flow on: the stage skills and the relay apply from then on. The flow stays on across handoffs; only the promoted second empty evaluation ends it. After that a new task is simple again, until another ledger is submitted, empty or not; that submission turns the full flow back on without re-arming a handoff. A `todo` view never turns the flow on.
 
-The flags describe the main session's own work line. Subagent sessions, read-only
-and read-write alike, are exempt from the ordering gate: they may open any stage
-in any order, repeat it, or move backward, and they never write the flags.
-
-Model-facing text lives in `resources/prompts/` as Markdown documents with
-`## section` blocks. Code loads them through `src/prompts/index.mjs`; no prompt,
-tool description, parameter description, receipt, or model-facing error is
-duplicated in source.
-
-Open order is nevertheless a principle, not a prohibition: the work runs `acceptance-cases`, then `architecture-design`, then `orchestration-plan`, and only then `direct-execution`. Each stage leaves its artifact on disk and pins its path, the plan maximizes genuine parallelism, and execution follows the plan rather than deciding the design a second time. The freedom to jump serves exploration, rework, and repair; it is not a license to skip.
-
-The stage sections for `decision-framing`, `acceptance-cases`, `architecture-design`, and `orchestration-plan` live in the system prompt as a stable prefix, so a provider can reuse its prompt cache. A begin receipt only names its stage; it does not repeat the prompt text. `direct-execution` has no section: it follows the `orchestration-plan` artifact.
+Model-facing text lives in `resources/prompts/` as Markdown documents with `## section` blocks. Code loads them through `src/prompts/index.mjs`; no prompt, tool description, parameter description, receipt, or model-facing error is duplicated in source.
 
 ## Scope permission
 
-Every fission item declares its own `permission: "ro" | "rw"`, and the field is required: a missing, `null`, or other value rejects the whole batch, so forgetting the declaration cannot bypass the gate.
+Every fork item declares its own `permission: "ro" | "rw"`, and the field is required: a missing, `null`, or other value rejects the whole batch.
 
-`"ro"` is a declaration, not an enforcement boundary. A flow that says `"ro"` is trusted: the system never blocks a tool because the scope called itself read-only, and it never audits a tool call against the claim. Mistake-proofing lives in the required field and in the two `"rw"` refusals below; what a flow *does* with the tools it already holds stays a matter of the flow's own discipline.
+`"ro"` is a declaration, not an enforcement boundary. A flow that says `"ro"` is trusted: the system never blocks a tool because the scope called itself read-only, and it never audits a tool call against the claim. Mistake-proofing lives in the required field and in the `"rw"` refusal below; what a flow *does* with the tools it already holds stays a matter of the flow's own discipline.
 
-`"rw"` is refused in two cases:
-
-- the batch's stage is `decision-framing`, which answers why rather than what;
-- in the full flow, the relay has not recorded its first submitted `todo` ledger for the current generation. A `todo` view is a read-only inspection and does not count.
+`"rw"` is refused while the full flow is on and the relay has not recorded its first submitted `todo` ledger for the current generation. A `todo` view is a read-only inspection and does not count.
 
 A refused batch changes no state, and no flow starts. Submit a ledger first, or open the flows with `"ro"`.
 
 ## Herd mode
 
-Herd mode is toggled only by the user, with `/herd`. No stage or model turn can enter or leave it.
+Herd mode is toggled only by the user, with `/herd`. No model turn can enter or leave it.
 
 A bare `/herd` flips the mode and sends nothing to the model: the next request learns the new mode from its receipt. `/herd <text>` is that same flip followed by one plain user message carrying `<text>`, so the model starts exactly one turn and reads the sentence as the user's request.
 
-- While it is on, new scopes may open only `decision-framing`, `ask` is allowed inside that scope, and a turn may end naturally to wait for the user. The relay's stop rules stay suspended until the user toggles herd mode off.
-- While it is off, `decision-framing` cannot open, `ask` is always blocked, and the relay's ledger and handoff rules run as usual.
+- While it is on, `ask` is allowed and a turn may end naturally to wait for the user. The relay's stop rules stay suspended until the user toggles herd mode off.
+- While it is off, `ask` is always blocked, and the relay's ledger and handoff rules run as usual.
 
-`ask` needs both conditions: herd mode on, and the innermost scope's stage `decision-framing`.
+`ask` needs one condition: herd mode on.
 
 ## Pinned context
 
-`pin` records durable notes: assumptions, deductions, inductions, findings, and conclusions. Each call appends one record to the session state and costs no budget. Pins survive scope collapse because they belong to the session, not to a scope.
+`pin` records durable notes: assumptions, deductions, inductions, findings, and conclusions. Each call appends one record to the session state and costs no budget. Pins survive receipt shortening because they belong to the session, not to a branch.
 
 At a relay handoff, every historical pin is written into the successor's opening text under `## Pinned Context`. The successor is told to read each important document named there with `read`, in full, rather than substituting grep excerpts.
 
@@ -200,19 +151,20 @@ CI pins the host to `57771ae562b9345e0579bceb2d68d585e3e6927e` and Bun
 
 ## Model selection
 
-Set a fission item's `model` to an omp `/switch` selector to use a different model for that flow:
+Set a fork item's `model` to an omp `/switch` selector to use a different model for that child:
 
 ```js
-scope({ begin: {
-  stage: "direct-execution",
-  elder_report: null,
+scope_fork({ forks: [{
+  scopeId: "review-results",
+  intent: "Review the results",
+  blocked: false,
+  budget: { read: 3 },
   time: 120,
-  fission: [{ intent: "Review the results", budget: { read: 3 }, permission: "ro", model: "@smol" }],
-} })
+  permission: "ro",
+  model: "@smol",
+}] })
 ```
 
-Omit `model` or use `null` to inherit the model of the scope that opens the batch, or the session model when there is no enclosing scope. Closing a flow's scope restores the enclosing model. A combined `end: true` and `begin` is currently refused, so a batch always inherits from the scope that opens it. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.
+Omit `model` or use `null` to inherit the model of the parent that opens the fork, or the session model at the root. The fork resolves and records the child's model once; it never changes the parent's model, and a join never adopts the child's model. The parent's model changes only through an explicit user switch. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.
 
-Each model has separate local usage and prefix estimates. The extension uses the target model’s context window when it can resolve it in advance. At 82% of that window it attempts to fold eligible history without dropping the current workbench. It then estimates the complete retained request separately for each target model, including the request header. It refuses to open the scope if that estimate occupies at least 95% of the target window or the complete request size cannot be estimated.
-
-Returning to a smaller model also folds eligible history at 82%, keeping the scope that just closed as the workbench. If the host truncates nested scopes, the extension restores the model of the surviving outer scope before the next request when it sees the boundary during compaction or before the agent starts.
+Scope admission and receipt folding are separate. `scope_fork` does not check whether the child record will fit. `scope_join` checks the parent's estimated context size before accepting a record. A context-size refusal leaves the child record and the prior receipt untouched. An archived `elder_report` replaces the older receipt's work text only when this saves space; the newest receipt, fork lines, and pins stay intact.

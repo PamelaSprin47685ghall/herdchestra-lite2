@@ -9,7 +9,6 @@
  */
 
 const TOOL_CALL_TYPE = "toolCall";
-const SCOPE_TOOL_NAME = "scope";
 export const PIN_TOOL_NAME = "pin";
 
 function reject(code, reason) {
@@ -105,4 +104,4 @@ export function findBegin(messages, beginToolCallId) {
 	return null;
 }
 
-export { TOOL_CALL_TYPE, SCOPE_TOOL_NAME, reject, fnv1a, joinedText };
+export { TOOL_CALL_TYPE, reject, fnv1a, joinedText };

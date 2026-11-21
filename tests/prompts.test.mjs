@@ -1,20 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { readdirSync } from "node:fs";
 
+import { wireTools } from "../src/activation/tools.mjs";
 import { loadDoc, placeholderNames, render } from "../src/prompts/index.mjs";
 import * as scopeTools from "../src/tools/descriptions.mjs";
 import * as todoTools from "../src/tools/todo-description.mjs";
-import * as stagePrompts from "../src/host/stage-prompts.mjs";
 import {
 	commonRulesText,
 	injectSystemPrompt,
 	persistentOperatingSkill,
-	stagePromptsBlock,
 } from "../src/host/prompts.mjs";
 
 const DOCS = [
-	"tools/scope",
+	"tools/fork-join",
+	"tools/notes",
 	"tools/todo",
-	"stages",
 	"system",
 	"receipts/scope",
 	"receipts/relay",
@@ -39,9 +39,9 @@ describe("prompt documents", () => {
 	});
 
 	test("are frozen and cached", () => {
-		const first = loadDoc("tools/scope");
+		const first = loadDoc("tools/fork-join");
 		expect(Object.isFrozen(first)).toBe(true);
-		expect(loadDoc("tools/scope")).toBe(first);
+		expect(loadDoc("tools/fork-join")).toBe(first);
 	});
 
 	test("reject a missing document and an invalid name", () => {
@@ -51,24 +51,27 @@ describe("prompt documents", () => {
 });
 
 describe("tool contracts map to their documents", () => {
-	test("scope", () => {
-		const doc = loadDoc("tools/scope");
-		expect(scopeTools.SCOPE_DESCRIPTION).toBe(doc.tool);
-		expect(scopeTools.BEGIN_INTENT_DESCRIPTION).toBe(doc["fission.intent"]);
-		expect(scopeTools.BUDGET_DESCRIPTION).toBe(doc["fission.budget"]);
-		expect(scopeTools.PERMISSION_DESCRIPTION).toBe(doc["fission.permission"]);
-		expect(scopeTools.FISSION_DESCRIPTION).toBe(doc["begin.fission"]);
-		expect(scopeTools.MODEL_DESCRIPTION).toBe(doc["fission.model"]);
-		expect(scopeTools.END_DESCRIPTION).toBe(doc.end);
-		expect(scopeTools.ELDER_REPORT_DESCRIPTION).toBe(doc["begin.elder_report"]);
-		expect(scopeTools.AMEND_DESCRIPTION).toBe(doc["amend.tool"]);
-		expect(scopeTools.REFLECTION_DESCRIPTION).toBe(doc["amend.reflection"]);
-		expect(scopeTools.PIN_DESCRIPTION).toBe(doc["pin.tool"]);
-		expect(scopeTools.PIN_ASSUMPTION_DESCRIPTION).toBe(doc["pin.assumption"]);
-		expect(scopeTools.PIN_DEDUCTION_DESCRIPTION).toBe(doc["pin.deduction"]);
-		expect(scopeTools.PIN_INDUCTION_DESCRIPTION).toBe(doc["pin.induction"]);
-		expect(scopeTools.PIN_FINDING_DESCRIPTION).toBe(doc["pin.finding"]);
-		expect(scopeTools.PIN_CONCLUSION_DESCRIPTION).toBe(doc["pin.conclusion"]);
+	test("the three fork/join tools carry their mapped text", () => {
+		const doc = loadDoc("tools/fork-join");
+		const notes = loadDoc("tools/notes");
+		expect(scopeTools.FORK_DESCRIPTION).toBe(doc["fork.tool"]);
+		expect(scopeTools.FORK_INTENT_DESCRIPTION).toBe(doc["fork.intent"]);
+		expect(scopeTools.FORK_BUDGET_DESCRIPTION).toBe(doc["fork.budget"]);
+		expect(scopeTools.FORK_TIME_DESCRIPTION).toBe(doc["fork.time"]);
+		expect(scopeTools.JOIN_DESCRIPTION).toBe(doc["join.tool"]);
+		expect(scopeTools.RETURN_DESCRIPTION).toBe(doc["return.tool"]);
+		// The retired working-level container has no description and no
+		// schema; amend and pin live in their own document.
+		expect(scopeTools.SCOPE_DESCRIPTION).toBeUndefined();
+		expect(scopeTools.scopeParameters).toBeUndefined();
+		expect(scopeTools.AMEND_DESCRIPTION).toBe(notes["amend.tool"]);
+		expect(scopeTools.REFLECTION_DESCRIPTION).toBe(notes["amend.reflection"]);
+		expect(scopeTools.PIN_DESCRIPTION).toBe(notes["pin.tool"]);
+		expect(scopeTools.PIN_ASSUMPTION_DESCRIPTION).toBe(notes["pin.assumption"]);
+		expect(scopeTools.PIN_DEDUCTION_DESCRIPTION).toBe(notes["pin.deduction"]);
+		expect(scopeTools.PIN_INDUCTION_DESCRIPTION).toBe(notes["pin.induction"]);
+		expect(scopeTools.PIN_FINDING_DESCRIPTION).toBe(notes["pin.finding"]);
+		expect(scopeTools.PIN_CONCLUSION_DESCRIPTION).toBe(notes["pin.conclusion"]);
 	});
 
 	test("todo", () => {
@@ -80,33 +83,36 @@ describe("tool contracts map to their documents", () => {
 		expect(todoTools.TODO_PHASE_DESCRIPTION).toBe(doc.phase);
 		expect(todoTools.TODO_ITEMS_DESCRIPTION).toBe(doc.items);
 		expect(todoTools.TODO_REASON_DESCRIPTION).toBe(doc.reason);
-		expect(doc.tool).toContain("An empty list counts as a submission too.");
-		expect(doc.tool).toContain(
-			"A later todo write after that (an empty list included) turns the full flow on again.",
-		);
+	});
+
+	test("the registered scope name rules prevent case-only collisions and reserved names", () => {
+		const tools = new Map();
+		wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
+		const item = tools.get("scope_fork").parameters.properties.forks.items;
+		const { description } = item.properties.scopeId;
+		expect(description).toMatch(/\broot`? is reserved\b[^.]*\b(?:any capitalization|regardless of case|case-insensitive)\b/i);
+		expect(description).toMatch(/\bunique\b[^.]*\b(?:case-insensitive|regardless of case)\b|\bcase-insensitive\b[^.]*\bunique\b/i);
 	});
 
 	test("schemas carry the mapped text", () => {
-		const scope = loadDoc("tools/scope");
-		const begin = scopeTools.scopeParameters.properties.begin;
-		expect(begin.description).toBe(scope.begin);
-		expect(begin.required).toEqual(["stage", "elder_report", "fission", "time"]);
-		expect(begin.properties.stage.description).toBe(scope["begin.stage"]);
-		expect(begin.properties.elder_report.description).toBe(scope["begin.elder_report"]);
-		expect(begin.properties).not.toHaveProperty("intent");
-		expect(begin.properties).not.toHaveProperty("budget");
-		expect(begin.properties).not.toHaveProperty("permission");
-		expect(begin.properties).not.toHaveProperty("model");
-		expect(begin.properties.fission).toMatchObject({ type: "array", minItems: 1 });
-		expect(begin.properties.fission.description).toBe(scope["begin.fission"]);
-		const item = begin.properties.fission.items;
-		expect(item.required).toEqual(["intent", "budget", "permission"]);
-		expect(item.properties.intent.description).toBe(scope["fission.intent"]);
-		expect(item.properties.budget.description).toBe(scope["fission.budget"]);
-		expect(item.properties.permission.description).toBe(scope["fission.permission"]);
-		expect(item.properties.model.description).toBe(scope["fission.model"]);
+		const doc = loadDoc("tools/fork-join");
+		const item = scopeTools.forkParameters.properties.forks.items;
+		expect(item.required).toEqual([
+			"scopeId",
+			"intent",
+			"blocked",
+			"budget",
+			"time",
+			"permission",
+		]);
+		expect(item.properties.intent.description).toBe(doc["fork.intent"]);
+		expect(item.properties.budget.description).toBe(doc["fork.budget"]);
+		expect(item.properties.time.description).toBe(doc["fork.time"]);
+		expect(item.properties.permission.description).toBe(doc["fork.permission"]);
+		expect(item.properties).not.toHaveProperty("stage");
+		expect(item.properties).not.toHaveProperty("fission");
 		expect(scopeTools.amendParameters.properties.reflection.description).toBe(
-			scope["amend.reflection"],
+			loadDoc("tools/notes")["amend.reflection"],
 		);
 		const todo = loadDoc("tools/todo");
 		expect(
@@ -115,70 +121,48 @@ describe("tool contracts map to their documents", () => {
 	});
 });
 
-describe("stage and system prompts map to their documents", () => {
-	test("stage sections", () => {
-		const doc = loadDoc("stages");
-		expect(stagePrompts.decisionFramingPrompt).toBe(doc["decision-framing"]);
-		expect(stagePrompts.acceptanceCasesPrompt).toBe(doc["acceptance-cases"]);
-		expect(stagePrompts.architectureDesignPrompt).toBe(doc["architecture-design"]);
-		expect(stagePrompts.orchestrationPlanPrompt).toBe(doc["orchestration-plan"]);
+describe("system prompts map to their documents", () => {
+	test("system pieces", () => {
+		const doc = loadDoc("system");
+		expect(commonRulesText).toBe(doc["common-rules"]);
+		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
+		expect(persistentOperatingSkill).toContain("强制以简体中文");
 	});
 
-	test("stage block is the header plus the four sections", () => {
-		const doc = loadDoc("stages");
-		expect(stagePromptsBlock).toContain(doc.header);
-		for (const key of [
-			"decision-framing",
-			"acceptance-cases",
-			"architecture-design",
-			"orchestration-plan",
-		]) {
-			expect(stagePromptsBlock).toContain(doc[key]);
-		}
-		expect(stagePromptsBlock).not.toContain("[Stage: direct-execution]");
+	test("stage guidance is shipped as skills, not injected as a prompt block", () => {
+		expect(persistentOperatingSkill).toMatch(/skills ship with this plugin/);
+		expect(persistentOperatingSkill).toContain("the runtime enforces no order");
+		expect(persistentOperatingSkill).not.toContain("Stage Prompts block");
 	});
 
-	test("the header and the persistent rules state the full-flow execution gate", () => {
-		const doc = loadDoc("stages");
-		const gate =
-			"In the full flow, `direct-execution` opens only after `acceptance-cases`, `architecture-design`, and `orchestration-plan` have each run once";
-		expect(doc.header).not.toContain(
-			"The four working stages may open in any order, and no stage gates another",
+	test("every skill the persistent rules name is in the package", () => {
+		const shipped = readdirSync(new URL("../skills/", import.meta.url), {
+			withFileTypes: true,
+		})
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name);
+		const list = persistentOperatingSkill.match(
+			/skills ship with this plugin \(([^)]*)\)/,
 		);
-		expect(doc.header).toContain("In simple mode");
-		expect(doc.header).toContain(gate);
-		expect(persistentOperatingSkill).toContain(
-			"In the full flow, direct-execution opens only after acceptance-cases, architecture-design, and orchestration-plan have each run once; simple mode skips that gate.",
-		);
-		expect(doc.header).toContain(
-			"A later todo write after that turns the full flow on again.",
-		);
-		expect(persistentOperatingSkill).toContain(
-			"after that, another todo write (empty included) turns the full flow back on",
-		);
+		expect(list).not.toBeNull();
+		const named = list[1].split(",").map((name) => name.trim());
+		expect(named.sort()).toEqual([...shipped].sort());
+
+		const referenced = [
+			...persistentOperatingSkill.matchAll(/skill:\/\/([a-z0-9-]+)/g),
+		].map((match) => match[1]);
+		expect(referenced.length).toBeGreaterThan(0);
+		for (const name of referenced) expect(shipped).toContain(name);
 	});
 
-	test("task nature has one authority and the other surfaces point to it", () => {
-		const doc = loadDoc("stages");
+	test("task nature is documented in the system prompt, not repeated by todo", () => {
 		const todo = loadDoc("tools/todo");
 		expect(persistentOperatingSkill).toContain("Choose by task nature.");
 		expect(persistentOperatingSkill).toContain("A refactor counts as development:");
 		expect(persistentOperatingSkill).toContain("in principle submit a ledger");
 		expect(persistentOperatingSkill).toContain("in principle do not submit one");
 		expect(persistentOperatingSkill).toContain("let that judgment override the default");
-
-		// DRY: the long rule lives once. The other surfaces only point to it.
-		expect(doc.header).not.toContain("Choose by task nature.");
 		expect(todo.tool).not.toContain("Choose by task nature.");
-		expect(doc.header).toContain("persistent-rules");
-		expect(todo.tool).toContain("persistent-rules");
-	});
-
-	test("system pieces", () => {
-		const doc = loadDoc("system");
-		expect(commonRulesText).toBe(doc["common-rules"]);
-		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
-		expect(persistentOperatingSkill).toContain("强制以简体中文");
 	});
 });
 
@@ -199,7 +183,8 @@ describe("injectSystemPrompt", () => {
 		const output = injectSystemPrompt("Host prompt.");
 		expect(output.startsWith(`${START}\n`)).toBe(true);
 		expect(output.endsWith(`${END}\n\nHost prompt.`)).toBe(true);
-		expect(injectSystemPrompt(output)).toBe(output);
+		const again = injectSystemPrompt(output);
+		expect(again).toBe(output);
 	});
 
 	test("replaces a stale managed block", () => {
@@ -209,6 +194,13 @@ describe("injectSystemPrompt", () => {
 		expect(output).toContain(commonRulesText);
 		expect(output.startsWith("Intro.\n\n")).toBe(true);
 		expect(output.endsWith(`${END}\n\nBody.`)).toBe(true);
+	});
+
+	test("does not repeat repo rules the host prompt already carries", () => {
+		const host = "# Repo-aware Rules\n\nAlready here.";
+		const output = injectSystemPrompt(host);
+		expect(output).toContain(persistentOperatingSkill);
+		expect(output.split("# Repo-aware Rules").length - 1).toBe(1);
 	});
 
 	test("prepends one block to an array without mutating it", () => {
@@ -228,11 +220,11 @@ describe("injectSystemPrompt", () => {
 	});
 });
 
-describe("scope schema", () => {
+describe("fork item schema", () => {
 	test("declares time as required and takes its text from the prompt document", () => {
-		const begin = scopeTools.scopeParameters.properties.begin;
-		expect(begin.required).toContain("time");
-		expect(begin.properties.time.type).toBe("number");
-		expect(begin.properties.time.description).toContain("Wall-clock budget");
+		const time = scopeTools.forkParameters.properties.forks.items.properties.time;
+		expect(scopeTools.forkParameters.properties.forks.items.required).toContain("time");
+		expect(time.type).toBe("number");
+		expect(time.description).toContain("Wall-clock budget");
 	});
 });

@@ -47,7 +47,11 @@ function flowEntry(value) {
 	return id ? globalFlows().get(id) ?? null : null;
 }
 
-export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog) {
+export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog, ports = {}) {
+	// The resolved port table, decided once by the composition root. Domain code
+	// reads this instead of asking a switch, so there is exactly one place where
+	// "which implementation" is answered.
+	let resolvedPorts = { ...ports };
 	const stations = new WeakMap();
 	// Flow ids are strings (`ctx.agent.id`), and a WeakMap refuses a primitive
 	// key. The local map only mirrors the global one for this extension
@@ -143,6 +147,17 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog)
 		//
 		// The station's pending descriptor is its own stop guard, never the
 		// scheduler's batch object; the id is the only value that crosses.
+		/** The port table chosen at startup; null until the wiring resolves it. */
+		setPorts(table) {
+			if (table === null || typeof table !== "object") {
+				throw new TypeError("setPorts() expects the resolved port table");
+			}
+			resolvedPorts = { ...table };
+			return resolvedPorts;
+		},
+		ports() {
+			return { ...resolvedPorts };
+		},
 		setFissionScheduler(port) {
 			if (port !== null && port !== undefined && typeof port.registerBatch !== "function") {
 				throw new TypeError("A fission scheduler must implement registerBatch()");

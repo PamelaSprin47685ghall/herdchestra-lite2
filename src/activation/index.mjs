@@ -47,5 +47,7 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 	wireCommands(pi, registry);
 	const fission = wireFission(pi, registry);
 	wireHostDiagnosis(pi, diagnosis, hooks);
-	return { hooks, fission };
+	// The root needs the resolved table to decide whether the status widget
+	// exists at all; the decision stays here, not in the host renderer.
+	return { hooks, fission, ports: ports.ok ? ports.ports : {} };
 }

@@ -24,6 +24,24 @@ All notable changes to this extension. The format follows
 
 ### Changed
 
+- `HERD_RELAY=none|ledger|handoff` now selects real behavior. `none` ignores a
+  ledger write and keeps the nudge off; `ledger` records the ledger but refuses
+  to arm or advance a handoff; `handoff` keeps the transfer path. A station
+  built without a registry keeps the default `handoff`, so unit doubles do not
+  change meaning.
+- `HERD_DISABLE_FOLDING=1` and `HERD_DISABLE_MODEL_SWITCH=1` now change
+  behavior. Folding is refused at the station's single branch-write entry, so
+  no flood or economics path can fold; model switching neither queues nor takes
+  a pending choice while the port is off.
+- `HERD_DISABLE_STATUS=1` and `HERD_DISABLE_OBSERVER=1` now suppress the
+  widget and the provider hooks. Both switches already resolved to `off`, but
+  the two installers bound their host events unconditionally, so a disabled
+  feature kept running.
+- `HERD_DISABLE_PIN`, `HERD_DISABLE_AMEND` and `HERD_DISABLE_HERD` now change
+  behavior. The three ports had implementations and contract tests but no
+  runtime consumer; the station now builds each implementation from the resolved
+  table on every call and writes through its own persisted state, so `off`
+  refuses instead of silently succeeding.
 - `HERD_DISABLE_STAGES=1` now really disables the stage feature. The scope gate skips
   `STAGE_FLAGS_UNMET` for `direct-execution`, and the managed system prompt omits the
   stage block instead of leaving rules whose enforcement is gone. The switch had been

@@ -36,8 +36,11 @@ export async function activate(pi, env = process.env) {
 	}
 	const diagnosis = await installCapture(pi, builtinExecutor);
 	const pricingCatalog = await loadPricingCatalog();
-	wireExtension(pi, pricingCatalog, diagnosis, env);
-	installStatus(pi, { diagnostics: { total: diagnosticsTotal } });
+	const wired = wireExtension(pi, pricingCatalog, diagnosis, env);
+	installStatus(pi, {
+		diagnostics: { total: diagnosticsTotal },
+		ports: wired.ports ?? {},
+	});
 }
 
 export default activate;

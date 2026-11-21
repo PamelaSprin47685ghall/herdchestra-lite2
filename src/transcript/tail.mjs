@@ -9,7 +9,8 @@ const VIBE_CONCURRENCY_REPLACEMENT =
 	"Run independent workstreams concurrently. For decomposable work, use more and more workers aggressively.";
 
 /** Apply the two vibe-mode wording updates to a custom message. */
-export function rewriteVibeMessage(message) {
+export function rewriteVibeMessage(message, options = {}) {
+	if (options?.vibeCompat === "off") return message;
 	if (
 		message?.role !== "custom" ||
 		message.customType !== "vibe-mode-context" ||

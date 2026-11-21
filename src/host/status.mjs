@@ -390,7 +390,14 @@ export function createStatusRuntime(options = {}) {
 	};
 }
 
-/** Register the one-line status widget on a host. */
-export function installStatus(pi, options) {
-	return createStatusRuntime(options).install(pi);
+/**
+ * Register the one-line status widget on a host.
+ *
+ * `status=off` means the host footer stays native: no event is bound, so no
+ * line is ever written. The runtime itself is not built, which also keeps a
+ * disabled status from accumulating per-session totals nobody reads.
+ */
+export function installStatus(pi, options = {}) {
+	if (options.ports?.status === "off") return { installed: false };
+	return { installed: true, ...createStatusRuntime(options).install(pi) };
 }

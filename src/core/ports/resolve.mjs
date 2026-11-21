@@ -9,7 +9,7 @@
 // back as PORT_UNAVAILABLE with the values that would have been accepted.
 // Nothing is half-started by a typo.
 
-import { NAMED_SWITCHES, PORTS, switchName } from "./registry.mjs";
+import { NAMED_SWITCHES, PORTS, disableName, switchName } from "./registry.mjs";
 
 const DISABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -45,7 +45,7 @@ export function readSwitch(port, env) {
 		}
 		return { ok: true, implementation: name, explicit: true };
 	}
-	if (truthy(source[`HERD_DISABLE_${port.toUpperCase()}`])) {
+	if (truthy(source[disableName(port)])) {
 		return { ok: true, implementation: "off", explicit: true };
 	}
 	return { ok: true, implementation: entry.fallback, explicit: false };

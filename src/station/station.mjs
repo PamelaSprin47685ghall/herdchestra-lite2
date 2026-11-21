@@ -53,6 +53,9 @@ import {
 	createEmptyCatalog,
 	resolveModelPolicy,
 } from "../host/pricing.mjs";
+import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
+import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
+import { createPinOff, createPinOn } from "../features/pin/index.mjs";
 import { handleAmendCall } from "./controls.mjs";
 import {
 	directAmend,
@@ -316,6 +319,12 @@ export class SessionStation {
 	 * relay-off, because a nudge would demand a call the model cannot make.
 	 */
 	relayOn(ctx) {
+		// `relay=none` means no ledger is owed, so the relay nudge and the
+		// todo override stay off for every agent tier.
+		if (this.registry?.ports?.().relay === "none") {
+			this.relayState = false;
+			return false;
+		}
 		const policy = this.policy(ctx);
 		let on;
 		if (policy === MAIN_AGENT) on = true;
@@ -469,6 +478,13 @@ export class SessionStation {
 
 	/** Fold a whole elder pool in one branch operation. */
 	foldBatch(args) {
+		// `folding=off` means the port folds nothing and keeps nothing. The
+		// station is the only writer of collapse records, so refusing here
+		// covers every call site (flood, economics, model change) without
+		// teaching each one to ask a switch.
+		if (this.registry?.ports?.().folding === "off") {
+			return { foldedCount: 0, savedTokens: 0, rebased: false, maxOrder: -1, foldStartIdx: -1 };
+		}
 		const folded = foldBatchInBranch({
 			manager: this.manager,
 			state: this.state,
@@ -586,12 +602,30 @@ export class SessionStation {
 		return executeAmend(this, toolCallId, params);
 	}
 
-	executeDefer(toolCallId, params) {
-		return executeDefer(this, toolCallId, params);
-	}
-
 	executePin(toolCallId, params) {
 		return executePin(this, toolCallId, params);
+	}
+
+	// The three session ports read the resolved table on every call, so a
+	// switch flipped by the composition root cannot leave a stale
+	// implementation behind. Each `on` form writes through this station's
+	// persisted state, never a module-level copy.
+	pinPort() {
+		return this.registry?.ports?.().pin === "off"
+			? createPinOff()
+			: createPinOn({ notes: this.state.pins });
+	}
+
+	amendPort() {
+		return this.registry?.ports?.().amend === "off"
+			? createAmendOff()
+			: createAmendOn({ retired: this.state.amends });
+	}
+
+	herdPort() {
+		return this.registry?.ports?.().herd === "off"
+			? createHerdOff()
+			: createHerdOn(this.state);
 	}
 
 	directScope(toolCallId, params, ctx) {
@@ -676,7 +710,9 @@ export class SessionStation {
 				const at = original.indexOf(message);
 				if (at > outboundFrontier) outboundFrontier = at;
 			}
-			messages = messages.map(rewriteVibeMessage);
+			messages = messages.map((message) =>
+				rewriteVibeMessage(message, this.registry?.ports?.() ?? {}),
+			);
 			this.maybeRebase(ctx, messages);
 			if (key) {
 				this.usage.noteSentContext({

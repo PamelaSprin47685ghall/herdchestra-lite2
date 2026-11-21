@@ -405,10 +405,12 @@ function onBeforeAgentStart(station, event, ctx) {
 }
 
 function onHerdCommand(station, args) {
-	station.state.herdMode = !station.state.herdMode;
-	station.persist();
 	const text = typeof args === "string" ? args.trim() : "";
-	if (text) station.deliverUserMessage(text);
+	const toggled = station.herdPort().toggle(text);
+	if (!toggled.ok) return toggled;
+	station.persist();
+	if (toggled.text) station.deliverUserMessage(toggled.text);
+	return toggled;
 }
 
 export {

@@ -4,16 +4,20 @@
 // `off` reports "off" forever and refuses a toggle. Neither knows which one it
 // is: the switch lives in the wiring.
 
-export function createHerdOn() {
-	let mode = "off";
+/**
+ * `store` is the caller's persistent mode holder (`{ herdMode: boolean }`).
+ * Writing through it keeps a session restore on the same answer this port
+ * reports; a closure-owned flag would flip back to "off" on reload.
+ */
+export function createHerdOn(store = { herdMode: false }) {
 	return {
 		name: "on",
 		mode() {
-			return mode;
+			return store.herdMode === true ? "on" : "off";
 		},
 		toggle(text) {
-			mode = mode === "on" ? "off" : "on";
-			return { ok: true, mode, text: typeof text === "string" ? text : "" };
+			store.herdMode = store.herdMode !== true;
+			return { ok: true, mode: this.mode(), text: typeof text === "string" ? text : "" };
 		},
 	};
 }

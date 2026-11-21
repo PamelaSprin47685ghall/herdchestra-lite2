@@ -58,8 +58,31 @@ function stageBlock(options) {
 	return options?.stages === "off" ? "" : stagePromptsBlock;
 }
 
+// The repo-aware rules are one switchable block, not a fixed prefix: the
+// commonRules port decides whether it is assembled at all. Everything else in
+// the managed block stays, so turning it off removes only that section.
+function commonRulesBlock(options) {
+	return options?.commonRules === "off" ? "" : commonRulesText;
+}
+
+// The Simplified-Chinese reminder is one line inside the persistent rules.
+// Turning `chineseReminder` off removes that line and nothing else, so the
+// rest of the skill text stays byte-identical.
+const CHINESE_REMINDER_PREFIX = "- 强制以简体中文思考";
+
+function persistentRulesBlock(options) {
+	if (options?.chineseReminder !== "off") return persistentOperatingSkill;
+	return persistentOperatingSkill
+		.split("\n")
+		.filter((line) => !line.startsWith(CHINESE_REMINDER_PREFIX))
+		.join("\n");
+}
+
 function managedBlock(options = {}) {
-	const sections = [commonRulesText, persistentOperatingSkill];
+	const sections = [];
+	const rules = commonRulesBlock(options);
+	if (rules !== "") sections.push(rules);
+	sections.push(persistentRulesBlock(options));
 	const block = stageBlock(options);
 	if (block !== "") sections.push(block);
 	return `${systemPromptStart}\n${sections.join("\n\n")}\n${systemPromptEnd}`;

@@ -10,25 +10,30 @@ function refusal() {
 	return { ok: false, code: AMEND_UNAVAILABLE, port: "amend" };
 }
 
-export function createAmendOn() {
-	const retired = new Set();
+/**
+ * `store` is the caller's persistent list of retired beat keys. Keeping the
+ * ledger in the caller's array is what lets a reload keep refusing to revive
+ * a beat that was amended before the restart.
+ */
+export function createAmendOn(store = { retired: [] }) {
+	const retired = store.retired;
 	return {
 		record(beatKey) {
 			if (typeof beatKey !== "string" || beatKey === "") {
 				return { ok: false, code: "INVALID_BEAT", port: "amend" };
 			}
-			retired.add(beatKey);
-			return { ok: true, retired: [...retired] };
+			if (!retired.includes(beatKey)) retired.push(beatKey);
+			return { ok: true, retired: retired.slice() };
 		},
 		refund(beatKey) {
 			// A refund only makes sense for a beat this ledger knows.
-			if (!retired.has(beatKey)) {
+			if (!retired.includes(beatKey)) {
 				return { ok: false, code: "UNKNOWN_BEAT", port: "amend" };
 			}
 			return { ok: true, refunded: true };
 		},
 		retired() {
-			return [...retired];
+			return retired.slice();
 		},
 	};
 }

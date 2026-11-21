@@ -68,6 +68,9 @@ tests/bill-split/   # 六对分账的方向断言
 | `scope` | `begin(spec)` `end(id)` `charge(id, amount)` `snapshot()` | `bare` `single` `batch` | `batch` |
 | `relay` | `record(ledger)` `status()` `advance()` | `none` `ledger` `handoff` | `handoff` |
 | `clock` | `start(scopeId, ms)` `remaining(scopeId, now)` `expired(scopeId, now)` | `on` `off` | `on` |
+| `commonRules` | 无运行时方法：只决定 repo-aware 规则块是否进入 managed block | `on` `off` | `on` |
+| `chineseReminder` | 无运行时方法：只剥离 persistent rules 里的简体中文提醒行 | `on` `off` | `on` |
+| `vibeCompat` | `rewriteVibeMessage(message, options)` 读开关；`off` 时不改写 vibe 文案 | `on` `off` | `on` |
 | `stages` | `open(scopeId, stage)` `allows(stage)` `snapshot()` | `on` `off` | `on` |
 | `herd` | `mode()` `toggle(text)` | `on` `off` | `on` |
 | `pin` | `add(note)` `list()` | `on` `off` | `on` |

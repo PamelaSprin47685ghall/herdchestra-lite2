@@ -291,6 +291,9 @@ export function observeProviderResponse(station, event) {
 
 /** Bind the real host events. Observer results must never replace payloads. */
 export function wireProviderObservation(pi, registry) {
+	// `observer=off` binds no provider hook: a disabled observer costs nothing
+	// and cannot change or record a request.
+	if (registry?.ports?.().observer === "off") return { installed: false };
 	pi.on("before_provider_request", (event, ctx) => {
 		try {
 			observeProviderRequest(registry.stationFor(ctx), event, ctx);
@@ -309,4 +312,5 @@ export function wireProviderObservation(pi, registry) {
 			});
 		}
 	});
+	return { installed: true };
 }

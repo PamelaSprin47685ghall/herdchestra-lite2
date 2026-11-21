@@ -257,7 +257,7 @@ export function applyAmend(state, params) {
   if (!beat || !isNonEmptyString(beat.key)) {
     return failure("INVALID_BEAT", "beat.key must be a non-empty string.");
   }
-  state.amends.push(beat.key);
+  if (!state.amends.includes(beat.key)) state.amends.push(beat.key);
   let refunded = 0;
   for (const call of toolCalls ?? []) {
     const charge = state.charges[call.id];

@@ -10,8 +10,13 @@ function refusal() {
 	return { ok: false, code: PIN_UNAVAILABLE, port: "pin" };
 }
 
-export function createPinOn() {
-	const notes = [];
+/**
+ * `store` is the caller's persistent list. The port reads and writes it
+ * directly so a session restore sees the same notes the port returned; an
+ * internal array would silently fork the notebook on reload.
+ */
+export function createPinOn(store = { notes: [] }) {
+	const notes = store.notes;
 	return {
 		add(note) {
 			if (typeof note !== "string" || note.trim() === "") {

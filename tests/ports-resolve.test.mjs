@@ -1,13 +1,19 @@
 import { describe, expect, test } from "bun:test";
 
-import { NAMED_SWITCHES, PORT_NAMES, PORTS, switchName } from "../src/core/ports/registry.mjs";
+import {
+	NAMED_SWITCHES,
+	PORT_NAMES,
+	PORTS,
+	disableName,
+	switchName,
+} from "../src/core/ports/registry.mjs";
 import { readSwitch, resolvePorts } from "../src/core/ports/resolve.mjs";
 
 const EMPTY = {};
 
 describe("port registry", () => {
-	test("eleven ports, each with a default that is one of its implementations", () => {
-		expect(PORT_NAMES).toHaveLength(11);
+	test("fourteen ports, each with a default that is one of its implementations", () => {
+		expect(PORT_NAMES).toHaveLength(14);
 		for (const port of PORT_NAMES) {
 			const entry = PORTS[port];
 			expect(entry.implementations.length).toBeGreaterThanOrEqual(2);
@@ -26,6 +32,17 @@ describe("port registry", () => {
 		expect(switchName("relay")).toBe("HERD_RELAY");
 		expect(switchName("modelSwitch")).toBe("HERD_MODEL_SWITCH");
 		expect(switchName("clock")).toBe("HERD_CLOCK");
+	});
+
+	test("a disable name keeps the port's word boundary", () => {
+		expect(disableName("clock")).toBe("HERD_DISABLE_CLOCK");
+		expect(disableName("commonRules")).toBe("HERD_DISABLE_COMMON_RULES");
+		expect(disableName("modelSwitch")).toBe("HERD_DISABLE_MODEL_SWITCH");
+		expect(readSwitch("modelSwitch", { HERD_DISABLE_MODEL_SWITCH: "1" })).toEqual({
+			ok: true,
+			implementation: "off",
+			explicit: true,
+		});
 	});
 });
 

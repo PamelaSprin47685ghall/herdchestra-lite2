@@ -1,3 +1,11 @@
+## pin-unavailable
+
+The pin port is disabled (HERD_DISABLE_PIN=1). No note was kept.
+
+## amend-unavailable
+
+The amend port is disabled (HERD_DISABLE_AMEND=1). No beat was retracted.
+
 ## amend-reflection
 
 amend.reflection must be a non-empty string.

@@ -53,6 +53,8 @@ function handleAmendCall(station, call, base, currentIndex) {
   }
   const target = station.findAmendTarget(base, currentIndex, scope);
   if (!target.ok) return errorResult(target.code, target.reason);
+  const recorded = station.amendPort().record(target.beat.key);
+  if (!recorded.ok) return errorResult(recorded.code, E["amend-unavailable"]);
   const applied = applyAmend(state, {
     scopeId: scope.id,
     beat: target.beat,
@@ -71,10 +73,10 @@ function handlePinCall(station, call) {
     const text = trimText(args[label.toLowerCase()]);
     if (text) lines.push(`**${label}:** ${text}`);
   }
-  if (lines.length > 0) {
-    station.state.pins.push(lines.join("\n\n"));
-    station.persist();
-  }
+  if (lines.length === 0) return textResult("OK");
+  const saved = station.pinPort().add(lines.join("\n\n"));
+  if (!saved.ok) return errorResult(saved.code, E["pin-unavailable"]);
+  station.persist();
   return textResult("OK");
 }
 

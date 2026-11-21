@@ -12,6 +12,11 @@ import {
 } from "../relay/index.mjs";
 
 function armHandoff(station, _ctx) {
+	// Only the `handoff` degree may arm a transfer. `ledger` owes a ledger but
+	// never hands off, and `none` owes nothing at all. A station built without
+	// a registry (unit doubles) keeps the default: handoff.
+	const relayPort = station.registry?.ports?.().relay;
+	if (relayPort === "none" || relayPort === "ledger") return false;
 	const relay = station.state.relay;
 	if (!relay || relay.canStop) return false;
 	station.handoffReport = null;
@@ -25,6 +30,8 @@ function armHandoff(station, _ctx) {
 }
 
 function advanceRelayForHandoff(station, options = {}) {
+	const relayPort = station.registry?.ports?.().relay;
+	if (relayPort === "none" || relayPort === "ledger") return false;
 	const relay = station.state.relay;
 	if (!relay || !relay.handoffPending || relay.canStop) return false;
 	const expected = options.expectedGeneration;
@@ -43,6 +50,16 @@ function advanceRelayForHandoff(station, options = {}) {
 }
 
 function recordLedgerEvaluation(station, phases, op, options = {}) {
+	// `none` owes nothing, so a ledger write must not turn the full flow on.
+	// The caller still gets the shared answer shape, with `changed: false`.
+	if (station.registry?.ports?.().relay === "none") {
+		return {
+			relay: station.state.relay,
+			stats: { empty: true, open: 0, total: 0 },
+			action: null,
+			changed: false,
+		};
+	}
 	const before = station.state.relay;
 	const applied = applyLedgerEvaluation(before, phases, {
 		op,

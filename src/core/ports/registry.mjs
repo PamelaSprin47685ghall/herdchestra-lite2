@@ -21,6 +21,9 @@ export const PORTS = Object.freeze({
 		fallback: "handoff",
 	}),
 	clock: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
+	commonRules: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
+	chineseReminder: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
+	vibeCompat: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	stages: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	herd: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	pin: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
@@ -31,9 +34,18 @@ export const PORTS = Object.freeze({
 	observer: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 });
 
+function snakeName(port) {
+	return port.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase();
+}
+
 /** The environment variable that selects a port's implementation. */
 export function switchName(port) {
-	return `HERD_${port.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`;
+	return `HERD_${snakeName(port)}`;
+}
+
+/** The environment variable that disables a port: `HERD_DISABLE_<PORT>=1`. */
+export function disableName(port) {
+	return `HERD_DISABLE_${snakeName(port)}`;
 }
 
 /**

@@ -60,6 +60,10 @@ Budget: {{budget}}. Permission: {{permission}}.
 
 Report your findings. Only scope_return submits your full record.
 
+## fork.child-return-nudge
+
+You stopped without calling scope_return. That breaks the branch contract: a natural stop submits nothing. Your record stays unpublished until scope_return carries your conclusions and evidence. Continue the work now; do not stop again without returning.
+
 ## fork.child-routing
 
 User messages go to the stable root. Tool approvals appear there under this fork.

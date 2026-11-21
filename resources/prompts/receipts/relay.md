@@ -12,7 +12,15 @@ This write turns the full flow back on. You may still write the final answer.
 
 ## handoff-demand
 
-Write the handoff report in your message body now; do not call tools. Include the user's full requirements, work completed, verification evidence, and remaining gaps or risks. Distinguish facts the successor can verify from your judgment.
+Write the handoff report in your message body now; do not call tools. Let the content decide its format: there is no template and no required list of sections. The user's prompts are preserved verbatim for your successor, so do not restate them. Write what the successor cannot recover from the code, the files, the prompts preserved above, and the pins.
+
+## successor-opening.user-prompts
+
+## User Prompts (verbatim)
+
+These are the user's own prompts, oldest first, preserved by the relay. They are the requirement record; the handoff report does not repeat them.
+
+{{prompts}}
 
 ## next.rework-first
 
@@ -108,7 +116,7 @@ Inherited open ledger: read it with todo({ op: "view" }) before writing your own
 
 ## successor-mandate
 
-Check the work and verification against the user's original request. Rerun relevant checks; look for missing or narrowed work. Treat the inherited report and ledger as claims, not proof.
+Check the work and verification against the user prompts preserved above. Rerun relevant checks; look for missing or narrowed work. Treat the inherited report and ledger as claims, not proof.
 
 ## pinned-reading
 

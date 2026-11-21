@@ -12,7 +12,8 @@ import {
   setOutcome,
   waitForReady,
 } from "../src/host/fork-registry.mjs";
-import { openChildren, registerFork, RUNNING } from "../src/scope/forkjoin.mjs";
+import { markReady, openChildren, registerFork, RUNNING } from "../src/scope/forkjoin.mjs";
+import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 
 function stationOf() {
   return {
@@ -42,6 +43,13 @@ function sessionOf(lines, options = {}) {
     prompt: async () => {
       messages.push(assistant(lines));
       if (options.throwAfter) throw new Error(options.throwAfter);
+      // A returning child closes its own bracket, exactly as scope_return
+      // does. Omitting the identity models a natural stop instead.
+      if (options.forkId !== undefined) {
+        const record = options.record !== undefined ? options.record : lines;
+        setOutcome(options.registry, options.forkId, { record, failed: false, reason: null });
+        markReady(options.ledger, options.forkId, { ok: true, record });
+      }
     },
     agent: { state: { messages, stopReason: options.stopReason ?? "stop" } },
   };
@@ -83,7 +91,11 @@ describe("attachForkPorts", () => {
       conversationKey: "c",
       createSession: async () => ({
         ok: true,
-        session: sessionOf("child did the work"),
+        session: sessionOf("child did the work", {
+          registry: wiring.registry,
+          ledger: attached.ledger,
+          forkId: "f1",
+        }),
       }),
     });
     registerFork(attached.ledger, {
@@ -231,7 +243,11 @@ describe("attachForkPorts", () => {
       conversationKey: "c",
       createSession: async (spec) => ({
         ok: true,
-        session: sessionOf(`record ${spec.forkId}`),
+        session: sessionOf(`record ${spec.forkId}`, {
+          registry: wiring.registry,
+          ledger: attached.ledger,
+          forkId: spec.forkId,
+        }),
       }),
     });
     registerFork(attached.ledger, { forkId: "a", ownerId: "root", levelKey: "L", intent: "a", depth: 0 });
@@ -366,6 +382,14 @@ describe("attachForkPorts", () => {
             new Promise((resolve) => {
               release = () => {
                 messages.push(assistant("late"));
+                // A returning child closes its bracket before its turn
+                // resolves, as scope_return does in the live loop.
+                setOutcome(wiring.registry, "slow", {
+                  record: "late",
+                  failed: false,
+                  reason: null,
+                });
+                markReady(attached.ledger, "slow", { ok: true, record: "late" });
                 resolve();
               };
             }),
@@ -650,7 +674,14 @@ describe("child identities", () => {
       conversationKey: "c",
       createSession: async (spec) => {
         seenAtAssembly = identityOf(wiring.registry, spec.forkId);
-        return { ok: true, session: sessionOf("done") };
+        return {
+          ok: true,
+          session: sessionOf("done", {
+            registry: wiring.registry,
+            ledger: station.forkLedgerPort(),
+            forkId: spec.forkId,
+          }),
+        };
       },
     });
     registerFork(station.forkLedgerPort(), {
@@ -687,7 +718,14 @@ describe("spawnChildTicket directly", () => {
       registry: wiring.registry,
       ledger,
       display,
-      createSession: async () => ({ ok: true, session: sessionOf("done") }),
+      createSession: async () => ({
+        ok: true,
+        session: sessionOf("done", {
+          registry: wiring.registry,
+          ledger,
+          forkId: "disp",
+        }),
+      }),
     });
     expect(result.ok).toBe(true);
     expect(calls).toEqual(["attach:Scope 1:function", "detach:Scope 1"]);
@@ -700,7 +738,15 @@ describe("spawnChildTicket directly", () => {
     const messages = [];
     const session = {
       messages,
-      prompt: async () => messages.push(assistant("session-shaped")),
+      prompt: async () => {
+        messages.push(assistant("session-shaped"));
+        setOutcome(wiring.registry, "shape", {
+          record: "session-shaped",
+          failed: false,
+          reason: null,
+        });
+        markReady(ledger, "shape", { ok: true, record: "session-shaped" });
+      },
     };
     const result = await spawnChildTicket(specFor("shape"), {
       registry: wiring.registry,
@@ -721,7 +767,15 @@ describe("spawnChildTicket directly", () => {
       ledger,
       createSession: async () => ({
         ok: true,
-        session: { prompt: async () => {}, agent: { state: { messages: [] } } },
+        session: {
+          // The child returned with nothing to show. scope_return still
+          // freezes the empty record and closes the bracket.
+          prompt: async () => {
+            setOutcome(wiring.registry, "empty", { record: "", failed: false, reason: null });
+            markReady(ledger, "empty", { ok: true, record: "" });
+          },
+          agent: { state: { messages: [] } },
+        },
       }),
     });
     expect(result.ok).toBe(true);
@@ -743,7 +797,14 @@ describe("spawnChildTicket directly", () => {
       registry: wiring.registry,
       ledger,
       display,
-      createSession: async () => ({ ok: true, session: sessionOf("still done") }),
+      createSession: async () => ({
+        ok: true,
+        session: sessionOf("still done", {
+          registry: wiring.registry,
+          ledger,
+          forkId: "display-fail",
+        }),
+      }),
     });
     expect(result.ok).toBe(true);
     expect(result.failed).toBe(false);
@@ -756,7 +817,15 @@ describe("spawnChildTicket directly", () => {
     registerFork(ledger, { forkId: "prepare", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
     const calls = [];
     const session = {
-      prompt: async () => calls.push("prompt"),
+      prompt: async () => {
+        calls.push("prompt");
+        setOutcome(wiring.registry, "prepare", {
+          record: "prepared",
+          failed: false,
+          reason: null,
+        });
+        markReady(ledger, "prepare", { ok: true, record: "prepared" });
+      },
       agent: { state: { messages: [] } },
     };
     const result = await spawnChildTicket(specFor("prepare"), {
@@ -781,7 +850,14 @@ describe("spawnChildTicket directly", () => {
       registry: wiring.registry,
       ledger,
       prepareChild: () => ({ ok: false, code: "NO_CONTEXT" }),
-      createSession: async () => ({ ok: true, session: sessionOf("prepared anyway") }),
+      createSession: async () => ({
+        ok: true,
+        session: sessionOf("prepared anyway", {
+          registry: wiring.registry,
+          ledger,
+          forkId: "prepare-fail",
+        }),
+      }),
     });
 
     expect(result.ok).toBe(true);
@@ -813,7 +889,14 @@ describe("spawnChildTicket directly", () => {
     await spawnChildTicket(specFor("d2"), {
       registry: wiring.registry,
       ledger,
-      createSession: async () => ({ ok: true, session: sessionOf("done") }),
+      createSession: async () => ({
+        ok: true,
+        session: sessionOf("done", {
+          registry: wiring.registry,
+          ledger,
+          forkId: "d2",
+        }),
+      }),
     });
     // The child returned: ready, not joined. Only the parent closes it.
     expect(outcomeOf(wiring.registry, "d2").record).toBe("done");
@@ -833,6 +916,7 @@ describe("spawnChildTicket directly", () => {
       failed: false,
       reason: null,
     });
+    markReady(ledger, "d3", { ok: true, record: "the child's own record" });
     await spawnChildTicket(specFor("d3"), {
       registry: wiring.registry,
       ledger,
@@ -840,6 +924,130 @@ describe("spawnChildTicket directly", () => {
     });
     // The parent must read what the child froze, not a different rendering.
     expect(outcomeOf(wiring.registry, "d3").record).toBe("the child's own record");
+  });
+
+  test("a natural stop is not a return: the child is told to return, then published", async () => {
+    const wiring = createForkWiring();
+    const ledger = ledgerFor(wiring.registry, "natural-stop");
+    registerFork(ledger, { forkId: "n1", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    const messages = [];
+    const prompts = [];
+    const session = {
+      messages,
+      prompt: async (text) => {
+        prompts.push(text);
+        messages.push(assistant(prompts.length === 1 ? "did the work" : "returning"));
+        if (prompts.length === 2) {
+          // The stop before this turn published nothing: the bracket is still
+          // running and no outcome exists while the child is being scolded.
+          expect(ledger.forks.n1.status).toBe(RUNNING);
+          expect(outcomeOf(wiring.registry, "n1")).toBeNull();
+          // Exactly what handleReturnCall writes from the child side.
+          setOutcome(wiring.registry, "n1", {
+            record: "the child's own record",
+            failed: false,
+            reason: null,
+          });
+          markReady(ledger, "n1", { ok: true, record: "the child's own record" });
+        }
+      },
+      agent: { state: { messages, stopReason: "stop" } },
+    };
+    const result = await spawnChildTicket(specFor("n1"), {
+      registry: wiring.registry,
+      ledger,
+      createSession: async () => ({ ok: true, session }),
+    });
+    // The first stop handed over nothing; the second turn is the scold.
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toBe(specFor("n1").receipt);
+    expect(prompts[1]).toBe(childReturnNudge());
+    // A missing doc key returns undefined, which would make the identity
+    // assertion above pass vacuously. Pin the contract's words too.
+    expect(prompts[1]).toContain("scope_return");
+    expect(prompts[1]).toContain("natural stop submits nothing");
+    expect(result.failed).toBe(false);
+    expect(ledger.forks.n1.status).toBe("ready");
+    expect(outcomeOf(wiring.registry, "n1").record).toBe("the child's own record");
+    const taken = await waitForReady(wiring.registry, ledger, { ownerId: "root", levelKey: "L" });
+    expect(taken.fork.forkId).toBe("n1");
+  });
+
+  test("two natural stops are scolded, and the third turn returns once", async () => {
+    const wiring = createForkWiring();
+    const ledger = ledgerFor(wiring.registry, "natural-stop-twice");
+    registerFork(ledger, { forkId: "n2", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    const messages = [];
+    const prompts = [];
+    let joined = false;
+    const parent = waitForReady(wiring.registry, ledger, { ownerId: "root", levelKey: "L" });
+    parent.then(() => {
+      joined = true;
+    });
+    const session = {
+      messages,
+      prompt: async (text) => {
+        prompts.push(text);
+        messages.push(assistant(`turn ${prompts.length}`));
+        // A record published by a natural stop would wake the parked parent
+        // here. Every stop before the third must leave it asleep.
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(joined).toBe(false);
+        expect(outcomeOf(wiring.registry, "n2")).toBeNull();
+        expect(ledger.forks.n2.status).toBe(RUNNING);
+        if (prompts.length === 3) {
+          setOutcome(wiring.registry, "n2", {
+            record: "the child's own record",
+            failed: false,
+            reason: null,
+          });
+          markReady(ledger, "n2", { ok: true, record: "the child's own record" });
+        }
+      },
+      agent: { state: { messages, stopReason: "stop" } },
+    };
+    const result = await spawnChildTicket(specFor("n2"), {
+      registry: wiring.registry,
+      ledger,
+      createSession: async () => ({ ok: true, session }),
+    });
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]).toBe(specFor("n2").receipt);
+    expect(prompts.slice(1).every((text) => text === childReturnNudge())).toBe(true);
+    expect(result.failed).toBe(false);
+    expect(outcomeOf(wiring.registry, "n2").record).toBe("the child's own record");
+    const taken = await parent;
+    expect(taken.ok).toBe(true);
+    expect(taken.fork.forkId).toBe("n2");
+  });
+
+  test("repeated natural stops end as a failed record, never as a transcript", async () => {
+    const wiring = createForkWiring();
+    const ledger = ledgerFor(wiring.registry, "never-returns");
+    registerFork(ledger, { forkId: "nr", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    const prompts = [];
+    const session = {
+      prompt: async (text) => {
+        prompts.push(text);
+      },
+      agent: { state: { messages: [], stopReason: "stop" } },
+    };
+    const result = await spawnChildTicket(specFor("nr"), {
+      registry: wiring.registry,
+      ledger,
+      createSession: async () => ({ ok: true, session }),
+    });
+    // One receipt and the bounded scold; the child never returns.
+    expect(prompts[0]).toBe(specFor("nr").receipt);
+    expect(prompts.length).toBe(3);
+    expect(prompts.slice(1).every((text) => text === childReturnNudge())).toBe(true);
+    expect(result.failed).toBe(true);
+    const outcome = outcomeOf(wiring.registry, "nr");
+    expect(outcome.failed).toBe(true);
+    // Nothing the child wrote is handed over as a result.
+    expect(outcome.record).toBe("");
+    expect(ledger.forks.nr.outcome).toBe("failed");
   });
 });
 

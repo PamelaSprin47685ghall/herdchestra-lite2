@@ -5,12 +5,16 @@ import { setAgentMessages } from "../host/capture.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { truncateForHostBoundary, openChildren, readyChildren } from "../scope/index.mjs";
+import { childReturnNudge } from "../scope/return-nudge.mjs";
 import {
 	applyLedgerEvaluation,
 	applyRetirement,
 	beginGenerationAfterHandoff,
+	collectUserPrompts,
 	handoffDemand,
+	handoffToolBlockedReason,
 	ledgerStats,
+	mergeUserPrompts,
 	successorOpeningText,
 } from "../relay/index.mjs";
 
@@ -167,7 +171,24 @@ function captureHandoffReport(station, text) {
 function commitSelfHandoff(station, ctx, report) {
 	const relay = station.state.relay;
 	if (!relay || !relay.handoffPending || relay.canStop) return { ok: false };
-	const opening = successorOpeningText(relay, report, station.state.pins);
+	// A handoff compacts the branch: the successor reads the summary, not the
+	// transcript. The archive keeps the user's own prompts across generations
+	// and a reload, so the report never has to restate them.
+	const messages =
+		typeof station.contextMessages === "function" ? station.contextMessages() : [];
+	const userPrompts = mergeUserPrompts(
+		relay.userPrompts ?? [],
+		collectUserPrompts(messages, {
+			exclude: new Set([handoffDemand(), handoffToolBlockedReason(), childReturnNudge()]),
+		}),
+	);
+	station.state.relay = { ...relay, userPrompts };
+	const opening = successorOpeningText(
+		station.state.relay,
+		report,
+		station.state.pins,
+		userPrompts,
+	);
 	const manager = station.manager ?? ctx?.sessionManager ?? null;
 	const compacted = appendHandoffCompaction(
 		manager,

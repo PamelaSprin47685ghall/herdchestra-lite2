@@ -114,9 +114,13 @@ export function handoffToolBlockedReason() {
 	return R["handoff-blocked"];
 }
 
-export function successorOpeningText(relay, report, pins = []) {
+export function successorOpeningText(relay, report, pins = [], userPrompts = []) {
 	const current = copyRelay(relay);
 	const trimmed = typeof report === "string" ? report.trim() : "";
+	const prompts = (Array.isArray(userPrompts) ? userPrompts : [])
+		.filter((text) => typeof text === "string" && text.trim() !== "")
+		.map((text) => `[user] ${text.trim()}`)
+		.join("\n\n");
 	return [
 		trimmed,
 		"---",
@@ -124,6 +128,9 @@ export function successorOpeningText(relay, report, pins = []) {
 			next: current.generation + 1,
 			prev: current.generation,
 		}),
+		prompts !== ""
+			? render(R["successor-opening.user-prompts"], { prompts })
+			: null,
 		R["successor-mandate"],
 		current.viewRequired ? R["inherited-ledger"] : null,
 		R["successor-rule"],

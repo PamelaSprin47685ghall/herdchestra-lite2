@@ -75,7 +75,7 @@ Receive one owned child record. If none is ready but a child is still running, w
 
 ## join.elder_report
 
-Pass `null` if no prior receipt at this level awaits a summary. Otherwise, in 24–4000 characters, record the result, evidence location, and remaining work so the prior record can be shortened.
+Pass `null` if no prior receipt at this level awaits a summary. Otherwise, in 24–4000 characters, write what a successor still needs from that record so it can be shortened without losing that. The content decides its format; the relay preserves the user's prompts, so they need no restatement.
 
 ## return.tool
 

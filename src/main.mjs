@@ -10,7 +10,7 @@ import { wireExtension, installCapture } from "./activation/index.mjs";
 import { installStatus, loadPricingCatalog } from "./host/index.mjs";
 import { total as diagnosticsTotal } from "./host/diagnostics.mjs";
 import { preloadDocs } from "./prompts/index.mjs";
-import { CHILD_ACTIVITY_TYPE, renderChildActivity } from "./host/child-display.mjs";
+import { CHILD_ACTIVITY_TYPE, registerToolCardComponent, renderChildActivity } from "./host/child-display.mjs";
 
 export async function activate(pi, env = process.env) {
 	preloadDocs();
@@ -29,6 +29,7 @@ export async function activate(pi, env = process.env) {
 		let ToolExecutionComponent;
 		try {
 			({ ToolExecutionComponent } = await import("@oh-my-pi/pi-tui/chat/tool-execution"));
+			registerToolCardComponent(ToolExecutionComponent);
 		} catch {
 			// A host without the standalone card export can still use Markdown.
 		}

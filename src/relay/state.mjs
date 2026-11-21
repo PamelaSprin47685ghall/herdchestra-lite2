@@ -32,6 +32,9 @@ export function createRelay() {
 		lastHandoff: null,
 		viewRequired: false,
 		fullFlow: false,
+		// The user's own prompts, oldest first. A handoff compacts the branch,
+		// so this archive is the only requirement record the successor keeps.
+		userPrompts: [],
 	};
 }
 
@@ -90,6 +93,11 @@ export function copyRelay(relay) {
 		lastLedger: copyLedger(source.lastLedger),
 		lastHandoff: copyLastHandoff(source.lastHandoff),
 		viewRequired: source.viewRequired === true,
+		userPrompts: Array.isArray(source.userPrompts)
+			? source.userPrompts.filter(
+					(text) => typeof text === "string" && text.trim() !== "",
+				)
+			: [],
 	};
 }
 
@@ -110,6 +118,12 @@ export function isValidRelay(value) {
 	if (typeof value.promotionInvalidated !== "boolean") return false;
 	if (value.viewRequired !== undefined && typeof value.viewRequired !== "boolean") {
 		return false;
+	}
+	if (value.userPrompts !== undefined) {
+		if (!Array.isArray(value.userPrompts)) return false;
+		for (const text of value.userPrompts) {
+			if (typeof text !== "string") return false;
+		}
 	}
 	if (
 		value.handoffError !== null &&

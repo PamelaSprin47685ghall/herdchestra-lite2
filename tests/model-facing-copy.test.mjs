@@ -70,10 +70,13 @@ test("routine scope status keeps local budget and pending work without repeating
 	const pending = skillReceiptText(state, true, branch, 3);
 	const root = skillReceiptText(state);
 	for (const text of [pending, root]) {
-		expect(text.split(chineseRequirement)).toHaveLength(2);
-		expect(text.match(chineseInstruction)).toHaveLength(1);
+		// The reminder is part of the persistent system prompt, not the receipt:
+		// repeating it here would say the same thing twice on every request.
+		expect(text).not.toContain(chineseRequirement);
 		expect(text).not.toMatch(/\bUTC\b|since this session began/);
 	}
+	// It still ships exactly once in the skill text the system prompt carries.
+	expect(persistentOperatingSkill.split(chineseRequirement)).toHaveLength(2);
 	expect(pending).not.toContain(intent);
 	expect(pending).toMatch(/read\s+2(?:\.00)?\/8(?:\.00)?\b/);
 	expect(pending).toMatch(/edit\s+1(?:\.00)?\/3(?:\.00)?\b/);
@@ -176,9 +179,13 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 	return { station, ctx, sent, commit, request, remove };
 }
 
-test("the language port changes only the language requirement on successive model requests", async () => {
-	const enabled = relayRequest();
-	const disabled = relayRequest({ ports: () => ({ chineseReminder: "off" }) });
+test("the language port leaves the receipt untouched on successive model requests", async () => {
+	// `keepHook` leaves the preparation hook installed: this test makes two
+	// requests in a row. The receipt path reads no language port, so the two
+	// fixtures differ only in identity, which is all the determinism check
+	// below needs.
+	const enabled = relayRequest({ keepHook: true });
+	const disabled = relayRequest({ keepHook: true });
 	async function latestReceipt(fixture) {
 		const receipts = (await fixture.request()).filter((message) => message.herdSkill);
 		return receipts.at(-1).content[0].text;
@@ -187,9 +194,10 @@ test("the language port changes only the language requirement on successive mode
 		for (let round = 0; round < 2; round++) {
 			const on = await latestReceipt(enabled);
 			const off = await latestReceipt(disabled);
-			expect(on.split(chineseRequirement)).toHaveLength(2);
-			expect(off).not.toMatch(chineseInstruction);
-			expect(off.split("\n").filter(Boolean)).toEqual(on.split("\n").filter((line) => line && !line.includes(chineseRequirement)));
+			// The reminder rides in the persistent system prompt, once. The
+			// per-request receipt must not repeat it or depend on the port.
+			expect(on).not.toContain(chineseRequirement);
+			expect(off).toBe(on);
 			const turn = { role: "user", content: `Continue after round ${round + 1}.` };
 			enabled.commit(turn);
 			disabled.commit(turn);
@@ -198,7 +206,7 @@ test("the language port changes only the language requirement on successive mode
 		enabled.remove();
 		disabled.remove();
 	}
-}
+});
 
 function demandCount(messages) {
 	return messages.flatMap(({ content }) => Array.isArray(content)

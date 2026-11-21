@@ -76,6 +76,8 @@ A bare `/herd` flips the mode and sends nothing to the model: the next request l
 
 At a relay handoff, every historical pin is written into the successor's opening text under `## Pinned Context`. The successor is told to read each important document named there with `read`, in full, rather than substituting grep excerpts.
 
+The same handoff copies the user's own prompts, verbatim and oldest first, into the opening under `## User Prompts (verbatim)`. The relay keeps that archive in session state, so a prompt that compaction removed still reaches every later generation; the handoff report therefore does not restate the requirements.
+
 ## Relay handoff
 
 When `todo` empties the ledger, the relay arms a handoff transaction and the next provider request is refused by a synchronous `agent.addBeforeModelCall` gate. The gate never awaits the handoff: it starts one background ticket and returns `{ stop: true }`, so no request is built on the empty ledger and no extra model turn is spent.

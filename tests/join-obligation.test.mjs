@@ -97,6 +97,24 @@ describe("a returned child is unreceived work", () => {
     expect(out.additionalContext).toContain("1 unreceived child result");
   });
 
+  test("a root natural stop with an empty ledger still records the evaluation", () => {
+    const ledger = createBracketLedger();
+    let recorded = 0;
+    const station = {
+      state: createState(),
+      forkLedgerPort: () => ledger,
+      forkOwnerId: () => null,
+      relayOn: () => true,
+      recordNaturalStop: () => {
+        recorded += 1;
+        return { changed: false };
+      },
+    };
+    const out = onSessionStop(station, {});
+    expect(recorded).toBe(1);
+    expect(out).toBeUndefined();
+  });
+
   test("a no-tool-call message is nudged while a ready child waits", () => {
     const ledger = createBracketLedger();
     forkChild(ledger, "ready");

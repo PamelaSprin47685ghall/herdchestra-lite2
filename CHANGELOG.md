@@ -6,6 +6,40 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added — the relay keeps the user's own words
+
+- A handoff writes every user prompt, verbatim and oldest first, into the
+  successor's opening under `## User Prompts (verbatim)`. The relay keeps the
+  archive in session state (`relay.userPrompts`, validated and serialized), so
+  a prompt that compaction removed still reaches every later generation and
+  survives a reload. `collectUserPrompts` skips the host's compaction summary,
+  the relay's own handoff demand and blocked-tool reason, and the child return
+  nudge; `mergeUserPrompts` matches the still-visible suffix so nothing is
+  duplicated or reordered. The handoff demand and `scope_join`'s
+  `elder_report` guidance now say the report does not restate the requirements.
+  `tests/relay-prompts.test.mjs`; README and prompt docs updated.
+
+### Fixed — a child that stops without returning is asked again
+
+- `spawnChildTicket` reads the bracket after the prompt: a natural stop leaves
+  it `running`, so the ticket delivers the child return nudge and hands the
+  loop back, at most twice. After that the child is failed and its record
+  stays unpublished. A record frozen by `scope_return` is no longer turned
+  into a failure by the spawner's empty slice. `pulse` wakes waiters even when
+  `markReady` reports `ALREADY_READY`, so a parent is not parked while a
+  frozen record waits. `tests/fork-wiring.test.mjs`,
+  `tests/join-obligation.test.mjs`.
+
+### Changed — running tools render above the editor
+
+- Child activity no longer appends an open tool card to the transcript while
+  the call is unsettled. Each running tool owns one row in the `herd-tools`
+  widget above the editor, so a slow `scope_join`, `scope_return` or tool call
+  never pins the transcript retirement frontier. `tool_execution_end` renders
+  the native card once, at full size, through the host component registered by
+  `registerToolCardComponent`; child thinking streams in the host's italic
+  `thinkingText` style. `tests/child-display.test.mjs`.
+
 ### Changed — the root cannot spend a budget it does not have
 
 - The root has no fork record and therefore no tool budget. It used to pass

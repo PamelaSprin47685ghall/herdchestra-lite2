@@ -258,12 +258,31 @@ describe("relay text", () => {
 		const text = successorOpeningText(relay, report, [pin]);
 		expect(text.startsWith(report)).toBe(true);
 		expect(text).toContain("Generation 3 (from 2)");
-		expect(text).toContain("user's original request");
 		expect(text).toContain("first root todo write");
 		expect(text).toContain('permission: "ro"');
 		expect(text).toContain("Pinned Context");
 		expect(text).toContain(pin);
 		expect(text).not.toContain('todo({ op: "view" })');
+		// No user prompts supplied: the section must be absent, not empty.
+		const header = doc["successor-opening.user-prompts"].split("\n")[0];
+		expect(text).not.toContain(header);
+	});
+
+	test("successor opening carries every user prompt verbatim, oldest first, before the pins", () => {
+		const relay = { ...createRelay(), generation: 2 };
+		const prompts = ["first ask: keep the relay prompts", "second ask: no report template"];
+		const pin = "Pin: local://pin.log";
+		const text = successorOpeningText(relay, "Report body", [pin], prompts);
+		const header = doc["successor-opening.user-prompts"].split("\n")[0];
+		expect(header).toContain("User Prompts");
+		expect(text).toContain(header);
+		for (const prompt of prompts) expect(text).toContain(`[user] ${prompt}`);
+		// The requirement record travels with the handoff, ahead of the pins.
+		expect(text.indexOf(header)).toBeLessThan(text.indexOf("Pinned Context"));
+		expect(text.indexOf(prompts[0])).toBeLessThan(text.indexOf(prompts[1]));
+		// Whitespace-only entries must not render an empty [user] line.
+		const empty = successorOpeningText(relay, "Report body", [], ["   "]);
+		expect(empty).not.toContain(header);
 	});
 
 	test("a successor with inherited open work is told to read it before writing", () => {
@@ -280,7 +299,15 @@ describe("relay text", () => {
 		expect(failed).toContain("report again in your message body");
 		const next = relayStatusText(relay, null, { action: "handoff" });
 		expect(next).toContain("do not call tools");
-		expect(next).toContain("work completed, verification evidence, and remaining gaps or risks");
+		// Content decides the report's shape, and the prompts are preserved
+		// verbatim, so the report must not restate them in fixed sections.
+		expect(next).toContain("content decide its format");
+		expect(next).toContain("no template");
+		expect(next).toContain("do not restate them");
+		// The old contract demanded a fixed list of sections; its return would
+		// mean the relay again lost the prompts it promised to carry.
+		expect(next).not.toContain("full requirements");
+		expect(next).not.toContain("verification evidence, and remaining");
 	});
 
 	test("the no-ledger status names both lawful ledger shapes", () => {

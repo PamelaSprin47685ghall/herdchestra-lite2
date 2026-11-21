@@ -328,16 +328,21 @@ export async function waitForJoin(registry, ledger, forkId, options = {}) {
 
 /** Signal that a fork is ready, for callers that mark without waiting. */
 export function pulse(registry, ledger, forkId, outcome = null) {
+  let marked = { ok: true };
   if (forkId) {
-    const marked = markReady(ledger, forkId, {
+    marked = markReady(ledger, forkId, {
       ok: outcome?.failed !== true,
       reason: outcome?.reason ?? null,
       record: outcome?.record,
     });
-    if (!marked.ok) return marked;
   }
+  // Waking is not conditional on this mark succeeding. A child that already
+  // froze its record at scope_return makes markReady fail with ALREADY_READY,
+  // and returning there left the parent parked forever while the record sat
+  // ready. Waiters re-check their own condition, so a wake that changes
+  // nothing costs one loop iteration and never loses a record.
   notifyWaiters(registry);
-  return { ok: true };
+  return marked;
 }
 
 export function statsOf(registry) {

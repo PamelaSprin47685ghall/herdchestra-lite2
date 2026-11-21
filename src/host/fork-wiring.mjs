@@ -27,7 +27,13 @@ import { renderChildRecord } from "../transcript/replay.mjs";
 import { record } from "./diagnostics.mjs";
 import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
 import { forkOf } from "../scope/forkjoin.mjs";
+import { childReturnNudge } from "../scope/return-nudge.mjs";
 import { stopAfterScopeReturn } from "./branch-context.mjs";
+
+// A child that stops without scope_return submits nothing. The ticket asks it
+// to return; after this many refusals the child is recorded as failed, so a
+// runaway stop loop cannot burn the branch forever.
+const MAX_RETURN_NUDGES = 2;
 
 function messagesOf(session) {
 	// The live host keeps the turn list on the agent state. A test double or a
@@ -150,20 +156,43 @@ export async function spawnChildTicket(spec, ports) {
 		}
 		if (typeof session.agent?.abort === "function") detachTermination = stopAfterScopeReturn(session.agent);
 		await prompt(spec.receipt);
-		const stop = stopReasonOf(session);
-		if (stop !== null && stop !== "stop" && stop !== "end") {
-			failed = true;
-			reason = `the child stopped with reason "${stop}"`;
+		// A natural stop submits nothing. Only scope_return closes the bracket,
+		// so a RUNNING bracket after the prompt proves the child stopped short.
+		// The ticket says so and hands the loop back, once per stop.
+		let bracket = forkOf(ledger, spec.forkId);
+		let nudges = 0;
+		let unpublished = false;
+		while (bracket && bracket.status === "running") {
+			const stop = stopReasonOf(session);
+			if (stop !== null && stop !== "stop" && stop !== "end") {
+				failed = true;
+				reason = `the child stopped with reason "${stop}"`;
+				break;
+			}
+			if (nudges >= MAX_RETURN_NUDGES) {
+				failed = true;
+				reason = "the child stopped without calling scope_return; its record stays unpublished";
+				unpublished = true;
+				break;
+			}
+			nudges += 1;
+			await prompt(childReturnNudge());
+			bracket = forkOf(ledger, spec.forkId);
 		}
 		const added = messagesOf(session).slice(before);
-		const text = renderChildRecord(added, {
-			maxResultChars: ports.maxResultChars,
-			maxThinkingChars: ports.maxThinkingChars,
-		});
+		const text = unpublished
+			? ""
+			: renderChildRecord(added, {
+					maxResultChars: ports.maxResultChars,
+					maxThinkingChars: ports.maxThinkingChars,
+				});
 		// An empty record is not a silent success. The parent cannot tell a
 		// child that did nothing from one whose provider rejected the turn, so
 		// the spawner names the failure instead of handing over a blank page.
-		if (text.trim() === "" && !failed) {
+		// A record frozen by scope_return is proof the child handed over work;
+		// the spawner's empty slice must not turn that return into a failure.
+		const frozen = outcomeOf(registry, spec.forkId);
+		if (text.trim() === "" && !failed && !unpublished && !frozen?.record) {
 			failed = true;
 			reason = "the child produced no messages; the host accepted the prompt but recorded no child turn";
 		}

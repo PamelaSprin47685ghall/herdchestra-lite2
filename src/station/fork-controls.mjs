@@ -29,9 +29,9 @@ const F = loadDoc("tools/fork-join");
 const S = loadDoc("receipts/scope");
 
 // A summary is archive material. The runtime cannot prove that it names what
-// was done, where the evidence is and what remains, but a one-word value can
-// guide no later decision, and an unbounded value is a second copy of the
-// record. Both are refused before any child is consumed.
+// the successor still needs, but a one-word value can guide no later decision,
+// and an unbounded value is a second copy of the record. Both are refused
+// before any child is consumed.
 const MIN_ELDER_REPORT_CHARS = 24;
 const MAX_ELDER_REPORT_CHARS = 4000;
 // The join receipt adds a header, the remaining list and the pending-report
@@ -571,7 +571,7 @@ export function handleJoinCall(station, call, options = {}) {
     if (elderReport.length < MIN_ELDER_REPORT_CHARS) {
       return errorResult(
         "INVALID_ELDER_REPORT",
-        `elder_report needs at least ${MIN_ELDER_REPORT_CHARS} characters. Give the result, evidence and remaining work.`,
+        `elder_report needs at least ${MIN_ELDER_REPORT_CHARS} characters. Say what the successor still needs from that record; the content decides its format.`,
         {
           pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId,
           minimum: MIN_ELDER_REPORT_CHARS,
@@ -581,7 +581,7 @@ export function handleJoinCall(station, call, options = {}) {
     if (elderReport.length > MAX_ELDER_REPORT_CHARS) {
       return errorResult(
         "INVALID_ELDER_REPORT",
-        `elder_report exceeds ${MAX_ELDER_REPORT_CHARS} characters. Keep the conclusions, omit the record.`,
+        `elder_report exceeds ${MAX_ELDER_REPORT_CHARS} characters. Shorten it to what a successor cannot recover elsewhere.`,
         {
           pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId,
           maximum: MAX_ELDER_REPORT_CHARS,

@@ -6,6 +6,8 @@ Scope is the only way to run functional tools. Every scope opens as a fission ba
 `scope({ begin: { stage, elder_report, time, fission: [{ intent, budget, permission, model? }] } })`
 There is no single-flow begin shape (one flow is a one-item array). Flows in a batch share the current conversation prefix, run in parallel with independent budgets and optional per-flow models, and merge in completion order into a surviving flow until the last flow hands control back.
 
+The workbench behind that call has three shapes, and the wiring chooses one at startup: with no container at all every call is refused; with one container the scope is pushed on the current session and runs one thing at a time; with many containers it registers a batch and fans the flows out. Nothing in this text changes with that choice.
+
 Execution barrier:
 - Calls listed before `scope` in the same assistant message run first in the outer context (put `todo` before `scope({ begin })` or after the final `scope({ end: true })`).
 - Calls listed after `scope({ begin })` in the same assistant message execute once after the batch registers and their results are copied to every flow in the batch—use this to fetch shared context once without spending an extra turn.

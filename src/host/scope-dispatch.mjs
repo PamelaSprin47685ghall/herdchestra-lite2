@@ -3,20 +3,40 @@
 const agents = new WeakMap();
 const guardedExecutions = new WeakMap();
 
-function gateTool(tool, manager, admit) {
+function agentIdOf(target) {
+	if (!target || (typeof target !== "object" && typeof target !== "function")) return null;
+	try {
+		if (typeof target.getAgentId === "function") {
+			const id = target.getAgentId();
+			if (typeof id === "string" && id !== "") return id;
+		}
+	} catch {
+		// A throwing getter must not decide routing.
+	}
+	const id = target.agent?.id;
+	return typeof id === "string" && id !== "" ? id : null;
+}
+
+function gateTool(tool, manager, admit, agentId = null) {
 	let owner = tool;
 	let descriptor;
 	while (owner && !(descriptor = Object.getOwnPropertyDescriptor(owner, "execute"))) {
 		owner = Object.getPrototypeOf(owner);
 	}
-	let sessions = guardedExecutions.get(descriptor?.value);
-	if (!sessions) {
-		sessions = new WeakMap();
+	let routes = guardedExecutions.get(descriptor?.value);
+	if (!routes) {
+		routes = { byAgentId: new Map(), byManager: new WeakMap() };
 		// ACP exposes an execute getter through a Proxy. Define on its target
 		// and keep the target implementation, not the outer approval closure.
 		const execute = descriptor?.value ?? tool.execute;
 		const guarded = async function (toolCallId, params, signal, onUpdate, ctx) {
-			const gate = sessions.get(ctx?.sessionManager);
+			// The owner and every flow share one SessionManager, so a manager
+			// key alone hands a flow the last station that registered. The
+			// agent id is the caller's own identity and wins when present.
+			const id = agentIdOf(ctx);
+			const gate =
+				(id ? routes.byAgentId.get(id) : undefined) ??
+				(ctx?.sessionManager ? routes.byManager.get(ctx.sessionManager) : undefined);
 			const verdict = gate?.(toolCallId, tool.name, ctx);
 			if (verdict?.block) throw new Error(verdict.reason);
 			const limitMs = verdict?.limitMs ?? 0;
@@ -54,9 +74,10 @@ function gateTool(tool, manager, admit) {
 			writable: true,
 			value: guarded,
 		});
-		guardedExecutions.set(guarded, sessions);
+		guardedExecutions.set(guarded, routes);
 	}
-	sessions.set(manager, admit);
+	if (agentId) routes.byAgentId.set(agentId, admit);
+	if (manager) routes.byManager.set(manager, admit);
 }
 
 export function installScopeDispatch(session, prepare, admit) {
@@ -68,11 +89,12 @@ export function installScopeDispatch(session, prepare, admit) {
 		installed.admit = admit;
 		return;
 	}
+	const agentId = agentIdOf(session);
 	const original = agent.beforeToolCall;
 	const dispatch = { prepare, admit };
 	dispatch.hook = function (input, signal) {
 		if (dispatch.prepare(input.assistantMessage, input.toolCall.id, input.tool.name)) {
-			gateTool(input.tool, session.sessionManager, dispatch.admit);
+			gateTool(input.tool, session.sessionManager, dispatch.admit, agentId);
 		}
 		return original.call(this, input, signal);
 	};

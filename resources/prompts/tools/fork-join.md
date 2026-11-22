@@ -8,7 +8,7 @@ Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter
 
 ## fork.intent
 
-Give the child one bounded task, its deliverable, and the evidence that will show it is done.
+Name the goal the child will make true, the surface it owns, and what a successor can accept. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size it to finish and to be accepted.
 
 ## fork.budget
 
@@ -32,7 +32,7 @@ Include the remaining plan, both ready and blocked items. Order does not express
 
 ## fork.model
 
-Provider/model, alias, or role; a model can include a thinking suffix (`:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`). Omit or pass `null` to inherit the parent's model.
+Provider/model, alias, or role; a model can include a thinking suffix (`:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). Omit or pass `null` to inherit the parent's model.
 
 ## fork.batch-started
 

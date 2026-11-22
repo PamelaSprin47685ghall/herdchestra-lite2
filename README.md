@@ -10,7 +10,7 @@ Herdchestra Lite 2 gives omp parallel work that returns to the branch that asked
 
 `scope_return({})` submits the child's own record. In a message with other calls, place it last: the record is a whole working result and reads best after the other results. No tool is exclusive. A child may return while it still has unreceived children: those children move to the child's current parent, keep their identities and budgets, and are received there by `scope_join`.
 
-A branch's tool budget and wall clock come from the `scope_fork` item that created it. The parent's balance never funds a child and never shrinks when a child starts. The root branch has no tool budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `scope_return`, `amend`, `pin`, `todo`, `ask`, `wait`), a `read` of a `skill://` path, and the write that resolves a staged ast_edit preview stay available at the root. `amend` may not retract a beat at or before the branch's most recent structural call.
+A branch's tool budget and wall clock come from the `scope_fork` item that created it. The parent's balance never funds a child and never shrinks when a child starts. The root branch has no tool budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `amend`, `pin`, `todo`, `ask`, `wait`), a `read` of a `skill://` path, and the write that resolves a staged ast_edit preview stay available at the root. `scope_return` is child-only: it submits a branch's own record, so the root has no use for it. `amend` may not retract a beat at or before the branch's most recent structural call.
 
 The root (`Root`) keeps its native transcript and input stream. Descendants at every depth appear in the main transcript as labelled message and tool components; full records arrive through `scope_join`. Root and descendants compete equally for one streaming slot: the first stream holds it through completion, and an overlapping stream appears as a single block after it ends. The native working row displays `[Busy: X, Idle: Y]` and the path to the latest requesting scope, omitting `Root`. Each fork item supplies a short `scopeId` such as `oh-my-pie`, displayed as `Oh My Pie`. Only explicit tool prompts and approvals can use the root UI. An accepted `scope_return` ends the child loop at the tool-result boundary, without an extra model request or an interruption message.
 
@@ -30,16 +30,20 @@ Restart the session afterwards; modules load at process start. A `todo` result t
 
 `bun run smoke:relay` tests the working tree against a fake host. It checks fork/join registration and refusals, the `todo` status, and the relay transitions into and out of full flow. It does not test the installed copy.
 
-## Stage skills
+## Skills
 
 Guidance ships as ordinary omp skills under `skills/`. Direct execution needs no skill.
 
 | Skill | Question |
 |---|---|
+| `constitution` | Stance: engineering, communication, team, execution, candor, courage, language |
 | `decision-framing` | Why: intent, non-goals, the decision and its bounds |
+| `polish` | How: preserve claims, causal links, and voice while improving expression |
+| `prompt-craft` | Where model-facing text lives and how to write it |
+| `skill-authoring` | How to split, name, and maintain a skill |
 | `tdd-crowdsource` | What and who: contracts, test seams, and a rolling dispatch plan |
 
-Read `skill://<name>` when that stage's discipline is needed, or invoke `/skill:<name>`. The runtime enforces no order between them: there is no stage argument on any scope tool, no stage flag, and no execution gate. The stages are a discipline the model reads, not a state machine the extension enforces.
+Read `skill://constitution` before work. Read `skill://prompt-craft` before changing model-facing text, `skill://skill-authoring` before creating or splitting a skill, and `skill://polish` before polishing an existing text. Read `skill://decision-framing` when the goal or limits are unclear. Read `skill://tdd-crowdsource` before writing code or tests.
 
 Red contracts may be written by the lead or delegated. As contracts become ready, pin the current dispatch plan instead of running Red, then start the corresponding Green slices without waiting for the rest. A child may pin unrun checks for its parent; only checks that ran count as verification. Keep stage artifacts as skills under `.agent/skills/<name>/SKILL.md`.
 
@@ -59,16 +63,16 @@ Every fork item declares its own `permission: "ro" | "rw"`, and the field is req
 
 A refused batch changes no state, and no flow starts. Submit a ledger first, or open the flows with `"ro"`.
 
-## Herd mode
+## Autopilot
 
-Herd mode is toggled only by the user, with `/herd`. No model turn can enter or leave it.
+Autopilot is off by default and is toggled only by the user, with `/herd-autopilot`. No model turn can enter or leave it.
 
-A bare `/herd` flips the mode and sends nothing to the model: the next request learns the new mode from its receipt. `/herd <text>` is that same flip followed by one plain user message carrying `<text>`, so the model starts exactly one turn and reads the sentence as the user's request.
+A bare `/herd-autopilot` flips the mode and sends nothing to the model: the next request learns the new mode from its receipt. `/herd-autopilot <text>` is that same flip followed by one plain user message carrying `<text>`, so the model starts exactly one turn and reads the sentence as the user's request.
 
-- While it is on, `ask` is allowed and a turn may end naturally to wait for the user. The relay's stop rules stay suspended until the user toggles herd mode off.
-- While it is off, `ask` is always blocked, and the relay's ledger and handoff rules run as usual.
+- Off (manual duty): `ask` is allowed, a turn may end naturally to wait for the user, and the relay's two-empty-ledger, handoff, and ledger-evaluation rules do not run. Fork/join and its budgets still do.
+- On (full automatic): `ask` is blocked, and the relay evaluates every successful `todo` write, including the two empty evaluations and the handoff chain.
 
-`ask` needs one condition: herd mode on.
+`ask` needs one condition: autopilot off.
 
 ## Pinned context
 
@@ -132,7 +136,7 @@ comes from the provider's reported token usage.
 
 `bun scripts/smoke-omp.mjs` loads the real omp `AgentSession` from a local
 checkout (`OMP_HOST`, default `~/Desktop/vibe/oh-my-pi`) and checks the two
-prototype seams this extension patches, the five registered tools, the host
+prototype seams this extension patches, the six registered tools, the host
 events it binds, and the append-only state log.
 
 A checkout whose native addon is older than its source cannot be imported.

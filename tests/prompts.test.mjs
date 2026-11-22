@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { wireTools } from "../src/activation/tools.mjs";
 import { loadDoc, placeholderNames, render } from "../src/prompts/index.mjs";
 import * as scopeTools from "../src/tools/descriptions.mjs";
 import * as todoTools from "../src/tools/todo-description.mjs";
 import {
-	commonRulesText,
 	injectSystemPrompt,
 	persistentOperatingSkill,
 } from "../src/host/prompts.mjs";
@@ -124,15 +123,29 @@ describe("tool contracts map to their documents", () => {
 describe("system prompts map to their documents", () => {
 	test("system pieces", () => {
 		const doc = loadDoc("system");
-		expect(commonRulesText).toBe(doc["common-rules"]);
+		expect(doc["common-rules"]).toBeUndefined();
 		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
 		expect(persistentOperatingSkill).toContain("强制以简体中文");
+		expect(persistentOperatingSkill).toContain("skill://constitution");
+		expect(persistentOperatingSkill).toContain("skill://prompt-craft");
+		expect(persistentOperatingSkill).toContain("skill://skill-authoring");
+		expect(persistentOperatingSkill).toContain("skill://polish");
 	});
 
 	test("stage guidance is shipped as skills, not injected as a prompt block", () => {
 		expect(persistentOperatingSkill).toMatch(/skills ship with this plugin/);
 		expect(persistentOperatingSkill).toContain("the runtime enforces no order");
 		expect(persistentOperatingSkill).not.toContain("Stage Prompts block");
+	});
+
+	test("constitution is a shipped skill with a loadable description", () => {
+		const text = readFileSync(
+			new URL("../skills/constitution/SKILL.md", import.meta.url),
+			"utf8",
+		);
+		expect(text.startsWith("---\nname: constitution\n")).toBe(true);
+		expect(text).toContain("description:");
+		expect(text).toContain("Read before work.");
 	});
 
 	test("every skill the persistent rules name is in the package", () => {
@@ -191,7 +204,7 @@ describe("injectSystemPrompt", () => {
 		const stale = `Intro.\n\n${START}\nSTALE\n${END}\n\nBody.`;
 		const output = injectSystemPrompt(stale);
 		expect(output).not.toContain("STALE");
-		expect(output).toContain(commonRulesText);
+		expect(output).toContain(persistentOperatingSkill);
 		expect(output.startsWith("Intro.\n\n")).toBe(true);
 		expect(output.endsWith(`${END}\n\nBody.`)).toBe(true);
 	});
@@ -217,6 +230,23 @@ describe("injectSystemPrompt", () => {
 		const value = { prompt: "Host prompt." };
 		expect(injectSystemPrompt(value)).toBe(value);
 		expect(injectSystemPrompt(null)).toBe(null);
+	});
+
+	test("keeps each mode's rules inside a skill element", () => {
+		for (const autopilot of [true, false]) {
+			const text = injectSystemPrompt("Host prompt.", { autopilot });
+			const modeAt = text.indexOf("### Close the work");
+			const lastOpen = text.lastIndexOf("<skill");
+			const lastClose = text.lastIndexOf("</skill>");
+
+			expect(modeAt).toBeGreaterThan(lastOpen);
+			expect(modeAt).toBeLessThan(lastClose);
+			expect((text.match(/<skill\b/g) ?? []).length).toBe(
+				(text.match(/<\/skill>/g) ?? []).length,
+			);
+			expect(text).toContain(persistentOperatingSkill);
+			expect(text.endsWith(`${END}\n\nHost prompt.`)).toBe(true);
+		}
 	});
 });
 

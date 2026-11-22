@@ -43,6 +43,7 @@ function forkChild(ledger, forkId, ownerId = "root") {
 function stationFor(registry, ledger) {
   const station = Object.create(SessionStation.prototype);
   station.state = createState();
+  station.state.autopilot = true;
   station.processed = createProcessedLedger();
   station.ownerId = null;
   station.forkLedgerPort = () => ledger;
@@ -84,7 +85,7 @@ describe("a returned child is unreceived work", () => {
     forkChild(ledger, "ready");
     markReady(ledger, "ready");
     const station = {
-      state: createState(),
+      state: { ...createState(), autopilot: true },
       forkLedgerPort: () => ledger,
       forkOwnerId: () => null,
       relayOn: () => true,
@@ -101,7 +102,7 @@ describe("a returned child is unreceived work", () => {
     const ledger = createBracketLedger();
     let recorded = 0;
     const station = {
-      state: createState(),
+      state: { ...createState(), autopilot: true },
       forkLedgerPort: () => ledger,
       forkOwnerId: () => null,
       relayOn: () => true,
@@ -119,7 +120,7 @@ describe("a returned child is unreceived work", () => {
     const ledger = createBracketLedger();
     forkChild(ledger, "ready");
     markReady(ledger, "ready");
-    const decision = nudgeDecision(createState(), {
+    const decision = nudgeDecision({ ...createState(), autopilot: true }, {
       hasToolCalls: false,
       ledger,
       ownerId: "root",

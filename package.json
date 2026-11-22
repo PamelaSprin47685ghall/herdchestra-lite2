@@ -1,7 +1,7 @@
 {
 	"name": "herdchestra-lite2",
 	"version": "3.0.0",
-	"description": "Budgeted work scopes, herd mode, and a handoff relay for omp",
+	"description": "Budgeted work scopes, an autopilot mode, and a handoff relay for omp",
 	"type": "module",
 	"license": "MIT",
 	"private": true,

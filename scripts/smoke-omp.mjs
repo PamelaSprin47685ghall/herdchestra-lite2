@@ -5,7 +5,9 @@
  * Load the host's real `AgentSession` and check the seams used by capture.
  * Run the real `activate` entry through a test API that exposes that class.
  * Other checks use local fixtures for construction inputs and persistence.
- * This script does not send provider requests or measure cache reuse.
+ * One check builds real sessions to observe the model a flow takes; it sends
+ * no completion request, though construction may run the host's warm-up.
+ * This script does not measure cache reuse.
  *
  *   bun scripts/smoke-omp.mjs
  *   OMP_HOST=/path/to/oh-my-pi bun scripts/smoke-omp.mjs
@@ -238,6 +240,30 @@ if (AgentSession) {
 	skip("capture installs on the real class", reason);
 }
 
+/**
+ * `scope_fork` resolves model selectors through the host facade that an
+ * extension sees as `ctx.models`. This check names the seam; it does not
+ * select a model or send a request.
+ */
+await check("host exposes the model facade used by scope_fork", () => {
+	const runnerPath = join(HOST, "packages/coding-agent/src/extensibility/extensions/runner.ts");
+	const typesPath = join(HOST, "packages/coding-agent/src/extensibility/extensions/types.ts");
+	assert(existsSync(runnerPath), `missing ${runnerPath}`);
+	assert(existsSync(typesPath), `missing ${typesPath}`);
+	const runner = stripComments(readFileSync(runnerPath, "utf8"));
+	const types = stripComments(readFileSync(typesPath, "utf8"));
+	assert(
+		/models:\s*createExtensionModelQuery\(/.test(runner),
+		"the extension context no longer installs ctx.models",
+	);
+	assert(/interface ExtensionModelQuery/.test(types), "ExtensionModelQuery is gone");
+	assert(
+		/resolve\s*\(\s*spec:\s*string\s*\)\s*:\s*Model(?:<[^>]+>)?\s*\|\s*undefined/.test(types),
+		"ctx.models.resolve no longer accepts a selector string",
+	);
+	return "ctx.models.resolve";
+});
+
 function fakePi() {
 	const tools = new Map();
 	const handlers = new Map();
@@ -287,6 +313,112 @@ await check("hooks bind to host events", () => {
 });
 
 /**
+ * Build a real owner session and a real flow session through the plugin's
+ * factory. The owner fixture cannot answer this: only a created AgentSession
+ * proves the host applied the requested model and thinking level, and that a
+ * request without a model inherits the owner's.
+ *
+ * The owner is a real session created offline. The flow needs an extension
+ * seed (deriveBranchConfig refuses without one), so the owner proxy supplies
+ * one prepared no-op extension; the session's own getters and managers stay
+ * untouched. A missing host SDK module is an environment failure, not drift.
+ */
+await check("a created flow session takes the requested model", async () => {
+	const sdkPath = join(HOST, "packages/coding-agent/src/sdk.ts");
+	const managerPath = join(HOST, "packages/coding-agent/src/session/session-manager.ts");
+	const costGatePath = join(HOST, "packages/coding-agent/src/session/cost-gate.ts");
+	assert(existsSync(sdkPath), `missing ${sdkPath}`);
+	assert(existsSync(managerPath), `missing ${managerPath}`);
+	assert(existsSync(costGatePath), `missing ${costGatePath}`);
+	const { createAgentSession } = await import(sdkPath);
+	const { SessionManager } = await import(managerPath);
+	const { CostGate } = await import(costGatePath);
+	const { createBranchSession } = await import("../src/host/branch-session.mjs");
+	assert(typeof createAgentSession === "function", "sdk exports no createAgentSession");
+	assert(typeof SessionManager?.inMemory === "function", "no in-memory SessionManager");
+
+	const manager = SessionManager.inMemory();
+	const owner = (
+		await createAgentSession({
+			sessionManager: manager,
+			cwd: process.cwd(),
+			bindProcessState: false,
+			disableExtensionDiscovery: true,
+			systemPrompt: ["You are the owner."],
+		})
+	).session;
+	assert(owner && typeof owner === "object", "owner session was not created");
+	assert(owner.model, "owner session selected no model");
+
+	const available = owner.modelRegistry?.getAvailable?.() ?? [];
+	assert(available.length > 0, "the host registry lists no available model");
+	const ownerId = `${owner.model.provider}/${owner.model.id}`;
+	const requested = available.find((model) => `${model.provider}/${model.id}` !== ownerId);
+	assert(requested, "the host registry lists only the owner's model");
+
+	// deriveBranchConfig requires an extension seed; the real session has none
+	// with discovery disabled. The proxy changes only that one getter.
+	const seed = [
+		{
+			path: "/virtual/smoke-extension.mjs",
+			resolvedPath: "/virtual/smoke-extension.mjs",
+			factory: () => ({}),
+			error: null,
+		},
+	];
+	const ownerSource = new Proxy(owner, {
+		get(target, property) {
+			if (property === "preparedExtensions") return seed;
+			return Reflect.get(target, property, target);
+		},
+	});
+
+	const common = {
+		session: ownerSource,
+		sessionManager: manager,
+		createAgentSession,
+		asyncJobManager: {},
+		costGate: new CostGate(owner.settings, 0, () => {}),
+		systemPrompt: ["You are the owner."],
+		// Name the tool view explicitly: this check is about the model seam,
+		// and the plugin's capture has already wrapped the live session class.
+		toolNames: ["read", "scope_fork", "todo"],
+		activeToolNames: ["read", "scope_fork"],
+		mountedToolNames: [],
+	};
+	const requestedId = `${requested.provider}/${requested.id}`;
+	const explicit = await createBranchSession({
+		...common,
+		flowId: "smoke-model-explicit",
+		model: requested,
+		thinkingLevel: "low",
+	});
+	assert(explicit.ok === true, `explicit flow refused: ${explicit.reason ?? explicit.error?.message}`);
+	assert(explicit.session?.model, "explicit flow session has no model");
+	assert(
+		`${explicit.session.model.provider}/${explicit.session.model.id}` === requestedId,
+		`explicit flow model ${explicit.session.model.provider}/${explicit.session.model.id} != ${requestedId}`,
+	);
+	assert(
+		explicit.session.thinkingLevel === "low",
+		`explicit flow thinking ${explicit.session.thinkingLevel} != low`,
+	);
+
+	const inherited = await createBranchSession({ ...common, flowId: "smoke-model-inherit" });
+	assert(inherited.ok === true, `inherited flow refused: ${inherited.reason ?? inherited.error?.message}`);
+	assert(inherited.session?.model, "inherited flow session has no model");
+	assert(
+		`${inherited.session.model.provider}/${inherited.session.model.id}` === ownerId,
+		`inherited flow model ${inherited.session.model.provider}/${inherited.session.model.id} != ${ownerId}`,
+	);
+	assert(
+		`${owner.model.provider}/${owner.model.id}` === ownerId,
+		"the owner session's model changed",
+	);
+	return `${requestedId} @ low; inherit ${ownerId}`;
+});
+
+/**
  * A2: check `deriveBranchConfig` with an owner fixture that has the host's
  * shape. Compare tool names, system prompt input, and prompt cache key by
  * SHA-256. This checks construction inputs; it does not compare full tool
@@ -307,7 +439,7 @@ await check("flow construction inputs match the owner fixture", async () => {
 		costGate: {},
 		getEnabledToolNames: () => ["read", "scope_fork", "todo"],
 		getActiveToolNames: () => ["read", "scope_fork"],
-		getMountedXdevToolNames: () => [],
+		getMountedToolCommandNames: () => [],
 		preparedExtensions: ["prepared"],
 		extensionPaths: [],
 		getHeader: () => ({}),
@@ -330,7 +462,21 @@ await check("flow construction inputs match the owner fixture", async () => {
 		comparison.mismatches.length === 0,
 		`construction-input mismatch: ${comparison.mismatches.join(", ")}`,
 	);
-	return "tool names, systemPrompt input, promptCacheKey";
+	// A selector resolved by the station reaches the config as the host Model
+	// object plus its level. The parent fixture stays untouched.
+	const requested = { id: "test/deep", provider: "test" };
+	const overridden = deriveBranchConfig({
+		session: owner,
+		sessionManager: manager,
+		flowId: "flow-smoke-1",
+		model: requested,
+		thinkingLevel: "high",
+	});
+	assert(overridden.ok === true, `override refused: ${overridden.reason ?? overridden.detail}`);
+	assert(overridden.config.model === requested, "requested model was not carried");
+	assert(overridden.config.thinkingLevel === "high", "requested thinking level was not carried");
+	assert(owner.model !== requested, "the owner fixture's model changed");
+	return "tool names, systemPrompt input, promptCacheKey, model override";
 });
 
 function memoryManager() {

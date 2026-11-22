@@ -5,6 +5,7 @@
 // note was kept.
 
 export const PIN_UNAVAILABLE = "PIN_UNAVAILABLE";
+export const PIN_INTERNAL_ERROR = "PIN_INTERNAL_ERROR";
 
 function refusal() {
 	return { ok: false, code: PIN_UNAVAILABLE, port: "pin" };

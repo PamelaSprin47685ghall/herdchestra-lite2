@@ -91,7 +91,7 @@ export function serializeState(state) {
     brackets: serializeLedger(state.brackets),
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
-    herdMode: state.herdMode === true,
+    autopilot: state.autopilot === true,
     pins: copyPins(state.pins),
     relay: copyRelay(state.relay),
     baseModelSpec:
@@ -271,7 +271,7 @@ export function deserializeState(input) {
       amends: amends.slice(),
       receipts: (data.receipts ?? []).map(copyReceipt).filter(Boolean),
       brackets: restoredBrackets.ledger,
-      herdMode: data.herdMode === true,
+      autopilot: data.autopilot === true,
       pins: copyPins(data.pins),
       relay: data.version === VERSION ? copyRelay(data.relay) : createRelay(),
       baseModelSpec:

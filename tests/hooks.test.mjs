@@ -76,6 +76,31 @@ describe("hook wiring", () => {
 		expect(hooksRecords()).toHaveLength(0);
 	});
 
+	test("session_stop forwards abort and error evidence to the station", () => {
+		const seen = [];
+		const station = {
+			...STATION,
+			onSessionStop: (_ctx, evidence) => {
+				seen.push(evidence);
+				return "station-answer";
+			},
+		};
+		const pi = fakePi();
+		wireHooks(pi, { stationFor: () => station, stationForStop: () => station });
+		const handler = pi.handlers.get("session_stop");
+		const signal = { aborted: false };
+
+		const result = handler(
+			{ last_assistant_message: { stopReason: "aborted" }, signal },
+			{},
+		);
+		expect(result).toBe("station-answer");
+		expect(seen).toEqual([{ signal, reason: "aborted" }]);
+
+		handler({ last_assistant_message: { stopReason: "error" } }, {});
+		expect(seen[1]).toEqual({ signal: null, reason: "error" });
+	});
+
 	test("is ok when both message events register", () => {
 		const pi = fakePi();
 		const diagnosis = wireHooks(pi, fakeRegistry());

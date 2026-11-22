@@ -19,7 +19,6 @@ export {
 	agentPolicy,
 } from "./policy.mjs";
 export {
-	commonRulesText,
 	rewriteVibeModeContext,
 	injectSystemPrompt,
 	persistentOperatingSkill,

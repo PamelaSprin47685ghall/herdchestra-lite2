@@ -23,7 +23,7 @@ function stationWith(children, { ownerId = "root", viewer = null } = {}) {
 		});
 	}
 	return {
-		state: { scopes: [], relay: null, herdMode: false },
+		state: { scopes: [], relay: null, autopilot: true },
 		processed: { hasHandled: () => true, markCall: () => {} },
 		processControlsForTool: () => {},
 		forkLedgerPort: () => ledger,

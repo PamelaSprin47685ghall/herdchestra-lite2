@@ -35,6 +35,40 @@ import { stopAfterScopeReturn } from "./branch-context.mjs";
 // runaway stop loop cannot burn the branch forever.
 const MAX_RETURN_NUDGES = 2;
 
+function isDisplayHolder(value) {
+	return value !== null && typeof value === "object" && "current" in value;
+}
+
+function resolveDisplay(value) {
+	if (typeof value === "function") return value();
+	if (isDisplayHolder(value)) return value.current;
+	return value;
+}
+
+// A display holder is shared across nested stations. `current` lets a late
+// reader resolve the port; `subscribe`/`notify` let the root wake every child
+// station that queued a session before the UI existed.
+function createDisplayHolder(initial = null) {
+	const listeners = new Set();
+	return {
+		current: initial ?? null,
+		subscribe(listener) {
+			if (typeof listener !== "function") return () => {};
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		notify() {
+			for (const listener of [...listeners]) {
+				try {
+					listener();
+				} catch (error) {
+					record("fork", error, { phase: "display" });
+				}
+			}
+		},
+	};
+}
+
 function messagesOf(session) {
 	// The live host keeps the turn list on the agent state. A test double or a
 	// host variant may expose it on the session or the agent instead; reading
@@ -100,10 +134,24 @@ export async function spawnChildTicket(spec, ports) {
 		created = await createSession(spec);
 		if (!created || created.ok !== true || !created.session) {
 			failed = true;
-			reason =
+			const base =
 				typeof created?.reason === "string" && created.reason !== ""
 					? created.reason
 					: "the child session could not be created";
+			// A factory refusal carries the original error and the refusal's
+			// explanation. Keep the code in the reason the parent sees, append
+			// whichever evidence exists, and put the cause in the diagnostics
+			// ring. A bare "CREATE_FAILED" or "NO_TOOL_VIEW" must not hide why
+			// the child never started.
+			const cause = created?.error;
+			const detail = typeof created?.detail === "string" && created.detail !== "" ? created.detail : null;
+			// A refusal with neither a cause nor a detail stays a bare code.
+			reason = cause
+				? `${base}: ${String(cause?.message ?? cause)}`
+				: detail
+					? `${base}: ${detail}`
+					: base;
+			if (cause) record("fork", cause, { forkId: spec.forkId, phase: "create" });
 			writeOutcome({ record: "", failed: true, reason });
 			return finish();
 		}
@@ -276,9 +324,106 @@ export function attachForkPorts(station, wiring, options = {}) {
 			? identity.forkId
 			: null;
 	station.ownerId = station.forkOwnerId();
-	station.noteRootWait = !identity && options.display ? (delta) => options.display.rootWait?.(delta) : null;
-	station.noteScopeRequest = options.display && ledger
-		? () => options.display.request(ledger, station.ownerId)
+	// Display is a live holder, not a snapshot: the interactive UI may appear
+	// after this station is attached (or the session may be remembered late).
+	// The composition root refreshes the holder on every later station access,
+	// and the spawner reads it at spawn time.
+	// A display holder is live: the interactive UI may arrive after this
+	// station (or a child station) is attached. Keep the holder when one is
+	// given, and never write a child's shared holder from this station.
+	const displayHolder = isDisplayHolder(options.display) ? options.display : null;
+	// A child receives the parent's live holder; the root owns a fresh one.
+	// Sharing the object is what lets a root setDisplayPort reach every nested
+	// station that is still waiting for a port.
+	const displayRef = displayHolder ?? createDisplayHolder(resolveDisplay(options.display));
+	const currentDisplay = () => resolveDisplay(displayRef);
+	// A child session that starts before the UI exists has no display to
+	// attach to. Hold it until a port arrives, then attach it; the spawner's
+	// detach still removes only that child.
+	const pendingDisplay = new Map();
+	// Only sessions still waiting for a port need a wake-up. Once every
+	// waiting session is attached, the station drops its listener so a
+	// long-lived root holder does not accumulate one per child station.
+	const waitingDisplay = new Set();
+	let unsubscribeDisplay = null;
+
+	function subscribeDisplay() {
+		if (unsubscribeDisplay || typeof displayRef.subscribe !== "function") return;
+		unsubscribeDisplay = displayRef.subscribe(() => flushPendingDisplay());
+	}
+
+	function releaseDisplaySubscriptionIfIdle() {
+		if (waitingDisplay.size > 0) return;
+		unsubscribeDisplay?.();
+		unsubscribeDisplay = null;
+	}
+
+	function attachPendingDisplay(entry, port) {
+		if (!entry.active || entry.attached) return;
+		try {
+			entry.detach = port.attach?.(entry.label, entry.session) ?? null;
+			entry.attached = true;
+		} catch (error) {
+			record("fork", error, { phase: "display" });
+		}
+	}
+
+	function flushPendingDisplay() {
+		const port = currentDisplay();
+		if (!port) return;
+		for (const [session, entry] of pendingDisplay) {
+			if (!entry.active) {
+				pendingDisplay.delete(session);
+				waitingDisplay.delete(session);
+				continue;
+			}
+			if (entry.attached) {
+				waitingDisplay.delete(session);
+				continue;
+			}
+			attachPendingDisplay(entry, port);
+			if (entry.attached) waitingDisplay.delete(session);
+		}
+		releaseDisplaySubscriptionIfIdle();
+	}
+
+	function attachDisplay(label, session) {
+		const entry = { label, session, detach: null, attached: false, active: true };
+		pendingDisplay.set(session, entry);
+		const port = currentDisplay();
+		if (port) attachPendingDisplay(entry, port);
+		if (!entry.attached) {
+			waitingDisplay.add(session);
+			subscribeDisplay();
+		}
+		return () => {
+			entry.active = false;
+			entry.detach?.();
+			entry.detach = null;
+			entry.attached = false;
+			pendingDisplay.delete(session);
+			waitingDisplay.delete(session);
+			releaseDisplaySubscriptionIfIdle();
+		};
+	}
+
+	station.displayPort = currentDisplay;
+	station.setDisplayPort = (port) => {
+		// A child shares the parent's holder. It may flush its own waiting
+		// sessions, but only the root owns the value.
+		if (displayHolder) {
+			flushPendingDisplay();
+			return;
+		}
+		displayRef.current = port ?? null;
+		flushPendingDisplay();
+		displayRef.notify?.();
+	};
+	station.noteRootWait = !identity
+		? (delta) => currentDisplay()?.rootWait?.(delta)
+		: null;
+	station.noteScopeRequest = ledger
+		? () => currentDisplay()?.request(ledger, station.ownerId)
 		: null;
 	station.forkDepthPort = () =>
 		identity && Number.isInteger(identity.childDepth)
@@ -304,13 +449,17 @@ export function attachForkPorts(station, wiring, options = {}) {
 			// the spawn so that station can find its own fork the moment the
 			// host builds it.
 			const agentId = `fork-${randomUUID()}`;
+			// The holder must outlive this spawn: a child created before the
+			// UI exists reads the same live slot when the display arrives.
+			const identityDisplayHolder = displayRef;
 			setIdentity(registry, spec.forkId, {
 				parentOwnerId: spec.parentOwnerId ?? null,
 				ownScopeId: spec.ownScopeId ?? null,
 				// Provider IDs are opaque (including slashes and long suffixes).
 				// Prebind the generated host ID without changing the fork identity.
 				agentId,
-				display: options.display ?? null,
+				display: resolveDisplay(identityDisplayHolder),
+				displayHolder: identityDisplayHolder,
 				ledger,
 				// The root branch is the one a reload restores. Give the child
 				// the ability to persist that branch when it returns, so a ready
@@ -325,7 +474,9 @@ export function attachForkPorts(station, wiring, options = {}) {
 			const ports = {
 				registry,
 				ledger,
-				display: options.display ?? null,
+				// Queue the attach until a display exists. A child that starts
+				// before the UI is still attached when the port arrives.
+				display: { attach: attachDisplay },
 				prepareChild: options.prepareChild ?? null,
 				// A finished spawn is a ledger change too. The parent's branch
 				// persists it, not the child's disappearing one.

@@ -31,7 +31,9 @@ function executeAmend(station, toolCallId, params) {
 function executePin(station, toolCallId, params) {
 	const cached = station.processed.handledFor(toolCallId);
 	if (cached) return cached;
-	if (!station.state.herdMode && station.state.relay?.handoffPending) {
+	const ownerId =
+		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
+	if (ownerId === null && station.state.autopilot && station.state.relay?.handoffPending) {
 		return errorResult("RELAY_HANDOFF_PENDING", handoffToolBlockedReason());
 	}
 	const result = handlePinCall(station, { id: toolCallId, arguments: params });
@@ -64,7 +66,7 @@ function amendBoundary(station, currentMessage, currentIndex, messages) {
 function directAmend(station, toolCallId, params) {
 	const found = station.assistantForToolCall(toolCallId);
 	if (found) {
-		station.processAssistantMessage(found.message, { persisted: true });
+		station.processAssistantMessage(found.message);
 		const cached = station.processed.handledFor(toolCallId);
 		if (cached) return cached;
 	}
@@ -96,7 +98,7 @@ function directAmend(station, toolCallId, params) {
  */
 function controlContext(station, toolCallId) {
 	const found = station.assistantForToolCall(toolCallId);
-	if (found) station.processAssistantMessage(found.message, { persisted: true });
+	if (found) station.processAssistantMessage(found.message);
 	const currentMessage =
 		found?.message ?? station.messageForToolCall(toolCallId) ?? null;
 	return { found, currentMessage };
@@ -131,7 +133,9 @@ function executeFork(station, toolCallId, params, ctx) {
 				ctx,
 				currentMessage,
 				mainAgent: station.policy(ctx) === MAIN_AGENT,
-				relayOn: station.relayOn(ctx),
+				// Manual duty runs no relay. A relay left behind by an earlier
+				// autopilot handoff must not keep gatekeeping fork admission.
+				relayOn: station.state.autopilot === true && station.relayOn(ctx),
 			},
 		);
 	});

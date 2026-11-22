@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { commonRulesText, injectSystemPrompt, persistentOperatingSkill } from "../src/host/prompts.mjs";
+import { injectSystemPrompt, persistentOperatingSkill } from "../src/host/prompts.mjs";
 import { wireTools } from "../src/activation/tools.mjs";
 import { handoffDemand, applyLedgerEvaluation, beginGenerationAfterHandoff, createRelay } from "../src/relay/index.mjs";
 import { installContextPreparation } from "../src/host/context-preparation.mjs";
@@ -19,13 +19,9 @@ for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 		const text = Array.isArray(prompt) ? prompt.join("\n") : prompt;
 		expect(injectSystemPrompt(prompt)).toEqual(prompt);
 		expect(text).toContain("Host instructions");
-		expect(text).toContain(commonRulesText);
 		expect(text).toContain(persistentOperatingSkill);
+		expect(persistentOperatingSkill).toContain("skill://constitution");
 		expect(persistentOperatingSkill.trim().split(/\s+/).length).toBeLessThanOrEqual(1300);
-
-		const withoutCommon = injectSystemPrompt(prompt, { commonRules: "off" });
-		const noCommonText = Array.isArray(withoutCommon) ? withoutCommon.join("\n") : withoutCommon;
-		expect(noCommonText).toBe(text.replace(`${commonRulesText}\n\n`, ""));
 		expect(text.match(chineseInstruction)).toHaveLength(1);
 
 		const withoutChinese = injectSystemPrompt(prompt, { chineseReminder: "off" });
@@ -36,6 +32,21 @@ for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 		);
 	});
 }
+
+test("the operating rules keep the relay section out of manual duty", () => {
+	const manual = injectSystemPrompt("Host instructions", { autopilot: false });
+	const manualText = Array.isArray(manual) ? manual.join("\n") : manual;
+	expect(manualText).toContain("Autopilot is off by default");
+	expect(manualText).not.toContain("Any successful `todo` write");
+	expect(manualText).not.toContain("A non-empty root ledger forbids a final reply");
+
+	const auto = injectSystemPrompt("Host instructions", { autopilot: true });
+	const autoText = Array.isArray(auto) ? auto.join("\n") : auto;
+	expect(autoText).toContain("Only the user toggles autopilot");
+	expect(autoText).not.toContain("Autopilot is off by default");
+	expect(autoText).toContain("Any successful `todo` write");
+	expect(autoText).toContain("A non-empty root ledger forbids a final reply");
+});
 
 test("reinjecting a prompt converted from text to an array retains only the host repo rules", () => {
 	const hostPrompt = "# Repo-aware Rules\nHost review rules";
@@ -51,14 +62,14 @@ test("a promoted successor is ready to answer without reevaluating its ledger", 
 	const successor = beginGenerationAfterHandoff(predecessor);
 	const promoted = applyLedgerEvaluation(successor, []);
 	expect(promoted.relay.canStop).toBe(true);
-	const text = skillReceiptText({ herdMode: false, relay: promoted.relay });
+	const text = skillReceiptText({ autopilot: true, relay: promoted.relay });
 	expect(text).toMatch(/ready to answer/i);
 	expect(text).not.toMatch(/no ledger|evaluat/i);
 });
 
 test("routine scope status keeps local budget and pending work without repeating the assignment", () => {
 	const intent = "Write a report on the cave swallows of Costa Rica";
-	const state = { herdMode: false, startedAt: 0 };
+	const state = { autopilot: true, startedAt: 0 };
 	const branch = {
 		intent,
 		remaining: { read: 2, edit: 1 },
@@ -162,6 +173,7 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 		canPrompt: true,
 		prompt: (text) => sent.push({ role: "user", content: text }),
 	}, registry, null);
+	station.state.autopilot = true;
 	const remove = installContextPreparation(session, { station, ctx });
 	function commit(message) {
 		manager.appendMessage(message);
@@ -178,6 +190,40 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 	}
 	return { station, ctx, sent, commit, request, remove };
 }
+
+function receiptTextOf(message) {
+	return message.content.map((part) => part.text ?? "").join("\n");
+}
+
+test("a toggle regenerates the mode receipt instead of reusing the previous one", async () => {
+	const fixture = relayRequest({ keepHook: true });
+	try {
+		const autoMessages = await fixture.request();
+		const auto = autoMessages.filter((message) => message.herdSkill).at(-1);
+		expect(receiptTextOf(auto)).toContain("Autopilot on");
+
+		fixture.station.state.autopilot = false;
+		const manualMessages = await fixture.request();
+		const manual = manualMessages.filter((message) => message.herdSkill).at(-1);
+		expect(manual).not.toBe(auto);
+		expect(receiptTextOf(manual)).toContain("Autopilot off");
+		expect(receiptTextOf(manual)).not.toContain("Autopilot on");
+
+		fixture.station.state.autopilot = true;
+		const backMessages = await fixture.request();
+		const back = backMessages.filter((message) => message.herdSkill).at(-1);
+		expect(back).not.toBe(manual);
+		expect(receiptTextOf(back)).toContain("Autopilot on");
+		expect(receiptTextOf(back)).not.toContain("Autopilot off");
+
+		// Same mode: the receipt is reused rather than rebuilt.
+		const sameMessages = await fixture.request();
+		const same = sameMessages.filter((message) => message.herdSkill).at(-1);
+		expect(same).toBe(back);
+	} finally {
+		fixture.remove();
+	}
+});
 
 test("the language port leaves the receipt untouched on successive model requests", async () => {
 	// `keepHook` leaves the preparation hook installed: this test makes two
@@ -243,3 +289,20 @@ for (const resultVisible of [true, false]) {
 		expect(demandCount(messages)).toBe(1);
 	});
 }
+
+test("a child prompt carries child duty instead of either mode line", () => {
+	for (const autopilot of [true, false]) {
+		const child = injectSystemPrompt("Host instructions", { autopilot, branch: true });
+		const text = Array.isArray(child) ? child.join("\n") : child;
+		expect(text).toContain("### Child duties");
+		expect(text).toContain("Fork child duty");
+		expect(text).toContain("scope_return");
+		expect(text).not.toContain("Autopilot is on");
+		expect(text).not.toContain("Autopilot is off by default");
+	}
+
+	const manual = injectSystemPrompt("Host instructions", { autopilot: false });
+	const auto = injectSystemPrompt("Host instructions", { autopilot: true });
+	expect(manual).toContain("Autopilot is off by default");
+	expect(auto).toContain("Only the user toggles autopilot");
+});

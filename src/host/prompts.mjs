@@ -7,8 +7,6 @@ import { loadDoc } from "../prompts/index.mjs";
 const system = loadDoc("system");
 const vibe = loadDoc("vibe-mode");
 
-export const commonRulesText = system["common-rules"];
-
 const vibeModeReplacements = [
 	{
 		from: "drive two worker CLIs",
@@ -34,11 +32,16 @@ const systemPromptEnd = "<!-- /herdchestra-lite2:system-prompt -->";
 
 export const persistentOperatingSkill = system["persistent-rules"];
 
-// The repo-aware rules are one switchable block, not a fixed prefix: the
-// commonRules port decides whether it is assembled at all. Everything else in
-// the managed block stays, so turning it off removes only that section.
-function commonRulesBlock(options) {
-	return options?.commonRules === "off" ? "" : commonRulesText;
+// The mode section is chosen per request, never cached into the session: the
+// user may toggle autopilot mid-session, and the next request must see the new
+// rules. Manual duty keeps the fork/join rules but none of the relay protocol.
+const autopilotRules = system["autopilot-rules"];
+const manualRules = system["manual-rules"];
+const childRules = system["child-rules"];
+
+function modeRulesBlock(options) {
+	if (options?.branch === true) return childRules;
+	return options?.autopilot === true ? autopilotRules : manualRules;
 }
 
 // The Simplified-Chinese reminder is one line inside the persistent rules.
@@ -54,50 +57,29 @@ function persistentRulesBlock(options) {
 		.join("\n");
 }
 
-/**
- * Build the managed block. `includeCommon` is false when the host prompt
- * already carries the repo-aware rules from AGENTS.md: the section is the same
- * text, and shipping it twice only spends context.
- */
-function managedBlock(options = {}, includeCommon = true) {
-	const sections = [];
-	if (includeCommon) {
-		const rules = commonRulesBlock(options);
-		if (rules !== "") sections.push(rules);
-	}
-	sections.push(persistentRulesBlock(options));
+/** Build the managed block: persistent rules, then the mode-specific rules. */
+function managedBlock(options = {}) {
+	const sections = [persistentRulesBlock(options)];
+	const mode = modeRulesBlock(options);
+	if (mode !== "") sections.push(mode);
 	return `${systemPromptStart}\n${sections.join("\n\n")}\n${systemPromptEnd}`;
 }
 
-function hasRules(text) {
-	return typeof text === "string" && text.includes("# Repo-aware Rules");
-}
-
-function replaceManaged(text, options = {}, includeCommon = true) {
+function replaceManaged(text, options = {}) {
 	const start = text.indexOf(systemPromptStart);
 	if (start < 0) return text;
 	const end = text.indexOf(systemPromptEnd, start + systemPromptStart.length);
 	if (end < 0) return text;
 	return (
 		text.slice(0, start) +
-		managedBlock(options, includeCommon) +
+		managedBlock(options) +
 		text.slice(end + systemPromptEnd.length)
 	);
 }
 
-function outside(text) {
-	const start = text.indexOf(systemPromptStart);
-	if (start < 0) return text;
-	const end = text.indexOf(systemPromptEnd, start + systemPromptStart.length);
-	if (end < 0) return text;
-	return text.slice(0, start) + text.slice(end + systemPromptEnd.length);
-}
-
 function injectIntoString(text, options = {}) {
-	if (text.includes(systemPromptStart)) {
-		return replaceManaged(text, options, !hasRules(outside(text)));
-	}
-	return `${managedBlock(options, !hasRules(text))}\n\n${text}`;
+	if (text.includes(systemPromptStart)) return replaceManaged(text, options);
+	return `${managedBlock(options)}\n\n${text}`;
 }
 
 function injectIntoArray(prompt, options = {}) {
@@ -106,16 +88,13 @@ function injectIntoArray(prompt, options = {}) {
 	);
 	if (markerIndex >= 0) {
 		const old = prompt[markerIndex];
-		const includeCommon = !hasRules(outside(old)) &&
-			!prompt.some((block, index) => index !== markerIndex && hasRules(block));
-		const next = replaceManaged(old, options, includeCommon);
+		const next = replaceManaged(old, options);
 		if (next === old) return prompt;
 		const copy = prompt.slice();
 		copy[markerIndex] = next;
 		return copy;
 	}
-	const includeCommon = !prompt.some(hasRules);
-	return [managedBlock(options, includeCommon), ...prompt];
+	return [managedBlock(options), ...prompt];
 }
 
 export function injectSystemPrompt(prompt, options = {}) {

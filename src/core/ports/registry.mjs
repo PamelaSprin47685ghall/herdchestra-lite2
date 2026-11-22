@@ -25,7 +25,6 @@ export const PORTS = Object.freeze({
 		fallback: "handoff",
 	}),
 	clock: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
-	commonRules: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	chineseReminder: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	vibeCompat: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	herd: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),

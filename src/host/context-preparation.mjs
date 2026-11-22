@@ -164,7 +164,13 @@ function commitPrepared(registration, binding, signal, context, request, receipt
 		throw failure("CONTEXT_PREPARATION_INVALID_RECEIPT", "The station did not supply a skill receipt.");
 	}
 	const { session, station } = binding;
-	const messages = split.prefix.at(-1)?.herdSkill === true ? split.prefix : [...split.prefix, receipt];
+	// A mode toggle regenerates the receipt for the same turn. Keep a receipt
+	// already in the prefix only when preparation reused that exact object;
+	// otherwise append the fresh one so the commit path can replace it.
+	const tail = split.prefix.at(-1);
+	const messages = tail?.herdSkill === true && tail === receipt
+		? split.prefix
+		: [...split.prefix, receipt];
 	const committed = commitSkillReceipt(station.manager, messages, session);
 	// Pending inputs still belong to the host. It emits and persists them after
 	// request preparation; placing the receipt first preserves that order.

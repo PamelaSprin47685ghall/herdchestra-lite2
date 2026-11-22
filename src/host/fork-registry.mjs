@@ -69,6 +69,15 @@ export function setIdentity(registry, forkId, identity) {
     // with the identity; deriving it again from the child context can create a
     // second empty ledger and turn scope_return into UNKNOWN_FORK.
     display: identity.display ?? null,
+    // A holder is live: the interactive UI may arrive after this identity is
+    // recorded. Keep the holder itself so a late display reaches the child
+    // station without rewriting the identity.
+    displayHolder:
+      identity.displayHolder &&
+      typeof identity.displayHolder === "object" &&
+      "current" in identity.displayHolder
+        ? identity.displayHolder
+        : null,
     ledger:
       identity.ledger && typeof identity.ledger === "object" ? identity.ledger : null,
     // A capability, not data: the root branch's persist function, so a child

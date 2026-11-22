@@ -12,6 +12,8 @@ const CAPTURE = Symbol.for("herdchestra-lite2.transcript-subscribe.v1");
 const STATE = Symbol.for("herdchestra-lite2.transcript-listeners.v1");
 const transcript = globalThis[STATE] ??= new WeakMap();
 const noopRepaint = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
+// One stable identity: the host detach only clears the slot it installed.
+const SUPPRESS_APPROVAL_PREVIEW = () => Promise.resolve();
 let toolCardCtor = null;
 
 export function registerToolCardComponent(Component) {
@@ -397,7 +399,7 @@ function partsSignature(parts) {
 	return parts.map((part) => `${part.kind}:${part.text}`).join("\0");
 }
 
-function displayArbiter(state, rootSession, tray) {
+function displayArbiter(state, tray, suppressApprovalPreview) {
 	let owner = null;
 	const queue = [];
 	const streams = new Map();
@@ -470,7 +472,7 @@ function displayArbiter(state, rootSession, tray) {
 		const root = source === ROOT;
 		const { type, message } = event;
 		if (type === "tool_execution_start") {
-			if (root) rootSession.extensionRunner?.setToolApprovalPreviewWaiter?.(() => Promise.resolve());
+			if (root) suppressApprovalPreview?.();
 			tray.start(source, root ? null : label, session, event);
 			return;
 		}
@@ -549,6 +551,41 @@ function displayArbiter(state, rootSession, tray) {
 	return { accept, detach };
 }
 
+/**
+ * The host exposes one approval-preview waiter slot. Root tool events are
+ * consumed into the herd-tools tray, so no native preview card exists to ask
+ * for that waiter. Leaving the host's waiter in place would stall its gate.
+ * The suppression belongs to one display lease: keep its detach and release it
+ * when the lease ends. The host detach is identity-checked and cannot restore
+ * a waiter installed before ours.
+ */
+function installApprovalPreviewSuppression(root, binding) {
+	if (binding.approvalPreviewInstalled) return;
+	const runner = root?.extensionRunner;
+	if (typeof runner?.setToolApprovalPreviewWaiter !== "function") return;
+	binding.approvalPreviewInstalled = true;
+	try {
+		const detach = runner.setToolApprovalPreviewWaiter(SUPPRESS_APPROVAL_PREVIEW);
+		binding.approvalPreviewDetach = typeof detach === "function" ? detach : null;
+	} catch (error) {
+		binding.approvalPreviewInstalled = false;
+		record("fork", error, { phase: "child-display" });
+	}
+}
+
+function releaseApprovalPreviewSuppression(binding) {
+	if (!binding) return;
+	const detach = binding.approvalPreviewDetach;
+	binding.approvalPreviewDetach = null;
+	binding.approvalPreviewInstalled = false;
+	if (typeof detach !== "function") return;
+	try {
+		detach();
+	} catch (error) {
+		record("fork", error, { phase: "child-display" });
+	}
+}
+
 export function childDisplayFor(root, ui) {
 	if (!root) return null;
 	const manager = root.sessionManager;
@@ -558,14 +595,23 @@ export function childDisplayFor(root, ui) {
 		if (ui) state.display.ui = ui;
 		return state.display.port;
 	}
-	const binding = { manager, sessionId, ui, port: null };
+	releaseApprovalPreviewSuppression(state.display);
+	const binding = {
+		manager,
+		sessionId,
+		ui,
+		port: null,
+		approvalPreviewInstalled: false,
+		approvalPreviewDetach: null,
+	};
 	state.display = binding;
 	const current = () => state.display === binding && !root.isSessionTransitioning && root.sessionManager === manager && manager?.getSessionId?.() === sessionId;
 	let lastOwnerId = "root";
 	let rootWaits = 0;
 	const tray = createActiveToolTray(() => binding.ui, current);
-	const arbiter = displayArbiter(state, root, tray);
-	root.extensionRunner?.setToolApprovalPreviewWaiter?.(() => Promise.resolve());
+	const suppressApprovalPreview = () => installApprovalPreviewSuppression(root, binding);
+	const arbiter = displayArbiter(state, tray, suppressApprovalPreview);
+	suppressApprovalPreview();
 	state.route = (event) => {
 		if (current()) arbiter.accept(ROOT, null, root, event);
 		else publish(state, event);

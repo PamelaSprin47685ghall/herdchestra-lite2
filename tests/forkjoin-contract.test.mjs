@@ -32,7 +32,7 @@ import {
 } from "../src/host/fork-registry.mjs";
 
 function state() {
-  return { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } };
+  return { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
 }
 
 function stationFor(ledger, identity = null) {
@@ -232,7 +232,7 @@ describe("a join leaves the parent where it was", () => {
         },
       ],
       modelCaches: { "parent-model": { cachedUntilPos: 5, chars: 900 } },
-      herdMode: false,
+      autopilot: false,
       relay: { generation: 0, fullFlow: false, canStop: false },
       pins: [],
       receipts: [],

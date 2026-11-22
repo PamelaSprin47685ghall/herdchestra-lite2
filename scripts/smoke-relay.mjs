@@ -21,7 +21,6 @@
  */
 
 import { activate } from "../src/main.mjs";
-import { stateFor } from "../src/station/index.mjs";
 import { beginGenerationAfterHandoff } from "../src/relay/ledger.mjs";
 
 // The smoke must test the shipped default, not whatever the developer's shell
@@ -94,7 +93,7 @@ function nativeTodo() {
 }
 
 const host = fakeHost();
-await activate(host.pi);
+const wired = await activate(host.pi);
 
 const manager = memoryManager();
 const native = nativeTodo();
@@ -105,7 +104,11 @@ const ctx = {
 	// A host abort path exists so a blocked control tool can be cancelled.
 	abort() {},
 };
-const station = stateFor(ctx);
+// The composition result owns the live registry; there is no module singleton.
+const station = wired.registry.stationFor(ctx);
+// The shipped default is manual duty. This smoke exists to prove the relay,
+// so it turns the user-facing toggle on exactly as `/herd-autopilot` would.
+station.state.autopilot = true;
 
 /**
  * The smallest host surface that lets the relay checks run. The fork tools

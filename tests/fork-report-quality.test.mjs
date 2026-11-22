@@ -12,6 +12,13 @@ import {
   registerFork,
 } from "../src/scope/forkjoin.mjs";
 import { handleJoinCall } from "../src/station/fork-controls.mjs";
+import * as descriptions from "../src/tools/descriptions.mjs";
+import {
+  ELDER_REPORT_PATTERN,
+  MAX_ELDER_REPORT_CHARS,
+  MIN_ELDER_REPORT_CHARS,
+  elderReportProblem,
+} from "../src/scope/elder-report.mjs";
 import {
   addReceipt,
   attachReport,
@@ -71,6 +78,107 @@ function stationWith(pendingReport = null) {
   };
   return { ledger, station };
 }
+
+describe("elder report boundaries", () => {
+  const atLeast = (n) => "x".repeat(n);
+
+  test("23 characters are refused and 24 are accepted", () => {
+    const { station } = stationWith("pending");
+    const short = handleJoinCall(station, { id: "j2", arguments: { elder_report: atLeast(23) } });
+    expect(short.isError).toBe(true);
+    expect(short.details.code).toBe("INVALID_ELDER_REPORT");
+    const ok = handleJoinCall(stationWith("pending").station, {
+      id: "j2",
+      arguments: { elder_report: atLeast(24) },
+    });
+    expect(ok.isError).toBeUndefined();
+  });
+
+  test("4000 characters are accepted and 4001 are refused", () => {
+    const ok = handleJoinCall(stationWith("pending").station, {
+      id: "j2",
+      arguments: { elder_report: atLeast(4000) },
+    });
+    expect(ok.isError).toBeUndefined();
+    const tooLong = handleJoinCall(stationWith("pending").station, {
+      id: "j2",
+      arguments: { elder_report: atLeast(4001) },
+    });
+    expect(tooLong.isError).toBe(true);
+    expect(tooLong.details.maximum).toBe(4000);
+  });
+
+  test("padding does not satisfy the bound: the trimmed length does", () => {
+    // Padding is not content. A 21-character sentence padded to 27 raw
+    // characters is still 21 characters once trimmed, so both the schema and
+    // the runtime refuse it.
+    const tooShort = `   ${atLeast(21)}   `;
+    expect(tooShort).toHaveLength(27);
+    const short = handleJoinCall(stationWith("pending").station, {
+      id: "j2",
+      arguments: { elder_report: tooShort },
+    });
+    expect(short.isError).toBe(true);
+    expect(short.details.code).toBe("INVALID_ELDER_REPORT");
+
+    const padded = `   ${atLeast(24)}   `;
+    const { station } = stationWith("pending");
+    const out = handleJoinCall(station, { id: "j2", arguments: { elder_report: padded } });
+    expect(out.isError).toBeUndefined();
+    expect(station.state.receipts[0].report).toBe(atLeast(24));
+  });
+
+  test("a whitespace-only report is refused by the shared non-space rule", () => {
+    const out = handleJoinCall(stationWith("pending").station, {
+      id: "j2",
+      arguments: { elder_report: " ".repeat(40) },
+    });
+    expect(out.isError).toBe(true);
+    expect(out.details.code).toBe("INVALID_ARGUMENT");
+  });
+
+  test("the tool schema carries the same trimmed-length window as the runtime", () => {
+    const branch = descriptions.joinParameters.properties.elder_report.anyOf[0];
+    expect(branch.minLength).toBe(MIN_ELDER_REPORT_CHARS);
+    // The upper bound lives in the pattern: a maxLength would reject a padded
+    // report that the runtime accepts after trimming.
+    expect(branch.maxLength).toBeUndefined();
+    expect(branch.pattern).toBe(ELDER_REPORT_PATTERN);
+  });
+
+  test("the schema and the runtime accept exactly the same reports", () => {
+    const branch = descriptions.joinParameters.properties.elder_report.anyOf[0];
+    const schemaAccepts = (value) => {
+      if (value === null) return true;
+      const longEnough = branch.minLength === undefined || value.length >= branch.minLength;
+      const shortEnough = branch.maxLength === undefined || value.length <= branch.maxLength;
+      return longEnough && shortEnough && new RegExp(branch.pattern, "u").test(value);
+    };
+    const runtimeAccepts = (value) =>
+      value === null || elderReportProblem(value) === null;
+
+    const cases = [
+      { value: "", accepts: false },
+      { value: " ", accepts: false },
+      { value: atLeast(MIN_ELDER_REPORT_CHARS - 1), accepts: false },
+      { value: atLeast(MIN_ELDER_REPORT_CHARS), accepts: true },
+      { value: atLeast(MAX_ELDER_REPORT_CHARS), accepts: true },
+      { value: atLeast(MAX_ELDER_REPORT_CHARS + 1), accepts: false },
+      { value: `   ${atLeast(21)}   `, accepts: false },
+      { value: `   ${atLeast(MIN_ELDER_REPORT_CHARS)}   `, accepts: true },
+      { value: `  ${atLeast(MAX_ELDER_REPORT_CHARS)}  `, accepts: true },
+      // A leading or trailing BOM is trimmed like any other white space, and
+      // the schema's trim class names it explicitly because \s does not.
+      { value: `\uFEFF${atLeast(MIN_ELDER_REPORT_CHARS)}\uFEFF`, accepts: true },
+      { value: `\uFEFF${atLeast(MIN_ELDER_REPORT_CHARS - 1)}\uFEFF`, accepts: false },
+      { value: null, accepts: true },
+    ];
+    for (const { value, accepts } of cases) {
+      expect({ value, accepts: schemaAccepts(value) }).toEqual({ value, accepts });
+      expect({ value, accepts: runtimeAccepts(value) }).toEqual({ value, accepts });
+    }
+  });
+});
 
 describe("a summary that cannot guide the next decision", () => {
   test("a one-word report is refused and the child stays ready", () => {

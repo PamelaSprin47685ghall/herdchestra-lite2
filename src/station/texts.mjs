@@ -52,28 +52,32 @@ export function insideScopeNudge(openCount) {
 	return render(T["scope.stop-blocked"], { count: openCount });
 }
 
-export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false) {
+export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false, child = false) {
+	const isChild = child || branch !== null;
 	const lines = [];
-	if (branch) {
-		lines.push(render(T["receipt.branch"], { budget: branchBudget(branch) }));
+	if (isChild) {
+		if (branch) lines.push(render(T["receipt.branch"], { budget: branchBudget(branch) }));
+		lines.push(T["receipt.branch-duty"]);
 	}
 	if (openCount > 0) {
 		lines.push(render(T["scope.unreceived"], { count: openCount }));
 	}
 	const relay = state.relay;
 	const fullFlow = relayOn && relay?.fullFlow === true;
-	if (fullFlow && relay.firstEvaluation === null) {
+	if (!isChild && state.autopilot && fullFlow && relay.firstEvaluation === null) {
 		lines.push(T["receipt.no-ledger"]);
 	}
-	if (!branch && relayOn && relay?.viewRequired && (state.herdMode || !relay.handoffPending)) {
+	if (!isChild && state.autopilot && relayOn && relay?.viewRequired && !relay.handoffPending) {
 		lines.push(T["receipt.view-required"]);
 	}
-	if (state.herdMode) {
-		lines.push(T["receipt.herd"]);
-	} else {
-		lines.push(T["receipt.herd-off"]);
+	if (!isChild) {
+		if (state.autopilot) {
+			lines.push(T["receipt.autopilot"]);
+		} else {
+			lines.push(T["receipt.manual"]);
+		}
 	}
-	if (!state.herdMode && !branch && relayOn) {
+	if (state.autopilot && !isChild && relayOn) {
 		if (relay?.handoffPending) {
 			if (openCount > 0) lines.push(T["receipt.close-handoff"]);
 			else if (!demandVisible) lines.push(handoffDemand());

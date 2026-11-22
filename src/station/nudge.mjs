@@ -8,7 +8,7 @@ import { insideScopeNudge } from "./texts.mjs";
  * @returns {{ kind: "none" } | { kind: "steer", text: string }}
  */
 export function nudgeDecision(state, { hasToolCalls, ledger = null, ownerId = null }) {
-	if (state.herdMode || hasToolCalls) return { kind: "none" };
+	if (!state.autopilot || hasToolCalls) return { kind: "none" };
 	// A branch that still owns unreceived work is the one thing a stop cannot
 	// do silently: a returned result no join has taken is as unreceived as a
 	// running child. At the root a stop is a submission, so no steer may judge

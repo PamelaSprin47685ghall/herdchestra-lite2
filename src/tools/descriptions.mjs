@@ -4,6 +4,10 @@
  */
 
 import { loadDoc } from "../prompts/index.mjs";
+import {
+	ELDER_REPORT_PATTERN,
+	MIN_ELDER_REPORT_CHARS,
+} from "../scope/elder-report.mjs";
 
 const notes = loadDoc("tools/notes");
 
@@ -76,7 +80,17 @@ export const forkParameters = {
 };
 
 const elderReportProperty = (description) => ({
-	anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
+	anyOf: [
+		{
+			type: "string",
+			minLength: MIN_ELDER_REPORT_CHARS,
+			// The same acceptance rule as the runtime: the stored report is
+			// trimmed, so the pattern measures the span between the first and
+			// last non-space characters. A blank value has no such span.
+			pattern: ELDER_REPORT_PATTERN,
+		},
+		{ type: "null" },
+	],
 	description,
 });
 
@@ -107,14 +121,31 @@ export const amendParameters = {
 	},
 };
 
+const pinField = (description) => ({
+	type: "string",
+	minLength: 1,
+	// A field of spaces carries nothing; it must not satisfy the anyOf gate.
+	pattern: "\\S",
+	description,
+});
+
 export const pinParameters = {
 	type: "object",
 	additionalProperties: false,
+	// At least one field must be present with content. The runtime refuses a
+	// call that satisfies the property types but names no non-blank field.
+	anyOf: [
+		{ required: ["assumption"] },
+		{ required: ["deduction"] },
+		{ required: ["induction"] },
+		{ required: ["finding"] },
+		{ required: ["conclusion"] },
+	],
 	properties: {
-		assumption: { type: "string", description: PIN_ASSUMPTION_DESCRIPTION },
-		deduction: { type: "string", description: PIN_DEDUCTION_DESCRIPTION },
-		induction: { type: "string", description: PIN_INDUCTION_DESCRIPTION },
-		finding: { type: "string", description: PIN_FINDING_DESCRIPTION },
-		conclusion: { type: "string", description: PIN_CONCLUSION_DESCRIPTION },
+		assumption: pinField(PIN_ASSUMPTION_DESCRIPTION),
+		deduction: pinField(PIN_DEDUCTION_DESCRIPTION),
+		induction: pinField(PIN_INDUCTION_DESCRIPTION),
+		finding: pinField(PIN_FINDING_DESCRIPTION),
+		conclusion: pinField(PIN_CONCLUSION_DESCRIPTION),
 	},
 };

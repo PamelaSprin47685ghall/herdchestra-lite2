@@ -62,7 +62,7 @@ export function compareBranchFrames(owner, config) {
 		read(read(read(owner, "agent"), "state"), "systemPrompt") ??
 		read(owner, "systemPrompt");
 	const ownerTools = call(owner, "getEnabledToolNames");
-	const ownerMounted = call(owner, "getMountedXdevToolNames");
+	const ownerMounted = mountedToolView(owner);
 	const ownerKey =
 		read(read(owner, "agent"), "promptCacheKey") ??
 		config?.taskPromptCacheKey ??
@@ -229,6 +229,21 @@ function read(target, key) {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * The owner's mounted tool names, newest host API first.
+ *
+ * omp 19.1 replaced xd:// devices with bash tool commands and renamed
+ * getMountedXdevToolNames() to getMountedToolCommandNames(). Both return the
+ * names presented as tool commands. Reading only the old name makes the whole
+ * tool view unreadable on 19.1 and refuses every fork with NO_TOOL_VIEW.
+ */
+function mountedToolView(owner) {
+	const current = call(owner, "getMountedToolCommandNames");
+	if (Array.isArray(current)) return current;
+	const legacy = call(owner, "getMountedXdevToolNames");
+	return Array.isArray(legacy) ? legacy : null;
 }
 
 /** Call a zero-argument method and return null when it is absent or throws. */
@@ -482,7 +497,7 @@ export function deriveBranchConfig(options = {}) {
 
 	const toolNames = options.toolNames ?? call(owner, "getEnabledToolNames");
 	const activeToolNames = options.activeToolNames ?? call(owner, "getActiveToolNames");
-	const mountedToolNames = options.mountedToolNames ?? call(owner, "getMountedXdevToolNames");
+	const mountedToolNames = options.mountedToolNames ?? mountedToolView(owner);
 	if (!Array.isArray(toolNames) || !Array.isArray(activeToolNames) || !Array.isArray(mountedToolNames)) {
 		return refusal(BRANCH_SESSION_REASONS.NO_TOOL_VIEW);
 	}
@@ -554,7 +569,14 @@ export function deriveBranchConfig(options = {}) {
 	limitations.push(limitation(BRANCH_SESSION_LIMITS.SETTINGS_SHARED));
 	limitations.push(limitation(BRANCH_SESSION_LIMITS.SHARED_MANAGER_DISPOSE_FORBIDDEN));
 
-	const label = isNonEmptyString(options.label) ? options.label : flowId;
+	// The display name is the scope title the station passes for a fork; the
+	// flow id remains the agent identity. An explicit label still wins, and a
+	// branch with neither keeps its flow id instead of an empty AgentRef.
+	const label = isNonEmptyString(options.label)
+		? options.label
+		: isNonEmptyString(options.agentDisplayName)
+			? options.agentDisplayName
+			: flowId;
 
 	const config = {
 		cwd,

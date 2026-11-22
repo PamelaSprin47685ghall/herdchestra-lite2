@@ -20,7 +20,7 @@ import { notifyWaiters, pulse } from "../src/host/fork-registry.mjs";
 function stateOf() {
   return {
     scopes: [],
-    herdMode: false,
+    autopilot: false,
     epoch: 0,
     relay: { generation: 0, fullFlow: false },
   };

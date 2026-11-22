@@ -17,7 +17,7 @@ import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 
 function stationOf() {
   return {
-    state: { herdMode: false, relay: { generation: 0, fullFlow: false } },
+    state: { autopilot: false, relay: { generation: 0, fullFlow: false } },
     manager: null,
   };
 }
@@ -149,7 +149,7 @@ describe("attachForkPorts", () => {
   test("a frozen child record survives a spawn failure after the work", async () => {
     const wiring = createForkWiring();
     const station = {
-      state: { herdMode: false, relay: { generation: 0, fullFlow: false } },
+      state: { autopilot: false, relay: { generation: 0, fullFlow: false } },
       manager: null,
       persist: () => {
         throw new Error("persist exploded");
@@ -188,7 +188,11 @@ describe("attachForkPorts", () => {
     const station = stationOf();
     const attached = attachForkPorts(station, wiring, {
       conversationKey: "c",
-      createSession: async () => ({ ok: false, reason: "no sdk" }),
+      createSession: async () => ({
+        ok: false,
+        reason: "NO_TOOL_VIEW",
+        detail: "The owner session exposes no tool view.",
+      }),
     });
     registerFork(attached.ledger, {
       forkId: "f3",
@@ -205,7 +209,11 @@ describe("attachForkPorts", () => {
     await waiting;
     const outcome = outcomeOf(wiring.registry, "f3");
     expect(outcome.failed).toBe(true);
-    expect(outcome.reason).toContain("no sdk");
+    // The parent must see why the child never started; a bare code is not a
+    // message.
+    expect(outcome.reason).toBe(
+      "NO_TOOL_VIEW: The owner session exposes no tool view.",
+    );
   });
 
   test("a non-clean stop reason counts as failed", async () => {

@@ -4,6 +4,8 @@ import { wireProviderObservation } from "../src/host/provider-observer.mjs";
 import { installStatus } from "../src/host/status.mjs";
 import { queueModelSwitch, takePendingModelSwitch } from "../src/station/models.mjs";
 import { SessionStation } from "../src/station/station.mjs";
+import { wireCommands } from "../src/activation/commands.mjs";
+import { createState, deserializeState, serializeState } from "../src/scope/index.mjs";
 
 function stationWith(ports, state = {}) {
 	const station = new SessionStation({ getSessionId: () => "s1" }, {}, {}, { ports: () => ports }, null);
@@ -39,28 +41,28 @@ test("amend on records into the station's persisted list exactly once", () => {
 });
 
 test("herd off refuses a toggle and never flips the persisted mode", () => {
-	const station = stationWith({ herd: "off" }, { herdMode: false });
+	const station = stationWith({ herd: "off" }, { autopilot: false });
 	expect(station.herdPort().toggle("hi")).toEqual({
 		ok: false,
 		code: "HERD_UNAVAILABLE",
 		port: "herd",
 	});
-	expect(station.state.herdMode).toBe(false);
+	expect(station.state.autopilot).toBe(false);
 });
 
 test("herd on flips the persisted mode and reports it", () => {
-	const station = stationWith({ herd: "on" }, { herdMode: false });
+	const station = stationWith({ herd: "on" }, { autopilot: false });
 	const first = station.herdPort().toggle("hi");
 	expect(first).toEqual({ ok: true, mode: "on", text: "hi" });
-	expect(station.state.herdMode).toBe(true);
+	expect(station.state.autopilot).toBe(true);
 	const second = station.herdPort().toggle("");
 	expect(second).toEqual({ ok: true, mode: "off", text: "" });
-	expect(station.state.herdMode).toBe(false);
+	expect(station.state.autopilot).toBe(false);
 });
 
 test("a missing registry keeps every port on", () => {
 	const station = new SessionStation({ getSessionId: () => "s1" }, {}, {}, null, null);
-	Object.assign(station.state, { pins: [], amends: [], herdMode: false });
+	Object.assign(station.state, { pins: [], amends: [], autopilot: false });
 	expect(station.pinPort().add("note").ok).toBe(true);
 	expect(station.amendPort().record("beat-1").ok).toBe(true);
 	expect(station.herdPort().toggle("").ok).toBe(true);
@@ -125,4 +127,62 @@ test("observer on binds both provider hooks", () => {
 	});
 	expect(wired).toEqual({ installed: true });
 	expect(events).toEqual(["before_provider_request", "after_provider_response"]);
+});
+
+test("autopilot is off in a fresh state and survives a persist round trip", () => {
+	const fresh = createState();
+	expect(fresh.autopilot).toBe(false);
+
+	fresh.autopilot = true;
+	expect(deserializeState(serializeState(fresh)).autopilot).toBe(true);
+
+	const legacy = serializeState(fresh);
+	delete legacy.autopilot;
+	expect(deserializeState(legacy).autopilot).toBe(false);
+});
+
+test("the command table registers herd-autopilot and no bare herd", async () => {
+	const commands = new Map();
+	const calls = [];
+	const pi = {
+		registerCommand(name, definition) {
+			commands.set(name, definition);
+		},
+	};
+	wireCommands(pi, {
+		stationFor: () => ({
+			onAutopilotCommand(args) {
+				calls.push(args);
+				return { ok: true };
+			},
+		}),
+	});
+
+	expect(commands.has("herd-autopilot")).toBe(true);
+	expect(commands.has("herd")).toBe(false);
+	const result = await commands.get("herd-autopilot").handler("note this");
+	expect(result).toEqual({ ok: true });
+	expect(calls).toEqual(["note this"]);
+});
+
+test("one bare command toggles autopilot and sends optional text once", () => {
+	const prompts = [];
+	const station = new SessionStation(
+		{ getSessionId: () => "s1" },
+		{},
+		{ canPrompt: true, prompt: (text) => prompts.push(text) },
+		{ ports: () => ({ herd: "on" }) },
+		null,
+	);
+
+	expect(station.state.autopilot).toBe(false);
+	const on = station.onAutopilotCommand("hello");
+	expect(on).toEqual({ ok: true, mode: "on", text: "hello" });
+	expect(station.state.autopilot).toBe(true);
+	expect(prompts).toEqual(["hello"]);
+
+	const off = station.onAutopilotCommand("");
+	expect(off).toEqual({ ok: true, mode: "off", text: "" });
+	expect(station.state.autopilot).toBe(false);
+	expect(prompts).toEqual(["hello"]);
 });

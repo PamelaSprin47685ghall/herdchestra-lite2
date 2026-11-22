@@ -12,8 +12,8 @@ import { readSwitch, resolvePorts } from "../src/core/ports/resolve.mjs";
 const EMPTY = {};
 
 describe("port registry", () => {
-	test("thirteen ports, each with a default that is one of its implementations", () => {
-		expect(PORT_NAMES).toHaveLength(13);
+	test("twelve ports, each with a default that is one of its implementations", () => {
+		expect(PORT_NAMES).toHaveLength(12);
 		for (const port of PORT_NAMES) {
 			const entry = PORTS[port];
 			expect(entry.implementations.length).toBeGreaterThanOrEqual(2);
@@ -38,7 +38,7 @@ describe("port registry", () => {
 
 	test("a disable name keeps the port's word boundary", () => {
 		expect(disableName("clock")).toBe("HERD_DISABLE_CLOCK");
-		expect(disableName("commonRules")).toBe("HERD_DISABLE_COMMON_RULES");
+		expect(disableName("chineseReminder")).toBe("HERD_DISABLE_CHINESE_REMINDER");
 		expect(disableName("modelSwitch")).toBe("HERD_DISABLE_MODEL_SWITCH");
 		expect(readSwitch("modelSwitch", { HERD_DISABLE_MODEL_SWITCH: "1" })).toEqual({
 			ok: true,

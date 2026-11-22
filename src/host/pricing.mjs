@@ -292,7 +292,7 @@ export function resolveModelPolicy(catalog, ctx, hint) {
 }
 
 const THINKING_SUFFIX =
-	/(?:\s*[:@]\s*|\s+)(off|minimal|low|medium|high|xhigh)\s*$/i;
+	/(?:\s*[:@]\s*|\s+)(off|minimal|low|medium|high|xhigh|max)\s*$/i;
 
 function splitThinkingSuffix(text) {
 	const match = THINKING_SUFFIX.exec(text);
@@ -595,8 +595,8 @@ function resolveModelEntry(ctx, catalog, modelText, exactOnly = false) {
  * Synchronous model-spec preparse for host `/model`-style commands.
  *
  * Resolves settings aliases/roles, strips a trailing thinking suffix
- * (`:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, or the same after
- * `@`/whitespace), then tries the live model registry before the pricing
+ * (`:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`, or the
+ * same after `@`/whitespace), then tries the live model registry before the pricing
  * catalog. Unknown specs stay unrecognized so the host can apply its own
  * fuzzy resolution.
  */

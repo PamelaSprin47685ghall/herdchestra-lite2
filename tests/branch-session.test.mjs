@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	BRANCH_SESSION_LIMITS,
 	BRANCH_SESSION_REASONS,
+	compareBranchFrames,
 	createBranchSession,
 	deriveBranchConfig,
 	labelledUIContext,
@@ -47,7 +48,7 @@ function createOwner(overrides = {}) {
 		thinkingLevel: "medium",
 		getEnabledToolNames: () => ["read", "ask"],
 		getActiveToolNames: () => ["read", "ask"],
-		getMountedXdevToolNames: () => ["read"],
+		getMountedToolCommandNames: () => ["read"],
 		getAgentId: () => "Main",
 		getMnemopiSessionState: () => MNEMOPI,
 		...overrides,
@@ -191,6 +192,18 @@ describe("deriveBranchConfig", () => {
 		expect(deriveBranchConfig(fixture({ label: "" }).options).config.agentDisplayName).toBe("flow-a");
 	});
 
+	test("falls back to agentDisplayName when label is absent", () => {
+		const config = deriveBranchConfig(fixture({ agentDisplayName: "Audit Handoff" }).options).config;
+		expect(config.agentDisplayName).toBe("Audit Handoff");
+	});
+
+	test("prefers label over agentDisplayName", () => {
+		const config = deriveBranchConfig(
+			fixture({ label: "batch.0/flow", agentDisplayName: "Audit Handoff" }).options,
+		).config;
+		expect(config.agentDisplayName).toBe("batch.0/flow");
+	});
+
 	test("copies the arrays it hands to the host", () => {
 		const systemPrompt = ["owner prompt"];
 		const toolNames = ["read", "ask"];
@@ -201,7 +214,7 @@ describe("deriveBranchConfig", () => {
 				systemPrompt,
 				getEnabledToolNames: () => toolNames,
 				getActiveToolNames: () => toolNames,
-				getMountedXdevToolNames: () => mountedToolNames,
+				getMountedToolCommandNames: () => mountedToolNames,
 				extensionPaths,
 			},
 		});
@@ -242,6 +255,29 @@ describe("deriveBranchConfig", () => {
 		).config;
 		expect(withoutAsk.advertiseHeadlessAsk).toBe(false);
 		expect(withoutAsk.toolNames).toEqual(["read", "ask"]);
+	});
+
+	test("reads the mounted tool view through the renamed host getter", () => {
+		// omp 19.1 renamed getMountedXdevToolNames to getMountedToolCommandNames.
+		// The old-only read refused every fork with NO_TOOL_VIEW.
+		const current = fixture({
+			owner: {
+				getMountedXdevToolNames: undefined,
+				getMountedToolCommandNames: () => ["grep"],
+			},
+		}).options;
+		const result = deriveBranchConfig(current);
+		expect(result.ok).toBe(true);
+		expect(result.config.mountedToolNames).toEqual(["grep"]);
+		expect(compareBranchFrames(current.session, result.config).ok).toBe(true);
+
+		const legacy = fixture({
+			owner: {
+				getMountedToolCommandNames: undefined,
+				getMountedXdevToolNames: () => ["read"],
+			},
+		}).options;
+		expect(deriveBranchConfig(legacy).config.mountedToolNames).toEqual(["read"]);
 	});
 
 	test("reads local protocol options live from the shared manager", () => {

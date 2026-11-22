@@ -29,20 +29,30 @@ import { loadDoc } from "../prompts/index.mjs";
 const E = loadDoc("errors");
 
 /**
+ * The branch's own fork id, or null at the root.
+ *
+ * Every relay decision asks this question: the relay belongs to the root, and
+ * a fork child shares the root's relay object only so a reload can see it. A
+ * child never evaluates, arms, or commits a handoff.
+ */
+function ownerIdOf(station) {
+	return typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
+}
+
+/**
  * Record the model's own report while a handoff waits.
  *
  * Both message events carry the same text, so the rule lives here once: a
  * session outside every scope, with a handoff pending, whose assistant turn
- * made no tool call.
+ * made no tool call. A child's prose is fork output, never the root's report.
  */
 function capturePendingReport(station, message) {
 	const state = station.state;
-	if (state.herdMode || !state.relay?.handoffPending) return;
+	if (!state.autopilot || !state.relay?.handoffPending) return;
+	if (ownerIdOf(station) !== null) return;
 	const ledger =
 		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
-	const ownerId =
-		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
-	if (ledger && unreceivedChildren(ledger, ownerId ?? "root").length > 0) return;
+	if (ledger && unreceivedChildren(ledger, "root").length > 0) return;
 	if (toolCalls(message).length > 0) return;
 	const text = message?.content
 		?.filter((block) => block?.type === "text")
@@ -73,7 +83,7 @@ function onAssistantMessage(station, message, ctx) {
 		station.onUsageMessage(message, ctx);
 		station.dispatch.setPreparing(message);
 		station.dispatch.rememberGroups(message);
-		station.processAssistantMessage(message, { persisted: false });
+		station.processAssistantMessage(message);
 		capturePendingReport(station, message);
 		station.maybeNudge(message, ctx);
 	} catch (error) {
@@ -91,8 +101,7 @@ function onMessageEnd(station, event, ctx) {
 		station.dispatch.rememberGroups(message);
 		const controls = controlsIn(message);
 		if (controls.length > 0) {
-			const found = station.assistantForToolCall(controls[0].id);
-			station.processAssistantMessage(message, { persisted: Boolean(found) });
+			station.processAssistantMessage(message);
 		}
 		capturePendingReport(station, message);
 		station.maybeNudge(message, ctx);
@@ -114,7 +123,10 @@ function onToolCall(station, event, ctx) {
 	}
 	try {
 		const state = station.state;
-		if (!state.herdMode && state.relay?.handoffPending) {
+		const ownerId = ownerIdOf(station);
+		// The pending-handoff gate belongs to the root. A child may share the
+		// root's relay state, but its tools are its own work.
+		if (ownerId === null && state.autopilot && state.relay?.handoffPending) {
 			return {
 				block: true,
 				reason: handoffToolBlockedReason(),
@@ -142,7 +154,7 @@ function onToolCall(station, event, ctx) {
 			return undefined;
 		}
 		if (toolName === "ask") {
-			if (state.herdMode) return undefined;
+			if (!state.autopilot) return undefined;
 			return {
 				block: true,
 				reason: E["ask-blocked"],
@@ -161,8 +173,6 @@ function onToolCall(station, event, ctx) {
 			}));
 		const ledger =
 			typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
-		const ownerId =
-			typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
 		const charged = chargeBranch(state, ledger, {
 			ownerId,
 			toolCallId,
@@ -206,21 +216,31 @@ function managesRequest(station, ctx) {
 
 // Prepare state before the host copies the live loop for context extensions.
 // The host adapter commits the returned receipt to all three histories.
+function receiptMatches(station, message) {
+	if (message?.herdSkill !== true) return false;
+	return message.autopilot === (station.state.autopilot === true) &&
+		message.branch === (ownerIdOf(station) !== null);
+}
+
 function prepareRequest(station, ctx, previous, history) {
 	if (!managesRequest(station, ctx)) return null;
 	station.ensureTools(ctx);
 	observeHostBoundary(station, station.contextMessages());
 	station.observeActualModel(ctx);
+	const demandVisible =
+		ownerIdOf(station) === null
+			? handoffDemandVisible(station.state.relay, history)
+			: false;
 	const restore = station.tickets.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
 	if (req) {
 		return restore(station, ctx, req, previous, (message) =>
-			message?.herdSkill === true ? message :
-				station.skillReceipt(ctx, handoffDemandVisible(station.state.relay, history)),
+			receiptMatches(station, message) ? message :
+				station.skillReceipt(ctx, demandVisible),
 		);
 	}
-	return previous?.herdSkill === true ? previous :
-		station.skillReceipt(ctx, handoffDemandVisible(station.state.relay, history));
+	return receiptMatches(station, previous) ? previous :
+		station.skillReceipt(ctx, demandVisible);
 }
 
 function onContext(station, messages, ctx) {
@@ -231,13 +251,19 @@ function onContext(station, messages, ctx) {
 	return station.transformContext(original, ctx);
 }
 
-function onSessionStop(station, ctx) {
-	if (station.state.herdMode) return undefined;
+function onSessionStop(station, ctx, evidence = null) {
+	// The host reports a stop it already aborted, or one whose assistant
+	// message ended in an error. Neither is user intent to stop, and both
+	// must bypass every relay decision. Keeping the test here leaves the hook
+	// a pure binding and puts the rule beside the state it protects.
+	if (evidence?.signal?.aborted || evidence?.reason === "aborted" || evidence?.reason === "error") {
+		return undefined;
+	}
+	if (!station.state.autopilot) return undefined;
 	if (!station.relayOn(ctx)) return undefined;
 	const ledger =
 		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
-	const ownerId =
-		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
+	const ownerId = ownerIdOf(station);
 	// A returned child that no join has taken is unreceived work in exactly
 	// the same sense as a running one. Counting only running children let a
 	// stop through while a finished result sat unread.
@@ -248,6 +274,10 @@ function onSessionStop(station, ctx) {
 	if (unreceived > 0) {
 		return continueFeedback(insideScopeNudge(unreceived));
 	}
+	// A child's natural stop is not a ledger submission. The host's branch
+	// contract keeps it working until `scope_return`; the root relay must not
+	// arm a handoff or capture the child's prose as the root's report.
+	if (ownerId !== null) return undefined;
 	const relay = station.state.relay;
 	if (relay?.canStop) return undefined;
 	if (relay?.handoffPending) {
@@ -287,7 +317,11 @@ function onSessionCompact(station, ctx) {
 
 function onBeforeAgentStart(station, event, ctx) {
 	const policy = station.policy(ctx);
-	const prompt = injectSystemPrompt(event?.systemPrompt, station.registry?.ports?.() ?? {});
+	const prompt = injectSystemPrompt(event?.systemPrompt, {
+		...(station.registry?.ports?.() ?? {}),
+		autopilot: station.state.autopilot === true,
+		branch: ownerIdOf(station) !== null,
+	});
 	const promptChanged = prompt !== event?.systemPrompt;
 	// Relay and `todo` share one verdict: `ensureTools` owns that rule, so no
 	// second `getActiveTools` check may live here.
@@ -303,7 +337,7 @@ function onBeforeAgentStart(station, event, ctx) {
 	return result;
 }
 
-function onHerdCommand(station, args) {
+function onAutopilotCommand(station, args) {
 	const text = typeof args === "string" ? args.trim() : "";
 	const toggled = station.herdPort().toggle(text);
 	if (!toggled.ok) return toggled;
@@ -316,7 +350,7 @@ export {
 	onAssistantMessage,
 	onMessageEnd,
 	onToolCall,
-	onHerdCommand,
+	onAutopilotCommand,
 	prepareRequest,
 	onContext,
 	onSessionStop,

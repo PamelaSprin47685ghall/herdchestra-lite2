@@ -333,3 +333,73 @@ test("a late child cannot write into the replacement root conversation", () => {
 	child.emit(answer("current output"));
 	expect(seen.map(({ message }) => message.content)).toEqual(["new\ncurrent output"]);
 });
+
+function approvalRunner() {
+	let installed = null;
+	const events = [];
+	return {
+		events,
+		get installed() { return installed; },
+		setToolApprovalPreviewWaiter(waiter) {
+			installed = waiter;
+			events.push({ kind: "install", waiter });
+			return () => {
+				const matched = installed === waiter;
+				if (matched) installed = null;
+				events.push({ kind: "detach", matched, installed });
+			};
+		},
+	};
+}
+
+test("approval preview suppression lives for exactly one display lease", () => {
+	const root = new Session();
+	root.sessionManager = { getSessionId: () => "one" };
+	const runner = approvalRunner();
+	root.extensionRunner = runner;
+	root.subscribe(() => {});
+
+	const display = childDisplayFor(root);
+	expect(runner.events).toHaveLength(1);
+	expect(runner.events[0].kind).toBe("install");
+	expect(typeof runner.installed).toBe("function");
+
+	// The same manager and session id reuse the lease without reinstalling.
+	expect(childDisplayFor(root)).toBe(display);
+	expect(runner.events).toHaveLength(1);
+
+	// Root tool events route through the installed suppression, not a new one.
+	root.emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} });
+	root.emit({ type: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: {} });
+	expect(runner.events).toHaveLength(1);
+
+	// A replacement lease detaches the old suppression before installing its own.
+	root.sessionManager = { getSessionId: () => "two" };
+	childDisplayFor(root);
+	expect(runner.events.map((event) => event.kind)).toEqual(["install", "detach", "install"]);
+	expect(runner.events[1].matched).toBe(true);
+	expect(runner.events[1].installed).toBeNull();
+	// The stable no-op keeps one identity while the detach clears only its slot.
+	expect(runner.events[2].waiter).toBe(runner.events[0].waiter);
+});
+
+test("releasing the plugin suppression never resurrects an earlier host waiter", () => {
+	const root = new Session();
+	root.sessionManager = { getSessionId: () => "one" };
+	const runner = approvalRunner();
+	const hostWaiter = () => Promise.resolve("host preview");
+	runner.setToolApprovalPreviewWaiter(hostWaiter);
+	root.extensionRunner = runner;
+
+	childDisplayFor(root);
+	expect(runner.events).toHaveLength(2);
+	expect(runner.installed).not.toBe(hostWaiter);
+
+	root.sessionManager = { getSessionId: () => "two" };
+	childDisplayFor(root);
+	const detach = runner.events.find((event) => event.kind === "detach");
+	expect(detach).toMatchObject({ matched: true, installed: null });
+	// The host's original waiter is cleared, never restored.
+	expect(runner.installed).not.toBe(hostWaiter);
+	expect(runner.events.at(-1).kind).toBe("install");
+});

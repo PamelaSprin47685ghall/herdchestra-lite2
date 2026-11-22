@@ -194,17 +194,23 @@ export function commitSkillReceipt(manager, messages, source = null) {
 			// A later context transform may rewrite an older scope. When it
 			// carries this exact committed receipt, it must keep that receipt
 			// instead of assigning the projection a second turn identity.
-			const matches = sameMessage(proposed, persisted) ||
-				(typeof persisted.herdSkillTurn === "string"
-					? persisted.herdSkillTurn === key
-					: sameTurnMessage(lastTurnMessage(journal), lastTurnMessage(prefix)));
-			if (!matches && !hasNewNote) {
+			const sameTurn = typeof persisted.herdSkillTurn === "string"
+				? persisted.herdSkillTurn === key
+				: sameTurnMessage(lastTurnMessage(journal), lastTurnMessage(prefix));
+			// A mode or branch toggle regenerates the receipt for the same
+			// turn. Its committed bytes must not win over the new mode.
+			const modeChanged =
+				(proposed.autopilot ?? null) !== (persisted.autopilot ?? null) ||
+				(proposed.branch ?? null) !== (persisted.branch ?? null);
+			const replace = hasNewNote || (modeChanged && sameTurn);
+			const matches = sameMessage(proposed, persisted) || sameTurn;
+			if (!matches && !replace) {
 				throw new Error("The persisted receipt belongs to a different message prefix.");
 			}
 			// A live-only note can follow the last journal receipt. Its presence
 			// after that exact receipt proves a new request, not a stale replay.
-			receipt = hasNewNote ? { ...proposed, herdSkillTurn: key } : persisted;
-			reuse = !hasNewNote;
+			receipt = replace ? { ...proposed, herdSkillTurn: key } : persisted;
+			reuse = !replace;
 		} else {
 			receipt = { ...proposed, herdSkillTurn: key };
 		}

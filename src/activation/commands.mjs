@@ -14,9 +14,9 @@ function compactDetail(detail) {
 }
 
 export function wireCommands(pi, registry) {
-	pi.registerCommand?.("herd", {
-		description: "Toggle interactive decision framing; optional text is sent as one user message",
-		handler: async (args, ctx) => registry.stationFor(ctx).onHerdCommand(args),
+	pi.registerCommand?.("herd-autopilot", {
+		description: "Toggle autopilot: off is manual duty with ask; on is the fully automatic relay",
+		handler: async (args, ctx) => registry.stationFor(ctx).onAutopilotCommand(args),
 	});
 	pi.registerCommand?.("herd-diag", {
 		description: "Print the last host diagnostics",

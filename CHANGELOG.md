@@ -6,6 +6,63 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — common rules moved into the required `constitution` skill
+
+- The always-on `common-rules` block moved out of the managed system prompt into
+  `skills/constitution/SKILL.md`, a required-reading skill. The persistent rules
+  now point to `skill://constitution`; the constitution is no longer repeated on
+  every request. The `commonRules` port and `HERD_DISABLE_COMMON_RULES` are gone.
+- `prompt-craft`, `skill-authoring`, and `polish` ship as on-demand skills. The
+  persistent rules name all six shipped skills and the trigger for each.
+- `tests/common-rules-switch.test.mjs` is retired; `tests/prompts.test.mjs`
+  checks the constitution skill and the persistent pointer instead.
+
+### Changed — `/herd` becomes `/herd-autopilot`, off by default
+
+- The command is now `/herd-autopilot` and the session flag is `autopilot`,
+  default `false`. Off is manual duty: the relay's two-empty-ledger and
+  handoff rules do not run, `ask` is available, and the relay rules are not
+  injected into the system prompt. On restores the previous full-automatic
+  behavior, including the blocked `ask`. The optional text after the command
+  is still sent as one user message.
+- `herdMode` is no longer persisted. An older snapshot without `autopilot`
+  restores as manual duty.
+
+### Fixed — fork branches start on omp 19.1
+
+- `deriveBranchConfig` reads the mounted tool view through
+  `getMountedToolCommandNames()` and falls back to the retired
+  `getMountedXdevToolNames()`. omp 19.1 replaced xd:// devices with bash tool
+  commands and renamed the getter; the old-only read refused every fork with
+  `NO_TOOL_VIEW` before any child session existed. `compareBranchFrames` reads
+  the same view. A factory refusal now carries its `detail` into the child
+  outcome, so a join receipt names the cause instead of a bare code.
+  `tests/branch-session.test.mjs`, `tests/fork-wiring.test.mjs`,
+  `tests/fork-spawn-chain.test.mjs`.
+
+### Fixed — every registered tool keeps its schema top-level
+
+- `scope_fork`, `scope_join`, `scope_return`, `amend`, and `pin` now declare
+  `loadMode: "essential"` alongside `todo`. With `tools.xdev` active the host
+  advertises their schemas directly in every request instead of mounting them
+  under `xd://`, so a model that never reads the device list can still call
+  them. `tests/tool-schema-visibility.test.mjs` pins the top-level
+  presentation for every registered tool, including future additions.
+
+## [3.0.0] — 2026-11-21
+
+### Added — the spawn chain is pinned end to end
+
+- `tests/fork-spawn-chain.test.mjs` drives `scope_fork` through the station's
+  spawner into the real `createBranchSession` with a fake host factory, then
+  asserts that the child's first request is the receipt and that the child
+  record reaches the join. A `NO_FORK_FRAME` refusal is proven to fail the
+  bracket and wake the join instead of leaving the parent waiting; two further
+  cases pin a rejected first prompt and a throwing session factory, the latter
+  keeping the factory's message in the refusal reason. The neighbouring suites
+  stop on one side of this seam: `fork-wiring` uses a fake session factory, and
+  `branch-session` never starts from a station.
+
 ### Added — the relay keeps the user's own words
 
 - A handoff writes every user prompt, verbatim and oldest first, into the
@@ -19,6 +76,19 @@ All notable changes to this extension. The format follows
   `elder_report` guidance now say the report does not restate the requirements.
   `tests/relay-prompts.test.mjs`; README and prompt docs updated.
 
+### Added — a fork item's model resolves before anything starts
+
+- `scope_fork` resolves each `model` selector through the host's own model
+  facade (`ctx.models`) before the first bracket is registered, then passes
+  the host `Model` object and its thinking level into the child session
+  config. A selector that names nothing refuses the whole batch as
+  `MODEL_UNKNOWN` with the available ids, so one bad item starts nothing; a
+  blocked item resolves nothing until it is resubmitted as ready. A literal
+  id with a colon-shaped tail wins over any suffix split, and the parent's
+  model and level are never written. `src/scope/model-selector.mjs`,
+  `tests/fork-model-selector.test.mjs`; the `fork.model` description now
+  lists `:max` with the other thinking suffixes.
+
 ### Fixed — a child that stops without returning is asked again
 
 - `spawnChildTicket` reads the bracket after the prompt: a natural stop leaves
@@ -30,6 +100,47 @@ All notable changes to this extension. The format follows
   frozen record waits. `tests/fork-wiring.test.mjs`,
   `tests/join-obligation.test.mjs`.
 
+### Fixed — a fork is labelled with its scope title, not an internal id
+
+- The branch config carries the public scope id's title as `agentDisplayName`
+  (`oh-my-pie` → "Oh My Pie") and keeps the generated `fork-<uuid>` only as
+  the host identity. The activation path already passed that title, but
+  `deriveBranchConfig` only read `label` and fell back to the flow id, so the
+  host's AgentRef and tool-approval dialog (`labelledUIContext`) showed
+  `fork-<uuid>`. The display name now falls back to the title; an explicit
+  `label` still wins, a blank one still falls through, and a branch with
+  neither keeps its flow id. The child display row derives the same title from
+  `publicScopeId`, so a record without a `scopeId` still shows `scope-N`.
+  `tests/branch-session.test.mjs`, `tests/child-display.test.mjs`.
+
+### Fixed — a pin that did not land is never reported OK
+
+- `pin` refuses a call whose fields are all absent or blank with
+  `INVALID_ARGUMENT` instead of answering OK and storing nothing; the schema
+  now requires at least one non-blank field. A write that returns `false`,
+  throws, or whose port throws rolls the in-memory note back and reports
+  `PIN_UNAVAILABLE` or `PIN_INTERNAL_ERROR`. `tests/pin-tool.test.mjs`.
+
+### Fixed — a stop the host aborted is not a user stop
+
+- The `session_stop` hook no longer filters aborted or errored turns itself;
+  it forwards the evidence and the station's `onSessionStop` owns the rule
+  beside the relay state it protects.
+  `tests/station-session-stop.test.mjs`, `tests/hooks.test.mjs`.
+
+### Fixed — a failed amend stays retryable
+
+- `processAssistantMessage` marks an `amend` call and its message only after
+  the work succeeds, so one throw leaves both unmarked for the scan path to
+  retry, while completed calls stay deduplicated.
+  `tests/station-amend-order.test.mjs`.
+
+### Fixed — a long session's idempotence caches stay bounded
+
+- The amend call and message caches are bounded rings that refresh an id on
+  every sighting, so an hours-long session cannot grow them without limit.
+  `tests/processed-ledger.test.mjs`.
+
 ### Changed — running tools render above the editor
 
 - Child activity no longer appends an open tool card to the transcript while
@@ -39,6 +150,19 @@ All notable changes to this extension. The format follows
   the native card once, at full size, through the host component registered by
   `registerToolCardComponent`; child thinking streams in the host's italic
   `thinkingText` style. `tests/child-display.test.mjs`.
+- The root's approval-preview waiter is installed once per display binding,
+  identity-detached when that lease ends, and reinstalled for the next one; a
+  root tool event inside the lease no longer replaces it on every call.
+  `src/host/child-display.mjs`.
+
+### Changed — the composition result owns the registry
+
+- Activation no longer routes stations through a process-wide module
+  singleton: `wireExtension` returns the registry it built, `activate` returns
+  the composition result, and tests plus `smoke-relay` reach a station through
+  that result. `setActiveRegistry`, `stationFor` and `stateFor` are gone from
+  the station index. `tests/integration.test.mjs`,
+  `tests/todo-any-level.test.mjs`, `scripts/smoke-relay.mjs`.
 
 ### Changed — the root cannot spend a budget it does not have
 
@@ -53,7 +177,7 @@ All notable changes to this extension. The format follows
   instead of silently running free. `tests/branch-charge.test.mjs`,
   `tests/todo-any-level.test.mjs`; prompt and README text updated.
 
-### Added — the bracket tree survives a reload, and a join has an admission gate
+### Added — the bracket tree survives a reload, and fork and join both have admission gates
 
 - The bracket ledger now lives in the persisted scope state (`state.brackets`)
   instead of a process-local registry map. `serializeState` writes it,
@@ -76,12 +200,38 @@ All notable changes to this extension. The format follows
   change. An unknown window or an unmeasured request is reported as unproven,
   never treated as zero or infinity. `src/scope/admission.mjs`,
   `tests/fork-join-admission.test.mjs` (10 cases).
+- Fork-start admission closes the other half. A child session seeds from the
+  parent's context and then reads its receipt, so its first request is the
+  parent's watermark plus that receipt priced at the model's measured density,
+  the fixed marker lines included. A known window refuses the whole batch as
+  `FORK_CONTEXT_EXCEEDED` before any bracket is registered and before the
+  spawner runs; the error names the failing index and the same numbers a join
+  refusal carries, a blocked checkpoint needs no admission and spawns nothing,
+  and an unknown window or unmeasured watermark passes as unproven. The
+  resolved model's own `contextWindow` outweighs the parent's catalog entry
+  when it is known, because the child runs on the selected model.
+  `src/station/fork-controls.mjs` (`admitForkStart`, `handleForkCall`),
+  `tests/fork-start-admission.test.mjs` (6 cases: refusal before ledger and
+  spawner, failing index in a batch, room to start, unknown window,
+  unmeasured watermark, blocked checkpoint).
+- A join receipt that cannot reach the shared tree is no longer silent.
+  `confirmJoinPersistence` reads `station.persist()` after `handleJoinCall`
+  commits an immediate join and inside `finalizeJoin`, and `renderJoinResult`
+  reports `details.persisted` (the field is omitted when the station has no
+  persist port, so fixtures keep their old shape). A false verdict appends
+  "Persistence warning: this join receipt exists in memory, but the shared
+  tree was not written."; the receipt still stands in memory for this run.
+  `src/station/fork-controls.mjs` (`confirmJoinPersistence`, `handleJoinCall`),
+  `src/station/station.mjs` (`finalizeJoin`),
+  `tests/join-persist-confirmation.test.mjs` (6 cases). The host's own
+  transcript confirmation remains open; see Not verified.
 - `elder_report` now has a quality floor and a ceiling: 24 to 4000 characters
-  after trimming. A one-word value or an overlong report is refused with
+  measured on the same string the tool schema accepts. A one-word value or an
+  overlong report is refused with
   `INVALID_ELDER_REPORT`, the ready child is not consumed, and a pending
   receipt keeps its unreported state. Semantic completeness cannot be proven
   automatically; the tool text states what the summary must carry.
-  `tests/fork-report-quality.test.mjs` (6 cases).
+  `tests/fork-report-quality.test.mjs` (12 cases).
 
 ### Changed — a folded receipt must earn its replacement
 
@@ -128,8 +278,9 @@ All notable changes to this extension. The format follows
   `tool_execution_end` publishes the start and the end together in one
   synchronous step. Root tools keep their real-time start and update. A child
   that detaches mid-tool publishes nothing. `tests/child-display.test.mjs`.
-- The three scope tools (`scope_fork`, `scope_join`, `scope_return`) are no
-  longer displayed at all, in the root or in a child. Dropping their
+- The three scope tools (`scope_fork`, `scope_join`, `scope_return`) no longer
+  create a transcript block, in the root or in a child; while they run, each
+  holds one row in the active-tools tray. Dropping their
   `tool_execution_*` events was not enough: the host builds one transcript
   block per `toolCall` in a streaming assistant message before any tool event
   arrives, and only a terminal result finalizes that block. A zero-row block
@@ -142,10 +293,12 @@ All notable changes to this extension. The format follows
   one continuous reply; the session's own message is untouched. The renderers
   still return `undefined` so a transcript rebuild draws the replayed call as
   zero rows. The model still receives the tool result; only the screen omits
-  the call. `tests/child-display.test.mjs` (32 cases).
-- Root tools other than the scope tools keep their real-time start and update
-  and hold the display slot exclusively; child tools other than the scope tools
-  still publish their real start+end atomically after the open stream ends.
+  the call. `tests/child-display.test.mjs` (8 cases).
+- Root tools other than the scope tools stream their real-time start and update
+  in the "herd-tools" widget above the editor, and the display copy of a root
+  assistant message drops every toolCall block, so no unfinalized ticket card
+  is created. Child tools keep one live row in the same widget and append their
+  transcript card when they end.
   A tool-shaped event with an unknown type is dropped instead of passed
   through. The working-line notices for scope tools are gone
   (`src/tools/wait-notice.mjs` and its suite).
@@ -229,7 +382,7 @@ All notable changes to this extension. The format follows
   open, tool events from different sources are published as they arrive and may
   interleave. A detached child closes its own stream with an `aborted`
   end and cannot freeze the others. Child control events never
-  impersonate the root; display never advances a join or a receipt. `tests/child-display.test.mjs` (12 cases) plus the spawner's
+  impersonate the root; display never advances a join or a receipt. `tests/child-display.test.mjs` plus the spawner's
   attach/detach case in `tests/fork-wiring.test.mjs`.
 - The root's UI context is now registered in `onStation`
   (`registerOwnerUI(owner, ctx.ui)`) and passed into `createBranchSession`, so
@@ -332,7 +485,7 @@ All notable changes to this extension. The format follows
   branch's tools. Before this, the old `afterScope` dispatch semantics always
   returned false, so the gate was never installed and a child's `time` was
   prose only. The root branch still has no clock. Tests:
-  `tests/fork-tool-deadline.test.mjs` (7 cases).
+  `tests/fork-tool-deadline.test.mjs` (11 cases).
 - `src/host/scope-dispatch.mjs` became `src/host/tool-dispatch.mjs`; the
   dispatch tracker keeps positions and group keys but no longer computes
   `afterScope`, `hasScope`, `carriesScope` or `deferPreflight`.
@@ -362,14 +515,13 @@ All notable changes to this extension. The format follows
 
 ### Docs
 
-- `docs/design/fork-join.md` §16 records the final state: six tools, real
-  wall-clock wiring, the removed shells, the verification numbers and the five
-  open gaps. §11.1, §11.2 and §15.7 are marked superseded.
-- `docs/acceptance/fork-join.md` records the current deletion evidence, the
-  retired exclusive-message rule and the new wall-clock test file.
-- `docs/acceptance/concurrent-fission.md` is deleted; the Esc acceptance file
-  is rewritten for the three tools; the old fission design and refactor
-  documents carry a historical banner.
+- `.agent/skills/fork-join/SKILL.md` records the failure-location table, the
+  cross-module boundaries (including the retired exclusive-message assumption
+  and the branch wall clock), the recovery and retirement rules, and the
+  acceptance checks.
+- `.agent/skills/fork-join-completion/SKILL.md` records the deletion evidence
+  and the known gaps: the real host's first projection, join receipts not being
+  a two-phase commit, and persistence that can leave a result only in memory.
 - `tests/refactor-guards.test.mjs` now asserts the retired dispatch names,
   files, error sections, host-smoke exports and exclusive marker stay gone.
 
@@ -470,7 +622,7 @@ All notable changes to this extension. The format follows
   wall-clock cap its parent gave it, so the dispatch plan is a tree rather than
   a single fan-out.
 - `skills/tdd-design` is gone. `README.md`, `resources/prompts/system.md` and
-  `docs/design/fork-join.md` §15.7 name `tdd-crowdsource`, and
+  `.agent/skills/fork-join/SKILL.md` name `tdd-crowdsource`, and
   `scripts/sync-plugin.mjs` prunes installed files the package no longer ships,
   so a rename retires the old name in the installed plugin instead of leaving
   both skills discoverable.
@@ -548,7 +700,7 @@ All notable changes to this extension. The format follows
   next batch; `src/scope/usage-ledger.mjs` keeps a no-op `accrue()` for the same
   reason.
 
-### Fixed — a shortened receipt kept no fork identity
+### Removed — the single scope implementation
 
 - `single` is retired from the scope port. `PORTS.scope.implementations` is now
   `["bare", "batch"]`, so `HERD_SCOPE=single` fails at startup with
@@ -556,10 +708,12 @@ All notable changes to this extension. The format follows
   landing on `batch`. `src/features/scope/single.mjs` and `batch.mjs` are
   deleted; `bare.mjs` keeps the method set and refuses every call, and `batch`
   is a name for "fork/join is available", not a container.
-- The fission batch prose is gone from `resources/prompts/tools/scope.md`
-  (`fission.permission`, `fission.model`) and the file's cross-references now
-  point at the fork/join reference. `amend` and `pin` descriptions moved to
-  `resources/prompts/tools/notes.md` so they outlived that edit.
+- The fission batch prose is gone from the scope reference, now
+  `resources/prompts/tools/fork-join.md` (`fission.permission`, `fission.model`),
+  and the file's cross-references point at the fork/join reference.
+  `resources/prompts/tools/scope.md` was retired in the same change. `amend` and
+  `pin` descriptions moved to `resources/prompts/tools/notes.md` so they outlived
+  that edit.
 
 ### Changed — the workflow stages left the runtime
 
@@ -569,7 +723,10 @@ All notable changes to this extension. The format follows
   is a design constraint rather than a separate sitting. Direct execution
   ships no skill: it is ordinary work done against the plan. The runtime
   enforces no order and holds no flags; `resources/prompts/system.md`,
-  `resources/prompts/tools/scope.md` and `README.md` all state that boundary.
+  `resources/prompts/tools/fork-join.md` (then named `scope.md`) and `README.md`
+  all state that boundary. `tdd-design` was later renamed `tdd-crowdsource`;
+  `orchestration-plan` was retired, and its design record remains at
+  `.agent/skills/plan/SKILL.md`.
 - `src/relay/texts.mjs` defined `firstEvaluationNudge`, `handoffPendingNudge`,
   `handoffEmptyReportNudge` and `openLedgerNudge`, and `src/relay/index.mjs`
   exported them, but no module consumed them after the stop rule changed:
@@ -625,14 +782,15 @@ All notable changes to this extension. The format follows
   `INVALID_ELDER_REPORT` without consuming the ready child, then accepts the
   join with the summary and checks the report landed on the old receipt.
 
-### Added — the todo gate reads the receive obligation
+### Corrected — the receive obligation holds the relay, not the todo tool
 
-- `onToolCall` refused `todo` only while a scope was open. A parent at depth 0
-  with an unreceived fork result would pass the gate and arm a relay handoff
-  that abandons the child. The gate now asks the bracket ledger for open
-  children under the branch's owner id and refuses with
-  `TODO_WHILE_CHILDREN_OPEN`. `tests/fork-todo-gate.test.mjs` covers both
-  directions.
+- The receive obligation never withholds `todo`; the tool stays free at every
+  level. A root that still owns an unreceived child can submit an empty ledger,
+  but the relay transition holds it instead of arming a handoff that would
+  abandon the child. A non-empty ledger still evaluates, and a child's write
+  never touches the relay. `tests/fork-todo-gate.test.mjs` covers both
+  directions; `tests/refactor-guards.test.mjs` asserts the retired
+  `TODO_WHILE_CHILDREN_OPEN` gate stays gone.
 
 ### Verification
 
@@ -650,10 +808,41 @@ All notable changes to this extension. The format follows
 
 ### Not verified
 
-- A real host run of `scope_fork → scope_return → scope_join`. No `OMP_HOST`
-  checkout exists in this environment, so `smoke:omp` was not run.
-- Window admission for a fork's start projection and for a join's receipt
-  (blueprint G5), and durable commit confirmation for a receipt (G4).
+- Durable commit confirmation for a receipt (G4). No port acknowledges that a
+  specific receipt reached durable storage. `commitSkillReceipt` writes through
+  `appendToJournal`, whose immediate readback proves only that the current
+  branch retains the message (`src/host/hack-context.mjs:46-59`). The only
+  related settlement is `await session.settleInFlightMessagePersistence?.()`
+  (`src/host/branch-session.mjs:626`, `src/host/context-preparation.mjs:252`),
+  which drains whatever the host has already queued before a read; it returns
+  no per-message acknowledgment and its absence is tolerated. A join receipt
+  is a tool result whose persistence the host owns after the tool returns, so
+  the station cannot observe it at all. A verifiable contract would need a host
+  port that accepts one message and returns a commit acknowledgment or an
+  error; the port table has none, so no code calls one and no test can pin the
+  behavior. Window admission is no longer on this list: the fork-start and join
+  halves are implemented and tested (see the Added block above). The station's
+  own scope state is the narrower, verifiable case: `confirmJoinPersistence`
+  reads `station.persist()` after `handleJoinCall` commits a receipt and in
+  `finalizeJoin`, and `renderJoinResult` reports `details.persisted` (omitted
+  when the station has no persist port) and appends a warning when the shared
+  tree was not written; the receipt still stands in memory for the run
+  (`tests/join-persist-confirmation.test.mjs`, 6 cases). What remains open is
+  the host's durable write of the receipt transcript, not the station's own
+  state.
+- The real host's first child request was observed (the probe under
+  "Verification — final"), but the first-request projection and the
+  parent-prefix alignment against that request remain unverified; the docs
+  bullet above records the first projection as a known gap.
+- No spawn timeout. `spawnChildTicket` awaits `createSession(spec)` and then
+  `session.prompt()` with no timer; a host call that never settles leaves the
+  bracket running and the parent's join waiting forever, and no outcome is
+  frozen. This is an accepted risk, not a shipped watchdog: no `AbortSignal`
+  contract is verified for the prompt (it is duck-typed; `agent.abort` is only
+  checked for `stopAfterScopeReturn`), so a `Promise.race` would wake the parent
+  without cancelling the host turn or its cost. The branch clock only caps
+  ordinary tool calls, and a join pauses that clock, so a join timeout cannot
+  substitute.
 
 ### Changed — breaking
 
@@ -681,11 +870,13 @@ All notable changes to this extension. The format follows
   until it runs one free `todo({ op: "view" })`; the receipt and the handoff
   text say so, and a successful view clears the requirement.
 - Workflow guidance is now omp skills instead of runtime state. The package
-  ships `skills/decision-framing`, `skills/tdd-design`, and
-  `skills/orchestration-plan`; omp discovers
-  them through its `omp-plugins` provider, so installing the plugin makes
-  `/skill:<name>` and `skill://<name>` work with no configuration. Direct
-  execution ships no skill: it is ordinary work done against the plan.
+  ships `skills/decision-framing` and `skills/tdd-crowdsource`; at this point in
+  the migration the second was still named `tdd-design`, and a third,
+  `orchestration-plan`, was planned but later retired. Its design record remains
+  at `.agent/skills/plan/SKILL.md`. omp discovers the shipped skills through its
+  `omp-plugins` provider, so installing the plugin makes `/skill:<name>` and
+  `skill://<name>` work with no configuration. Direct execution ships no skill:
+  it is ordinary work done against the plan.
 - `acceptance-cases` and `architecture-design` are merged into `tdd-design`.
   That skill makes testability a design constraint: every unit's tests are
   written before its code, with every collaborator mocked at the contract
@@ -718,8 +909,9 @@ All notable changes to this extension. The format follows
   identify itself. A successful join arms the previous receipt's
   `elder_report`; a later join without that report is refused before any
   bracket is consumed. The old fission batch scheduler remains callable but is
-  not part of the new path; `docs/design/fork-join.md` records the retirement
-  checklist and the host evidence still required before deletion.
+  not part of the new path; `.agent/skills/fork-join-completion/SKILL.md`
+  records the retirement checklist and the host evidence still required before
+  deletion.
 
 - Folding economics now prices context-bloat degradation. Effective work per turn
   falls linearly from 1 to 1/2 across the context window, so a fold is credited
@@ -781,9 +973,47 @@ All notable changes to this extension. The format follows
   writing a receipt. Orphan results, unknown roles, and a lost or ambiguous committed
   tail still fail with `CONTEXT_PREPARATION_HISTORY_MISMATCH`.
 
-- Esc pauses active fission flows without closing their scopes. New input resumes the original flows. Pending broadcasts use omp's Steering panel, support Alt+Up and Esc restoration, and appear only once on first delivery.
 - An open flow that stops normally receives a steer to continue instead of crashing the batch. Recoverable external failures wait for user input; permanent per-flow failures no longer discard a completed sibling's work.
 - Request preparation can verify interrupted tails and match live assistant frames without rewriting them. Spawning no longer duplicates the SDK-restored history, and takeover keeps the heir's warmed message prefix.
+- A child-session factory that threw surfaced only as `CREATE_FAILED`; the
+  original error never reached the parent. The create-failure branch now keeps
+  the refusal code and appends the factory message
+  (`CREATE_FAILED: <message>`), and records the structured error in the
+  diagnostics ring with `{ forkId, phase: "create" }`.
+  `tests/fork-spawn-chain.test.mjs` adds "a throwing factory fails the fork and
+  preserves the cause".
+
+### Verification — final (2026-11-22)
+
+This block supersedes every earlier checkpoint in this section: the
+9-pass/1-fail mid-refactor run, the 626/50, 646/49, and 806/55 suites, the
+804/2754 pre-admission suite, and the 802/2738 generation-5 run.
+
+- `bun test tests`: 816 pass, 0 fail, 2801 `expect()` calls, 68 files, after
+  fork-start window admission and its six cases plus join receipt persistence
+  confirmation and its six cases, on top of the scope-title display fallback
+  and four spawn-chain cases: the success chain, the
+  `NO_FORK_FRAME` refusal, a rejected first prompt, and a throwing session
+  factory whose original message survives as `CREATE_FAILED: <message>`.
+- `bun run lint`: clean, no diagnostics.
+- `bun run smoke:relay`: 12/12 checks.
+- `bun scripts/sync-plugin.mjs --check`: in sync, fingerprints ok.
+- `OMP_HOST=/path/to/oh-my-pi OMP_SMOKE_STRICT=1 bun scripts/smoke-omp.mjs`:
+  13/13 checks, recorded in generation 5 and not re-run for this block. The
+  model readback was explicit `google-antigravity/claude-opus-5-5 @ low` and
+  inherited `kw92/mistral/deepseek-v4-1-flash-1017`.
+
+The live host turn is observed in a one-shot probe: `/tmp/g5-host-turn2.log`
+(1062 JSONL lines, session cwd `/tmp/g5-probe`) records a real `scope_fork`
+call whose joined child record carries the child's first user message
+`You are the child of fork g5-probe2, depth 1.` The probe is evidence, not a
+regression test; `tests/fork-spawn-chain.test.mjs` pins the same spawn seam
+offline, now including both failure branches. The `Not verified` block above
+now names durable commit confirmation, the unverified first-request projection
+and parent-prefix alignment, and the absent spawn timeout; window admission is
+delivered on both sides and pinned offline by
+`tests/fork-start-admission.test.mjs` and `tests/fork-join-admission.test.mjs`.
+The host smoke sends no completion request.
 
 ## [2.3.0] — 2026-11-19
 

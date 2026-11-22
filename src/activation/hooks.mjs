@@ -107,11 +107,12 @@ export function wireHooks(pi, registry) {
 	pi.on("before_agent_start", (event, ctx) =>
 		bindDispatch(ctx).onBeforeAgentStart(event, ctx),
 	);
-	pi.on("session_stop", (event, ctx) => {
-		const reason = event?.last_assistant_message?.stopReason;
-		if (event?.signal?.aborted || reason === "aborted" || reason === "error") return undefined;
-		return registry.stationForStop(ctx).onSessionStop(ctx);
-	});
+	pi.on("session_stop", (event, ctx) =>
+		registry.stationForStop(ctx).onSessionStop(ctx, {
+			signal: event?.signal ?? null,
+			reason: event?.last_assistant_message?.stopReason ?? null,
+		}),
+	);
 	pi.on("session_switch", (event, ctx) => {
 		const result = registry.stationForStop(ctx).onSessionSwitch(event, ctx);
 		bindDispatch(ctx);

@@ -2,17 +2,10 @@
 
 import {
 	activateToolsTicket,
+	restoreScopedModelTicket,
 	sendSteerTicket,
 	sendUserMessageTicket,
-	switchModelTicket,
 } from "../tools/tickets.mjs";
-
-async function restoreScopedModel(station, ctx, req, result, finish) {
-	const outcome = await switchModelTicket(station.pi, ctx, req);
-	station.reconcileActualModel(ctx, req, outcome);
-	if (!outcome.ok) station.lastError = `${req.command}: ${outcome.reason}`;
-	return finish ? finish(result) : result;
-}
 
 export function buildTickets(pi) {
 	return {
@@ -24,7 +17,7 @@ export function buildTickets(pi) {
 			void sendUserMessageTicket(pi, text);
 		},
 		canPrompt: typeof pi?.sendUserMessage === "function",
-		restoreScopedModel,
+		restoreScopedModel: restoreScopedModelTicket,
 		activateTools: (activeTools, prompt, changed) =>
 			activateToolsTicket(pi, activeTools, prompt, changed),
 	};

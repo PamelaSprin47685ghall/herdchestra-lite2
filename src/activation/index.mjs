@@ -3,13 +3,13 @@
  * tools. Mechanical only. No business logic lives here.
  */
 
-import { createStationRegistry, setActiveRegistry } from "../station/index.mjs";
+import { createStationRegistry } from "../station/index.mjs";
 import { attachForkPorts } from "../host/fork-wiring.mjs";
 import { conversationKeyOf, identityForAgent } from "../host/fork-registry.mjs";
 import { createBranchSession, registerOwnerUI } from "../host/branch-session.mjs";
 import { childDisplayFor } from "../host/child-display.mjs";
 import { prepareChildContext } from "../host/branch-context.mjs";
-import { sessionFor } from "../host/capture.mjs";
+import { rememberSession, sessionFor } from "../host/capture.mjs";
 import { scopeTitle } from "../scope/scope-id.mjs";
 import { resolvePorts } from "../core/ports/resolve.mjs";
 
@@ -53,6 +53,23 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 	const ports = resolveWiringPorts(env);
 	const table = ports.ok ? ports.ports : {};
 	let registry = null;
+	// Refresh only the UI seams of a cached station. The first attach may have
+	// missed the interactive context; a later event carries it. This must stay
+	// cheap: the registry calls it on every stationFor of the session.
+	const refreshStationUI = (station, ctx) => {
+		if (!station || typeof station.setDisplayPort !== "function") return;
+		const owner = sessionFor(ctx);
+		if (!owner) return;
+		const forkWiring = registry.forkWiring();
+		if (identityForAgent(forkWiring.registry, agentIdOf(ctx))) return;
+		if (ctx?.hasUI === false || !ctx?.ui) return;
+		// A context can carry the live session before the host reports it
+		// through the manager. Remember it so a later manager-only context
+		// still resolves the same owner.
+		if (ctx?.session === owner) rememberSession(owner);
+		registerOwnerUI(owner, ctx.ui);
+		station.setDisplayPort(childDisplayFor(owner, ctx.ui));
+	};
 	const attachStation = (station, ctx) => {
 			// The registry already attached the ports with the process-wide
 			// wiring. Reuse that exact wiring so this station cannot end up on a
@@ -71,7 +88,9 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 			// honest OWNER_UI_ABSENT limitation.
 			// Descendants use the same root display sink, regardless of adoption.
 			if (owner && !childIdentity && ctx?.hasUI !== false && ctx?.ui) registerOwnerUI(owner, ctx.ui);
-			const display = childIdentity?.display ??
+			const display =
+				childIdentity?.displayHolder ??
+				childIdentity?.display ??
 				(!childIdentity && ctx?.hasUI !== false ? childDisplayFor(owner, ctx?.ui) : null);
 			attachForkPorts(station, forkWiring, {
 				identity: childIdentity,
@@ -103,6 +122,12 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 									sourceToolCallId: spec.sourceToolCallId,
 									agentDisplayName: scopeTitle(spec.scopeId),
 									ui: childIdentity ? null : (ctx?.ui ?? null),
+									// The selector was resolved by the station with the
+									// host's own model facade before any bracket was
+									// registered. Pass the host Model object; an absent
+									// override keeps the owner's model and level.
+									model: spec.modelOverride,
+									thinkingLevel: spec.thinkingLevel,
 								})
 						: undefined,
 			});
@@ -110,16 +135,16 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 	registry = createStationRegistry(pi, buildTickets(pi), pricingCatalog, {
 		...table,
 		onStation: attachStation,
+		onStationRefresh: refreshStationUI,
 	});
 	if (!ports.ok) {
 		record("activation", new Error(ports.detail), { wiring: "ports" });
 	}
-	setActiveRegistry(registry);
 	const hooks = wireHooks(pi, registry);
 	wireTools(pi, registry);
 	wireCommands(pi, registry);
 	wireHostDiagnosis(pi, diagnosis, hooks);
 	// The root needs the resolved table to decide whether the status widget
 	// exists at all; the decision stays here, not in the host renderer.
-	return { hooks, ports: ports.ok ? ports.ports : {} };
+	return { hooks, ports: ports.ok ? ports.ports : {}, registry };
 }

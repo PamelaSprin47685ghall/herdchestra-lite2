@@ -5,10 +5,8 @@ import { injectSystemPrompt, persistentOperatingSkill } from "../src/host/prompt
 import { rewriteVibeMessage } from "../src/transcript/tail.mjs";
 
 test("each prompt-fragment switch resolves from its environment name", () => {
-	const commonRules = resolvePorts({}, { HERD_DISABLE_COMMON_RULES: "1" });
 	const chineseReminder = resolvePorts({}, { HERD_DISABLE_CHINESE_REMINDER: "1" });
 	const vibeCompat = resolvePorts({}, { HERD_DISABLE_VIBE_COMPAT: "1" });
-	expect(commonRules.ports.commonRules).toBe("off");
 	expect(chineseReminder.ports.chineseReminder).toBe("off");
 	expect(vibeCompat.ports.vibeCompat).toBe("off");
 });

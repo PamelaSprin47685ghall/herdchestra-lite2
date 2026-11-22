@@ -304,7 +304,7 @@ describe("owner queries", () => {
     const ledger = createBracketLedger();
     const spawned = [];
     const station = {
-      state: { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } },
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
       forkLedgerPort: () => ledger,
       childSpawnPort: () => (spec) => {
         spawned.push(spec);
@@ -339,7 +339,7 @@ describe("owner queries", () => {
     expect(early.content[0].text).toContain("No child has returned yet");
 
     const child = {
-      state: { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } },
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
       forkLedgerPort: () => ledger,
       forkIdentityPort: () => ({ forkId: "call-f1", parentOwnerId: "root" }),
     };
@@ -364,7 +364,7 @@ describe("owner queries", () => {
   test("refuses a fork when no child spawner is attached", async () => {
     const { handleForkCall } = await import("../src/station/fork-controls.mjs");
     const station = {
-      state: { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } },
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
       forkLedgerPort: () => createBracketLedger(),
     };
     const out = handleForkCall(station, {
@@ -387,7 +387,7 @@ describe("owner queries", () => {
 
   test("rejects a malformed fork before any state change", async () => {
     const { validateFork } = await import("../src/station/fork-controls.mjs");
-    const state = { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } };
+    const state = { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
     const base = {
       scopeId: "probe", intent: "x",
       budget: { read: 1 },
@@ -407,14 +407,14 @@ describe("owner queries", () => {
     );
     const ledger = createBracketLedger();
     const station = {
-      state: { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } },
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
       forkLedgerPort: () => ledger,
     };
     // The root forks p, and p's own branch forks one grandchild.
     fork(ledger, "call-p", "root", 0);
     fork(ledger, "call-c1", "call-p", 1);
     const child = {
-      state: { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } },
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
       forkLedgerPort: () => ledger,
       forkIdentityPort: () => ({
         forkId: "call-p",
@@ -442,7 +442,7 @@ describe("owner queries", () => {
   test("refuses scope_return outside a forked child", async () => {
     const { handleReturnCall } = await import("../src/station/fork-controls.mjs");
     const station = {
-      state: { scopes: [], herdMode: false, relay: { generation: 0, fullFlow: false } },
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
       forkLedgerPort: () => createBracketLedger(),
     };
     const out = handleReturnCall(station, {

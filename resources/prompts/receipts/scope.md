@@ -18,17 +18,21 @@ Unreceived child results: {{count}}. Receive them with `scope_join`.
 
 Budget: {{budget}}.
 
+## receipt.branch-duty
+
+Fork child duty: complete the assigned slice, then return with `scope_return`.
+
 ## receipt.no-ledger
 
 Until the first `todo` write, fork with `permission: "ro"`.
 
-## receipt.herd
+## receipt.autopilot
 
-Herd mode on: `ask` or pause for the user.
+Autopilot on: the relay runs; `ask` is unavailable.
 
-## receipt.herd-off
+## receipt.manual
 
-Herd mode off.
+Autopilot off: manual duty; `ask` is available.
 
 ## receipt.can-stop
 

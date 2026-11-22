@@ -14,7 +14,7 @@ description: 修改 todo 工单、根分支接力、fork 身份、计费或 skil
 | `read` 的 `skill://` 路径 | 免费放行 | 免费放行 |
 | 普通 `read`（含其他 URL） | `ROOT_HAS_NO_BUDGET` | 扣本分支的 `read` 预算 |
 
-待定交接的闸门先于免费放行；未开启 herd mode 时返回 `RELAY_HANDOFF_PENDING`。根分支继承台账后，写入前须先 `view`，否则返回 `INHERITED_LEDGER_UNVIEWED`。herd mode 下原生台账仍可用，但不评估接力。
+未开启 autopilot 时原生台账直接生效、不评估接力；autopilot 开启且交接待定时返回 `RELAY_HANDOFF_PENDING`。根分支继承台账后，写入前须先 `view`，否则返回 `INHERITED_LEDGER_UNVIEWED`。autopilot 开启时原生台账仍可用，但只由根分支评估接力。
 
 ## 改动入口
 

@@ -8,6 +8,29 @@
  */
 
 const HANDLED_LIMIT = 512;
+const CALL_LIMIT = 512;
+const MESSAGE_LIMIT = 512;
+
+/**
+ * Remember one id in a bounded ring. Re-seeing an id refreshes it to the
+ * newest position, so the ids the host keeps repeating are never evicted
+ * while a stale one falls out first.
+ */
+function remember(set, id, limit) {
+	set.delete(id);
+	set.add(id);
+	if (set.size > limit) {
+		const oldest = set.values().next().value;
+		set.delete(oldest);
+	}
+}
+
+function seen(set, id) {
+	if (!set.has(id)) return false;
+	set.delete(id);
+	set.add(id);
+	return true;
+}
 
 export function createProcessedLedger() {
 	const handled = new Map();
@@ -32,19 +55,19 @@ export function createProcessedLedger() {
 		},
 
 		markCall(toolCallId) {
-			calls.add(toolCallId);
+			remember(calls, toolCallId, CALL_LIMIT);
 		},
 
 		hasCall(toolCallId) {
-			return calls.has(toolCallId);
+			return seen(calls, toolCallId);
 		},
 
 		markMessage(key) {
-			messages.add(key);
+			remember(messages, key, MESSAGE_LIMIT);
 		},
 
 		hasMessage(key) {
-			return messages.has(key);
+			return seen(messages, key);
 		},
 	};
 }

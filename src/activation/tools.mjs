@@ -35,6 +35,9 @@ export function wireTools(pi, registry) {
 		label: "Fork Scope",
 		description: FORK_DESCRIPTION,
 		parameters: forkParameters,
+		// Every tool here is part of the working protocol, so its schema must
+		// stay in the top-level request instead of moving behind xd://.
+		loadMode: "essential",
 		execute: (toolCallId, params, signal, _onUpdate, ctx) =>
 			forkTicket(registry.stationFor(ctx), toolCallId, params, ctx, signal),
 	});
@@ -43,6 +46,7 @@ export function wireTools(pi, registry) {
 		label: "Join Child",
 		description: JOIN_DESCRIPTION,
 		parameters: joinParameters,
+		loadMode: "essential",
 		execute: (toolCallId, params, signal, _onUpdate, ctx) =>
 			joinTicket(registry.stationFor(ctx), toolCallId, params, ctx, signal),
 	});
@@ -51,6 +55,7 @@ export function wireTools(pi, registry) {
 		label: "Return Scope",
 		description: RETURN_DESCRIPTION,
 		parameters: returnParameters,
+		loadMode: "essential",
 		execute: (toolCallId, params, signal, _onUpdate, ctx) =>
 			returnTicket(registry.stationFor(ctx), toolCallId, params, ctx, signal),
 	});
@@ -59,6 +64,7 @@ export function wireTools(pi, registry) {
 		label: "Amend",
 		description: AMEND_DESCRIPTION,
 		parameters: amendParameters,
+		loadMode: "essential",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 			amendTicket(registry.stationFor(ctx), toolCallId, params),
 	});
@@ -67,6 +73,7 @@ export function wireTools(pi, registry) {
 		label: "Pin",
 		description: PIN_DESCRIPTION,
 		parameters: pinParameters,
+		loadMode: "essential",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 			pinTicket(registry.stationFor(ctx), toolCallId, params),
 	});

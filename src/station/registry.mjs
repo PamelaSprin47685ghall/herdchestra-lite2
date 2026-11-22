@@ -115,6 +115,17 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog,
 				station = new SessionStation(ctx?.sessionManager ?? null, pi, tickets, registry, pricingCatalog);
 				stations.set(key, station);
 				attachStationPorts(station, ctx ?? null);
+				return station;
+			}
+			// A station is cached for the whole session. Its first attach may
+			// have run before the interactive UI existed (or before the host
+			// session was remembered), and a display snapshot would then stay
+			// null forever. Give the composition root a cheap refresh every time
+			// the station is reached; the refresh only fills missing UI state.
+			try {
+				ports.onStationRefresh?.(station, ctx ?? null);
+			} catch (error) {
+				station.noteError?.("activation", error);
 			}
 			return station;
 		},
@@ -140,22 +151,5 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog,
 	return registry;
 }
 
-let activeRegistry = null;
-let fallbackRegistry = null;
-
-export function setActiveRegistry(registry) {
-	activeRegistry = registry;
-}
-
-export function stationFor(ctx) {
-	if (!activeRegistry) {
-		if (!fallbackRegistry) fallbackRegistry = createStationRegistry(null);
-		return fallbackRegistry.stationFor(ctx);
-	}
-	return activeRegistry.stationFor(ctx);
-}
-
-/** Alias kept for test compatibility: returns the SessionStation for ctx. */
-export function stateFor(ctx) {
-	return stationFor(ctx);
-}
+// The registry is owned by the activation wiring that created it. A module
+// singleton would be a second, process-wide owner of station state.

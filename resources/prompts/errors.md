@@ -2,33 +2,33 @@
 
 Provide a non-empty `reflection` to replace the beat.
 
-## amend-scope
-
-Select a beat in this branch after its latest `scope_fork`, `scope_join`, or `scope_return`.
-
 ## amend-unavailable
 
 Amend is unavailable. The record is unchanged.
+
+## pin-empty
+
+Name at least one field with content: `assumption`, `deduction`, `induction`, `finding`, or `conclusion`.
 
 ## pin-unavailable
 
 Pin is unavailable. Note not saved.
 
+## pin-internal
+
+The note could not be saved, and it was not kept.
+
+## pin-internal-error
+
+The pin failed. Treat the note as not saved.
+
 ## ask-blocked
 
-Herd mode is off. Only the user can enable `ask` with `/herd`.
+Autopilot is on. Only the user can turn it off with `/herd-autopilot`.
 
 ## model-switch-warning
 
 Could not verify {{command}}: {{reason}}. Use the model the host reports.
-
-## context-exceeded
-
-The child record exceeds this model's context window. It stays available. Use a larger model or return the work in files and a short record.
-
-## context-estimate-unavailable
-
-Cannot estimate request size for this model. Fit is unverified.
 
 ## overtime-killed
 

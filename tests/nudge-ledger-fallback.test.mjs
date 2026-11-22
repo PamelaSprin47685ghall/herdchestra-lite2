@@ -4,7 +4,7 @@ import { copyRelay, createRelay } from "../src/relay/index.mjs";
 import { nudgeDecision } from "../src/station/nudge.mjs";
 
 function stateWithRelay(relay) {
-	return { herdMode: false, relay };
+	return { autopilot: true, relay };
 }
 
 const outside = { hasToolCalls: false };

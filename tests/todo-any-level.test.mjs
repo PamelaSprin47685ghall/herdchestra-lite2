@@ -10,7 +10,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { activate } from "../src/main.mjs";
-import { stateFor } from "../src/station/index.mjs";
 import {
 	createBracketLedger,
 	markReady,
@@ -18,6 +17,14 @@ import {
 	takeReady,
 } from "../src/scope/index.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
+
+// The live station comes from the registry that `start()` just built. A
+// module-wide accessor keeps the test bodies focused on relay behavior.
+let activeStation = null;
+function stateFor() {
+	if (!activeStation) throw new Error("start() has not run");
+	return activeStation;
+}
 
 function clone(value) {
 	return JSON.parse(JSON.stringify(value));
@@ -168,7 +175,7 @@ async function start() {
 		name: "todo",
 		execute: async () => ({ content: [{ type: "text", text: "host builtin" }] }),
 	});
-	await activate(host.pi, {});
+	const wired = await activate(host.pi, {});
 	const ctx = {
 		sessionManager: manager,
 		mode: "rpc",
@@ -199,7 +206,11 @@ async function start() {
 		ctx,
 	);
 	if (prepared?.systemPrompt) session.agent.state.systemPrompt = prepared.systemPrompt;
-	return { host, ctx, native, session, station: stateFor(ctx) };
+	activeStation = wired.registry.stationFor(ctx);
+	// Every case in this file exercises the relay; manual duty has its own
+	// cases at the end and flips the flag off explicitly.
+	activeStation.state.autopilot = true;
+	return { host, ctx, native, session, station: activeStation };
 }
 
 async function runAssistant(host, ctx, message) {
@@ -417,8 +428,8 @@ describe("todo in a fork child", () => {
 		expect(textOf(outer)).toContain("INHERITED_LEDGER_UNVIEWED");
 	});
 
-	test("is refused at both levels while a handoff is pending", async () => {
-		const { host, ctx, station } = await start();
+	test("is refused on the root while a handoff is pending", async () => {
+		const { host, ctx } = await start();
 		stateFor(ctx).state.relay = {
 			...stateFor(ctx).state.relay,
 			handoffPending: true,
@@ -430,15 +441,22 @@ describe("todo in a fork child", () => {
 		);
 		expect(root.blocked).toBe(true);
 		expect(textOf(root)).toContain("RELAY_HANDOFF_PENDING");
+	});
 
+	test("is not refused in a child while the root handoff is pending", async () => {
+		const { host, ctx, station } = await start();
+		stateFor(ctx).state.relay = {
+			...stateFor(ctx).state.relay,
+			handoffPending: true,
+		};
 		asChild(station);
 		const [child] = await runAssistant(
 			host,
 			ctx,
 			assistant([call("t2", "todo", { op: "view" })]),
 		);
-		expect(child.blocked).toBe(true);
-		expect(textOf(child)).toContain("RELAY_HANDOFF_PENDING");
+		expect(child.blocked).toBe(false);
+		expect(textOf(child)).not.toContain("RELAY_HANDOFF_PENDING");
 	});
 });
 
@@ -495,13 +513,12 @@ describe("skill read at every level", () => {
 		expect(ledger.forks.fork_a.remaining.read).toBe(0);
 	});
 
-	test("is refused during a pending handoff", async () => {
-		const { host, ctx, station } = await start();
+	test("is refused on the root during a pending handoff", async () => {
+		const { host, ctx } = await start();
 		stateFor(ctx).state.relay = {
 			...stateFor(ctx).state.relay,
 			handoffPending: true,
 		};
-		asChild(station);
 		const [refused] = await runAssistant(
 			host,
 			ctx,
@@ -509,6 +526,22 @@ describe("skill read at every level", () => {
 		);
 		expect(refused.blocked).toBe(true);
 		expect(textOf(refused)).toContain("RELAY_HANDOFF_PENDING");
+	});
+
+	test("is allowed in a child during a pending root handoff", async () => {
+		const { host, ctx, station } = await start();
+		stateFor(ctx).state.relay = {
+			...stateFor(ctx).state.relay,
+			handoffPending: true,
+		};
+		asChild(station);
+		const [read] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("r1", "read", SKILL_READ)]),
+		);
+		expect(read.blocked).toBe(false);
+		expect(textOf(read)).not.toContain("RELAY_HANDOFF_PENDING");
 	});
 });
 
@@ -518,5 +551,197 @@ describe("todo description", () => {
 		const definition = host.tools.get("todo");
 		expect(definition.description).toMatch(/free at every level/i);
 		expect(definition.description).not.toContain("forbidden inside any active scope");
+	});
+});
+
+describe("manual duty (autopilot off)", () => {
+	test("a todo write leaves the relay untouched and hides RELAY STATE", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.autopilot = false;
+		const before = JSON.stringify(stateFor(ctx).state.relay);
+		const [written] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("m1", "todo", { op: "init", list: [] })]),
+		);
+
+		expect(written.blocked).toBe(false);
+		expect(written.result.isError).toBeFalsy();
+		expect(JSON.stringify(stateFor(ctx).state.relay)).toBe(before);
+		expect(textOf(written)).not.toContain("RELAY STATE");
+		expect(textOf(written)).not.toContain("handoff report");
+	});
+
+	test("ask is allowed, and the native todo still runs", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.autopilot = false;
+		const [asked] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("m2", "ask", { question: "Which file?" })]),
+		);
+		expect(asked.blocked).toBe(false);
+	});
+
+	test("a natural stop neither arms a handoff nor demands a report", async () => {
+		const { host, ctx, station } = await start();
+		stateFor(ctx).state.autopilot = false;
+		const stop = await emit(
+			host.handlers,
+			"session_stop",
+			{ last_assistant_message: { stopReason: "stop" } },
+			ctx,
+		);
+		expect(stop).toBeUndefined();
+		expect(stateFor(ctx).state.relay.handoffPending).toBe(false);
+		expect(station.state.relay.firstEvaluation).toBeNull();
+	});
+
+	test("a stale relay handoff cannot block tools in manual duty", async () => {
+		const { host, ctx } = await start();
+		stateFor(ctx).state.autopilot = false;
+		stateFor(ctx).state.relay = {
+			...stateFor(ctx).state.relay,
+			handoffPending: true,
+		};
+		const [written] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("m4", "todo", { op: "view" })]),
+		);
+		const [asked] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("m5", "ask", { question: "Paused?" })]),
+		);
+
+		expect(written.blocked).toBe(false);
+		expect(textOf(written)).not.toContain("RELAY_HANDOFF_PENDING");
+		expect(asked.blocked).toBe(false);
+	});
+
+	test("turning autopilot on restores relay evaluation and the relay prompt", async () => {
+		const { host, ctx, session, station } = await start();
+		stateFor(ctx).state.autopilot = false;
+
+		const toggled = station.onAutopilotCommand("");
+		expect(toggled).toEqual({ ok: true, mode: "on", text: "" });
+
+		const [emptied] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("m3", "todo", { op: "init", list: [] })]),
+		);
+		expect(emptied.blocked).toBe(false);
+		expect(relayOf(ctx).handoffPending).toBe(true);
+		expect(textOf(emptied)).toContain("handoff report");
+
+		const prepared = await emit(
+			host.handlers,
+			"before_agent_start",
+			{ systemPrompt: session.agent.state.systemPrompt },
+			ctx,
+		);
+		const prompt = Array.isArray(prepared?.systemPrompt)
+			? prepared.systemPrompt.join("\n")
+			: prepared?.systemPrompt ?? "";
+		expect(prompt).toContain("Any successful `todo` write");
+		expect(prompt).not.toContain("Autopilot is off by default");
+	});
+});
+
+describe("ask under autopilot", () => {
+	test("is blocked for the root and for a child", async () => {
+		const { host, ctx, station } = await start();
+		stateFor(ctx).state.autopilot = true;
+
+		const [root] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("a1", "ask", { question: "Which file?" })]),
+		);
+		expect(root.blocked).toBe(true);
+		expect(textOf(root)).toContain("Autopilot is on");
+
+		asChild(station);
+		const [child] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("a2", "ask", { question: "Which file?" })]),
+		);
+		expect(child.blocked).toBe(true);
+		expect(textOf(child)).toContain("Autopilot is on");
+	});
+
+	test("stays available to a child in manual duty", async () => {
+		const { host, ctx, station } = await start();
+		stateFor(ctx).state.autopilot = false;
+		asChild(station);
+
+		const [child] = await runAssistant(
+			host,
+			ctx,
+			assistant([call("a3", "ask", { question: "Which file?" })]),
+		);
+		expect(child.blocked).toBe(false);
+	});
+});
+
+describe("rw fork admission under manual duty", () => {
+	/** A relay left just after a handoff: no first evaluation, full flow on. */
+	function afterHandoff(station) {
+		station.state.relay = {
+			...station.state.relay,
+			fullFlow: true,
+			firstEvaluation: null,
+		};
+	}
+
+	/**
+	 * A deferred rw item needs no spawner, so the tool result exposes the
+	 * admission verdict instead of a host-dependent child launch.
+	 */
+	function rwCheckpoint() {
+		return assistant([
+			call("rw1", "scope_fork", {
+				forks: [{
+					scopeId: "rw-checkpoint",
+					intent: "write after the checkpoint",
+					budget: { read: 1 },
+					time: 30,
+					permission: "rw",
+					blocked: true,
+				}],
+			}),
+		]);
+	}
+
+	test("refuses rw while autopilot is on and the first ledger is unsubmitted", async () => {
+		const { host, ctx, station } = await start();
+		station.state.autopilot = true;
+		afterHandoff(station);
+
+		const [forked] = await runAssistant(host, ctx, rwCheckpoint());
+
+		expect(forked.blocked).toBe(false);
+		expect(forked.result.isError).toBe(true);
+		expect(textOf(forked)).toContain("RW_BEFORE_LEDGER");
+	});
+
+	test("does not refuse rw after the user toggles autopilot off", async () => {
+		const { host, ctx, station } = await start();
+		station.state.autopilot = true;
+		afterHandoff(station);
+
+		const toggled = station.onAutopilotCommand("");
+		expect(toggled).toEqual({ ok: true, mode: "off", text: "" });
+		expect(station.state.autopilot).toBe(false);
+
+		const [forked] = await runAssistant(host, ctx, rwCheckpoint());
+
+		expect(forked.blocked).toBe(false);
+		expect(forked.result.isError).toBeFalsy();
+		expect(textOf(forked)).not.toContain("RW_BEFORE_LEDGER");
+		expect(textOf(forked)).toContain("Resubmit deferred items when ready.");
 	});
 });

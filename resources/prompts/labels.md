@@ -13,9 +13,6 @@ No pinned records.
 ## unknown-error
 unknown error
 
-## target-model
-the target model
-
 ## flow-simple
 simple (this task runs without a ledger)
 

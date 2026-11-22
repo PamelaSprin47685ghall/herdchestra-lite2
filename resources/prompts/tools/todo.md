@@ -1,6 +1,6 @@
 ## tool
 
-Free at every level. Keep a ledger the next holder can act on: user requirement, evidence of completion, unresolved risk, and next step. A child can update the ledger but cannot evaluate the relay. At the root, follow the returned relay action; an empty submission waits while child results are unreceived.
+Free at every level. Keep a ledger the next holder can act on: user requirement, evidence of completion, unresolved risk, and next step. A child can update the ledger but cannot evaluate the relay. At the root, follow the returned relay action when autopilot is on; with autopilot off the native ledger stands alone and an empty submission waits while child results are unreceived.
 
 ## op
 
@@ -8,7 +8,7 @@ Omit to infer the operation from the supplied fields. `view` is read-only and do
 
 ## list
 
-Replacement ledger for `init`. Use `[]` to submit an empty ledger, not to bypass relay evaluation.
+Replacement ledger for `init`. Use `[]` to submit an empty ledger, not to bypass relay evaluation when autopilot is on.
 
 ## list.item
 

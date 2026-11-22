@@ -5,7 +5,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { activate } from "../src/main.mjs";
-import { stateFor } from "../src/station/index.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
 import { installVibeTools } from "../src/host/index.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";

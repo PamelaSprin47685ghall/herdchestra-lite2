@@ -73,7 +73,9 @@ function relayDetails(relay) {
 export async function todoTicket(station, params, ctx) {
 	const ownerId =
 		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
-	if (!station.state.herdMode && station.state.relay?.handoffPending) {
+	// The pending-handoff gate is the root's. A child's ledger write is its own
+	// work, never a relay evaluation, even while it shares the root's relay.
+	if (!ownerId && station.state.autopilot && station.state.relay?.handoffPending) {
 		return errorResult(
 			"RELAY_HANDOFF_PENDING",
 			handoffToolBlockedReason(),
@@ -81,9 +83,9 @@ export async function todoTicket(station, params, ctx) {
 	}
 	// An inherited non-empty ledger is read before it is rewritten. A view is
 	// free: it submits nothing, so requiring one costs the successor no budget.
-	// Only the root branch owes this read; a fork child has its own history and
-	// never evaluates the inherited relay state.
-	if (!ownerId && station.state.relay?.viewRequired && !isTodoView(params)) {
+	// Only the root branch owes this read, and only while autopilot owns the
+	// ledger; a fork child has its own history and never evaluates the relay.
+	if (!ownerId && station.state.autopilot && station.state.relay?.viewRequired && !isTodoView(params)) {
 		return errorResult(
 			"INHERITED_LEDGER_UNVIEWED",
 			"The previous generation retired with open work, so its ledger is yours to read first. Call todo({ op: \"view\" }) once. It is free and does not submit a ledger; then write your own.",
@@ -112,8 +114,9 @@ export async function todoTicket(station, params, ctx) {
 		);
 	}
 	// Keep the native ledger available, but do not evaluate it for relay while
-	// the user has paused relay with /herd. Check after the native await too.
-	if (station.state.herdMode) return native;
+	// autopilot is off. The relay is an autopilot protocol; manual duty owns
+	// the ledger directly. Check after the native await too.
+	if (!station.state.autopilot) return native;
 
 	// A fork child has its own history. Its ledger write is real work, but the
 	// relay is a root protocol: a child must not arm a handoff or clear the

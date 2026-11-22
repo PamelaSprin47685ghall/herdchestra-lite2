@@ -52,6 +52,10 @@ export async function activate(pi, env = process.env) {
 		diagnostics: { total: diagnosticsTotal },
 		ports: wired.ports ?? {},
 	});
+	// The composition result is the only handle on the live registry. Tests
+	// and host tooling use it to reach a station without a process-wide
+	// singleton.
+	return wired;
 }
 
 export default activate;

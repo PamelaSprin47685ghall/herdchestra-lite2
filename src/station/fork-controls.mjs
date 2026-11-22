@@ -19,21 +19,17 @@ import { validScopeId, publicScopeId } from "../scope/scope-id.mjs";
 import { estimateJoinTokens, joinAdmission } from "../scope/admission.mjs";
 import { latestReceiptOf } from "../scope/receipts.mjs";
 import { normalizeBudget, validBudget } from "../scope/budget.mjs";
+import { resolveModelSelector } from "../scope/model-selector.mjs";
 import { joinReceipt, renderChildRecord } from "../transcript/replay.mjs";
 import { filterAmends } from "../transcript/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
+import { elderReportProblem } from "../scope/elder-report.mjs";
 
 const F = loadDoc("tools/fork-join");
 const S = loadDoc("receipts/scope");
 
-// A summary is archive material. The runtime cannot prove that it names what
-// the successor still needs, but a one-word value can guide no later decision,
-// and an unbounded value is a second copy of the record. Both are refused
-// before any child is consumed.
-const MIN_ELDER_REPORT_CHARS = 24;
-const MAX_ELDER_REPORT_CHARS = 4000;
 // The join receipt adds a header, the remaining list and the pending-report
 // line. Pricing them keeps the admission estimate from assuming the record
 // rides for free.
@@ -104,10 +100,11 @@ export function validateFork(state, args, options = {}) {
   if (args?.permission !== "ro" && args?.permission !== "rw") {
     return { ok: false, code: "INVALID_ARGUMENT" };
   }
-  if (args.model !== undefined && args.model !== null) {
-    if (typeof args.model !== "string" || args.model.trim() === "") {
-      return { ok: false, code: "INVALID_ARGUMENT" };
-    }
+  // A non-string is a shape error; a blank string is an unresolvable selector.
+  // The blank case stays for the resolver, so the refusal names the models the
+  // caller can pick instead of blaming the argument list.
+  if (args.model !== undefined && args.model !== null && typeof args.model !== "string") {
+    return { ok: false, code: "INVALID_ARGUMENT" };
   }
   if (args.blocked !== undefined && typeof args.blocked !== "boolean") {
     return { ok: false, code: "INVALID_ARGUMENT" };
@@ -196,49 +193,55 @@ function windowOf(station) {
   return null;
 }
 
+/** The station's live outbound watermark, or Infinity when unmeasured. */
+function measuredBase(station) {
+  const messages =
+    typeof station.contextMessages === "function" ? station.contextMessages() : [];
+  // A station double may expose only a partial usage ledger. Missing evidence
+  // is an unmeasured request, never a zero-sized one.
+  try {
+    if (typeof station.currentContextTokens === "function") {
+      return station.currentContextTokens(messages);
+    }
+    if (typeof station.usage?.currentContextTokens === "function") {
+      return station.usage.currentContextTokens(messages);
+    }
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+/** The model's measured characters-per-token rate, defaulting to 0.3. */
+function densityOf(station) {
+  const key = station.usage?.lastUsageModelKey ?? null;
+  try {
+    if (typeof station.tokensPerCharFor === "function") {
+      const value = station.tokensPerCharFor(key);
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+    } else if (typeof station.usage?.tokensPerCharFor === "function") {
+      const value = station.usage.tokensPerCharFor(key);
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+    }
+  } catch {
+    return 0.3;
+  }
+  return 0.3;
+}
+
 /**
  * Admission for one candidate join. A refusal keeps the record ready; the
  * caller names the refusal and lets the model choose a larger window or a
  * smaller result.
  */
 export function admitJoin(station, record, options = {}) {
-  const messages =
-    typeof station.contextMessages === "function" ? station.contextMessages() : [];
-  // A station double may expose only a partial usage ledger. Missing evidence
-  // is an unmeasured request, never a zero-sized one.
-  let base = Number.POSITIVE_INFINITY;
-  try {
-    if (typeof station.currentContextTokens === "function") {
-      base = station.currentContextTokens(messages);
-    } else if (typeof station.usage?.currentContextTokens === "function") {
-      base = station.usage.currentContextTokens(messages);
-    }
-  } catch {
-    base = Number.POSITIVE_INFINITY;
-  }
+  const base = measuredBase(station);
   const recordChars =
     recordTextOf(station, record).length + JOIN_RECEIPT_OVERHEAD_CHARS;
-  const key = station.usage?.lastUsageModelKey ?? null;
-  let density = 0.3;
-  try {
-    if (typeof station.tokensPerCharFor === "function") {
-      const value = station.tokensPerCharFor(key);
-      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-        density = value;
-      }
-    } else if (typeof station.usage?.tokensPerCharFor === "function") {
-      const value = station.usage.tokensPerCharFor(key);
-      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-        density = value;
-      }
-    }
-  } catch {
-    density = 0.3;
-  }
   const projected = estimateJoinTokens({
     baseTokens: base,
     recordChars,
-    tokensPerChar: density,
+    tokensPerChar: densityOf(station),
   });
   const window = options.window !== undefined ? options.window : windowOf(station);
   const reserve =
@@ -328,6 +331,46 @@ export function childReceiptText(spec) {
   ].join("\n");
 }
 
+// The receipt's marker, return note and routing note are fixed lines above the
+// rendered intent. Pricing them keeps a fork start from looking as small as
+// its intent alone.
+const FORK_RECEIPT_PREFIX_CHARS = 600;
+
+/**
+ * Admission for one fork's start projection.
+ *
+ * A child session seeds from the parent's context and then reads its receipt,
+ * so its first request is the parent's watermark plus that receipt. A known
+ * window may refuse before any bracket is registered; an unknown window or an
+ * unmeasured watermark passes, exactly as join admission does.
+ */
+function admitForkStart(station, item, depth) {
+  const receiptChars =
+    childReceiptText({
+      scopeId: item.scopeId,
+      childDepth: depth + 1,
+      intent: item.intent,
+      budget: item.budget,
+      permission: item.permission,
+    }).length + FORK_RECEIPT_PREFIX_CHARS;
+  const projected = estimateJoinTokens({
+    baseTokens: measuredBase(station),
+    recordChars: receiptChars,
+    tokensPerChar: densityOf(station),
+  });
+  const override = item.modelOverride?.contextWindow;
+  const window =
+    Number.isFinite(override) && override > 0 ? override : windowOf(station);
+  return joinAdmission({
+    window,
+    projected,
+    reserve:
+      typeof station.forkReservePort === "function" ? station.forkReservePort() : undefined,
+    margin:
+      typeof station.forkMarginPort === "function" ? station.forkMarginPort() : undefined,
+  });
+}
+
 /**
  * Open one child scope. Never blocks: the parent keeps its depth, its model,
  * and its own work. Several forks may share one assistant message.
@@ -362,8 +405,49 @@ export function handleForkCall(station, call, options = {}) {
     return errorResult("CHILD_SPAWNER_UNAVAILABLE", "No child spawner is attached.");
   }
 
-  const parentOwnerId = ownerIdOf(station);
+  // Resolve every requested model before the first bracket is registered.
+  // The host owns selection; a refusal must leave the ledger untouched, so a
+  // batch with one unknown selector starts nothing. A blocked item spawns
+  // nothing now and is resolved again when it is resubmitted as ready.
+  for (let index = 0; index < batch.items.length; index += 1) {
+    const item = batch.items[index];
+    if (item.model == null || item.blocked === true) continue;
+    const resolved = resolveModelSelector(options.ctx?.models, item.model);
+    if (!resolved.ok) {
+      return errorResult(resolved.code, `forks[${index}]: ${resolved.message}`, {
+        index,
+        selector: item.model,
+        available: resolved.available,
+        availableTotal: resolved.availableTotal,
+      });
+    }
+    item.modelOverride = resolved.model;
+    item.thinkingLevel = resolved.thinkingLevel;
+  }
+
   const depth = depthOf(station);
+  // A fork's first request is the parent's context plus the child receipt.
+  // Refuse the whole batch when any ready item cannot fit a known window:
+  // nothing is registered, nothing spawns, and the parent learns the numbers
+  // instead of letting the provider reject the child's first turn.
+  for (let index = 0; index < batch.items.length; index += 1) {
+    const item = batch.items[index];
+    if (item.blocked === true) continue;
+    const verdict = admitForkStart(station, item, depth);
+    if (verdict.ok) continue;
+    return errorResult("FORK_CONTEXT_EXCEEDED", `forks[${index}]: ${verdict.reason}`, {
+      index,
+      admission: verdict.code,
+      source: "measured",
+      limit: verdict.limit,
+      projected: verdict.projected,
+      reserve: verdict.reserve,
+      margin: verdict.margin,
+      overBy: verdict.overBy,
+    });
+  }
+
+  const parentOwnerId = ownerIdOf(station);
   const baseId = typeof call.id === "string" && call.id !== "" ? call.id : `fork-${Date.now()}`;
   const started = [];
   const deferred = [];
@@ -409,6 +493,8 @@ export function handleForkCall(station, call, options = {}) {
       time: item.time,
       permission: item.permission,
       model: item.model,
+      modelOverride: item.modelOverride,
+      thinkingLevel: item.thinkingLevel,
       parentOwnerId,
       parentDepth: depth,
     };
@@ -551,8 +637,9 @@ export function handleJoinCall(station, call, options = {}) {
   // dropping the fold gate. The map remains for fixtures that drive the
   // handlers without a persistence layer.
   const pendingReport = pendingReportOf(station, ownerId);
-  const elderReport =
-    typeof args.elder_report === "string" ? args.elder_report.trim() : null;
+  const elderReportRaw =
+    typeof args.elder_report === "string" ? args.elder_report : null;
+  const elderReport = elderReportRaw === null ? null : elderReportRaw.trim();
   if (pendingReport !== null && elderReport === null) {
     const named = publicScopeId(forkOf(ledger, pendingReport.forkId));
     return errorResult(
@@ -568,25 +655,14 @@ export function handleJoinCall(station, call, options = {}) {
     );
   }
   if (pendingReport !== null && elderReport !== null) {
-    if (elderReport.length < MIN_ELDER_REPORT_CHARS) {
-      return errorResult(
-        "INVALID_ELDER_REPORT",
-        `elder_report needs at least ${MIN_ELDER_REPORT_CHARS} characters. Say what the successor still needs from that record; the content decides its format.`,
-        {
-          pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId,
-          minimum: MIN_ELDER_REPORT_CHARS,
-        },
-      );
-    }
-    if (elderReport.length > MAX_ELDER_REPORT_CHARS) {
-      return errorResult(
-        "INVALID_ELDER_REPORT",
-        `elder_report exceeds ${MAX_ELDER_REPORT_CHARS} characters. Shorten it to what a successor cannot recover elsewhere.`,
-        {
-          pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId,
-          maximum: MAX_ELDER_REPORT_CHARS,
-        },
-      );
+    // The stored report is trimmed, so the bound applies to its trimmed
+    // length. The schema's pattern measures the same span on the raw string.
+    const problem = elderReportProblem(elderReportRaw);
+    if (problem !== null) {
+      return errorResult(problem.code, problem.message, {
+        pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId,
+        ...problem.details,
+      });
     }
   }
   // A reparented child closes at the receiver's level, not at the level of
@@ -624,10 +700,18 @@ export function handleJoinCall(station, call, options = {}) {
     });
   }
   commitJoin(station, taken.fork, call.id, elderReport, pendingReport);
+  const persisted = confirmJoinPersistence(station);
+  if (persisted === false) {
+    station.noteError?.("fork", new Error("join receipt was not persisted"), {
+      forkId: taken.fork.forkId,
+      phase: "join",
+    });
+  }
   return renderJoinResult(station, taken.fork, {
     ledger,
     ownerId,
     closeToolCallId: call.id,
+    persisted,
   });
 }
 
@@ -747,6 +831,19 @@ function pendingOf(value) {
   return null;
 }
 
+/**
+ * Confirm a just-filed join receipt reached the shared tree.
+ *
+ * `persist()` is the station's durable-write signal: false means the receipt
+ * exists in memory but the tree was not written. A station double without the
+ * method is not judged, so handlers that never wire persistence keep their
+ * old result shape.
+ */
+export function confirmJoinPersistence(station) {
+  if (typeof station.persist !== "function") return undefined;
+  return station.persist() !== false;
+}
+
 function reportsOf(station) {
   if (!(station.forkReports instanceof Map)) station.forkReports = new Map();
   return station.forkReports;
@@ -791,10 +888,17 @@ export function renderJoinResult(station, record, options = {}) {
     remaining: remaining.map((entry) => entry.scopeId),
     pendingReceipt: publicScopeId(record),
 	});
-  return textResult(text, {
+  const persisted = options.persisted;
+  const warning =
+    persisted === false
+      ? "Persistence warning: this join receipt exists in memory, but the shared tree was not written."
+      : "";
+  const body = warning === "" ? text : `${text}${text.endsWith("\n") ? "" : "\n"}${warning}`;
+  return textResult(body, {
     forkId: record.forkId,
     joined: true,
     remaining,
+    ...(persisted === undefined ? {} : { persisted }),
   });
 }
 

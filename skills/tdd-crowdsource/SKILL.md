@@ -1,47 +1,54 @@
 ---
 name: tdd-crowdsource
-description: Write or delegate contract tests, then pin the latest dispatch plan before starting each ready implementation batch.
+description: Pin the user-side acceptance goal, write red contracts, then dispatch green slices with explicit verification ownership.
 ---
 
 # TDD Crowdsource
 
-For each ready group of implementation slices: **write their red contracts → pin the current dispatch plan → dispatch green**. Repeat as work becomes ready. Do not wait for unrelated red contracts or running green slices.
+The standing constitution applies; this skill adds only the development and acceptance method.
 
-## Red: write the contract, do not run it
+Tests are a means, not a ritual. The goal is a change a successor can accept: automated where it pays, manual where it does not. One acceptance goal before Red; one dispatch pin before Green; verification goes to the level with context and authority. Repeat as work becomes ready; unrelated red contracts or running Green slices do not gate the next dispatch.
 
-The lead can write the tests or delegate them. Give each red writer a slice, the consumer behavior to cover, and ownership of its test files. Before dispatching green for a slice, confirm its tests are on disk and cover the behavior that slice must deliver: results, relevant errors and boundaries, and any promised ordering. Test observable behavior. Isolate outside collaborators where needed.
+Use skill://decision-framing when the goal itself is unclear. This skill assumes the goal exists and turns it into contracts, dispatch, and acceptance.
 
-**Do not run the tests in red.** The dispatch pin replaces the red test run. It records the written contract and authorizes green; it is not evidence that a test failed or passed.
+## Before Red
 
-## Pin and dispatch the ready green slices
+Write the goal from the user's side: who acts, what becomes true, what they see, what stays out. Ignore implementation feasibility for now. No scores, thresholds, rubrics, coverage targets, or quality points; those are proxies, not the goal. A test that cannot fail for a user-visible reason is coverage, not acceptance.
 
-As soon as a slice has a red contract and its real prerequisites are available, include it in the next dispatch. Red and green may run in parallel on different slices. Pin again before each new green batch using the latest state; an older pin does not authorize a new dispatch.
+Pin it only when it changes the bet. If the work has no user-visible acceptance, skip the pin; do not manufacture ceremony.
 
-Pin the best available concurrency plan: the ready slices and their worker count, what is already running, what remains blocked and why, and the remaining critical path. For each dispatch, name the contract files and cases, read and write sets, acceptance criteria, wall time and tool budget, and whether the slice is a leaf or a subtree. Name the integrator and the owner of each shared file. Order overlapping writes or give them to one owner; do not create edges for convenience.
+When part of the goal cannot be automated, keep the manual procedure in the project's .agent/skills/manual-acceptance/SKILL.md entry, with surface-specific siblings such as cli.md, tui.md, and relay.md. One entry plus siblings is the single source of truth; do not copy the procedure into every task. Pin only the run-specific difference: environment, values, owner, what to observe, and what would make you adjust. The skill is a control loop, not a diary.
 
-```text
-pin({
-  finding: "Red contracts on disk: <slice → test file and cases>; not run.",
-  assumption: "Slices: <read set, write set, acceptance, leaf or subtree>; running: <slices>.",
-  deduction: "Remaining dependencies: <blocked slices and reasons>; critical path: <chain and time>.",
-  conclusion: "Dispatch now: <ready slices, worker count, time and tool budgets>; integrator and file owners: <names>."
-})
-```
+The acceptance goal is the source; tests derive from it. If a test cannot be derived, question the goal before writing the test.
 
-In the next message, dispatch all green slices in that pin together with `scope_fork`. Give every worker the contract path, ownership, acceptance criteria, and verification assignment. When new work becomes ready, pin the updated plan and dispatch it without waiting for unrelated work. At every depth, a subtree lead follows the same sequence within its time limit and keeps the parent contract intact. Escalate a needed contract change before implementing it.
+## Red and dispatch
 
-## Green: verify or hand verification to the parent
+The lead writes the tests or delegates them. Give each red writer a slice, the consumer behavior to cover, and ownership of its test files. Cover results, relevant errors, boundaries, and any promised ordering. Before Green, confirm the tests are on disk and cover the behavior the slice must deliver. Test observable behavior; isolate outside collaborators where needed.
 
-Run a focused check when it is useful and the required inputs are ready. If the check needs sibling changes, a shared environment, or an integration point, prefer to hand it to the parent rather than wait or duplicate their run. A child can return completed implementation without running tests: first pin **`暂不测试` (not tested yet)** with the check to run, the condition it needs, and the parent or integrator who will run it. The receiving lead can carry that check to the next integration point.
+Do not run Red. The dispatch pin records the written contract and authorizes Green; a red run spends a turn to prove what the test already states, and proves nothing about the implementation. A red test you run to watch it fail buys nothing the written contract did not already buy.
 
-```text
-pin({
-  conclusion: "暂不测试 — <check or command>; run after <condition>; owner: <parent or integrator>."
-})
-```
+As soon as a slice has a red contract and its real prerequisites, include it in the next dispatch. Red and Green may run in parallel on different slices. Pin again before each new Green batch; an older pin does not authorize a new one.
 
-Report only observed test results. A verification handoff is useful, not a failure; it does not turn an unrun check into a pass.
+Pin the concurrency plan: ready slices, worker count, what is running, what is blocked and why, and the critical path. For each slice, name the contract files and cases, read and write sets, acceptance goal, wall time, tool budget, and whether it is a leaf or a subtree. Name the integrator and the owner of each shared file. Order overlapping writes or give them to one owner. Record the red contracts on disk and not run; the slices with their read and write sets; the remaining dependencies and critical path; and the dispatch now, with workers, budgets, integrators, and file owners. Edges follow dependencies, not convenience.
 
-## Design record
+A batch of one names the overlap or dependency that made it one. If you cannot name it, run the slices together. A batch of one that cannot name its dependency is a queue with better manners.
 
-Keep the design record as a skill under `.agent/skills/<name>/SKILL.md`. Record the boundaries, consumer contracts and test paths, dependency and ownership decisions, dispatch pins, and open verification work. Pin the record's path so the next lead can find it.
+The design record states module boundaries, consumer contracts, and failure isolation. Each slice builds against that record, not a private design; if the boundary is unknown, the slice is not ready.
+
+In the next message, dispatch all Green slices in the pin with scope_fork. Give every worker the contract path, ownership, acceptance goal, and verification assignment. When new work becomes ready, pin the updated plan and dispatch it without waiting for unrelated work. A subtree lead follows the same sequence within its time limit and keeps the parent contract intact. Escalate a needed contract change before implementing it.
+
+## Green, acceptance, and record
+
+Run a focused check when its marginal value is positive and the required inputs are ready. If the check needs sibling changes, a shared environment, or an integration point, hand it to the parent or integrator instead of waiting or duplicating the run. A child that verifies everything has priced nothing.
+
+A child may return completed work without running tests. Pin "not tested yet" with the check to run, the condition it needs, and the owner who will run it. The receiving lead carries that check to the next integration point; the next holder can accept it, assign it, or explicitly pass it upward. No level may let it disappear.
+
+Verification belongs to the level with context and authority, not to every child by default. The parent, grandparent, or next holder may own it. Report only observed results; a verification handoff is useful, not a failure, and it does not turn an unrun check into a pass.
+
+Manual acceptance is for the part automation cannot carry. Use the project's manual-acceptance entry and its surface sibling; pin the run-specific difference. No rubric, no score. A rubric with a hundred points and no user in the room is a spreadsheet, not acceptance. The goal is a user-side experience, not a parent's review of a child. If the goal is met, say so and move. If not, name the residual and its owner. Do not turn acceptance into a second implementation review.
+
+Keep the design record under .agent/skills/<name>/SKILL.md: boundaries, consumer contracts, test paths, dependency and ownership decisions, dispatch pins, open verification, and the acceptance skill path. Pin the record's path so the next lead can find it. Run-specific results belong in pins and the ledger, not in the skill.
+
+## Test rituals to refuse
+
+The defaults to refuse here are test ritual: everyone tests everything; run Red to prove failure; the child must verify; one giant batch; coverage is quality. Each has a cost: duplicated verification, wasted turns, moral hazard, hidden failure, Goodhart. Name the default and the cost before choosing the smaller move. Coverage is a map of what you touched, not a measure of what works.

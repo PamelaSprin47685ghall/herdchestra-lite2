@@ -23,6 +23,6 @@ description: 核验 fork/join 的回执、过继、持久化与结构边界，�
 ## 退役围栏与已知缺口
 
 - 不恢复 `station/fold.mjs`、区间折叠（`applyCollapses`、`applyForkJoinCollapse`、`collectPinnedMessages`）、空租金累积、`canFoldInterval` / `canFoldContent` 或无引用的 handoff 复制。保留 `applyReceiptFolds`、`extractForkLines`、`extractPinnedLines`、`foldedScopeText`、缓存位置助手和 relay 自己的交接会话。
-- 孩子起点由宿主构造。本地不从继承前缀删兄弟 fork；真实宿主的首轮投影仍需验。没有 `ChildStartSpec`，不可拿完整父方窗口代替孩子预准入。
+- 孩子起点由宿主构造。本地不从继承前缀删兄弟 fork；真实宿主的首轮请求已由 `/tmp/g5-host-turn2.log` 观测（joined child record 内是子方 receipt），但首轮投影与父方前缀是否对齐仍未单独验证。没有 `ChildStartSpec`，不可拿完整父方窗口代替孩子预准入。
 - 收件并非两阶段提交：回执先于宿主工具结果写入。`closeToolCallId` 保证重放幂等；两次写入之间崩溃仍可能只有回执。
 - 子方请根持久化共享树。落盘失败可见，但结果暂只在内存；成功重写前崩溃会恢复为待收失败。分支持久化隔离依赖宿主。

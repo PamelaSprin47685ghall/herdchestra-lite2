@@ -8,6 +8,7 @@
  */
 
 import { errorResult, textResult } from "./results.mjs";
+import { PIN_INTERNAL_ERROR } from "../features/pin/index.mjs";
 import { levelKeyOf, ownerIdOf, returnAcceptedText, admitJoin } from "../station/fork-controls.mjs";
 import { notifyWaiters, waitForJoin, waitForReady } from "../host/fork-registry.mjs";
 import { sendSlashPrompt, sessionFor } from "../host/capture.mjs";
@@ -41,7 +42,7 @@ export async function sendSteerTicket(pi, text) {
 
 /**
  * Fire-and-forget user-message delivery. A plain message without `deliverAs`
- * always starts one turn, which is what `/herd <text>` promises.
+ * always starts one turn, which is what `/herd-autopilot <text>` promises.
  */
 export async function sendUserMessageTicket(pi, text) {
 	if (!text) return;
@@ -49,7 +50,7 @@ export async function sendUserMessageTicket(pi, text) {
 		await pi?.sendUserMessage?.(text);
 	} catch (error) {
 		// A host that rejects the message must not leak an unhandled rejection,
-		// but `/herd <text>` promises the user one turn: losing that message in
+		// but `/herd-autopilot <text>` promises the user one turn: losing that message in
 		// silence is the worst outcome, so it is recorded instead.
 		record("tickets", error, { kind: "prompt", chars: text.length });
 	}
@@ -76,7 +77,7 @@ export async function activateToolsTicket(pi, activeTools, prompt, promptChanged
 }
 
 const THINKING_SUFFIX =
-	/(?:\s*[:@]\s*|\s+)(off|minimal|low|medium|high|xhigh)\s*$/i;
+	/(?:\s*[:@]\s*|\s+)(off|minimal|low|medium|high|xhigh|max)\s*$/i;
 
 function splitThinkingSuffix(text) {
 	const value = String(text ?? "").trim();
@@ -171,6 +172,19 @@ function outcomeReason(outcome) {
 		.find((entry) => entry?.kind === "error" || entry?.type === "error");
 	if (lastError?.text) return String(lastError.text);
 	return "host reported model switch failure";
+}
+
+/**
+ * Restore a scoped model through the host route.
+ *
+ * The station has already taken the pending request. This performs the switch
+ * and reconciles what the host reports; it never writes the parent's model.
+ */
+export async function restoreScopedModelTicket(station, ctx, req, result, finish) {
+	const outcome = await switchModelTicket(station.pi, ctx, req);
+	station.reconcileActualModel(ctx, req, outcome);
+	if (!outcome.ok) station.lastError = `${req.command}: ${outcome.reason}`;
+	return finish ? finish(result) : result;
 }
 
 /**
@@ -476,8 +490,11 @@ export async function amendTicket(station, toolCallId, params) {
 export async function pinTicket(station, toolCallId, params) {
 	try {
 		return station.executePin(toolCallId, params);
-	} catch {
-		return textResult("OK");
+	} catch (error) {
+		// A throw means the note never reached a durable exit. Reporting OK
+		// would tell the caller the notebook kept it.
+		record("tickets", error, { kind: "pin", toolCallId });
+		return errorResult(PIN_INTERNAL_ERROR, errors["pin-internal-error"]);
 	}
 }
 

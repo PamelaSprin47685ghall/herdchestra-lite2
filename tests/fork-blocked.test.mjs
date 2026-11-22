@@ -18,7 +18,7 @@ import { handleForkCall, handleJoinCall } from "../src/station/fork-controls.mjs
 
 const STATE = () => ({
   scopes: [],
-  herdMode: false,
+  autopilot: false,
   relay: { generation: 0, fullFlow: false },
 });
 

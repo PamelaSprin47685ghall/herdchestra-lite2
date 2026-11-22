@@ -18,7 +18,12 @@ import {
 	successorOpeningText,
 } from "../relay/index.mjs";
 
+function isChild(station) {
+	return typeof station.forkOwnerId === "function" && station.forkOwnerId() !== null;
+}
+
 function armHandoff(station, _ctx) {
+	if (isChild(station)) return false;
 	// Only the `handoff` degree may arm a transfer. `ledger` owes a ledger but
 	// never hands off, and `none` owes nothing at all. A station built without
 	// a registry (unit doubles) keeps the default: handoff.
@@ -37,6 +42,7 @@ function armHandoff(station, _ctx) {
 }
 
 function advanceRelayForHandoff(station, options = {}) {
+	if (isChild(station)) return false;
 	const relayPort = station.registry?.ports?.().relay;
 	if (relayPort === "none" || relayPort === "ledger") return false;
 	const relay = station.state.relay;
@@ -128,6 +134,15 @@ function recordRetirement(station) {
  */
 function recordNaturalStop(station, ctx) {
 	if (station.registry?.ports?.().relay === "none") return null;
+	// The relay is an autopilot protocol. With autopilot off, a natural stop
+	// is a manual stop; no empty evaluation, retirement, or handoff runs.
+	if (!station.state.autopilot) return null;
+	// The relay is a root protocol. A child's stop is the host's return gate;
+	// this transition must not touch the shared relay even if a future caller
+	// forgets the identity check.
+	const ownerId =
+		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
+	if (ownerId !== null) return null;
 	const relay = station.state.relay;
 	if (!relay || relay.handoffPending || relay.canStop) return null;
 	// After a handoff the recorded ledger belongs to the predecessor; the
@@ -161,6 +176,7 @@ function markInheritedLedgerViewed(station) {
 }
 
 function captureHandoffReport(station, text) {
+	if (isChild(station)) return false;
 	if (!station.state.relay?.handoffPending) return false;
 	const trimmed = typeof text === "string" ? text.trim() : "";
 	if (!trimmed) return false;
@@ -169,6 +185,7 @@ function captureHandoffReport(station, text) {
 }
 
 function commitSelfHandoff(station, ctx, report) {
+	if (isChild(station)) return { ok: false };
 	const relay = station.state.relay;
 	if (!relay || !relay.handoffPending || relay.canStop) return { ok: false };
 	// A handoff compacts the branch: the successor reads the summary, not the

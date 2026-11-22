@@ -69,7 +69,7 @@ export function createState() {
     // frozen record of every child that returned. It is persisted with the
     // state because a reload must be able to close or explain every bracket.
     brackets: createBracketLedger(),
-    herdMode: false,
+    autopilot: false,
     pins: [],
     relay: createRelay(),
     // Persisted base model identity. The base model lives outside all
@@ -95,7 +95,7 @@ export function createState() {
 /** Make a flow-local view while keeping session fields shared with its owner. */
 export function createFlowState(base) {
   const flow = createState();
-  const shared = new Set(["herdMode", "relay", "pins", "brackets"]);
+  const shared = new Set(["autopilot", "relay", "pins", "brackets"]);
   // A child starts its own receive chain: the parent's receipts belong to the
   // parent's level and must not be folded twice from a child's projection.
   const local = new Set(["receipts"]);

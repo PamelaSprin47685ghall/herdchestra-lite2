@@ -69,7 +69,12 @@ import {
 	executeJoin,
 	executeReturn,
 } from "./execute.mjs";
-import { checkJoinBinding, commitJoin, renderJoinResult } from "./fork-controls.mjs";
+import {
+	checkJoinBinding,
+	commitJoin,
+	confirmJoinPersistence,
+	renderJoinResult,
+} from "./fork-controls.mjs";
 import {
 	addReceipt,
 	attachReport,
@@ -90,7 +95,7 @@ import {
 	onAssistantMessage,
 	onBeforeAgentStart,
 	onContext,
-	onHerdCommand,
+	onAutopilotCommand,
 	onMessageEnd,
 	onSessionCompact,
 	onSessionStop,
@@ -519,42 +524,39 @@ export class SessionStation {
 
 	// -- Message processing ----------------------------------------------------
 
-	processAssistantMessage(message, { persisted = false } = {}) {
+	processAssistantMessage(message) {
 		const controls = controlsIn(message);
 		if (controls.length === 0) return;
 		const key = processedKey(controls);
 		if (this.processed.hasMessage(key)) return;
-		this.processed.markMessage(key);
 
 		const existing = this.contextMessages();
 		const firstIndex = findToolCallIndex(existing, controls[0].id);
 		const currentPersisted = firstIndex >= 0;
 		const base = currentPersisted ? existing : [...existing, message];
 		const currentIndex = currentPersisted ? firstIndex : base.length - 1;
-		const calls = toolCalls(message);
-		const earlyControls = controls;
 		let changed = false;
-		for (const call of earlyControls) {
+		for (const call of controls) {
 			if (call.name !== "amend") continue;
 			if (this.processed.hasCall(call.id)) continue;
 			const boundary = this.amendBoundary(currentIndex, message);
-			this.processed.setHandled(
-				call.id,
-				handleAmendCall(this, call, base, currentIndex, boundary),
-			);
+			const result = handleAmendCall(this, call, base, currentIndex, boundary);
+			this.processed.setHandled(call.id, result);
+			// Mark after the work succeeded. A throw must leave both the call
+			// and the message unmarked, so the scan path can retry it; the
+			// tool path stays idempotent because a completed call is marked.
+			this.processed.markCall(call.id);
 			changed = true;
 		}
 
-		for (const call of earlyControls) {
-			if (call.name === "amend") this.processed.markCall(call.id);
-		}
+		this.processed.markMessage(key);
 		if (changed) this.persist();
 	}
 
 	processControlsForTool(toolCallId) {
 		const found = this.assistantForToolCall(toolCallId);
 		if (!found) return;
-		this.processAssistantMessage(found.message, { persisted: true });
+		this.processAssistantMessage(found.message);
 	}
 
 	// -- Execute cores (called by tickets) -------------------------------------
@@ -579,7 +581,17 @@ export class SessionStation {
 		// the chain: a join that waited must file its summary against the
 		// receipt the model saw, or refuse.
 		commitJoin(this, record, toolCallId, elderReport, pending);
-		const result = renderJoinResult(this, record, { closeToolCallId: toolCallId });
+		const persisted = confirmJoinPersistence(this);
+		if (persisted === false) {
+			this.noteError?.("fork", new Error("join receipt was not persisted"), {
+				forkId: record.forkId,
+				phase: "join",
+			});
+		}
+		const result = renderJoinResult(this, record, {
+			closeToolCallId: toolCallId,
+			persisted,
+		});
 		this.processed.setHandled(toolCallId, result);
 		this.processed.markCall(toolCallId);
 		this.persist();
@@ -791,8 +803,8 @@ export class SessionStation {
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------
 
-	onHerdCommand(args) {
-		return onHerdCommand(this, args);
+	onAutopilotCommand(args) {
+		return onAutopilotCommand(this, args);
 	}
 
 	onAssistantMessage(message, ctx) {
@@ -824,12 +836,15 @@ export class SessionStation {
 			branch,
 			open,
 			demandVisible,
+			ownerId !== null,
 		);
 		return {
 			role: "developer",
 			content: [{ type: "text", text }],
 			attribution: "agent",
 			timestamp: Date.now(),
+			autopilot: this.state.autopilot === true,
+			branch: ownerId !== null,
 			herdSkill: true,
 		};
 	}
@@ -842,8 +857,8 @@ export class SessionStation {
 		return onContext(this, messages, ctx);
 	}
 
-	onSessionStop(ctx) {
-		return onSessionStop(this, ctx);
+	onSessionStop(ctx, evidence = null) {
+		return onSessionStop(this, ctx, evidence);
 	}
 
 	onSessionSwitch(event, ctx) {

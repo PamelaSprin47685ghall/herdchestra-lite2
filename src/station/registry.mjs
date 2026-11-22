@@ -2,11 +2,17 @@
 
 import { attachBaseForkPorts, createForkWiring } from "../host/fork-wiring.mjs";
 import {
+	adoptLedger,
 	agentIdOf,
 	conversationKeyOf,
 	identityForAgent,
 	ledgerFor,
 } from "../host/fork-registry.mjs";
+import { capabilities, contextHeaderOf, modelOf, thinkingOf } from "../host/adapter.mjs";
+import { appendHistoryMessage } from "../host/hack-context.mjs";
+import { sessionFor, setAgentMessages } from "../host/capture.mjs";
+import { record } from "../host/diagnostics.mjs";
+import { createEmptyCatalog, preparseModelSpec } from "../host/pricing.mjs";
 import { SessionStation } from "./station.mjs";
 
 /**
@@ -142,6 +148,27 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 		/** Object implementations for the ports that have one. */
 		implementations() {
 			return { ...resolvedImplementations };
+		},
+		/**
+		 * Host capabilities for the Station. The Station imports no host module;
+		 * the registry is the one composition bridge that can see them.
+		 */
+		host() {
+			return {
+				conversationKeyOf,
+				ledgerFor,
+				adoptLedger,
+				sessionFor,
+				setAgentMessages,
+				contextHeaderOf,
+				record,
+				createEmptyCatalog,
+				appendHistoryMessage,
+				preparseModelSpec,
+				capabilities,
+				modelOf,
+				thinkingOf,
+			};
 		},
 		/**
 		 * The process-wide fork wiring. A station takes its ledger from here so

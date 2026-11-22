@@ -123,6 +123,10 @@ function stationWith(relayObject, relayName) {
 		forkOwnerId: () => null,
 		forkLedgerPort: () => null,
 		handoffReport: null,
+		markPending() {
+			this.registry.markPending(this);
+		},
+		clearPending() {},
 	};
 	station.state.relay = {
 		...station.state.relay,

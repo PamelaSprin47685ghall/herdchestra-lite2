@@ -958,6 +958,22 @@ export class SessionStation {
 		return markInheritedLedgerViewed(this);
 	}
 
+	/**
+	 * Relay bookkeeping: this station is the pending handoff target.
+	 *
+	 * The registry is the station's composition bridge, so its relay
+	 * bookkeeping is reached here instead of from the pure handoff module.
+	 * A station double may pass a registry without these methods.
+	 */
+	markPending() {
+		this.registry?.markPending?.(this);
+	}
+
+	/** Relay bookkeeping: no successor is pending any more. */
+	clearPending() {
+		this.registry?.clearPending?.(this);
+	}
+
 	// -- Gatekeepers (sync event entries) ---------------------------------------
 
 	onAutopilotCommand(args) {

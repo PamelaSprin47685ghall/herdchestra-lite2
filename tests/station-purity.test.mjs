@@ -226,10 +226,11 @@ test("a station without a complete port table refuses to start", () => {
 	expect(error?.missing).toContain("folding");
 });
 
-// Match every call spelling, including the optional call `?.()` where a dot
-// sits between the optional chain and the parenthesis. A detector that misses
-// `registry?.ports?.(` cannot guard the per-event read it claims to forbid.
-const PORT_TABLE_READ = /registry\s*\??\.\s*ports\s*(?:\?\.)?\s*\(/;
+// Match every call spelling, whichever object holds the table: `registry.ports(`,
+// `registry?.ports?.(`, `station["registry"].ports()` and `wired.ports()` all
+// contain `.ports(` or `.ports?.(`. A detector anchored to the `registry`
+// identifier quietly accepts a table read through an alias or a bracket.
+const PORT_TABLE_READ = /\.\s*ports\s*(?:\?\.)?\s*\(/;
 // The ratchet's previous spelling. It accepts `registry.ports(` and
 // `registry?.ports(` but not `registry?.ports?.(`, so it was fake-green.
 const PRE_RATCHET_READ = /registry\?*\.ports\?*\(/;
@@ -238,25 +239,30 @@ function portTableReads(source) {
 	return [...source.matchAll(new RegExp(PORT_TABLE_READ.source, "g"))];
 }
 
-test("the port-table detector catches the optional call the old one missed", () => {
+test("the port-table detector catches every call spelling", () => {
 	for (const sample of [
 		"registry.ports(",
 		"registry?.ports(",
 		"registry?.ports?.(",
+		'station["registry"].ports()',
+		"wired.ports()",
 	]) {
 		expect(portTableReads(sample)).toHaveLength(1);
 	}
 	expect(portTableReads("const table = station.portTable;")).toHaveLength(0);
+	expect(portTableReads("options.ports?.status")).toHaveLength(0);
 
 	const perEventRead = "const ports = registry?.ports?.();";
 	expect(portTableReads(perEventRead)).toHaveLength(1);
 	// The regression this test exists to catch: the pre-ratchet detector was
 	// blind to exactly the spelling a per-event read uses.
 	expect(perEventRead).not.toMatch(PRE_RATCHET_READ);
+	// The identifier-anchored detector was blind to the bracket spelling.
+	expect('station["registry"].ports()').not.toMatch(PRE_RATCHET_READ);
 });
 
-test("src/station reads the port table exactly once, in the constructor", () => {
-	const root = new URL("../src/station/", import.meta.url);
+function readsUnder(relative) {
+	const root = new URL(relative, import.meta.url);
 	const files = readdirSync(root, { recursive: true })
 		.map(String)
 		.filter((file) => file.endsWith(".mjs"))
@@ -268,14 +274,41 @@ test("src/station reads the port table exactly once, in the constructor", () => 
 			reads.push({ file, match: match[0] });
 		}
 	}
-	// One read, one file, one spelling. A second read anywhere in src/station
-	// would be an event re-reading the table or a new composition fallback.
-	expect(reads).toEqual([
-		{ file: "station.mjs", match: "registry?.ports?.(" },
-	]);
+	return reads;
+}
 
-	// Anchor the allowed read to the constructor that validates and freezes it,
-	// so it cannot be displaced by a same-count read elsewhere in the file.
-	const stationSource = readFileSync(new URL("station.mjs", root), "utf8");
+test("the extension reads the port table only at composition time", () => {
+	// One read while the station is constructed and freezes its copy, and one
+	// while provider observation is wired. Every event-time reader uses
+	// `station.portTable`, so a third read in these trees is a regression.
+	expect(readsUnder("../src/station/")).toEqual([
+		{ file: "station.mjs", match: ".ports?.(" },
+	]);
+	expect(readsUnder("../src/host/")).toEqual([
+		{ file: "provider-observer.mjs", match: ".ports?.(" },
+	]);
+	expect(readsUnder("../src/activation/")).toEqual([]);
+
+	// Anchor each allowed read to its composition function, so it cannot be
+	// displaced by a same-count read elsewhere in the file.
+	const stationSource = readFileSync(
+		new URL("../src/station/station.mjs", import.meta.url),
+		"utf8",
+	);
 	expect(stationSource).toContain("const portTable = registry?.ports?.();");
+	const observerSource = readFileSync(
+		new URL("../src/host/provider-observer.mjs", import.meta.url),
+		"utf8",
+	);
+	expect(observerSource).toContain(
+		'if (registry?.ports?.().observer === "off") return { installed: false };',
+	);
+});
+
+test("the composition root never substitutes an empty port table", () => {
+	const source = readFileSync(
+		new URL("../src/main.mjs", import.meta.url),
+		"utf8",
+	);
+	expect(source).not.toMatch(/\bwired\.ports\s*\?\?/);
 });

@@ -113,6 +113,10 @@ describe("the natural-stop transition", () => {
 			},
 			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 			registry: { ports: () => ({ relay: "handoff" }), markPending() {} },
+			markPending() {
+				this.registry.markPending(this);
+			},
+			clearPending() {},
 		};
 
 		const applied = recordNaturalStop(station, {});

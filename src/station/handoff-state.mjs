@@ -47,7 +47,7 @@ function armHandoff(station, _ctx) {
 	station.handoffReport = null;
 	station.state.relay = decision.relay;
 	station.persist();
-	station.registry?.markPending?.(station);
+	station.markPending();
 	return true;
 }
 
@@ -217,7 +217,7 @@ function commitSelfHandoff(station, ctx, report) {
 		expectedGeneration: relay.generation,
 		at: Date.now(),
 	});
-	station.registry?.clearPending?.(station);
+	station.clearPending();
 	if (manager && typeof manager.buildSessionContext === "function") {
 		try {
 			const rebuilt = manager.buildSessionContext()?.messages;

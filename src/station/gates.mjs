@@ -10,7 +10,7 @@ import {
 } from "../scope/index.mjs";
 import { beatKey, toolCalls } from "../transcript/index.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
-import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../core/policy.mjs";
+import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
 import { successorStartNudge } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { controlsIn, hostBoundaryKey } from "./messages.mjs";
@@ -344,7 +344,7 @@ function onBeforeAgentStart(station, event, ctx) {
 	// Relay and `todo` share one verdict: `ensureTools` owns that rule, so no
 	// second `getActiveTools` check may live here. Tail position: every state
 	// commit above lands before the grant (and the restore) dispatch.
-	if (policy === READ_WRITE_SUBAGENT) station.ensureTools(ctx);
+	station.ensureTools(ctx);
 	if (req) return restore(station, ctx, req, result);
 	return result;
 }

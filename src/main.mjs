@@ -50,7 +50,7 @@ export async function activate(pi, env = process.env) {
 	const wired = wireExtension(pi, pricingCatalog, diagnosis, env);
 	installStatus(pi, {
 		diagnostics: { total: diagnosticsTotal },
-		ports: wired.ports ?? {},
+		ports: wired.ports,
 	});
 	// The composition result is the only handle on the live registry. Tests
 	// and host tooling use it to reach a station without a process-wide

@@ -450,7 +450,10 @@ describe("owner queries", () => {
       arguments: { elder_report: null },
     });
     expect(out.isError).toBe(true);
-    expect(out.content[0].text).toContain("scope_return belongs to a forked child");
+    const text = out.content[0].text;
+    expect(text).toContain("NOT_A_CHILD");
+    expect(text).toContain("scope_return");
+    expect(text).toContain("scope_join");
   });
 
   test("parks a join until a child returns, then takes it", async () => {

@@ -973,7 +973,8 @@ describe("spawnChildTicket directly", () => {
     // A missing doc key returns undefined, which would make the identity
     // assertion above pass vacuously. Pin the contract's words too.
     expect(prompts[1]).toContain("scope_return");
-    expect(prompts[1]).toContain("natural stop submits nothing");
+    expect(prompts[1]).toContain("still unpublished");
+    expect(prompts[1]).toContain("hand it to the parent");
     expect(result.failed).toBe(false);
     expect(ledger.forks.n1.status).toBe("ready");
     expect(outcomeOf(wiring.registry, "n1").record).toBe("the child's own record");

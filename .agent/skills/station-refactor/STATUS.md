@@ -28,8 +28,10 @@ synchronous aggregate, Tickets own the awaits, and Wiring only composes.
   with ratchets. The processed/dispatch/tool-gate tables moved into
   `src/station/domain/tool-call-ledger.mjs`. The Station class receives host
   capabilities through `registry.host()`; ESLint forbids station→host imports
-  except the registry composition bridge. `fork-controls` handlers only
-  take/commit/persist; the ratchet baseline is 20 and `admitForkStart` is gone.
+  except the registry composition bridge. `fork-controls` handlers stay
+  synchronous station code: `handleForkCall` admits, registers, renders, and
+  starts spawners in one atomic Run-to-Completion block, never awaiting; the
+  ratchet baseline is 20 and `admitForkStart` is gone.
 - **Wiring.** `spawnChildTicket` lives in
   `src/tools/fork-spawn-ticket.mjs`; `fork-wiring.mjs` composes it. Fork attach
   is split into `attachBaseForkPorts` (ledger/wait/identity/owner/depth/
@@ -97,9 +99,22 @@ ratchet.
   already present in `state.charges`, so a re-admission cannot double-charge
   even after the 512-entry gate cache evicts it. The post-execution receipt
   seam checks the same gate cache and re-admits when the id is absent instead
-  of returning a free result; a missing budget then refuses the result. The
-  regression is `tests/fork-tool-deadline.test.mjs` "a receipt without an
-  admission is refused, not free".
+  of returning a free result; with no prior admission and no budget, that
+  fresh admission refuses the result. The regression is
+  `tests/fork-tool-deadline.test.mjs` "a receipt without an admission is
+  refused, not free".
+- **Receipt re-admission is idempotent for an executed call.** A receipt that
+  follows a guarded execution cannot be refused by the re-admission it falls
+  back to when the bounded 512-entry gate cache evicted the id: `chargeBranch`
+  short-circuits on `state.charges[toolCallId]`, so the call is neither
+  billed twice nor refused for a budget it already passed; control and amend
+  replay is gated by the processed ledger (`processAssistantMessage` marks the
+  message key, `directAmend` returns `handledFor`); and a free call's
+  arguments are rebuilt from the carrying message via the dispatch tracker, so
+  a skill read stays free. `tests/fork-tool-deadline.test.mjs` now pins both
+  cases — evicted verdict (no block, one charge, three remaining) and free
+  skill read after eviction (no block, no charge) — and runs 14 cases.
+  Pin commit: `6cb59213`.
 
 ## Verification (this pass, 2026-11-22)
 
@@ -113,8 +128,14 @@ ratchet.
   **1078 pass / 0 fail**, 96 files, 3922 expect calls.
 - Clean committed-tree replay after the ratchet repair: `git archive 4f7b1af`
   → **1079 pass / 0 fail**, 96 files, 3923 expect calls.
+- Receipt-idempotence pin: `bun test tests/fork-tool-deadline.test.mjs` →
+  **14 pass / 0 fail**, 56 expect calls; the full worktree carrying the
+  concurrent scope edits → **1092 pass / 0 fail**, 97 files, 4031 expect
+  calls; `bunx eslint .` exit **0** with no output; clean committed-tree replay
+  of `git archive 6cb59213` → **1081 pass / 0 fail**, 96 files, 3937 expect
+  calls. The two-test difference from `4f7b1af` is the receipt pin itself.
 - This status record is committed one commit after the code it describes, so
-  the STATUS commit itself becomes a newer HEAD; `4f7b1af` is the verified
+  the STATUS commit itself becomes a newer HEAD; `6cb59213` is the verified
   code SHA.
 - `bunx eslint .`: **0**.
 - `bun run smoke:relay`: **11/11**.
@@ -178,6 +199,8 @@ ratchet.
   receipt.
 - `4f7b1af` Scan all of `src/station` for port-table reads; pin the pre-ratchet
   regex's blind spot so the guard cannot silently regress.
+- `6cb59213` Pin receipt idempotence across a gate-cache miss: an executed call
+  is re-admitted, charged once, and never refused by the fallback admission.
 
 ## Final state
 

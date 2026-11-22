@@ -10,6 +10,9 @@ import {
 } from "./state.mjs";
 import { beatShares, isFreeCall, normalizeToolName } from "./budget.mjs";
 import { applyCharge, applyRefund, forkOf } from "./forkjoin.mjs";
+import { loadDoc, render } from "../prompts/index.mjs";
+
+const E = loadDoc("errors");
 
 /**
  * Charge one tool call against the branch that owns it.
@@ -28,14 +31,11 @@ export function chargeBranch(state, ledger, params = {}) {
   const record = ownerId && ledger ? forkOf(ledger, ownerId) : null;
   if (!record) {
     if (!ownerId) {
-      return failure(
-        "ROOT_HAS_NO_BUDGET",
-        "The root branch has no tool budget. Delegate the work with scope_fork; free control tools (scope_fork, scope_join, scope_return, amend, pin, todo, ask, wait) and skill reads remain available.",
-      );
+      return failure("ROOT_HAS_NO_BUDGET", E["root-has-no-budget"]);
     }
     return failure(
       "NO_BRANCH_BUDGET",
-      `Branch "${ownerId}" has no fork record, so it has no tool budget. Return with scope_return or fork the work.`,
+      render(E["no-branch-budget"], { ownerId }),
     );
   }
   if (

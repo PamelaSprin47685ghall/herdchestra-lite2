@@ -24,7 +24,7 @@ import {
 	parseArgs,
 } from "./messages.mjs";
 import { handoffDemandVisible, insideScopeNudge } from "./texts.mjs";
-import { loadDoc } from "../prompts/index.mjs";
+import { loadDoc, render } from "../prompts/index.mjs";
 
 const E = loadDoc("errors");
 
@@ -196,7 +196,9 @@ function onToolCall(station, event, ctx) {
 	} catch (error) {
 		return {
 			block: true,
-			reason: `Scope accounting failed closed: ${String(error?.message ?? error)}`,
+			reason: render(E["accounting-failed-closed"], {
+				error: String(error?.message ?? error),
+			}),
 		};
 	}
 }

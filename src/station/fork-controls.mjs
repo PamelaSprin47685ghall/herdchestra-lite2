@@ -29,6 +29,7 @@ import { elderReportProblem } from "../scope/elder-report.mjs";
 
 const F = loadDoc("tools/fork-join");
 const S = loadDoc("receipts/scope");
+const E = loadDoc("errors");
 
 // The join receipt adds a header, the remaining list and the pending-report
 // line. Pricing them keeps the admission estimate from assuming the record
@@ -142,13 +143,13 @@ export function validateForkBatch(state, args, options = {}) {
   return { ok: true, items };
 }
 
-const REFUSAL_TEXT = {
-  INVALID_SCOPE_ID: "scopeId is required: use a short ASCII identifier other than root.",
-  INVALID_INTENT: "intent must be a non-empty string.",
-  INVALID_BUDGET: "budget must be a plain object of non-negative integer tool budgets.",
-  INVALID_TIME: "time is required and must be a positive number of seconds.",
-  INVALID_ARGUMENT: "permission must be ro or rw, and model must be a string or null.",
-  RW_BEFORE_LEDGER: "Write permission requires the first ledger evaluation.",
+const REFUSAL_KEY = {
+  INVALID_SCOPE_ID: "invalid-scope-id",
+  INVALID_INTENT: "invalid-intent",
+  INVALID_BUDGET: "invalid-budget",
+  INVALID_TIME: "invalid-time",
+  INVALID_ARGUMENT: "invalid-argument",
+  RW_BEFORE_LEDGER: "rw-before-ledger",
 };
 
 function budgetText(budget) {
@@ -382,18 +383,22 @@ export function handleForkCall(station, call, options = {}) {
     const where = batch.index >= 0 ? ` (forks[${batch.index}])` : "";
     return errorResult(
       batch.code,
-      `${REFUSAL_TEXT[batch.code] ?? "Invalid fork arguments."}${where}`,
+      `${E[REFUSAL_KEY[batch.code]] ?? "Invalid fork arguments."}${where}`,
     );
   }
   const ledger = ledgerOf(station);
   if (!ledger) {
-    return errorResult("FORK_LEDGER_UNAVAILABLE", "No bracket ledger is attached.");
+    return errorResult("FORK_LEDGER_UNAVAILABLE", E["fork-ledger-unavailable"]);
   }
   const names = new Set(ledger.order.map((id) => forkOf(ledger, id))
     .filter((entry) => entry?.status !== "blocked").map((entry) => publicScopeId(entry).toLowerCase()));
   for (const item of batch.items) {
     const key = item.scopeId.toLowerCase();
-    if (names.has(key)) return errorResult("DUPLICATE_SCOPE_ID", `Scope ${item.scopeId} is already declared.`);
+    if (names.has(key)) {
+      return errorResult("DUPLICATE_SCOPE_ID", render(E["duplicate-scope-id"], {
+        scopeId: item.scopeId,
+      }));
+    }
     names.add(key);
   }
   // A pure checkpoint starts nothing, so it needs no spawner. Only a batch
@@ -402,7 +407,7 @@ export function handleForkCall(station, call, options = {}) {
   const spawner =
     typeof station.childSpawnPort === "function" ? station.childSpawnPort() : null;
   if (needsSpawn && typeof spawner !== "function") {
-    return errorResult("CHILD_SPAWNER_UNAVAILABLE", "No child spawner is attached.");
+    return errorResult("CHILD_SPAWNER_UNAVAILABLE", E["child-spawner-unavailable"]);
   }
 
   // Resolve every requested model before the first bracket is registered.
@@ -435,7 +440,10 @@ export function handleForkCall(station, call, options = {}) {
     if (item.blocked === true) continue;
     const verdict = admitForkStart(station, item, depth);
     if (verdict.ok) continue;
-    return errorResult("FORK_CONTEXT_EXCEEDED", `forks[${index}]: ${verdict.reason}`, {
+    return errorResult("FORK_CONTEXT_EXCEEDED", render(E["fork-context-exceeded"], {
+      index,
+      reason: verdict.reason,
+    }), {
       index,
       admission: verdict.code,
       source: "measured",
@@ -600,28 +608,25 @@ export function handleJoinCall(station, call, options = {}) {
   const args = parseArgs(call);
   const ledger = ledgerOf(station);
   if (!ledger) {
-    return errorResult("FORK_LEDGER_UNAVAILABLE", "No bracket ledger is attached.");
+    return errorResult("FORK_LEDGER_UNAVAILABLE", E["fork-ledger-unavailable"]);
   }
   if (args.elder_report !== undefined && args.elder_report !== null &&
       typeof args.elder_report !== "string") {
-    return errorResult("INVALID_ARGUMENT", "elder_report must be a string or null.");
+    return errorResult("INVALID_ARGUMENT", E["elder-report-type"]);
   }
   // A summary is evidence, not whitespace. Accepting "  " would pass the gate
   // while the receipt writer refuses to store it: the join would look
   // successful, the obligation would survive, and the next refusal would ask
   // for a report the model already believed it had given.
   if (typeof args.elder_report === "string" && args.elder_report.trim() === "") {
-    return errorResult(
-      "INVALID_ARGUMENT",
-      "elder_report must be a non-empty string or null.",
-    );
+    return errorResult("INVALID_ARGUMENT", E["elder-report-empty"]);
   }
   const ownerId = ownerIdOf(station);
   // With nothing running and nothing ready, no join can succeed. Answering
   // before the report gate keeps the model out of a loop that demands a
   // summary for a receipt no later join could ever archive.
   if (unreceivedChildren(ledger, ownerId).length === 0) {
-    return errorResult("NO_READY_CHILD", "No child has returned yet.", {
+    return errorResult("NO_READY_CHILD", E["no-ready-child"], {
       ownerId,
       active: 0,
       pending: null,
@@ -644,15 +649,12 @@ export function handleJoinCall(station, call, options = {}) {
     const named = publicScopeId(forkOf(ledger, pendingReport.forkId));
     return errorResult(
       "INVALID_ELDER_REPORT",
-      `Receipt ${named} is still unreported. Summarize it in elder_report, or this join cannot proceed.`,
+      render(E["elder-report-missing"], { scopeId: named }),
       { pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId },
     );
   }
   if (pendingReport === null && elderReport !== null) {
-    return errorResult(
-      "ELDER_REPORT_UNEXPECTED",
-      "No receipt needs a summary. Pass elder_report: null.",
-    );
+    return errorResult("ELDER_REPORT_UNEXPECTED", E["elder-report-unexpected"]);
   }
   if (pendingReport !== null && elderReport !== null) {
     // The stored report is trimmed, so the bound applies to its trimmed
@@ -677,11 +679,12 @@ export function handleJoinCall(station, call, options = {}) {
   if (!taken.ok) {
     if (taken.code === "NO_ADMISSIBLE_CHILD") {
       const first = taken.blocked?.[0] ?? null;
+      const detail = first
+        ? `Fork ${publicScopeId(forkOf(ledger, first.forkId))} cannot be delivered: ${first.reason ?? "the next request would exceed the model window"}.`
+        : "No ready child fits the model window.";
       return errorResult(
         "JOIN_CONTEXT_EXCEEDED",
-        first
-          ? `Fork ${publicScopeId(forkOf(ledger, first.forkId))} cannot be delivered: ${first.reason ?? "the next request would exceed the model window"}. The record stays ready; use a model with a larger window or reduce the record, then join again.`
-          : "No ready child fits the model window. The records stay ready.",
+        render(E["join-context-exceeded"], { detail }),
         {
           ownerId,
           active: openChildren(ledger, ownerId).length,
@@ -690,7 +693,7 @@ export function handleJoinCall(station, call, options = {}) {
         },
       );
     }
-    return errorResult("NO_READY_CHILD", "No child has returned yet.", {
+    return errorResult("NO_READY_CHILD", E["no-ready-child"], {
       ownerId,
       active: openChildren(ledger, ownerId).length,
       // The waiting ticket commits with exactly this binding. Recomputing it
@@ -741,14 +744,14 @@ export function checkJoinBinding(station, expected) {
     return {
       ok: false,
       code: "STALE_ELDER_REPORT",
-      reason: `Receipt ${named} already has a summary. This join took no result. Retry with elder_report: null.`,
+      reason: render(E["stale-elder-reported"], { scopeId: named }),
     };
   }
   const named = publicScopeId(forkOf(ledgerOf(station), current.forkId));
   return {
     ok: false,
     code: "STALE_ELDER_REPORT",
-    reason: `This join took no result; its summary was not committed. Retry with an elder_report for ${named}.`,
+    reason: render(E["stale-elder-uncommitted"], { scopeId: named }),
   };
 }
 
@@ -910,33 +913,30 @@ export function handleReturnCall(station, call) {
   const args = parseArgs(call);
   const ledger = ledgerOf(station);
   if (!ledger) {
-    return errorResult("FORK_LEDGER_UNAVAILABLE", "No bracket ledger is attached.");
+    return errorResult("FORK_LEDGER_UNAVAILABLE", E["fork-ledger-unavailable"]);
   }
   const identity = identityOf(station);
   const selfForkId =
     identity && typeof identity.forkId === "string" ? identity.forkId : "";
   if (selfForkId === "") {
-    return errorResult(
-      "NOT_A_CHILD",
-      "scope_return belongs to a forked child. The parent receives work with scope_join.",
-    );
+    return errorResult("NOT_A_CHILD", E["not-a-child"]);
   }
   const record = forkOf(ledger, selfForkId);
   if (!record) {
-    return errorResult("UNKNOWN_FORK", "This scope is not registered.");
+    return errorResult("UNKNOWN_FORK", E["unknown-fork"]);
   }
   if (record.status !== "running") {
-    return errorResult("FORK_NOT_RUNNING", `Fork ${publicScopeId(record)} is ${record.status}.`);
+    return errorResult("FORK_NOT_RUNNING", render(E["fork-not-running"], {
+      scopeId: publicScopeId(record),
+      status: record.status,
+    }));
   }
   // Adoption follows the current receiver, never the birth parent: a branch
   // that was itself adopted must hand its unreceived children to the branch
   // that now answers for it.
   const receiverId = record.ownerId;
   if (typeof receiverId !== "string" || receiverId === "") {
-    return errorResult(
-      "ORPHANS_WITHOUT_RECEIVER",
-      "No receiving branch owns this fork. Join its children first.",
-    );
+    return errorResult("ORPHANS_WITHOUT_RECEIVER", E["orphans-without-receiver"]);
   }
   const orphans = [
     ...openChildren(ledger, selfForkId),

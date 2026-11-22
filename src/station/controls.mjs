@@ -33,7 +33,7 @@ function handleAmendCall(station, call, base, currentIndex, boundary) {
     toolCalls: target.toolCalls,
   });
   if (!applied.ok) return errorResult(applied.code, applied.reason);
-  return textResult(amendText(applied, boundary.record), {
+  return textResult(amendText(applied, boundary.record, station.clockPort?.() ?? null), {
     refunded: applied.refunded,
   });
 }

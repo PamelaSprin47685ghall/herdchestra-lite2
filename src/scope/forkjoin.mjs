@@ -5,6 +5,8 @@
 // This module is pure data and arithmetic. It holds no host objects, reads no
 // clock, and performs no I/O.
 
+import { deadlineInfo } from "./clock.mjs";
+
 const RUNNING = "running";
 const READY = "ready";
 const JOINED = "joined";
@@ -57,7 +59,8 @@ export function createBracketLedger() {
  * Register one left bracket. Returns the fork record. Nothing blocks, so the
  * parent may register several forks in one beat.
  */
-export function registerFork(ledger, spec) {
+export function registerFork(ledger, spec, options = {}) {
+  const { clock = null } = options;
   const s = spec && typeof spec === "object" ? spec : {};
   if (!isNonEmptyString(s.forkId)) {
     return failure("INVALID_FORK_ID", "forkId must be a non-empty string.");
@@ -114,14 +117,16 @@ export function registerFork(ledger, spec) {
     charges: {},
     timeBudgetMs,
     startedAt,
-    deadlineAt:
-      timeBudgetMs !== null && startedAt !== null ? startedAt + timeBudgetMs : null,
+    deadlineAt: null,
     overtimeAt: null,
     // Waiting for another branch is not this branch's work. A pause freezes
     // the remaining time; resume shifts the deadline by the paused span.
     clockPausedAt: null,
     pausedMs: 0,
   };
+  if (clock && typeof clock.start === "function") {
+    clock.start(record, timeBudgetMs, startedAt);
+  }
   put(ledger.forks, s.forkId, record);
   ledger.order.push(s.forkId);
   return { ok: true, fork: record };
@@ -748,51 +753,8 @@ export function applyRefund(ledger, forkId, toolCallId) {
   return { ok: true, refunded: refund, ...accountOf(record) };
 }
 
-/**
- * Freeze a branch's clock. Waiting for another branch is not this branch's own
- * work, so the remaining time must not drain while it waits. The first pause
- * edge wins: a repeated call cannot move it.
- */
-export function pauseClock(record, now = Date.now()) {
-  if (!record || !Number.isFinite(record.deadlineAt)) return false;
-  if (Number.isFinite(record.clockPausedAt)) return false;
-  record.clockPausedAt = Number.isFinite(now) ? now : Date.now();
-  return true;
-}
-
-/**
- * Release a paused clock and shift the deadline by the paused span, so the
- * branch resumes with exactly the time it had left. A resume without a pause
- * changes nothing.
- */
-export function resumeClock(record, now = Date.now()) {
-  if (!record || !Number.isFinite(record.deadlineAt)) return false;
-  if (!Number.isFinite(record.clockPausedAt)) return false;
-  const at = Number.isFinite(now) ? now : Date.now();
-  const paused = Math.max(0, at - record.clockPausedAt);
-  record.deadlineAt += paused;
-  record.pausedMs = (Number.isFinite(record.pausedMs) ? record.pausedMs : 0) + paused;
-  record.clockPausedAt = null;
-  return true;
-}
-
-/** How much wall clock a branch has left. The deadline itself is overtime. */
-export function deadlineInfo(record, now = Date.now()) {
-  if (!record || !Number.isFinite(record.deadlineAt)) return { bounded: false };
-  // A paused clock reads as the pause edge: the remaining time is frozen and
-  // no overtime can begin until the branch resumes.
-  const at = Number.isFinite(record.clockPausedAt)
-    ? record.clockPausedAt
-    : Number.isFinite(now)
-      ? now
-      : Date.now();
-  const leftMs = record.deadlineAt - at;
-  if (leftMs <= 0) return { bounded: true, overtime: true, leftMs: 0 };
-  return { bounded: true, overtime: false, leftMs };
-}
-
 /** Render a branch's budget and clock the way the old scope line did. */
-export function forkBudgetText(record, now = Date.now()) {
+export function forkBudgetText(record, now = Date.now(), clock = null) {
   if (!record || !isPlainObject(record.remaining)) return "";
   const entries = [];
   for (const tool of Object.keys(record.remaining).sort()) {
@@ -801,7 +763,9 @@ export function forkBudgetText(record, now = Date.now()) {
     entries.push(`${tool} ${format2(record.remaining[tool])}/${format2(budget)}`);
   }
   const tools = entries.join(", ");
-  const info = deadlineInfo(record, now);
+  const info = clock && typeof clock.info === "function"
+    ? clock.info(record, now)
+    : deadlineInfo(record, now);
   if (!info.bounded) return tools;
   const timed = info.overtime
     ? "time OVERTIME (1s per tool)"

@@ -9,7 +9,7 @@
 // back as PORT_UNAVAILABLE with the values that would have been accepted.
 // Nothing is half-started by a typo.
 
-import { NAMED_SWITCHES, PORTS, disableName, switchName } from "./registry.mjs";
+import { PORTS, disableName, switchName } from "./registry.mjs";
 
 const DISABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -34,11 +34,11 @@ export function readSwitch(port, env) {
 	const entry = PORTS[port];
 	if (!entry) return refusal(port, null, []);
 	const source = environment(env);
-	if (NAMED_SWITCHES.has(port)) {
-		const raw = source[switchName(port)];
-		if (raw === undefined || String(raw).trim() === "") {
-			return { ok: true, implementation: entry.fallback, explicit: false };
-		}
+	// Every port reads its name form. `scope`/`relay` always did; the
+	// two-implementation ports used to read only the older disable flag. The
+	// name form is the port's own vocabulary, so it wins over that flag.
+	const raw = source[switchName(port)];
+	if (raw !== undefined && String(raw).trim() !== "") {
 		const name = String(raw).trim();
 		if (!entry.implementations.includes(name)) {
 			return refusal(port, name, entry.implementations);

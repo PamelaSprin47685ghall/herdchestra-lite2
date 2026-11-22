@@ -1,103 +1,93 @@
-// The clock contract, run against every implementation by name.
+// The clock contract, run against the record policy.
 //
-// Whatever the implementation, the same questions must be answerable with the
-// same shapes: remaining() is a number or null, expired() is a boolean,
-// start() answers ok, and only a bounded clock can render a time segment.
+// The port is stateless: `start` fills the persisted fork record, and every
+// other call reads or mutates that record. The keyed-map shape is gone.
 
 import { describe, expect, test } from "bun:test";
 
-import { createClockOff, createClockOn } from "../../src/features/clock/index.mjs";
-import { defineContract, fakeCtx } from "./_harness.mjs";
+import {
+	CLOCK_IMPLEMENTATIONS,
+	createClockOff,
+	createClockOn,
+} from "../../src/scope/clock.mjs";
 
-const implementations = {
-	on: createClockOn(),
-	off: createClockOff(),
-};
-
-defineContract("clock", {
-	implementations,
-	cases: {
-		"remaining is a number or null"(_impl, _ctx) {
-			const value = implementations.on.remaining("missing-scope");
-			expect(value === null || typeof value === "number").toBe(true);
-		},
-		"expired is boolean for an unknown scope"(_impl) {
-			expect(typeof implementations.on.expired("missing-scope")).toBe("boolean");
-		},
-	},
-});
+function record(overrides = {}) {
+	return {
+		timeBudgetMs: 5_000,
+		startedAt: 1_000,
+		deadlineAt: null,
+		clockPausedAt: null,
+		pausedMs: 0,
+		overtimeAt: null,
+		...overrides,
+	};
+}
 
 describe("clock: on", () => {
-	test("counts down and expires at the deadline", () => {
+	test("starts the deadline on the record and counts down", () => {
 		const clock = createClockOn();
-		const started = clock.start("s1", 5_000);
-		expect(started.ok).toBe(true);
-		const deadline = started.deadlineAt;
-
-		expect(clock.remaining("s1", deadline - 2_000)).toBe(2_000);
-		expect(clock.expired("s1", deadline - 1)).toBe(false);
-		expect(clock.expired("s1", deadline)).toBe(true);
-		expect(clock.remaining("s1", deadline + 500)).toBe(0);
-	});
-
-	test("stamps overtime once and keeps it", () => {
-		const clock = createClockOn();
-		const { deadlineAt } = clock.start("s2", 1_000);
-		expect(clock.expired("s2", deadlineAt + 100)).toBe(true);
-		expect(clock.expired("s2", deadlineAt + 200)).toBe(true);
-	});
-
-	test("refuses a non-positive budget", () => {
-		const clock = createClockOn();
-		expect(clock.start("s3", 0)).toEqual({
-			ok: false,
-			code: "CLOCK_INVALID_BUDGET",
-			port: "clock",
-			detail: "budgetMs must be a positive number",
+		const fork = record();
+		expect(clock.start(fork, fork.timeBudgetMs, fork.startedAt)).toEqual({
+			ok: true,
+			deadlineAt: 6_000,
 		});
+		expect(clock.info(fork, 3_000)).toEqual({
+			bounded: true,
+			overtime: false,
+			leftMs: 3_000,
+		});
+		expect(clock.toolLimit(fork, 3_000)).toBe(4_000);
 	});
 
-	test("is bounded, so a time segment can be rendered", () => {
-		expect(createClockOn().bounded()).toBe(true);
+	test("a pause freezes and a resume shifts the deadline", () => {
+		const clock = createClockOn();
+		const fork = record();
+		clock.start(fork, fork.timeBudgetMs, fork.startedAt);
+		expect(clock.pause(fork, 3_000)).toBe(true);
+		expect(clock.info(fork, 4_000)).toEqual({
+			bounded: true,
+			overtime: false,
+			leftMs: 3_000,
+		});
+		expect(clock.resume(fork, 5_000)).toBe(true);
+		expect(fork.deadlineAt).toBe(8_000);
+		expect(fork.pausedMs).toBe(2_000);
+		expect(fork.clockPausedAt).toBeNull();
+	});
+
+	test("the deadline is overtime and the tool limit is one second", () => {
+		const clock = createClockOn();
+		const fork = record();
+		clock.start(fork, fork.timeBudgetMs, fork.startedAt);
+		expect(clock.info(fork, 7_000)).toEqual({
+			bounded: true,
+			overtime: true,
+			leftMs: 0,
+		});
+		expect(clock.toolLimit(fork, 7_000)).toBe(1_000);
+		expect(fork.overtimeAt).toBe(7_000);
 	});
 });
 
 describe("clock: off", () => {
-	test("nothing is ever late and no bound exists", () => {
+	test("start clears the record and nothing is gated", () => {
 		const clock = createClockOff();
-		expect(clock.start("s1", 10)).toEqual({ ok: true });
-		expect(clock.remaining("s1")).toBeNull();
-		expect(clock.expired("s1")).toBe(false);
-	});
-
-	test("is unbounded, so no time segment is rendered", () => {
-		// The receipt reads this answer instead of asking a switch.
-		expect(createClockOff().bounded()).toBe(false);
-	});
-
-	test("start leaves nothing behind", () => {
-		const clock = createClockOff();
-		clock.start("s1", 10);
-		expect(clock.clear("s1")).toBe(false);
+		const fork = record({ deadlineAt: 6_000, clockPausedAt: 3_000 });
+		expect(clock.start(fork, fork.timeBudgetMs, fork.startedAt)).toEqual({ ok: true });
+		expect(fork.deadlineAt).toBeNull();
+		expect(fork.clockPausedAt).toBeNull();
+		expect(clock.info(fork, 3_000)).toEqual({ bounded: false });
+		expect(clock.toolLimit(fork, 3_000)).toBeNull();
+		expect(clock.pause(fork, 3_000)).toBe(false);
+		expect(clock.resume(fork, 4_000)).toBe(false);
 	});
 });
 
-describe("the two implementations answer the same shapes", () => {
-	test("start, remaining and expired line up", () => {
-		const on = createClockOn();
-		const off = createClockOff();
-		expect(on.start("s", 100).ok).toBe(true);
-		expect(off.start("s", 100).ok).toBe(true);
-		// Same shape, different answers: a bounded clock returns milliseconds,
-		// an unbounded one says "no bound" - it must not say zero, which would
-		// read as expired.
-		expect(typeof on.remaining("s")).toBe("number");
-		expect(off.remaining("s")).toBeNull();
-		expect(typeof on.expired("s")).toBe("boolean");
-		expect(typeof off.expired("s")).toBe("boolean");
-		// Both answer with the same union, which is what callers switch on.
-		expect(on.bounded() || off.bounded()).toBe(true);
-		expect(on.bounded() && off.bounded()).toBe(false);
-		expect(fakeCtx().now()).toBe(1_000);
+describe("the two implementations share one shape", () => {
+	test("names and bounded flags", () => {
+		expect(CLOCK_IMPLEMENTATIONS.on().name).toBe("on");
+		expect(CLOCK_IMPLEMENTATIONS.off().name).toBe("off");
+		expect(CLOCK_IMPLEMENTATIONS.on().bounded).toBe(true);
+		expect(CLOCK_IMPLEMENTATIONS.off().bounded).toBe(false);
 	});
 });

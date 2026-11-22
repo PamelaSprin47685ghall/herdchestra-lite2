@@ -91,6 +91,42 @@ describe("environment resolution", () => {
 		});
 	});
 
+	test("a two-implementation port reads its name form", () => {
+		expect(readSwitch("clock", { HERD_CLOCK: "off" })).toEqual({
+			ok: true,
+			implementation: "off",
+			explicit: true,
+		});
+		expect(readSwitch("folding", { HERD_FOLDING: "off" })).toEqual({
+			ok: true,
+			implementation: "off",
+			explicit: true,
+		});
+		expect(readSwitch("clock", { HERD_CLOCK: "on" })).toEqual({
+			ok: true,
+			implementation: "on",
+			explicit: true,
+		});
+	});
+
+	test("an unknown name form is refused with what is available", () => {
+		expect(readSwitch("clock", { HERD_CLOCK: "paused" })).toEqual({
+			ok: false,
+			code: "PORT_UNAVAILABLE",
+			port: "clock",
+			wanted: "paused",
+			available: ["on", "off"],
+		});
+	});
+
+	test("the name form wins over the legacy disable flag", () => {
+		expect(readSwitch("clock", { HERD_CLOCK: "on", HERD_DISABLE_CLOCK: "1" })).toEqual({
+			ok: true,
+			implementation: "on",
+			explicit: true,
+		});
+	});
+
 	test("an unknown port has no switch", () => {
 		expect(readSwitch("nope", EMPTY)).toEqual({
 			ok: false,

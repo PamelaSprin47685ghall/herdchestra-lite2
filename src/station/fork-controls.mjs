@@ -16,6 +16,7 @@ import {
   unreceivedChildren,
 } from "../scope/forkjoin.mjs";
 import { validScopeId, publicScopeId } from "../scope/scope-id.mjs";
+import { createClockOn } from "../scope/clock.mjs";
 import { estimateJoinTokens, joinAdmission } from "../scope/admission.mjs";
 import { latestReceiptOf } from "../scope/receipts.mjs";
 import { normalizeBudget, validBudget } from "../scope/budget.mjs";
@@ -465,6 +466,7 @@ export function handleForkCall(station, call, options = {}) {
   }
 
   const parentOwnerId = ownerIdOf(station);
+  const clock = typeof station.clockPort === "function" ? station.clockPort() : createClockOn();
   const baseId = typeof call.id === "string" && call.id !== "" ? call.id : `fork-${Date.now()}`;
   const started = [];
   const deferred = [];
@@ -483,7 +485,7 @@ export function handleForkCall(station, call, options = {}) {
       budget: item.budget,
       time: item.time,
       startedAt: Date.now(),
-    });
+    }, { clock });
     if (!registered.ok) {
       failed.push({
         forkId,

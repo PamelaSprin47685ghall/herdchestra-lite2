@@ -9,6 +9,7 @@ import { createForkRegistry, notifyWaiters } from "../src/host/fork-registry.mjs
 import { joinTicket, returnTicket } from "../src/tools/tickets.mjs";
 import {
 	createBracketLedger,
+	createClockOn,
 	markReady,
 	pauseClock,
 	registerFork,
@@ -36,7 +37,7 @@ function ledgerWith(time, startedAt) {
 		depth: 0,
 		time,
 		startedAt,
-	});
+	}, { clock: createClockOn() });
 	if (!registered.ok) throw new Error(registered.reason);
 	return { ledger, record: registered.fork };
 }

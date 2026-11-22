@@ -38,11 +38,17 @@ export {
   validLedger,
   applyCharge,
   applyRefund,
+  forkBudgetText,
+} from "./forkjoin.mjs";
+export {
   pauseClock,
   resumeClock,
   deadlineInfo,
-  forkBudgetText,
-} from "./forkjoin.mjs";
+  toolLimitOf,
+  createClockOn,
+  createClockOff,
+  CLOCK_IMPLEMENTATIONS,
+} from "./clock.mjs";
 export {
   chargeBranch,
   refundBranch,

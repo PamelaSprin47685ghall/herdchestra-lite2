@@ -4,13 +4,16 @@ import {
   applyCharge,
   applyRefund,
   createBracketLedger,
-  deadlineInfo,
   forkBudgetText,
   forkOf,
-  pauseClock,
   registerFork,
-  resumeClock,
 } from "../src/scope/forkjoin.mjs";
+import {
+  createClockOn,
+  deadlineInfo,
+  pauseClock,
+  resumeClock,
+} from "../src/scope/clock.mjs";
 
 function fork(ledger, spec = {}) {
   const result = registerFork(ledger, {
@@ -21,7 +24,7 @@ function fork(ledger, spec = {}) {
     budget: spec.budget,
     time: spec.time,
     startedAt: spec.startedAt,
-  });
+  }, { clock: createClockOn() });
   expect(result.ok).toBe(true);
   return result.fork;
 }

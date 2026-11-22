@@ -26,10 +26,9 @@
 
 import {
 	createBracketLedger,
+	createClockOn,
 	createUsageLedger,
-	pauseClock,
 	planStateEntry,
-	resumeClock,
 	serializeState,
 	unreceivedChildren,
 } from "../scope/index.mjs";
@@ -42,7 +41,6 @@ import {
 	filterAmends,
 	findAmendTarget,
 	findToolCallIndex,
-	applyReceiptFolds,
 	lastStructuralCallId,
 	rewriteVibeMessage,
 	toolCalls,
@@ -60,6 +58,7 @@ import { createEmptyCatalog } from "../host/pricing.mjs";
 import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
 import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
 import { createPinOff, createPinOn } from "../features/pin/index.mjs";
+import { foldingOn } from "../features/folding/index.mjs";
 import { handleAmendCall } from "./controls.mjs";
 import {
 	directAmend,
@@ -79,7 +78,6 @@ import {
 	addReceipt,
 	attachReport,
 	createReceiptRecord,
-	foldableReceipts,
 	markCollapsed,
 } from "../scope/receipts.mjs";
 import {
@@ -269,6 +267,24 @@ export class SessionStation {
 		record(domain, error, detail);
 	}
 
+	/**
+	 * Detach a fire-and-forget ticket from this sync beat. A rejection is a
+	 * station failure, not an unhandled promise: record it and keep the turn
+	 * alive. A synchronous throw from the capability takes the same path.
+	 */
+	dispatchFireAndForget(domain, start) {
+		try {
+			const result = start();
+			if (result && typeof result.catch === "function") {
+				result.catch((error) => this.noteError(domain, error));
+			}
+			return result;
+		} catch (error) {
+			this.noteError(domain, error);
+			return undefined;
+		}
+	}
+
 	// -- Policy --------------------------------------------------------------
 
 	policy(ctx) {
@@ -283,9 +299,6 @@ export class SessionStation {
 		}
 		if (hasSessionInit(ctx)) {
 			this.agentPolicy = policy;
-			// INVARIANT: relay and `todo` are one decision. The relay starts
-			// here, so `todo` must be granted in the same breath.
-			this.syncTodo(policy);
 		}
 		return policy;
 	}
@@ -309,7 +322,8 @@ export class SessionStation {
 		const key = active.join("\u0000");
 		if (key === this.todoGrantKey) return;
 		this.todoGrantKey = key;
-		void this.tickets.activateTools(active, undefined, false);
+		this.dispatchFireAndForget("tickets", () =>
+			this.tickets.activateTools(active, undefined, false));
 	}
 
 	/**
@@ -442,35 +456,27 @@ export class SessionStation {
 		return ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null;
 	}
 
+	/** The injected clock implementation; `on` is the port's default. */
+	clockPort() {
+		return this.registry?.implementations?.()?.clock ?? createClockOn();
+	}
+
 	/**
 	 * Freeze this branch's clock while it waits on another bracket. The root
 	 * owns no record, so it has nothing to pause.
 	 */
 	pauseBranchClock() {
-		return pauseClock(this.branchRecord());
+		return this.clockPort().pause(this.branchRecord());
 	}
 
 	/** Resume the clock and give back exactly the paused span. */
 	resumeBranchClock() {
-		return resumeClock(this.branchRecord());
+		return this.clockPort().resume(this.branchRecord());
 	}
 
 	/** 1000 ms once this branch's deadline has passed, else null. */
 	toolTimeLimit() {
-		const record = this.branchRecord();
-		const deadline = record?.deadlineAt;
-		if (!Number.isFinite(deadline)) return null;
-		const now = Date.now();
-		if (now < deadline) {
-			// A tool started in normal time may run only up to the deadline
-			// plus the one-second chess-clock unit, so the effective limit is
-			// exactly deadline + 1s.
-			return deadline - now + 1000;
-		}
-		if (record.overtimeAt === null || record.overtimeAt === undefined) {
-			record.overtimeAt = now;
-		}
-		return 1000;
+		return this.clockPort().toolLimit(this.branchRecord());
 	}
 
 	/** Observed token density, clamped to a safe band. */
@@ -653,10 +659,6 @@ export class SessionStation {
 		return reconcileActualModel(this, ctx, req, outcome);
 	}
 
-	directAmend(toolCallId, params) {
-		return directAmend(this, toolCallId, params);
-	}
-
 	// -- Nudge -----------------------------------------------------------------
 
 	maybeNudge(message, ctx) {
@@ -727,11 +729,13 @@ export class SessionStation {
 			// Receipts are the only fold target. The projection shortens an old
 			// right bracket without removing its left bracket, so the structure
 			// of every fork stays readable and restorable.
-			const foldable = foldableReceipts(this.state.receipts);
+			const folding = this.registry?.implementations?.()?.folding ?? foldingOn();
+			const foldable = folding.foldable(this.state.receipts);
+			let collapsed = [];
 			if (foldable.length > 0) {
-				const folded = applyReceiptFolds(messages, this.state.receipts, { foldable });
+				const folded = folding.apply(messages, this.state.receipts, { foldable });
 				messages = folded.messages;
-				if (folded.collapsed.length > 0) this.settleReceiptFolds(folded.collapsed);
+				collapsed = folded.collapsed;
 			}
 			// `messages` is the outbound list: amends removed entries and
 			// collapses replaced whole intervals, so its length is not a
@@ -746,6 +750,10 @@ export class SessionStation {
 			messages = messages.map((message) =>
 				rewriteVibeMessage(message, this.registry?.ports?.() ?? {}),
 			);
+			// Commit: the projection is complete. Write the folds it used,
+			// then the host rebase and the usage snapshot. No ticket dispatch
+			// follows, so no ticket can observe a half-written state.
+			if (collapsed.length > 0) this.settleReceiptFolds(collapsed);
 			this.maybeRebase(ctx, messages);
 			if (key) {
 				this.usage.noteSentContext({
@@ -837,6 +845,7 @@ export class SessionStation {
 			open,
 			demandVisible,
 			ownerId !== null,
+			this.clockPort(),
 		);
 		return {
 			role: "developer",

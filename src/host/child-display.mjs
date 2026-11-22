@@ -355,12 +355,14 @@ function createActiveToolTray(getUi, current) {
 	};
 }
 
-export function scopeActivity(ledger, lastOwnerId, rootBusy) {
+export function scopeActivity(ledger, lastOwnerId, rootBusy, clock = null) {
 	let busy = Number(rootBusy);
 	let idle = Number(!rootBusy);
 	for (const id of ledger.order) {
 		const branch = forkOf(ledger, id);
-		if (branch?.status === RUNNING && branch.clockPausedAt == null) busy++;
+		const paused = branch?.clockPausedAt != null &&
+			(!clock || clock.info(branch).bounded !== false);
+		if (branch?.status === RUNNING && !paused) busy++;
 		else if (branch?.status === READY || branch?.status === RUNNING) idle++;
 	}
 	const lineage = [];

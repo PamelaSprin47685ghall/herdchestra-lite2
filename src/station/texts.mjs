@@ -37,14 +37,14 @@ export function handoffDemandVisible(relay, history) {
 
 const T = loadDoc("receipts/scope");
 
-function branchBudget(record) {
-	return forkBudgetText(record) || "none";
+function branchBudget(record, clock = null) {
+	return forkBudgetText(record, Date.now(), clock) || "none";
 }
 
-function amendText(applied, record = null) {
+function amendText(applied, record = null, clock = null) {
 	const refunded = Number.isInteger(applied.refunded) ? applied.refunded : 0;
 	const text = render(T["amend.undone"], { refunded });
-	return record ? `${text}\n${render(T["amend.remaining"], { budget: branchBudget(record) })}` : text;
+	return record ? `${text}\n${render(T["amend.remaining"], { budget: branchBudget(record, clock) })}` : text;
 }
 
 /** A steer when a branch tries to stop with unreceived work. */
@@ -52,11 +52,11 @@ export function insideScopeNudge(openCount) {
 	return render(T["scope.stop-blocked"], { count: openCount });
 }
 
-export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false, child = false) {
+export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false, child = false, clock = null) {
 	const isChild = child || branch !== null;
 	const lines = [];
 	if (isChild && branch) {
-		lines.push(render(T["receipt.branch"], { budget: branchBudget(branch) }));
+		lines.push(render(T["receipt.branch"], { budget: branchBudget(branch, clock) }));
 	}
 	if (openCount > 0) {
 		lines.push(render(T["scope.unreceived"], { count: openCount }));

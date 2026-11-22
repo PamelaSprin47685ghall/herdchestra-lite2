@@ -1,52 +1,39 @@
 // Folding port: the keep-list and the collapse decision.
 //
-// Two implementations. `on` accumulates notes and folds them through the amend
-// contract it is handed, so a beat that amend retired can never come back.
-// `off` folds nothing and keeps nothing; it still answers the same shape.
+// Two implementations. `on` projects the elder fork/join receipts through the
+// pure transcript helpers; `off` returns the messages untouched. The port
+// carries no state: the station owns `receipts` and `messages`, and the
+// projection is idempotent.
 //
-// The port never imports amend: the retired-key lookup arrives as `retired`,
-// a function the composition root passes in. That is the bill-split direction
-// in code, not in prose.
+// `foldable` answers the receipts a pass may shorten; `apply` answers the
+// projected messages and the ids it shortened. Both implementations answer the
+// same shape, so the station never branches on the port name.
 
-function refusal(code) {
-	return { ok: false, code, port: "folding" };
-}
+import { foldableReceipts } from "../../scope/receipts.mjs";
+import { applyReceiptFolds } from "../../transcript/collapse.mjs";
 
-/** `on`: accumulate notes, filter retired keys at fold time. */
+/** `on`: the real projection. */
 export function foldingOn() {
-	const notes = [];
 	return {
 		name: "on",
-		note(entry) {
-			if (!entry || typeof entry.key !== "string") return refusal("FOLDING_INVALID_ENTRY");
-			notes.push({ ...entry });
-			return { ok: true, accepted: notes.length };
+		foldable(receipts) {
+			return foldableReceipts(receipts);
 		},
-		fold({ retired = () => [] } = {}) {
-			const gone = new Set(retired());
-			const kept = notes.filter((entry) => !gone.has(entry.key));
-			const folded = notes.length - kept.length;
-			notes.length = 0;
-			return { ok: true, folded, dropped: [...gone].filter((key) => !kept.some((e) => e.key === key)) };
-		},
-		kept() {
-			return notes.map((entry) => entry.key);
+		apply(messages, receipts, options = {}) {
+			return applyReceiptFolds(messages, receipts, options);
 		},
 	};
 }
 
-/** `off`: the same methods, no accumulation, no rewrite. */
+/** `off`: nothing is foldable, nothing is rewritten. */
 export function foldingOff() {
 	return {
 		name: "off",
-		note() {
-			return { ok: true, accepted: 0 };
-		},
-		fold() {
-			return { ok: true, folded: 0, dropped: [] };
-		},
-		kept() {
+		foldable() {
 			return [];
+		},
+		apply(messages) {
+			return { messages, collapsed: [] };
 		},
 	};
 }

@@ -31,11 +31,44 @@ const nullTickets = {
 		changed ? { systemPrompt: prompt } : undefined,
 };
 
+/**
+ * Accept both the new `{ ports, implementations, onStation }` shape and the
+ * older flat table. The table holds names only; hooks and implementations are
+ * separate so `ports()` cannot leak them back into a domain check.
+ */
+function normalizePorts(input) {
+	const source = input && typeof input === "object" ? input : {};
+	const nested = source.ports && typeof source.ports === "object" && !Array.isArray(source.ports);
+	const table = nested ? { ...source.ports } : { ...source };
+	if (!nested) {
+		delete table.onStation;
+		delete table.onStationRefresh;
+		delete table.forkOptions;
+		delete table.implementations;
+	}
+	const implementations =
+		source.implementations &&
+		typeof source.implementations === "object" &&
+		!Array.isArray(source.implementations)
+			? { ...source.implementations }
+			: {};
+	return {
+		table,
+		implementations,
+		onStation: source.onStation,
+		onStationRefresh: source.onStationRefresh,
+		forkOptions: source.forkOptions,
+	};
+}
+
 export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog, ports = {}) {
+	const wiring = normalizePorts(ports);
 	// The resolved port table, decided once by the composition root. Domain code
 	// reads this instead of asking a switch, so there is exactly one place where
-	// "which implementation" is answered.
-	let resolvedPorts = { ...ports };
+	// "which implementation" is answered. Implementations are the object form of
+	// the same decision for the ports that have one.
+	let resolvedPorts = wiring.table;
+	let resolvedImplementations = wiring.implementations;
 	const stations = new WeakMap();
 	let orphanStation = null;
 	let pendingStation = null;
@@ -54,14 +87,14 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog,
 		try {
 			attachForkPorts(station, forkWiring, {
 				conversationKey: conversationKeyOf(ctx?.sessionManager ?? station.manager ?? null),
-				...(ports.forkOptions ?? {}),
+				...(wiring.forkOptions ?? {}),
 			});
 		} catch (error) {
 			// A station without ports still works: every fork call reports the
 			// missing capability instead of inventing a ledger.
 			station.noteError?.("fork", error);
 		}
-		ports.onStation?.(station, ctx ?? null);
+		wiring.onStation?.(station, ctx ?? null);
 	}
 
 	// The pending handoff belongs to one session. A `/new` or a session switch
@@ -81,15 +114,22 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog,
 
 	const registry = {
 		/** The port table chosen at startup; null until the wiring resolves it. */
-		setPorts(table) {
+		setPorts(table, implementations = null) {
 			if (table === null || typeof table !== "object") {
 				throw new TypeError("setPorts() expects the resolved port table");
 			}
 			resolvedPorts = { ...table };
-			return resolvedPorts;
+			if (implementations && typeof implementations === "object") {
+				resolvedImplementations = { ...implementations };
+			}
+			return { ...resolvedPorts };
 		},
 		ports() {
 			return { ...resolvedPorts };
+		},
+		/** Object implementations for the ports that have one. */
+		implementations() {
+			return { ...resolvedImplementations };
 		},
 		/**
 		 * The process-wide fork wiring. A station takes its ledger from here so
@@ -123,7 +163,7 @@ export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog,
 			// null forever. Give the composition root a cheap refresh every time
 			// the station is reached; the refresh only fills missing UI state.
 			try {
-				ports.onStationRefresh?.(station, ctx ?? null);
+				wiring.onStationRefresh?.(station, ctx ?? null);
 			} catch (error) {
 				station.noteError?.("activation", error);
 			}

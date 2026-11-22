@@ -45,6 +45,7 @@ export default [
 			sourceType: "module",
 		},
 		rules: {
+			"no-dupe-class-members": "error",
 			"no-restricted-syntax": [
 				"error",
 				stationRule,

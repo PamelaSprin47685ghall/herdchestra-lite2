@@ -11,7 +11,7 @@ import { childDisplayFor } from "../host/child-display.mjs";
 import { prepareChildContext } from "../host/branch-context.mjs";
 import { rememberSession, sessionFor } from "../host/capture.mjs";
 import { scopeTitle } from "../scope/scope-id.mjs";
-import { resolvePorts } from "../core/ports/resolve.mjs";
+import { buildPorts } from "./ports.mjs";
 
 /** The host's agent id for a context, or null. */
 function agentIdOf(ctx) {
@@ -40,13 +40,12 @@ export { installCapture };
  * different system than the one the user asked for.
  */
 export function resolveWiringPorts(env = process.env) {
-	const resolved = resolvePorts({}, env);
-	if (!resolved.ok) {
-		const detail = `the port switch is unusable: ${resolved.code} port=${resolved.port} wanted=${resolved.wanted ?? "default"} available=[${resolved.available.join(", ")}]`;
-		record("activation", new Error(detail), { port: resolved.port });
-		return { ok: false, ...resolved, detail };
+	const built = buildPorts(env);
+	if (built.ok) {
+		return { ok: true, ports: built.names, implementations: built.implementations };
 	}
-	return resolved;
+	record("activation", new Error(built.detail), { port: built.port });
+	return built;
 }
 
 export function wireExtension(pi, pricingCatalog, diagnosis = null, env = process.env) {
@@ -133,18 +132,16 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 			});
 	};
 	registry = createStationRegistry(pi, buildTickets(pi), pricingCatalog, {
-		...table,
+		ports: table,
+		implementations: ports.ok ? ports.implementations : {},
 		onStation: attachStation,
 		onStationRefresh: refreshStationUI,
 	});
-	if (!ports.ok) {
-		record("activation", new Error(ports.detail), { wiring: "ports" });
-	}
 	const hooks = wireHooks(pi, registry);
 	wireTools(pi, registry);
 	wireCommands(pi, registry);
 	wireHostDiagnosis(pi, diagnosis, hooks);
 	// The root needs the resolved table to decide whether the status widget
 	// exists at all; the decision stays here, not in the host renderer.
-	return { hooks, ports: ports.ok ? ports.ports : {}, registry };
+	return { hooks, ports: table, registry };
 }

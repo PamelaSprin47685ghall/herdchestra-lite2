@@ -91,6 +91,10 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 		ownerSession: owner,
 		prepareChild,
 		createSession,
+		// The spawn ticket lives in core. The termination hook must cross this
+		// binding, or bindHostForkPorts reads null and an accepted scope_return
+		// no longer ends the child at the tool-result boundary.
+		stopAfterReturn: options.stopAfterReturn ?? null,
 	};
 }
 

@@ -495,6 +495,56 @@ describe("two-phase attach", () => {
   });
 });
 
+describe("termination hook binding", () => {
+  test("resolveStationBinding forwards stopAfterReturn into the binding", async () => {
+    // The host passes the hook, the core spawn ticket reads it, and this
+    // binding is the only place the two meet. When the field was dropped here,
+    // an accepted scope_return no longer ended the child at the tool-result
+    // boundary and the host paid for one more model request.
+    const { resolveStationBinding } = await import(
+      "../host-omp/src/host/activation-binding.mjs"
+    );
+    const wiring = createForkWiring();
+    const stop = () => {};
+    const binding = resolveStationBinding(
+      { forkIdentityPort: () => null },
+      {},
+      wiring,
+      { stopAfterReturn: stop },
+    );
+    expect(binding.stopAfterReturn).toBe(stop);
+  });
+
+  test("the binding's hook reaches the child ticket ports", () => {
+    const wiring = createForkWiring();
+    const station = stationOf();
+    const stop = () => {};
+    let seen = null;
+    wiring.spawn = (spec, ports) => {
+      seen = ports;
+      return Promise.resolve();
+    };
+    wiring.bind(station, {
+      display: null,
+      identity: null,
+      conversationKey: "hook",
+      ownerSession: null,
+      prepareChild: null,
+      createSession: async () => ({ ok: true, session: sessionOf("done") }),
+      stopAfterReturn: stop,
+    });
+    registerFork(station.forkLedgerPort(), {
+      forkId: "f-hook",
+      ownerId: "root",
+      levelKey: "L",
+      intent: "x",
+      depth: 0,
+    });
+    station.childSpawnPort()(specFor("f-hook"));
+    expect(seen.stopAfterReturn).toBe(stop);
+  });
+});
+
 describe("child identity table", () => {
   test("an identity written before the spawn is visible by fork id", async () => {
     const {

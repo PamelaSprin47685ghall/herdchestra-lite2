@@ -2,6 +2,8 @@
 
 Replace the latest completed beat (one assistant message and its tool traffic) in your current scope. The next model request sees your reflection instead. Commands and edits already made stay in effect.
 
+Amend is Gauss polishing a proof: the theorem stays, the scaffolding goes. The files and commands that ran remain; the record keeps the clean derivation and why it changed.
+
 Amend is free and runs before ordinary calls in the same message, so you can use refunded budget immediately. Multiple amends replace one beat each. You cannot cross a scope boundary, replace a structural scope call, or amend a beat paid for by an outer scope.
 
 ## amend.reflection

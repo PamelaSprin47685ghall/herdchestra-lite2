@@ -329,7 +329,7 @@ function onSessionCompact(station, ctx) {
 function onBeforeAgentStart(station, event, ctx) {
 	const policy = station.policy(ctx);
 	const prompt = injectSystemPrompt(event?.systemPrompt, {
-		...(station.registry?.ports?.() ?? {}),
+		...station.portTable,
 		autopilot: station.state.autopilot === true,
 		branch: ownerIdOf(station) !== null,
 	});

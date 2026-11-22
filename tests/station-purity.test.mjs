@@ -7,8 +7,12 @@
 // fire-and-forget ticket: a rejection or a synchronous throw must reach the
 // diagnostics ring instead of becoming an unhandled promise rejection.
 
+import { readFileSync } from "node:fs";
+
 import { beforeEach, expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
+
+import { buildPorts } from "../src/activation/ports.mjs";
 
 import {
 	record,
@@ -193,4 +197,41 @@ test("the production entry injects the on port implementations by default", asyn
 	const { folding, clock } = wired.registry.implementations();
 	expect(folding.name).toBe("on");
 	expect(clock.name).toBe("on");
+});
+
+test("a station captures the port table once and freezes it", () => {
+	const station = stationWith({});
+	expect(Object.isFrozen(station.portTable)).toBe(true);
+	expect(station.portTable).toBe(station.registry.ports());
+});
+
+test("a station without a complete port table refuses to start", () => {
+	const built = buildPorts({});
+	let error;
+	try {
+		new SessionStation(
+			{ getSessionId: () => "s1", getBranch: () => [] },
+			{ getActiveTools: () => [] },
+			{},
+			{
+				ports: () => ({ relay: "handoff" }),
+				implementations: () => built.implementations,
+			},
+			null,
+		);
+	} catch (caught) {
+		error = caught;
+	}
+	expect(error?.code).toBe("MISSING_PORTS");
+	expect(error?.missing).toContain("folding");
+});
+
+test("station code reads the one port table, never registry.ports() per event", () => {
+	for (const file of ["gates.mjs", "models.mjs", "station.mjs"]) {
+		const source = readFileSync(
+			new URL(`../src/station/${file}`, import.meta.url),
+			"utf8",
+		);
+		expect(source).not.toMatch(/registry\?*\.ports\?*\(/);
+	}
 });

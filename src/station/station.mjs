@@ -48,6 +48,7 @@ import {
 	MAIN_AGENT,
 	READ_WRITE_SUBAGENT,
 } from "../core/policy.mjs";
+import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 import { handleAmendCall } from "./controls.mjs";
 import {
@@ -238,6 +239,14 @@ export class SessionStation {
 			(key) => !implementations?.[key],
 		);
 		if (missing.length > 0) throw missingPortsError(missing);
+		const portTable = registry?.ports?.();
+		const missingNames = PORT_NAMES.filter(
+			(name) => typeof portTable?.[name] !== "string",
+		);
+		if (missingNames.length > 0) throw missingPortsError(missingNames);
+		this.portTable = Object.isFrozen(portTable)
+			? portTable
+			: Object.freeze({ ...portTable });
 		this.ports = Object.freeze({
 			relay: implementations.relay,
 			clock: implementations.clock,
@@ -879,7 +888,7 @@ export class SessionStation {
 					original,
 					tree,
 					needsRebase,
-					ports: this.registry?.ports?.() ?? {},
+					ports: this.portTable,
 					modelKey: key,
 					header: key ? (this.host?.contextHeaderOf?.(ctx) ?? null) : null,
 				},

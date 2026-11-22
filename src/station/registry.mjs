@@ -65,10 +65,11 @@ function readWiring(input) {
 		error.code = "LEGACY_PORTS_SHAPE";
 		throw error;
 	}
-	const table =
+	const table = Object.freeze(
 		source.ports && typeof source.ports === "object" && !Array.isArray(source.ports)
 			? { ...source.ports }
-			: {};
+			: {},
+	);
 	const implementations = completeBundle(source.implementations);
 	return {
 		table,
@@ -136,9 +137,9 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 	}
 
 	const registry = {
-		/** The port table chosen at startup; null until the wiring resolves it. */
+		/** The one frozen table chosen at startup; every reader shares it. */
 		ports() {
-			return { ...resolvedPorts };
+			return resolvedPorts;
 		},
 		/** Object implementations for the ports that have one; frozen once. */
 		implementations() {

@@ -4,6 +4,7 @@
 // second factory in src/.
 
 import { buildPorts } from "../../src/activation/ports.mjs";
+import { PORT_NAMES } from "../../src/core/ports/registry.mjs";
 import { IMPLEMENTATION_KEYS } from "../../src/station/ports-contract.mjs";
 
 const ENV_NAME = {
@@ -15,7 +16,7 @@ const ENV_NAME = {
 	relay: "HERD_RELAY",
 };
 
-function complete(implementations) {
+function implementationsComplete(implementations) {
 	return (
 		implementations &&
 		typeof implementations === "object" &&
@@ -23,14 +24,22 @@ function complete(implementations) {
 	);
 }
 
-function bundleFor(names, env = {}) {
+function tableComplete(table) {
+	return (
+		table &&
+		typeof table === "object" &&
+		PORT_NAMES.every((name) => typeof table[name] === "string")
+	);
+}
+
+function builtFor(names, env = {}) {
 	const switches = { ...env };
 	for (const [port, key] of Object.entries(ENV_NAME)) {
 		if (typeof names?.[port] === "string") switches[key] = names[port];
 	}
 	const built = buildPorts(switches);
 	if (!built.ok) throw new Error(built.detail);
-	return built.implementations;
+	return built;
 }
 
 /**
@@ -38,7 +47,7 @@ function bundleFor(names, env = {}) {
  * station doubles that cannot run the constructor. Same table as production.
  */
 export function bindStationPorts(state, env = {}) {
-	const implementations = bundleFor(null, env);
+	const implementations = builtFor(null, env).implementations;
 	return Object.freeze({
 		relay: implementations.relay,
 		clock: implementations.clock,
@@ -51,19 +60,29 @@ export function bindStationPorts(state, env = {}) {
 
 /**
  * Construct a station with a complete bundle. A wiring double that already
- * carries the full bundle passes through unchanged (identity assertions stay
- * valid); a names-only double is completed from the same switches.
+ * carries both the full implementation bundle and the full name table passes
+ * through unchanged (identity assertions stay valid); a partial or names-only
+ * double is completed from the same switches.
  */
 export function createTestStation(Station, manager, pi, tickets, wiring, pricing) {
-	let registry = wiring;
-	if (!complete(registry?.implementations?.())) {
-		const names = registry?.ports?.() ?? null;
-		const provided = registry?.implementations?.() ?? {};
-		const implementations = Object.freeze({
-			...bundleFor(names),
-			...provided,
-		});
-		registry = { ...(registry ?? {}), implementations: () => implementations };
+	const providedTable = wiring?.ports?.() ?? null;
+	const providedImplementations = wiring?.implementations?.() ?? null;
+	if (
+		implementationsComplete(providedImplementations) &&
+		tableComplete(providedTable)
+	) {
+		return new Station(manager, pi, tickets, wiring, pricing);
 	}
+	const built = builtFor(providedTable);
+	const names = Object.freeze({ ...built.names, ...(providedTable ?? {}) });
+	const implementations = Object.freeze({
+		...built.implementations,
+		...(providedImplementations ?? {}),
+	});
+	const registry = {
+		...(wiring ?? {}),
+		ports: () => names,
+		implementations: () => implementations,
+	};
 	return new Station(manager, pi, tickets, registry, pricing);
 }

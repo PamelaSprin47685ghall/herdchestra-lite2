@@ -66,7 +66,7 @@ export function observeActualModel(station, ctx) {
 }
 
 export function queueModelSwitch(station, target, fallback, scopeId, recovery = false) {
-	if (station.registry?.ports?.().modelSwitch === "off") return;
+	if (station.portTable.modelSwitch === "off") return;
 	if (!target.spec || target.spec === fallback.spec) return;
 	station.pendingModelSwitch = {
 		command: `/switch ${target.spec}`,
@@ -82,7 +82,7 @@ export function queueModelSwitch(station, target, fallback, scopeId, recovery = 
 }
 
 export function takePendingModelSwitch(station, ctx) {
-	if (station.registry?.ports?.().modelSwitch === "off") return null;
+	if (station.portTable.modelSwitch === "off") return null;
 	if (station.modelSwitchInFlight) return null;
 	const recovery = station.state.modelRecovery;
 	if (!station.pendingModelSwitch && recovery) {

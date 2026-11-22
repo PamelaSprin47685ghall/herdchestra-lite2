@@ -18,10 +18,6 @@ Unreceived child results: {{count}}. Receive them with `scope_join`.
 
 Scope budget: {{budget}}.
 
-## receipt.branch-duty
-
-Fork child duty: complete the assigned slice, then return with `scope_return`.
-
 ## receipt.no-ledger
 
 Until the first `todo` write, fork with `permission: "ro"`.

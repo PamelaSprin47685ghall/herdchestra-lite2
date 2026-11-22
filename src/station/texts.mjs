@@ -55,9 +55,8 @@ export function insideScopeNudge(openCount) {
 export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false, child = false) {
 	const isChild = child || branch !== null;
 	const lines = [];
-	if (isChild) {
-		if (branch) lines.push(render(T["receipt.branch"], { budget: branchBudget(branch) }));
-		lines.push(T["receipt.branch-duty"]);
+	if (isChild && branch) {
+		lines.push(render(T["receipt.branch"], { budget: branchBudget(branch) }));
 	}
 	if (openCount > 0) {
 		lines.push(render(T["scope.unreceived"], { count: openCount }));

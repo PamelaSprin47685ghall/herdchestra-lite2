@@ -38,11 +38,9 @@ import {
 	ledgerFor,
 } from "../host/fork-registry.mjs";
 import {
-	filterAmends,
 	findAmendTarget,
 	findToolCallIndex,
 	lastStructuralCallId,
-	rewriteVibeMessage,
 	toolCalls,
 } from "../transcript/index.mjs";
 import {
@@ -79,7 +77,6 @@ import {
 	addReceipt,
 	attachReport,
 	createReceiptRecord,
-	markCollapsed,
 } from "../scope/receipts.mjs";
 import {
 	advanceRelayForHandoff,
@@ -102,7 +99,12 @@ import {
 	onToolCall,
 	prepareRequest,
 } from "./gates.mjs";
-import { controlsIn, processedKey, sameTail } from "./messages.mjs";
+import { controlsIn, processedKey } from "./messages.mjs";
+import {
+	projectContext,
+	settleReceipts,
+	shouldRebase,
+} from "./domain/context.mjs";
 import {
 	modelKey,
 	actualModel,
@@ -663,7 +665,7 @@ export class SessionStation {
 	maybeRebase(ctx, outbound) {
 		if (!this.anchor.needsRebase()) return;
 		const tree = this.contextMessages();
-		if (!sameTail(tree, outbound)) return;
+		if (!shouldRebase({ needsRebase: true, tree, outbound })) return;
 		if (setAgentMessages(ctx, tree)) this.anchor.clearRebase();
 	}
 
@@ -696,11 +698,10 @@ export class SessionStation {
 
 	/** Mark the receipts whose text the projection has shortened. */
 	settleReceiptFolds(closeToolCallIds) {
-		let receipts = this.state.receipts;
-		for (const id of Array.isArray(closeToolCallIds) ? closeToolCallIds : []) {
-			receipts = markCollapsed(receipts, id);
-		}
-		this.state.receipts = receipts;
+		this.state.receipts = settleReceipts(
+			this.state.receipts,
+			closeToolCallIds,
+		);
 	}
 
 	// -- Context transform (sync) -----------------------------------------------
@@ -709,46 +710,32 @@ export class SessionStation {
 		try {
 			const model = actualModel(ctx);
 			const key = modelKey(model);
-			let messages = filterAmends(original, this.state.amends);
-			// Receipts are the only fold target. The projection shortens an old
-			// right bracket without removing its left bracket, so the structure
-			// of every fork stays readable and restorable.
 			const folding = this.registry?.implementations?.()?.folding ?? foldingOn();
-			const foldable = folding.foldable(this.state.receipts);
-			let collapsed = [];
-			if (foldable.length > 0) {
-				const folded = folding.apply(messages, this.state.receipts, { foldable });
-				messages = folded.messages;
-				collapsed = folded.collapsed;
-			}
-			// `messages` is the outbound list: amends removed entries and
-			// collapses replaced whole intervals, so its length is not a
-			// position in the branch. The economics compare a cache's
-			// `cachedUntilPos` against branch indexes, so record the highest
-			// branch position the provider actually saw.
-			let outboundFrontier = -1;
-			for (const message of messages) {
-				const at = original.indexOf(message);
-				if (at > outboundFrontier) outboundFrontier = at;
-			}
-			messages = messages.map((message) =>
-				rewriteVibeMessage(message, this.registry?.ports?.() ?? {}),
+			const needsRebase = this.anchor.needsRebase();
+			const tree = needsRebase ? this.contextMessages() : null;
+			const projection = projectContext(
+				{ receipts: this.state.receipts, amends: this.state.amends },
+				{
+					original,
+					tree,
+					needsRebase,
+					ports: this.registry?.ports?.() ?? {},
+					modelKey: key,
+					header: key ? contextHeaderOf(ctx) : null,
+				},
+				{ folding },
 			);
 			// Commit: the projection is complete. Write the folds it used,
 			// then the host rebase and the usage snapshot. No ticket dispatch
 			// follows, so no ticket can observe a half-written state.
-			if (collapsed.length > 0) this.settleReceiptFolds(collapsed);
-			this.maybeRebase(ctx, messages);
-			if (key) {
-				this.usage.noteSentContext({
-					key,
-					messages,
-					header: contextHeaderOf(ctx),
-					frontier:
-						outboundFrontier >= 0 ? outboundFrontier + 1 : messages.length,
-				});
+			if (projection.collapsed.length > 0) {
+				this.state.receipts = projection.nextState.receipts;
 			}
-			return { messages };
+			if (projection.rebase && tree && setAgentMessages(ctx, tree)) {
+				this.anchor.clearRebase();
+			}
+			if (projection.usage) this.usage.noteSentContext(projection.usage);
+			return { messages: projection.messages };
 		} catch (error) {
 			this.noteError("context", error);
 			if (error?.code === "FOLD_ROLLBACK_FAILED") {

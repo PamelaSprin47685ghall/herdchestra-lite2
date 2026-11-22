@@ -147,9 +147,11 @@ describe("retired mechanisms stay retired", () => {
 		const activation = source("../src/activation/index.mjs");
 		expect(activation).toContain("prepareChildContext");
 		const wiring = source("../src/host/fork-wiring.mjs");
-		expect(wiring).toContain("ports.prepareChild");
-		expect(wiring.indexOf("ports.prepareChild")).toBeLessThan(
-			wiring.indexOf("await prompt(spec.receipt)"),
+		const spawn = source("../src/tools/fork-spawn-ticket.mjs");
+		expect(wiring).toContain("spawnChildTicket");
+		expect(spawn).toContain("ports.prepareChild");
+		expect(spawn.indexOf("ports.prepareChild")).toBeLessThan(
+			spawn.indexOf("await prompt(spec.receipt)"),
 		);
 	});
 });

@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  attachForkPorts,
-  createForkWiring,
-  spawnChildTicket,
-} from "../src/host/fork-wiring.mjs";
+import { attachForkPorts, createForkWiring } from "../src/host/fork-wiring.mjs";
+import { spawnChildTicket } from "../src/tools/fork-spawn-ticket.mjs";
 import {
   conversationKeyOf,
   ledgerFor,

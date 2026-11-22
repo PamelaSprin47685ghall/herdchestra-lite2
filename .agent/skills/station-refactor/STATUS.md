@@ -41,15 +41,14 @@ synchronous aggregate, Tickets own the awaits, and Wiring only composes.
   is mechanical through `src/host/activation-binding.mjs`, and the combined
   `attachForkPorts` exists only in `tests/helpers/fork-attach.mjs`.
 
-## Verification (2026-11-22, worktree and pre-commit candidate)
+## Verification (2026-11-22, committed HEAD `35bfc39`)
 
 - `bun test tests`: **988 pass / 0 fail**, 87 files, 3628 expect calls.
 - `bunx eslint .`: **0**.
 - `bun run smoke:relay`: **11/11**.
-- `git diff --check`: **0**.
-- The exact commit patch was applied first to a pristine `git archive HEAD`
-  tree; the full suite and smoke test passed there too, proving the commit is
-  green in isolation rather than only on top of the dirty worktree.
+- `git diff --check`: **0**; `git status --porcelain`: empty.
+- Verified in a pristine `git archive` copy of committed HEAD, so the numbers
+  do not depend on the dirty worktree.
 - Station host imports: only `src/station/registry.mjs` (the allowed composition
   bridge). ESLint allowlist: only that file.
 
@@ -66,7 +65,8 @@ synchronous aggregate, Tickets own the awaits, and Wiring only composes.
   documented; status recorded.
 - `366d8a0` Phase 7 status record: fork handlers pure, activation attach
   mechanical, combined `attachForkPorts` test-only.
-- Phase 8 (this commit): all Phase 1–7 code plus the in-flight fork-targets and
+- `35bfc39` Land the station refactor with feature ablation and the station
+  method. Contains all Phase 1–7 code plus the in-flight fork-targets and
   interruptible `scope_join` work. The two streams import each other
   (`src/scope/targets.mjs` is used by `fork-controls`, `domain/fork-join`,
   `fork-registry`, and transcript replay), so they land together; committing
@@ -80,4 +80,4 @@ synchronous aggregate, Tickets own the awaits, and Wiring only composes.
 - The combined `attachForkPorts` exists only in `tests/helpers/fork-attach.mjs`.
 - Ablation tests cover folding, clock, and relay; the dead `scope` port and the
   test-only feature modules are gone.
-- The working tree is clean and HEAD is the verified full refactor.
+- The working tree is clean and HEAD `35bfc39` is the verified full refactor.

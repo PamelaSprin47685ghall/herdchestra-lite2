@@ -12,7 +12,7 @@ import {
 	MAIN_AGENT,
 	READ_ONLY_SUBAGENT,
 	READ_WRITE_SUBAGENT,
-} from "../../../host-omp/src/host/policy.mjs";
+} from "../../../src/core/policy.mjs";
 import { decideToolCall } from "../../../src/station/domain/tool-call.mjs";
 
 const NORMAL_CALL = {
@@ -291,7 +291,7 @@ describe("ask and wait", () => {
 });
 
 describe("relay handoff", () => {
-	test("the root blocks every tool while a handoff is pending", () => {
+	test("the root blocks every tool except the receive while a handoff is pending", () => {
 		const decision = decide({
 			state: { autopilot: true, relay: { handoffPending: true } },
 			relay: { ownerId: null, handoffPending: true },
@@ -302,6 +302,17 @@ describe("relay handoff", () => {
 		expect(decision.controls.process).toBe(false);
 		expect(decision.charge).toBeNull();
 		expect(decision.persist).toBe(false);
+	});
+
+	test("the pending handoff still lets the root receive a child", () => {
+		const decision = decide({
+			state: { autopilot: true, relay: { handoffPending: true } },
+			relay: { ownerId: null, handoffPending: true },
+			call: { toolName: "scope_join", toolCallId: "call-join", input: {} },
+		});
+
+		expect(decision.verdict).toBe("allow");
+		expect(decision.block).toBeNull();
 	});
 
 	test("a child is not blocked by the root's pending handoff", () => {

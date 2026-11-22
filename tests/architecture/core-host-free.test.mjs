@@ -10,9 +10,25 @@ import { expect, test } from "bun:test";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import {
+	ENGINE_ONLY_HOST_KEYS,
+	HOST_CONTRACT,
+	TICKET_CONTRACT,
+} from "../../src/engine.mjs";
+import { shapeHost } from "../../src/station/station.mjs";
+
 const ROOT = join(import.meta.dir, "..", "..");
 const CORE = join(ROOT, "src");
 const HOST = join(ROOT, "host-omp");
+
+/** Source with comments and string literals removed: only code remains. */
+function codeOnly(source) {
+	return source
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/^\s*\/\/.*$/gm, "")
+		.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, "")
+		.replace(/\?\./g, ".");
+}
 
 function sourceFiles(dir) {
 	const out = [];
@@ -108,8 +124,8 @@ test("a symlinked dependency resolves to the repository root itself", () => {
 test("every published files entry exists in the package", () => {
 	// A `files` entry that names nothing is not harmless: it ships an empty
 	// promise, and `npm pack` silently omits whatever the entry was meant to
-	// carry. The host package used to declare `skills/` — a mirror the install
-	// script generates, absent from the repository.
+	// carry. The skills moved into the core's `resources/`, so the host package
+	// must not keep naming a `skills/` directory it no longer carries.
 	const offenders = [];
 	for (const pkgPath of [join(ROOT, "package.json"), join(HOST, "package.json")]) {
 		const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
@@ -119,4 +135,94 @@ test("every published files entry exists in the package", () => {
 		}
 	}
 	expect(offenders).toEqual([]);
+});
+
+test("the core exports exactly one value: the engine factory", () => {
+	const source = readFileSync(join(CORE, "index.mjs"), "utf8");
+	const statements = [...source.matchAll(/^\s*export\b.*$/gm)].map((match) => match[0].trim());
+	expect(statements).toEqual(['export { createEngine } from "./engine.mjs";']);
+});
+
+test("the host package takes exactly one symbol from the core", () => {
+	const names = [];
+	for (const file of sourceFiles(join(HOST, "src"))) {
+		const source = readFileSync(file, "utf8");
+		for (const match of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*"herdchestra-lite2"/g)) {
+			names.push(
+				...match[1]
+					.split(",")
+					.map((name) => name.trim())
+					.filter(Boolean),
+			);
+		}
+	}
+	expect(names).toEqual(["createEngine"]);
+});
+
+test("core never touches a session handle", () => {
+	// `ctx` may travel through the core as an opaque token. The first member
+	// access on it would name a host field, and every later rename in the host
+	// would become a silent break.
+	const offenders = [];
+	for (const file of sourceFiles(CORE)) {
+		for (const match of codeOnly(readFileSync(file, "utf8")).matchAll(/\bctx\s*[!.?]*\s*\.\s*[a-zA-Z_]/g)) {
+			offenders.push(`${file}: ${match[0].trim()}`);
+		}
+	}
+	expect(offenders).toEqual([]);
+});
+
+test("the host contract is closed: no core file reaches for an undeclared key", () => {
+	// The contract is the only thing that may grow. Without this scan the bag
+	// widens one convenient key at a time, and the "interface" becomes whatever
+	// the last patch needed.
+	const offenders = [];
+	for (const file of sourceFiles(CORE)) {
+		const code = codeOnly(readFileSync(file, "utf8"));
+		for (const match of code.matchAll(/\bhost\.([a-zA-Z_]+)\.([a-zA-Z_]+)/g)) {
+			const [, group, key] = match;
+			if (!HOST_CONTRACT[group]?.includes(key)) offenders.push(`${file}: host.${group}.${key}`);
+		}
+		for (const match of code.matchAll(/\btickets\.([a-zA-Z_]+)/g)) {
+			const [, key] = match;
+			if (!TICKET_CONTRACT.includes(key)) offenders.push(`${file}: tickets.${key}`);
+		}
+	}
+	expect(offenders).toEqual([]);
+});
+
+test("no contract entry is dead weight", () => {
+	// A key declared but never read is a promise to no one. Each group and each
+	// verb must be reached by at least one core file.
+	const code = sourceFiles(CORE)
+		.map((file) => codeOnly(readFileSync(file, "utf8")))
+		.join("\n");
+	for (const group of Object.keys(HOST_CONTRACT)) {
+		expect({ group, used: new RegExp(`\\bhost\\.${group}\\b`).test(code) }).toEqual({
+			group,
+			used: true,
+		});
+	}
+	for (const verb of TICKET_CONTRACT) {
+		expect({ verb, used: new RegExp(`\\btickets\\.${verb}\\b`).test(code) }).toEqual({
+			verb,
+			used: true,
+		});
+	}
+});
+
+test("the declared contract and the shape a station accepts are the same shape", () => {
+	// `shapeHost` is the gateway: it widens the old flat bag and returns the
+	// canonical grouped object. If a key exists on one side only, either a host
+	// supplies something no station reads, or a station reads something no host
+	// will supply.
+	const shaped = shapeHost({});
+	for (const group of Object.keys(HOST_CONTRACT)) {
+		const engineOnly = ENGINE_ONLY_HOST_KEYS[group] ?? [];
+		const declared = HOST_CONTRACT[group].filter((key) => !engineOnly.includes(key));
+		expect({ group, keys: Object.keys(shaped[group]).sort() }).toEqual({
+			group,
+			keys: [...declared].sort(),
+		});
+	}
 });

@@ -15,16 +15,21 @@ point. omp loads this package; the core is its dependency.
 | `src/activation/` | the composition root: ports, hooks, tools, commands, capture |
 | `src/host/` | every omp seam: capture, branch sessions, display, status, pricing, model adapters |
 | `src/host/host-tickets.mjs` | the tickets whose body is a host call: steer, prompt, tool activation, scoped model switch |
-| `src/host/fork-spawn-ticket.mjs` | child session creation |
-| `skills/` | generated at install by `sync:plugin` — a mirror of the core's skills, where the host discovers them. Not shipped in `files`: the repository has no such directory. |
+| `src/host/branch-session.mjs` | child session creation, over the shared SessionManager |
+
+Skills are not a host asset. The core carries them under `resources/skills/` and inlines every body into the managed system prompt.
 
 Everything else — stations, pure tickets, the scope ledger, relay, prompts,
 and the prompt documents under `resources/` — belongs to the core package and
 is imported by name:
 
 ```js
-import { createStationRegistry, forkTicket, loadDoc } from "herdchestra-lite2";
+import { createEngine } from "herdchestra-lite2";
 ```
+
+That is the whole dependency: the core hands back one engine (stations, tool
+catalog, scope read model, text renderer, ports, fork wiring) and takes the
+host's facts plus its async verbs.
 
 The core never imports this package. `tests/architecture/core-host-free.test.mjs`
 and the `no-restricted-imports` rule in `eslint.config.mjs` enforce both
@@ -33,13 +38,17 @@ core by relative path.
 
 ## Install
 
-The sync script materializes both packages into the host's plugin directory:
+Two modes, and `sync:plugin` refuses to blur them:
 
 ```
-bun run sync:plugin            # from the repository root
-bun run sync:plugin --check    # report drift only
+omp plugins link host-omp      # dev: this directory is the install
+omp plugins install <git-url>  # host-owned copy
+bun run sync:plugin            # report the install shape; writes only for --vendor
+bun scripts/sync-plugin.mjs --check
 ```
 
-That copies this package to `~/.omp/plugins/node_modules/herdchestra-host-omp`
-and the core to its `node_modules/herdchestra-lite2`. Restart the session
-afterward; omp loads the installed copy, not the working tree.
+A linked install is a symlink at this directory, so the source is live and the
+sync writes nothing. A host-owned `omp plugins install` is classified as an
+installed copy and is also left alone. Only an explicit `--vendor` run fills a
+real directory: this package at the target root, and the core under `node_modules/herdchestra-lite2`. Restart the session afterward;
+modules load at process start.

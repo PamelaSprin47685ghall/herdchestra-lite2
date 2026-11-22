@@ -14,7 +14,7 @@ import {
 	PORTS,
 } from "../../src/core/ports/registry.mjs";
 import { readSwitch, resolvePorts } from "../../src/core/ports/resolve.mjs";
-import { buildPorts } from "../../host-omp/src/activation/ports.mjs";
+import { buildPorts } from "../../src/core/ports/build.mjs";
 import { createStationRegistry } from "../../src/station/registry.mjs";
 
 const repo = new URL("../../", import.meta.url);

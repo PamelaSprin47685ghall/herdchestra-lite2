@@ -6,12 +6,12 @@
 import { describe, expect, test } from "bun:test";
 
 import { activate } from "../host-omp/src/main.mjs";
-import { createForkWiring } from "../host-omp/src/host/fork-wiring.mjs";
+import { createForkWiring } from "../src/scope/fork-wiring.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { registerFork } from "../src/scope/forkjoin.mjs";
 import { rememberSession } from "../host-omp/src/host/capture.mjs";
-import { identityOf } from "../host-omp/src/host/fork-registry.mjs";
+import { identityOf } from "../src/scope/fork-registry.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
 
 function managerOf(id = "ui-init") {
@@ -126,7 +126,7 @@ describe("station reuse after a cold attach", () => {
 		appendRequestMessages(ctx, user);
 
 		await emit(host.handlers, "before_agent_start", { systemPrompt: [] }, ctx);
-		const station = wired.registry.stationFor(ctx);
+		const station = wired.engine.station(ctx);
 		expect(station.displayPort()).toBeNull();
 
 		const ready = { ...ctx, hasUI: true, ui: uiOf() };
@@ -138,7 +138,7 @@ describe("station reuse after a cold attach", () => {
 		expect(typeof display.attach).toBe("function");
 		expect(typeof display.request).toBe("function");
 		// The second lookup must return the same station, now with a display.
-		expect(wired.registry.stationFor(ready)).toBe(station);
+		expect(wired.engine.station(ready)).toBe(station);
 	});
 });
 
@@ -223,7 +223,7 @@ async function coldStation(id) {
 	const session = sessionOf(manager);
 	const cold = { sessionManager: manager, hasUI: false };
 	const wired = await activate(host.pi, {});
-	const station = wired.registry.stationFor(cold);
+	const station = wired.engine.station(cold);
 	return { host, manager, session, wired, station };
 }
 
@@ -281,18 +281,18 @@ describe("a later context after a cold attach", () => {
 		const { wired, station, manager, session } = await coldStation("ui-init-explicit-session");
 		expect(station.displayPort()).toBeNull();
 		const ready = { sessionManager: manager, hasUI: true, ui: uiOf(), session };
-		expect(wired.registry.stationFor(ready)).toBe(station);
+		expect(wired.engine.station(ready)).toBe(station);
 		expect(station.displayPort()).not.toBeNull();
 	});
 
 	test("a headless later ctx does not clear an existing display", async () => {
 		const { wired, station, manager, session } = await coldStation("ui-init-headless");
 		const ready = { sessionManager: manager, hasUI: true, ui: uiOf(), session };
-		wired.registry.stationFor(ready);
+		wired.engine.station(ready);
 		const display = station.displayPort();
 		expect(display).not.toBeNull();
 		const headless = { ...ready, hasUI: false, ui: undefined };
-		expect(wired.registry.stationFor(headless)).toBe(station);
+		expect(wired.engine.station(headless)).toBe(station);
 		expect(station.displayPort()).toBe(display);
 	});
 });

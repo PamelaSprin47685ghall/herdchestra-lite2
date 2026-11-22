@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
 
-import { injectSystemPrompt, persistentOperatingSkill } from "../host-omp/src/host/prompts.mjs";
-import { wireTools } from "../host-omp/src/activation/tools.mjs";
+import { injectSystemPrompt, persistentOperatingSkill } from "../src/prompts/inject.mjs";
+import { inlinedSkills } from "../src/prompts/skills.mjs";
+import { wireTools } from "../src/tools/catalog.mjs";
 import { handoffDemand, applyLedgerEvaluation, beginGenerationAfterHandoff, createRelay } from "../src/relay/index.mjs";
 import { installContextPreparation } from "../host-omp/src/host/context-preparation.mjs";
 import { todoTicket } from "../src/tools/todo.mjs";
@@ -15,13 +16,15 @@ const chineseInstruction = /^.*强制以简体中文思考.*$/gm;
 const chineseRequirement = "强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。";
 
 for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
-	test(`the ${typeof hostPrompt === "string" ? "string" : "array"} system prompt stays compact when reinjected`, () => {
+	test(`the ${typeof hostPrompt === "string" ? "string" : "array"} system prompt stays idempotent when reinjected`, () => {
 		const prompt = injectSystemPrompt(hostPrompt);
 		const text = Array.isArray(prompt) ? prompt.join("\n") : prompt;
 		expect(injectSystemPrompt(prompt)).toEqual(prompt);
 		expect(text).toContain("Host instructions");
 		expect(text).toContain(persistentOperatingSkill);
-		expect(persistentOperatingSkill).toContain("skill://constitution");
+		expect(text).toContain(
+			inlinedSkills.find((skill) => skill.name === "constitution").body,
+		);
 		expect(persistentOperatingSkill.trim().split(/\s+/).length).toBeLessThanOrEqual(1300);
 		expect(text.match(chineseInstruction)).toHaveLength(1);
 
@@ -185,6 +188,10 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 	const station = createTestStation(SessionStation, manager, {}, {
 		canPrompt: true,
 		prompt: (text) => sent.push({ role: "user", content: text }),
+		invokeTool: () => ({
+			content: [{ type: "text", text: "Ledger empty." }],
+			details: { op: "init", phases: [] },
+		}),
 	}, registry, null);
 	station.state.autopilot = true;
 	const remove = installContextPreparation(session, { station, ctx });
@@ -288,10 +295,7 @@ for (const resultVisible of [true, false]) {
 	test(`todo transfer supplies one complete handoff demand when the tool result is ${resultVisible ? "visible" : "missing"}`, async () => {
 		const { station, ctx, commit, request } = relayRequest();
 		const params = { op: "init", list: [] };
-		const result = await todoTicket(station, params, {
-			...ctx,
-			invokeTool: () => ({ content: [{ type: "text", text: "Ledger empty." }], details: { op: "init", phases: [] } }),
-		});
+		const result = await todoTicket(station, params, ctx);
 		expect(demandCount([result])).toBe(1);
 		if (resultVisible) {
 			commit({ role: "assistant", content: [{ type: "toolCall", id: "todo-1", name: "todo", arguments: params }] });

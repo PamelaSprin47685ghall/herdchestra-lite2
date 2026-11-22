@@ -1,7 +1,7 @@
 // Station handoff state transitions. Pure synchronous functions.
 
 import { appendHandoffCompaction } from "../handoff/session.mjs";
-import { truncateForHostBoundary, openChildren, readyChildren } from "../scope/index.mjs";
+import { truncateForHostBoundary, unreceivedChildren } from "../scope/index.mjs";
 import { childReturnNudge } from "../scope/return-nudge.mjs";
 import {
 	collectUserPrompts,
@@ -70,14 +70,14 @@ function advanceRelayForHandoff(station, options = {}) {
  * a returned child that no join has taken are both unreceived. A child branch
  * never evaluates the relay, so only the root counts here.
  */
-function unreceivedChildren(station) {
+function unreceivedRootChildren(station) {
 	const ownerId =
 		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
 	if (ownerId !== null) return 0;
 	const ledger =
 		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
 	if (!ledger) return 0;
-	return openChildren(ledger, "root").length + readyChildren(ledger, "root").length;
+	return unreceivedChildren(ledger, "root").length;
 }
 
 function recordLedgerEvaluation(station, phases, op, options = {}) {
@@ -87,7 +87,7 @@ function recordLedgerEvaluation(station, phases, op, options = {}) {
 		phases,
 		op,
 		options,
-		unreceived: unreceivedChildren(station),
+		unreceived: unreceivedRootChildren(station),
 	});
 	const { commit, ...applied } = decision;
 	if (commit) {
@@ -130,6 +130,7 @@ function recordNaturalStop(station, ctx) {
 		isChild: isChild(station),
 		autopilot: station.state.autopilot,
 		owesLedger: relayPolicyOf(station).owesLedger(),
+		unreceived: unreceivedRootChildren(station),
 	});
 	if (!plan) return null;
 	const applied =
@@ -142,7 +143,7 @@ function recordNaturalStop(station, ctx) {
 	// The demand rides the prompt. If the next request cannot see it, the
 	// context receipt supplies it instead.
 	if (!station.deliverUserMessage(handoffDemand())) {
-		station.host?.record?.("handoff", new Error("the handoff demand could not be sent as a prompt"), {
+		(station.host?.report?.record ?? station.host?.record)?.("handoff", new Error("the handoff demand could not be sent as a prompt"), {
 			stage: "natural-stop-prompt",
 		});
 	}
@@ -199,7 +200,7 @@ function commitSelfHandoff(station, ctx, report) {
 		station.usage.lastTotalInput ?? 0,
 	);
 	if (!compacted && manager) {
-		station.host?.appendHistoryMessage?.(
+		station.host?.session?.appendHistory?.(
 			manager,
 			{
 				role: "custom",
@@ -221,12 +222,12 @@ function commitSelfHandoff(station, ctx, report) {
 	if (manager && typeof manager.buildSessionContext === "function") {
 		try {
 			const rebuilt = manager.buildSessionContext()?.messages;
-			if (Array.isArray(rebuilt)) station.host?.setAgentMessages?.(ctx, rebuilt);
+			if (Array.isArray(rebuilt)) station.host?.session?.setMessages?.(ctx, rebuilt);
 		} catch (error) {
 			// Keep existing agent messages if the rebuild fails, but record it:
 			// a silent miss leaves the successor reading the pre-handoff
 			// transcript while the branch already holds the compacted one.
-			station.host?.record?.("handoff", error, { stage: "rebuild-context" });
+			(station.host?.report?.record ?? station.host?.record)?.("handoff", error, { stage: "rebuild-context" });
 		}
 	}
 	return {

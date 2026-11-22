@@ -1,31 +1,46 @@
 #!/usr/bin/env bun
 /**
- * Copy both packages into the installed plugin directory.
+ * Install the plugin into the host's plugin directory.
  *
- * omp loads `~/.omp/plugins/node_modules/herdchestra-host-omp`, not this
- * working tree, and that package imports `herdchestra-lite2` by package name.
- * So the sync materializes two roots: the host package at the target root, and
- * the core package under the target's `node_modules/`.
+ * Three install shapes, and the script refuses to blur them:
  *
- *   bun run sync:plugin                    copy, then verify
- *   bun scripts/sync-plugin.mjs --check    report drift, change nothing
+ * - **link** (`omp plugins link`): the installed path is a symlink at this
+ *   working tree. The tree *is* the plugin, so the script prints the mode and
+ *   writes nothing.
+ * - **installed copy** (`omp plugins install <url>`): a real directory the host
+ *   owns. It was installed and resolved by the host's own package manager, so
+ *   the script treats it as read-only and says so.
+ * - **vendor target**: a real directory this script was asked to fill. Only an
+ *   explicit request selects it, because writing into a directory the host
+ *   installed is how a sync once overwrote the repository's own package.json.
+ *   The host package imports `herdchestra-lite2` by package name, so a vendor
+ *   target gets two roots: the host package at the target root, and the core
+ *   package under the target's `node_modules/`.
+ *
+ *   bun run sync:plugin                      report the mode; write only for a vendor target
+ *   bun scripts/sync-plugin.mjs --vendor     install/refresh a copy, then verify
+ *   bun scripts/sync-plugin.mjs --check      report mode and drift, change nothing
  *   HERDCHESTRA_PLUGIN_DIR=/path bun run sync:plugin
+ *   HERDCHESTRA_SYNC=vendor bun run sync:plugin
  *
- * Exit code is 0 only when every runtime file matches and the installed build
- * carries the current feature fingerprints.
+ * Exit code is 0 only when the install is inspectable and consistent: a link is
+ * in sync by construction, an installed copy is not this script's to police,
+ * and a vendor target must match the tree after the copy.
  */
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const HOST_ROOT = join(ROOT, "host-omp");
@@ -40,17 +55,18 @@ const CORE_INSTALL = "node_modules/herdchestra-lite2";
  * package.json to sanitize there, plus the directories to prune.
  *
  * The core must own `resources/`: prompts resolve relative to
- * `src/prompts/index.mjs`, two levels up. The host package is the extension
- * entry, so it owns the root `package.json` and the `skills/` the host
- * discovers; those skills stay single-sourced in the core and are mirrored
- * here by the `mirrorSkills` unit.
+ * `src/prompts/index.mjs`, two levels up, and the six skills live under
+ * `resources/skills/` so the core can inline their bodies into the system
+ * prompt. The host package is the extension entry, so it owns the root
+ * `package.json`. Skills are no longer a host asset; a stale plugin-root
+ * `skills/` from an older vendor copy is removed below.
  */
 const UNITS = [
   {
     name: "core",
     source: ROOT,
     dest: CORE_INSTALL,
-    dirs: ["src", "resources", "skills"],
+    dirs: ["src", "resources"],
     stripPackageKeys: ["devDependencies", "scripts", "repository", "keywords"],
   },
   {
@@ -60,26 +76,22 @@ const UNITS = [
     dirs: ["src"],
     stripPackageKeys: ["dependencies", "repository", "keywords"],
   },
-  {
-    name: "skills-mirror",
-    source: join(ROOT, "skills"),
-    dest: "skills",
-    dirs: ["."],
-    stripPackageKeys: null,
-  },
 ];
 
 const FINGERPRINTS = [
   { root: CORE_INSTALL, file: "src/relay/texts.mjs", needle: "status.flow", min: 1 },
   { root: CORE_INSTALL, file: "src/relay/texts.mjs", needle: 'case "reopened"', min: 1 },
   // The scope protocol is the four fork/join/return/panhandle tools. The
-  // receipt chain is gone, so no needle may depend on it.
-  { root: "", file: "src/activation/tools.mjs", needle: 'name: "scope_fork"', min: 1 },
-  { root: "", file: "src/activation/tools.mjs", needle: 'name: "scope_join"', min: 1 },
-  { root: "", file: "src/activation/tools.mjs", needle: 'name: "scope_return"', min: 1 },
-  { root: "", file: "src/activation/tools.mjs", needle: 'name: "scope_panhandle"', min: 1 },
+  // receipt chain is gone, so no needle may depend on it. The tool catalog
+  // lives in the core: the host package only loops over `engine.tools`.
+  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_fork"', min: 1 },
+  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_join"', min: 1 },
+  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_return"', min: 1 },
+  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_panhandle"', min: 1 },
 ];
 const checkOnly = process.argv.includes("--check");
+const vendorRequested =
+  process.argv.includes("--vendor") || process.env.HERDCHESTRA_SYNC === "vendor";
 
 function filesUnder(base, dir) {
   const abs = dir === "." ? base : join(base, dir);
@@ -135,6 +147,25 @@ function collectDrift() {
     }
   }
   return drift;
+}
+
+/**
+ * Directories an older vendor copy shipped where the current install no longer
+ * does: the plugin-root `skills/`, and the nested core `skills/` an older core
+ * copy carried. The current core keeps skills under `resources/skills/`.
+ */
+const LEGACY = ["skills", `${CORE_INSTALL}/skills`];
+
+function legacyLeftovers() {
+  const targetReal = realpathSync(TARGET);
+  return LEGACY.filter((rel) => {
+    const path = join(TARGET, rel);
+    if (!existsSync(path)) return false;
+    // Never follow a nested symlink out of the target: a development copy may
+    // link `node_modules/herdchestra-lite2` at this working tree.
+    const real = realpathSync(dirname(path));
+    return real === targetReal || real.startsWith(`${targetReal}${sep}`);
+  });
 }
 
 /** Files the target carries that the source no longer ships. */
@@ -196,38 +227,101 @@ function fingerprintProblems() {
   }).filter(Boolean);
 }
 
+/**
+ * The install comes in two shapes, and the sync owns only one of them.
+ *
+ * `omp plugin link` symlinks `TARGET` at this working tree: the tree is the
+ * plugin, so there is nothing to copy, nothing to fingerprint, and no file the
+ * sync may touch. Writing through that link is exactly what once rewrote the
+ * repository's own `package.json`; this guard makes that impossible.
+ *
+ * A real directory is a copy install, and the sync owns its contents.
+ */
+function classifyTarget() {
+  let stats;
+  try {
+    stats = lstatSync(TARGET);
+  } catch {
+    return { kind: "absent" };
+  }
+  if (!stats.isSymbolicLink()) return { kind: "copy" };
+  const real = realpathSync(TARGET);
+  return real === ROOT || real.startsWith(`${ROOT}${sep}`)
+    ? { kind: "link", real }
+    : { kind: "foreign-link", real };
+}
+
+const target = classifyTarget();
+
+if (target.kind === "link") {
+  console.log(`sync-plugin: link install -> ${target.real}`);
+  console.log("the working tree is the plugin; nothing to copy");
+  if (checkOnly) console.log("in sync (link install); nothing to check");
+  process.exit(0);
+}
+
+if (target.kind === "foreign-link") {
+  console.error(`sync-plugin: ${TARGET} links to ${target.real}, outside this repository`);
+  console.error("That link is not this script's to replace; point it at host-omp/ or remove it.");
+  process.exit(1);
+}
+
 if (!existsSync(TARGET)) {
-  // A fresh checkout has no host package yet: this package is private and is
-  // not in a registry, so the sync is the install. Create the target only when
-  // the host's plugin directory exists; a typo'd HERDCHESTRA_PLUGIN_DIR must
-  // still fail instead of materializing a plugin tree the host never scans.
-  if (!existsSync(dirname(TARGET))) {
+  if (!vendorRequested) {
     console.error(`sync-plugin: no installed plugin at ${TARGET}`);
-    console.error("Install it first, or set HERDCHESTRA_PLUGIN_DIR.");
+    console.error("Install it first: omp plugins install <url>, or omp plugins link from host-omp/.");
+    console.error("To fill a directory by hand, pass --vendor.");
+    process.exit(1);
+  }
+  // A fresh checkout has no host package yet: this package is private and is
+  // not in a registry, so the vendor request is the install. Create the target
+  // only when the host's plugin directory exists; a typo'd
+  // HERDCHESTRA_PLUGIN_DIR must still fail instead of materializing a plugin
+  // tree the host never scans.
+  if (!existsSync(dirname(TARGET))) {
+    console.error(`sync-plugin: no plugin directory at ${dirname(TARGET)}`);
+    console.error("Set HERDCHESTRA_PLUGIN_DIR to the host's plugin directory.");
     process.exit(1);
   }
   mkdirSync(TARGET, { recursive: true });
+  console.log(`vendor target created: ${TARGET}`);
+}
+
+if (!vendorRequested) {
+  console.log(`sync-plugin: installed copy at ${TARGET}`);
+  console.log("the host owns this directory; pass --vendor to fill it from this tree");
+  if (checkOnly) console.log("not a vendor target; nothing to check");
+  process.exit(0);
 }
 
 console.log(`sync-plugin: ${ROOT} -> ${TARGET}`);
 const drift = collectDrift();
 const extra = extraUnder();
+const legacy = legacyLeftovers();
 
 for (const { unit, rel } of drift) console.log(`  drift  ${join(unit.dest, rel)}`);
 for (const { unit, rel } of extra) console.log(`  extra  ${join(unit.dest, rel)}`);
+for (const rel of legacy) console.log(`  legacy ${rel}/`);
 
 if (checkOnly) {
   const problems = fingerprintProblems();
   for (const line of problems) console.log(`  stale  ${line}`);
-  if (drift.length === 0 && extra.length === 0 && problems.length === 0) {
+  if (drift.length === 0 && extra.length === 0 && legacy.length === 0 && problems.length === 0) {
     console.log("in sync; fingerprints ok");
   }
-  process.exit(drift.length === 0 && extra.length === 0 && problems.length === 0 ? 0 : 1);
+  process.exit(
+    drift.length === 0 && extra.length === 0 && legacy.length === 0 && problems.length === 0 ? 0 : 1,
+  );
 }
 
 if (extra.length > 0) {
   pruneAll(extra);
   console.log(`pruned ${extra.length} file(s)`);
+}
+
+for (const rel of legacy) {
+  rmSync(join(TARGET, rel), { recursive: true, force: true });
+  console.log(`removed legacy ${rel}/`);
 }
 
 if (drift.length > 0) {

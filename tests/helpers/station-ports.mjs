@@ -3,8 +3,9 @@
 // bundle built by the same `buildPorts` the extension uses, so there is no
 // second factory in src/.
 
-import { buildPorts } from "../../host-omp/src/activation/ports.mjs";
-import { createForkWiring } from "../../host-omp/src/host/fork-wiring.mjs";
+import { buildPorts } from "../../src/core/ports/build.mjs";
+import { record } from "../../host-omp/src/host/diagnostics.mjs";
+import { createForkWiring } from "../../src/scope/fork-wiring.mjs";
 import { PORT_NAMES } from "../../src/core/ports/registry.mjs";
 import { IMPLEMENTATION_KEYS } from "../../src/station/ports-contract.mjs";
 
@@ -29,18 +30,21 @@ function testForkWiring() {
 }
 
 export const testHostBag = {
-	managerOf: (ctx) => ctx?.sessionManager ?? null,
-	forkWiring: () => testForkWiring(),
-	branchOf: (ctx) => {
-		try {
-			const branch = ctx?.sessionManager?.getBranch?.();
-			return Array.isArray(branch) ? branch : [];
-		} catch {
-			return [];
-		}
+	session: {
+		managerOf: (ctx) => ctx?.sessionManager ?? null,
+		branch: (ctx) => {
+			try {
+				const branch = ctx?.sessionManager?.getBranch?.();
+				return Array.isArray(branch) ? branch : [];
+			} catch {
+				return [];
+			}
+		},
+		agent: (ctx) => ctx?.agent ?? null,
+		activeTools: () => [],
 	},
-	agentOf: (ctx) => ctx?.agent ?? null,
-	activeTools: () => [],
+	fork: { wiring: () => testForkWiring() },
+	report: { record },
 };
 
 const ENV_NAME = {

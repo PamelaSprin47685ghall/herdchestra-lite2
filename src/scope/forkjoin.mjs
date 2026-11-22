@@ -346,6 +346,84 @@ export function takeReady(ledger, options = {}) {
 }
 
 /**
+ * The nearest owner that can still take a result.
+ *
+ * A branch that returned, joined, failed, or was never started (blocked) can
+ * never call `scope_join` again. Work still addressed to it would sit in a
+ * queue nobody drains, and the child parked in `scope_return` would wait for
+ * a take that can never happen. Follow the current receiver chain one step at
+ * a time. An unknown owner is not provably dead (a test or a host may name a
+ * receiver this ledger does not carry), so it stays; a cycle has no live
+ * taker, so the root is the only safe destination.
+ */
+export function liveReceiverOf(ledger, ownerId) {
+  if (!isNonEmptyString(ownerId) || ownerId === "root") return "root";
+  const seen = new Set();
+  let current = ownerId;
+  while (current !== "root") {
+    if (!isNonEmptyString(current) || seen.has(current)) return "root";
+    seen.add(current);
+    const record = forkOf(ledger, current);
+    if (!record) return current;
+    // A record that names itself as receiver can never be taken by anyone.
+    if (record.ownerId === current) return "root";
+    if (record.status === RUNNING) return current;
+    const next = record.ownerId;
+    if (!isNonEmptyString(next)) return "root";
+    current = next;
+  }
+  return "root";
+}
+
+/**
+ * Move one fork's result to a new receiver. A running record has no queue
+ * entry yet; a ready one does, and its entry must follow the owner or the
+ * ready queue and the record disagree.
+ */
+export function adoptFork(ledger, forkId, toOwnerId) {
+  const record = forkOf(ledger, forkId);
+  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
+  if (!isNonEmptyString(toOwnerId)) {
+    return failure("INVALID_OWNER", "toOwnerId must be a non-empty string.");
+  }
+  if (record.ownerId === toOwnerId) return { ok: true, record, adopted: false };
+  if (record.status === READY) removeFromQueues(ledger, forkId);
+  record.reparentedFrom = record.ownerId;
+  record.ownerId = toOwnerId;
+  if (record.status === READY) queueFor(ledger, toOwnerId).push(forkId);
+  return { ok: true, record, adopted: true };
+}
+
+/**
+ * Rebuild the ready queues and point every ready result at a live receiver.
+ *
+ * A reload marks running children ready, and their stored owner may be a
+ * branch that returned or was joined before the process ended. Without this
+ * pass those results are restored into a queue no one will ever drain, and
+ * the parent's receive count never sees them.
+ */
+export function rehomeReadyResults(ledger) {
+  if (!ledger || !isPlainObject(ledger.forks)) return { moved: 0 };
+  let moved = 0;
+  for (const forkId of ledger.order ?? []) {
+    const record = forkOf(ledger, forkId);
+    if (!record || record.status !== READY || record.supersededAt) continue;
+    const receiver = liveReceiverOf(ledger, record.ownerId);
+    if (receiver === record.ownerId) continue;
+    record.reparentedFrom = record.ownerId;
+    record.ownerId = receiver;
+    moved += 1;
+  }
+  ledger.queues = {};
+  const ready = (ledger.order ?? [])
+    .map((forkId) => forkOf(ledger, forkId))
+    .filter((record) => record && record.status === READY && !record.supersededAt)
+    .sort((left, right) => (left.readySeq ?? 0) - (right.readySeq ?? 0));
+  for (const record of ready) queueFor(ledger, record.ownerId).push(record.forkId);
+  return { moved };
+}
+
+/**
  * Move one owner's unfinished children to another owner. The dying owner's
  * own ready results keep their place, so a grandparent always sees the parent
  * before the parent's children.
@@ -360,6 +438,12 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
   if (fromOwnerId === toOwnerId) {
     return failure("SAME_OWNER", "A fork cannot be reparented to its own owner.");
   }
+  // The named receiver may itself have returned by now. Hand the work to the
+  // nearest live branch instead of a queue that no join will ever drain.
+  const receiverId = liveReceiverOf(ledger, toOwnerId);
+  if (receiverId === fromOwnerId) {
+    return failure("SAME_OWNER", "A fork cannot be reparented to its own owner.");
+  }
   let moved = 0;
   for (const forkId of ledger.order) {
     const record = forkOf(ledger, forkId);
@@ -370,20 +454,20 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
     // run and never enter the ready queue.
     if (record.status !== RUNNING && record.status !== BLOCKED) continue;
     record.reparentedFrom = fromOwnerId;
-    record.ownerId = toOwnerId;
+    record.ownerId = receiverId;
     moved += 1;
   }
   // Ready results already queued for the dying owner follow the same edge.
   // They append behind the dying owner's own result, so a grandparent always
   // sees the parent before the parent's children.
   const source = queueFor(ledger, fromOwnerId);
-  const target = queueFor(ledger, toOwnerId);
+  const target = queueFor(ledger, receiverId);
   let transferred = 0;
   const remaining = [];
   for (const forkId of source) {
     const record = forkOf(ledger, forkId);
     if (record && record.status === READY) {
-      record.ownerId = toOwnerId;
+      record.ownerId = receiverId;
       target.push(forkId);
       transferred += 1;
       continue;
@@ -731,8 +815,10 @@ export function restoreLedgerChecked(value) {
     } else if (record.readySeq > out.receiveSeq) {
       out.receiveSeq = record.readySeq;
     }
-    queueFor(out, record.ownerId).push(record.forkId);
   }
+  // A stored owner may have returned before the process ended. Point those
+  // results at the nearest live receiver and rebuild the queues in one pass.
+  rehomeReadyResults(out);
   // A tree that cannot be addressed consistently is not a partial tree: a
   // queue entry without a fork, or a joined level entry out of order, makes
   // every later take guess. Refuse the snapshot as a whole, exactly as a

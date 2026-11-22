@@ -4,7 +4,9 @@
 // appears. The holder owns that lifecycle; the fork wiring only binds station
 // fields to it.
 
-import { record } from "./diagnostics.mjs";
+// The holder reports failures through an injected sink, so the core module
+// carries no host diagnostics dependency.
+function noReport() {}
 
 function isDisplayHolder(value) {
 	return value !== null && typeof value === "object" && "current" in value;
@@ -16,7 +18,7 @@ function resolveDisplay(value) {
 	return value;
 }
 
-function createDisplayHolder(initial = null) {
+function createDisplayHolder(initial = null, report = noReport) {
 	const listeners = new Set();
 	return {
 		current: initial ?? null,
@@ -30,7 +32,7 @@ function createDisplayHolder(initial = null) {
 				try {
 					listener();
 				} catch (error) {
-					record("fork", error, { phase: "display" });
+					report("fork", error, { phase: "display" });
 				}
 			}
 		},
@@ -42,9 +44,9 @@ function createDisplayHolder(initial = null) {
  * the caller; otherwise this binder owns a fresh holder. Pending child
  * sessions live here, not in the wiring.
  */
-export function createDisplayBinder({ display = null } = {}) {
+export function createDisplayBinder({ display = null, report = noReport } = {}) {
 	let sharedHolder = isDisplayHolder(display) ? display : null;
-	let holder = sharedHolder ?? createDisplayHolder(resolveDisplay(display));
+	let holder = sharedHolder ?? createDisplayHolder(resolveDisplay(display), report);
 	const pendingDisplay = new Map();
 	const waitingDisplay = new Set();
 	let unsubscribeDisplay = null;
@@ -68,7 +70,7 @@ export function createDisplayBinder({ display = null } = {}) {
 			entry.detach = port.attach?.(entry.label, entry.session) ?? null;
 			entry.attached = true;
 		} catch (error) {
-			record("fork", error, { phase: "display" });
+			report("fork", error, { phase: "display" });
 		}
 	}
 

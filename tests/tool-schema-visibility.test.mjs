@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { wireTools } from "../host-omp/src/activation/tools.mjs";
+import { wireTools } from "../src/tools/catalog.mjs";
 
 /**
  * The host mounts an enabled discoverable tool under `xd://` when that

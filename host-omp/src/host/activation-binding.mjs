@@ -1,3 +1,4 @@
+import { agentIdOf, conversationKeyOf } from "./identity-adapters.mjs";
 // Host-side binding for the composition root.
 //
 // The activation layer used to decide owner UI, child identity, display, and
@@ -9,16 +10,12 @@ import { createBranchSession, registerOwnerUI } from "./branch-session.mjs";
 import { prepareChildContext } from "./branch-context.mjs";
 import { childDisplayFor } from "./child-display.mjs";
 import { rememberSession, sessionFor } from "./capture.mjs";
-import {
-	agentIdOf,
-	conversationKeyOf,
-	identityForAgent,
-} from "./fork-registry.mjs";
-import { scopeTitle } from "herdchestra-lite2";
 import { planStationBinding } from "./domain/binding.mjs";
 
 function agentIdOfSession(session) {
-	const id = session?.agent?.id;
+	const id =
+		(typeof session?.getAgentId === "function" ? session.getAgentId() : null) ??
+		session?.agent?.id;
 	return typeof id === "string" && id !== "" ? id : null;
 }
 
@@ -37,7 +34,7 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 	const baseIdentity =
 		typeof station?.forkIdentityPort === "function" ? station.forkIdentityPort() : null;
 	const childIdentity =
-		baseIdentity ?? identityForAgent(forkWiring.registry, agentIdOf(ctx));
+		baseIdentity ?? forkWiring.identityForAgent(agentIdOf(ctx));
 	// The root interface is the only user-facing surface. Register it on the
 	// owner session so a fork's approval appears there, with the child's label,
 	// instead of a headless prompt nobody sees. A headless root keeps the honest
@@ -57,7 +54,9 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 				? childIdentity.display
 				: plan.displayKind === "owner"
 					? childDisplayFor(owner, ctx?.ui)
-					: null;
+					: ctx?.ui
+						? childDisplayFor(owner ?? ctx?.session ?? ctx, ctx.ui)
+						: null;
 	// The session id is the conversation key, not the manager object: a fork
 	// branch holds a per-branch manager proxy, and an object key would give
 	// parent and child two different ledgers.
@@ -72,10 +71,10 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 			? (spec) =>
 					createBranchSession({
 						session: spec.ownerSession ?? owner,
-						sessionManager: spec.sessionManager ?? station.manager ?? null,
+						sessionManager: spec.sessionManager ?? spec.manager ?? station.manager ?? null,
 						flowId: spec.agentId,
 						sourceToolCallId: spec.sourceToolCallId,
-						agentDisplayName: scopeTitle(spec.scopeId),
+						agentDisplayName: spec.scopeId,
 						ui: childIdentity ? null : (ctx?.ui ?? null),
 						// The selector was resolved by the station with the host's
 						// own model facade before any bracket was registered. Pass
@@ -104,7 +103,7 @@ export function refreshStationDisplay(station, ctx, forkWiring) {
 	if (!station || typeof station.setDisplayPort !== "function") return;
 	const owner = sessionFor(ctx);
 	if (!owner) return;
-	if (identityForAgent(forkWiring.registry, agentIdOf(ctx))) return;
+	if (forkWiring.identityForAgent(agentIdOf(ctx))) return;
 	if (ctx?.hasUI === false || !ctx?.ui) return;
 	// A context can carry the live session before the host reports it through
 	// the manager. Remember it so a later manager-only context still resolves

@@ -6,6 +6,7 @@ import { installContextPreparation } from "../host/context-preparation.mjs";
 import { wireProviderObservation } from "../host/provider-observer.mjs";
 import { installToolDispatch } from "../host/tool-dispatch.mjs";
 
+
 /**
  * The capture map is keyed by the session manager. A forked child has its own
  * manager proxy, so the identity must agree before the seam is installed. An
@@ -34,9 +35,12 @@ function dispatchSession(ctx) {
  * decision stops arriving, yet the extension still loads and the status line
  * looks healthy. That silence is the bug this return value closes.
  */
-export function wireHooks(pi, registry) {
+export function wireHooks(pi, engine) {
+	// A wiring may hand a full engine or a station-shaped double.
+	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
+	const stationForStop = (ctx) => (engine.stationForStop ?? engine.stationFor)(ctx);
 	const bindDispatch = (ctx) => {
-		const station = registry.stationFor(ctx);
+		const station = stationOf(ctx);
 		const session = dispatchSession(ctx);
 		installToolDispatch(
 			session,
@@ -47,9 +51,9 @@ export function wireHooks(pi, registry) {
 		if (session) installContextPreparation(session, { station, ctx });
 		return station;
 	};
-	wireProviderObservation(pi, registry);
+	wireProviderObservation(pi, engine);
 	pi.on("before_provider_request", (_event, ctx) => {
-		const station = registry.stationFor(ctx);
+		const station = stationOf(ctx);
 		station.noteScopeRequest?.();
 		station.beginRequestSample?.(Date.now());
 	});
@@ -68,7 +72,7 @@ export function wireHooks(pi, registry) {
 	if (!transitionsBound) {
 		try {
 			pi.on("message_end", (event, ctx) =>
-				registry.stationFor(ctx).onMessageEnd(event, ctx),
+				stationOf(ctx).onMessageEnd(event, ctx),
 			);
 			transitionsBound = true;
 		} catch {
@@ -82,7 +86,7 @@ export function wireHooks(pi, registry) {
 			pi.on("message_end", (event, ctx) => {
 				const message = event?.message;
 				if (message?.role !== "assistant") return;
-				registry.stationFor(ctx).onUsageMessage(message, ctx);
+				stationOf(ctx).onUsageMessage(message, ctx);
 			});
 		} catch (error) {
 			// Usage at message_end is optional only for providers that attach
@@ -104,7 +108,7 @@ export function wireHooks(pi, registry) {
 		);
 	}
 	pi.on("tool_call", (event, ctx) =>
-		registry.stationFor(ctx).onToolCall(event, ctx),
+		stationOf(ctx).onToolCall(event, ctx),
 	);
 	pi.on(
 		"context",
@@ -114,18 +118,18 @@ export function wireHooks(pi, registry) {
 		bindDispatch(ctx).onBeforeAgentStart(event, ctx),
 	);
 	pi.on("session_stop", (event, ctx) =>
-		registry.stationForStop(ctx).onSessionStop(ctx, {
+		stationForStop(ctx).onSessionStop(ctx, {
 			signal: event?.signal ?? null,
 			reason: event?.last_assistant_message?.stopReason ?? null,
 		}),
 	);
 	pi.on("session_switch", (event, ctx) => {
-		const result = registry.stationForStop(ctx).onSessionSwitch(event, ctx);
+		const result = stationForStop(ctx).onSessionSwitch(event, ctx);
 		bindDispatch(ctx);
 		return result;
 	});
 	pi.on("session_compact", (_event, ctx) =>
-		registry.stationFor(ctx).onSessionCompact(ctx),
+		stationOf(ctx).onSessionCompact(ctx),
 	);
 	return {
 		ok: transitionsBound,

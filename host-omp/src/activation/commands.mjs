@@ -3,6 +3,7 @@
 import { snapshot } from "../host/diagnostics.mjs";
 import { providerDiagnostics } from "../host/provider-observer.mjs";
 
+
 /** Render evidence on one line: compact JSON, or the value itself. */
 function compactDetail(detail) {
 	if (detail === undefined) return "";
@@ -13,16 +14,19 @@ function compactDetail(detail) {
 	}
 }
 
-export function wireCommands(pi, registry) {
+export function wireCommands(pi, engine) {
+	// A wiring may hand a full engine or a station-shaped double.
+	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
+	const stationForStop = (ctx) => (engine.stationForStop ?? engine.stationFor)(ctx);
 	pi.registerCommand?.("herd-autopilot", {
 		description: "Toggle autopilot: off is manual duty with ask; on is the fully automatic relay",
-		handler: async (args, ctx) => registry.stationFor(ctx).onAutopilotCommand(args),
+		handler: async (args, ctx) => stationOf(ctx).onAutopilotCommand(args),
 	});
 	pi.registerCommand?.("herd-diag", {
 		description: "Print the last host diagnostics",
 		handler: async (_args, ctx) => {
 			const entries = snapshot();
-			const reports = providerDiagnostics(registry.stationFor(ctx));
+			const reports = providerDiagnostics(stationOf(ctx));
 			if (entries.length === 0 && reports.length === 0) {
 				ctx?.ui?.notify?.("Herdchestra: no diagnostics recorded.", "info");
 				return "Herdchestra: no diagnostics recorded.";

@@ -90,11 +90,14 @@ export function decideToolCall({
 	}
 
 	// The pending-handoff gate belongs to the root. A child may share the
-	// root's relay state, but its tools are its own work.
+	// root's relay state, but its tools are its own work. `scope_join` is the
+	// one exception: a restored or raced ready record must remain receivable,
+	// and a gate that blocks the join would leave the child parked forever.
 	if (
 		relay.ownerId === null &&
 		state.autopilot === true &&
-		state.relay?.handoffPending === true
+		state.relay?.handoffPending === true &&
+		toolName !== "scope_join"
 	) {
 		return blocked(handoffToolBlockedReason(), {
 			process: false,

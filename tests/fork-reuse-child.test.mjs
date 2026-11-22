@@ -8,8 +8,8 @@ import {
   markReady,
   registerFork,
 } from "../src/scope/forkjoin.mjs";
-import { createForkRegistry } from "../host-omp/src/host/fork-registry.mjs";
-import { spawnChildTicket } from "../host-omp/src/host/fork-spawn-ticket.mjs";
+import { createForkRegistry } from "../src/scope/fork-registry.mjs";
+import { spawnChildTicket } from "../src/tools/spawn-ticket.mjs";
 
 function harness(returnAfterFirst = false) {
   const ledger = createBracketLedger();

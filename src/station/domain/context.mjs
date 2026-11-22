@@ -25,9 +25,9 @@ export function shouldRebase({ needsRebase, tree, outbound } = {}) {
 	return sameTail(tree, outbound);
 }
 
-export function projectContext(snapshot = {}, ctx = {}) {
+export function projectContext(snapshot = {}, input = {}) {
 	const amends = Array.isArray(snapshot.amends) ? snapshot.amends : [];
-	const original = Array.isArray(ctx.original) ? ctx.original : [];
+	const original = Array.isArray(input.original) ? input.original : [];
 	let messages = filterAmends(original, amends);
 
 	// `messages` is the outbound list: amends removed entries, so its length is
@@ -40,19 +40,19 @@ export function projectContext(snapshot = {}, ctx = {}) {
 		if (at > outboundFrontier) outboundFrontier = at;
 	}
 
-	const ports = ctx.ports && typeof ctx.ports === "object" ? ctx.ports : {};
+	const ports = input.ports && typeof input.ports === "object" ? input.ports : {};
 	messages = messages.map((message) => rewriteVibeMessage(message, ports));
 
 	const rebase = shouldRebase({
-		needsRebase: ctx.needsRebase === true,
-		tree: ctx.tree,
+		needsRebase: input.needsRebase === true,
+		tree: input.tree,
 		outbound: messages,
 	});
-	const usage = ctx.modelKey
+	const usage = input.modelKey
 		? {
-				key: ctx.modelKey,
+				key: input.modelKey,
 				messages,
-				header: ctx.header ?? null,
+				header: input.header ?? null,
 				frontier:
 					outboundFrontier >= 0 ? outboundFrontier + 1 : messages.length,
 			}

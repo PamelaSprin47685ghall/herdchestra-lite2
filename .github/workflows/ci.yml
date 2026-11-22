@@ -36,12 +36,15 @@ jobs:
         with:
           bun-version: "1.4.4"
       - run: bun install --frozen-lockfile
-      - name: Check out the verified omp host
+      - name: Check out the latest omp host
         uses: actions/checkout@v4
         with:
           repository: can1357/oh-my-pi
-          ref: 57771ae562b9345e0579bceb2d68d585e3e6927e
           path: .omp-host
+      - name: Resolve the latest host commit
+        id: host-rev
+        working-directory: .omp-host
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Install host dependencies
         working-directory: .omp-host
         run: bun install --frozen-lockfile
@@ -56,14 +59,14 @@ jobs:
             .omp-host/packages/natives/native/*.node
             .omp-host/packages/natives/native/index.js
             .omp-host/packages/natives/native/index.d.ts
-          key: omp-native-ubuntu24-${{ runner.arch }}-57771ae562b9345e0579bceb2d68d585e3e6927e-bun1.4.4-nightly2026-11-08-ci-${{ steps.native-target.outputs.filename }}
+          key: omp-native-ubuntu24-${{ runner.arch }}-${{ steps.host-rev.outputs.sha }}-bun1.4.4-nightly2026-11-08-ci-${{ steps.native-target.outputs.filename }}
       - name: Install native build dependencies
         if: steps.native-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev clang libclang-dev cmake ninja-build
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
-      - name: Build the native addon from the pinned host source
+      - name: Build the native addon from the latest host source
         if: steps.native-cache.outputs.cache-hit != 'true'
         working-directory: .omp-host
         run: bun run build:native

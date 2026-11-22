@@ -80,7 +80,7 @@ Still unreceived: {{remaining}}.
 
 ## return.tool
 
-Hand the record to the parent; the parent receives it with `scope_join`. Any unreceived child work transfers to that parent. Put your conclusions in your text: the record keeps what you said plus the bare names of the tools you called, so a result you never state is lost. The last receipt at your level is sealed in full.
+Hand the record to the parent; the parent receives it with `scope_join`. Any unreceived child work transfers to that parent, or to the nearest live receiver above it when the parent has already returned. Put your conclusions in your text: the record keeps what you said plus the bare names of the tools you called, so a result you never state is lost. The last receipt at your level is sealed in full.
 
 ## return.pending
 
@@ -89,3 +89,7 @@ Fork {{forkId}} queued for {{receiver}}; awaiting the parent's join.
 ## return.receipt
 
 Fork {{forkId}} has been handed to {{receiver}}.
+
+## return.superseded
+
+Fork {{forkId}} was superseded by a later generation of the same scope. Its record is closed; stop here.

@@ -110,7 +110,7 @@ export function compareBranchFrames(owner, config) {
  * The caller supplies the prefix after removing owner-only artifacts. This
  * check runs before provider conversion and does not establish a cache hit.
  */
-export function compareMessagePrefix(ownerPrefix, flowMessages) {
+function compareMessagePrefix(ownerPrefix, flowMessages) {
 	const valid = Array.isArray(ownerPrefix) && Array.isArray(flowMessages);
 	const owner = Array.isArray(ownerPrefix) ? ownerPrefix : [];
 	const flow = Array.isArray(flowMessages) ? flowMessages : [];
@@ -359,7 +359,7 @@ export function labelledUIContext(ui, label, headless = {}) {
  * its own meter is the writer. `stop()` samples once more, so the status bar
  * keeps the last reading between turns instead of going blank.
  */
-export function relayTokenRate({ ownerSession, flowSession, label = null } = {}) {
+function relayTokenRate({ ownerSession, flowSession, label = null } = {}) {
 	const ownerMeter = read(ownerSession, "tokenRate");
 	const flowMeter = read(flowSession, "tokenRate");
 	if (typeof ownerMeter?.seed !== "function" || typeof flowMeter?.rate !== "function") {
@@ -418,7 +418,7 @@ function loadSdkModule() {
  * Load the host factory once. A failed import stays failed: the module set is
  * fixed for the life of the process, and retrying only repeats side effects.
  */
-export function loadCreateAgentSession() {
+function loadCreateAgentSession() {
 	return loadSdkModule().then((module) =>
 		typeof module?.createAgentSession === "function" ? module.createAgentSession : null,
 	);

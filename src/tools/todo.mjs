@@ -31,9 +31,9 @@ function appended(native, text) {
 	};
 }
 
-function replayPhases(ctx) {
+function replayPhases(view) {
 	try {
-		const branch = ctx?.branch?.() ?? [];
+		const branch = view?.branch?.() ?? [];
 		for (let index = branch.length - 1; index >= 0; index -= 1) {
 			const entry = branch[index];
 			const message = entry?.type === "message" ? entry.message : entry?.message;
@@ -94,7 +94,7 @@ export async function todoTicket(station, params, ctx) {
 			errors["inherited-ledger-unviewed"],
 		);
 	}
-	if (typeof ctx?.invokeTool !== "function") {
+	if (typeof station.tickets?.invokeTool !== "function") {
 		return errorResult(
 			"TODO_NATIVE_UNAVAILABLE",
 			errors["todo-native-unavailable"],
@@ -103,7 +103,7 @@ export async function todoTicket(station, params, ctx) {
 
 	let native;
 	try {
-		native = await ctx.invokeTool(params);
+		native = await station.tickets.invokeTool(ctx, params);
 	} catch (error) {
 		return errorResult(
 			"TODO_NATIVE_FAILED",

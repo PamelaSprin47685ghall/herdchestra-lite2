@@ -39,6 +39,10 @@ const noForAwait = {
 
 export default [
 	{
+		// `src/scope/fork-registry.mjs` is the session-wide waiter: its Promises
+		// are what a ticket parks on, not a station method. Every other file in
+		// these three domains stays synchronous.
+		ignores: ["src/scope/fork-registry.mjs"],
 		files: ["src/station/**/*.mjs", "src/scope/**/*.mjs", "src/relay/**/*.mjs"],
 		languageOptions: {
 			ecmaVersion: 2024,

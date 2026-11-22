@@ -5,29 +5,9 @@
 // depending on the host adapter.
 
 import { loadDoc } from "./index.mjs";
+import { inlinedSkillsSection } from "./skills.mjs";
 
 const system = loadDoc("system");
-const vibe = loadDoc("vibe-mode");
-
-const vibeModeReplacements = [
-	{
-		from: "drive two worker CLIs",
-		to: vibe.workers,
-	},
-	{
-		from: "Run sessions concurrently — normally one `fast` and one `good` on different workstreams.",
-		to: vibe.concurrent,
-	},
-];
-
-export function rewriteVibeModeContext(content) {
-	if (typeof content !== "string") return content;
-	let text = content;
-	for (const { from, to } of vibeModeReplacements) {
-		text = text.split(from).join(to);
-	}
-	return text;
-}
 
 const systemPromptStart = "<!-- herdchestra-lite2:system-prompt v1 -->";
 const systemPromptEnd = "<!-- /herdchestra-lite2:system-prompt -->";
@@ -59,9 +39,13 @@ function persistentRulesBlock(options) {
 		.join("\n");
 }
 
-/** Build the managed block: persistent rules, then the mode-specific rules. */
+/**
+ * Build the managed block: persistent rules, the inlined skill bodies, then
+ * the mode-specific rules. The block is replaced between its markers on every
+ * injection, so a second call returns the same bytes instead of appending.
+ */
 function managedBlock(options = {}) {
-	const sections = [persistentRulesBlock(options)];
+	const sections = [persistentRulesBlock(options), inlinedSkillsSection];
 	const mode = modeRulesBlock(options);
 	if (mode !== "") sections.push(mode);
 	return `${systemPromptStart}\n${sections.join("\n\n")}\n${systemPromptEnd}`;

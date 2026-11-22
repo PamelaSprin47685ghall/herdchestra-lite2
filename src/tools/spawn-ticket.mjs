@@ -13,13 +13,13 @@ import {
 	outcomeOf,
 	pulse,
 	setOutcome,
-} from "./fork-registry.mjs";
-import { renderChildRecord } from "herdchestra-lite2";
-import { record } from "./diagnostics.mjs";
-import { publicScopeId, scopeTitle } from "herdchestra-lite2";
-import { forkOf } from "herdchestra-lite2";
-import { childReturnNudge } from "herdchestra-lite2";
-import { stopAfterScopeReturn } from "./branch-context.mjs";
+} from "../scope/fork-registry.mjs";
+import { renderChildRecord } from "../transcript/replay.mjs";
+import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
+import { forkOf } from "../scope/forkjoin.mjs";
+import { childReturnNudge } from "../scope/return-nudge.mjs";
+
+
 
 // A child that stops without scope_return submits nothing. The ticket asks it
 // to return; after this many refusals the child is recorded as failed, so a
@@ -67,6 +67,7 @@ export function writeFrozenOutcome(registry, forkId, outcome) {
  */
 export async function spawnChildTicket(spec, ports) {
 	const { registry, ledger, createSession } = ports;
+	const report = ports.report ?? null;
 	let session = null;
 	let failed = false;
 	let reason = null;
@@ -108,7 +109,7 @@ export async function spawnChildTicket(spec, ports) {
 				: detail
 					? `${base}: ${detail}`
 					: base;
-			if (cause) record("fork", cause, { forkId: spec.forkId, phase: "create" });
+			if (cause) report?.("fork", cause, { forkId: spec.forkId, phase: "create" });
 			writeOutcome({ record: "", failed: true, reason });
 			return finish();
 		}
@@ -121,12 +122,13 @@ export async function spawnChildTicket(spec, ports) {
 		try {
 			detachDisplay = ports.display?.attach?.(scopeTitle(publicScopeId(forkOf(ledger, spec.forkId))), session) ?? null;
 		} catch (error) {
-			record("fork", error, { forkId: spec.forkId, phase: "display" });
+			report?.("fork", error, { forkId: spec.forkId, phase: "display" });
 		}
 		// The host gives the child an agent id only once the session exists.
 		// Bind it now so the child's own station can resolve its fork and call
 		// scope_return; without this the child is nobody's child.
 		const childAgentId =
+			(typeof session?.getAgentId === "function" ? session.getAgentId() : null) ??
 			session?.agent?.id ?? session?.agentId ?? created.agentId ?? null;
 		if (typeof childAgentId === "string" && childAgentId !== "") {
 			bindAgent(registry, spec.forkId, childAgentId);
@@ -138,13 +140,13 @@ export async function spawnChildTicket(spec, ports) {
 		try {
 			const prepared = ports.prepareChild?.(session) ?? null;
 			if (prepared?.ok === false) {
-				record("fork", new Error(`child context preparation refused: ${prepared.code}`), {
+				report?.("fork", new Error(`child context preparation refused: ${prepared.code}`), {
 					forkId: spec.forkId,
 					phase: "child-context",
 				});
 			}
 		} catch (error) {
-			record("fork", error, { forkId: spec.forkId, phase: "child-context" });
+			report?.("fork", error, { forkId: spec.forkId, phase: "child-context" });
 		}
 		const before = messagesOf(session).length;
 		const prompt =
@@ -159,7 +161,7 @@ export async function spawnChildTicket(spec, ports) {
 			writeOutcome({ record: "", failed: true, reason });
 			return finish();
 		}
-		if (typeof session.agent?.abort === "function") detachTermination = stopAfterScopeReturn(session.agent);
+		if (typeof session.agent?.abort === "function") detachTermination = ports.stopAfterReturn?.(session.agent) ?? null;
 		// Requirements arrive in the ledger while the child works. The child
 		// has no inbox or session handle; it checks the ledger at each turn
 		// boundary, so a requirement never interrupts a running tool call.
@@ -227,12 +229,12 @@ export async function spawnChildTicket(spec, ports) {
 		writeOutcome({ record: "", failed: true, reason });
 		// A child that throws must not vanish: the reason is the only evidence
 		// the parent will ever see.
-		record("fork", error, { forkId: spec.forkId });
+		report?.("fork", error, { forkId: spec.forkId });
 		return finish();
 	} finally {
 		detachTermination?.();
 		if (created?.limitations?.length > 0) {
-			record("fork", new Error("limits"), {
+			report?.("fork", new Error("limits"), {
 				forkId: spec.forkId,
 				limits: created.limitations.length,
 			});

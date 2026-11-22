@@ -45,6 +45,7 @@ function stationWith(ledger, spawned) {
     state: createState(),
     forkLedgerPort: () => ledger,
     childSpawnPort: () => (spec) => spawned.push(spec),
+    host: { model: { query: (ctx) => ctx?.models ?? null } },
   };
 }
 
@@ -67,7 +68,7 @@ function forkOne(station, ctx, overrides = {}) {
         ],
       },
     },
-    { ctx },
+    { models: ctx?.models ?? null, ctx },
   );
 }
 
@@ -201,7 +202,7 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
           ],
         },
       },
-      { ctx: { models: hostModels() } },
+      { models: hostModels(), ctx: {} },
     );
     expect(out.isError).toBe(true);
     expect(out.details.index).toBe(1);

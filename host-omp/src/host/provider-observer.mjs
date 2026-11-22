@@ -82,7 +82,7 @@ function unavailable(reason, format = null) {
 }
 
 /** Project only the supported provider payload shapes seen at the host hook. */
-export function projectProviderRequest(payload, model) {
+function projectProviderRequest(payload, model) {
 	try {
 		const api = model?.api;
 		if (!APIS.has(api)) return { status: "unsupported", format: null, reason: "UNSUPPORTED_API" };
@@ -198,7 +198,7 @@ function firstDifference(before, after, comparison) {
 }
 
 /** Record one bounded, hash-only observation on the current station. */
-export function observeProviderRequest(station, event, ctx) {
+function observeProviderRequest(station, event, ctx) {
 	const previous = previousObservation(station);
 	const sequence = (previous?.sequence ?? 0) + 1;
 	const revision = historyRevision(station);
@@ -268,7 +268,7 @@ export function observeProviderRequest(station, event, ctx) {
  * The host emits this before consuming the response stream. It supplies no
  * reliable usage total or request-to-frame link, so do not invent either.
  */
-export function observeProviderResponse(station, event) {
+function observeProviderResponse(station, event) {
 	const report = Object.freeze({
 		layer: "provider",
 		source: "after_provider_response",
@@ -282,13 +282,16 @@ export function observeProviderResponse(station, event) {
 }
 
 /** Bind the real host events. Observer results must never replace payloads. */
-export function wireProviderObservation(pi, registry) {
+export function wireProviderObservation(pi, engine) {
 	// `observer=off` binds no provider hook: a disabled observer costs nothing
-	// and cannot change or record a request.
-	if (registry?.ports?.().observer === "off") return { installed: false };
+	// and cannot change or record a request. The table may arrive as a plain
+	// object (the engine) or as a reader (a composition double), so both
+	// shapes are accepted here.
+	const ports = typeof engine?.ports === "function" ? engine.ports() : engine?.ports;
+	if (ports?.observer === "off") return { installed: false };
 	pi.on("before_provider_request", (event, ctx) => {
 		try {
-			observeProviderRequest(registry.stationFor(ctx), event, ctx);
+			observeProviderRequest(engine.station(ctx), event, ctx);
 		} catch {
 			record("provider", "Provider payload observation unavailable", {
 				layer: "provider", source: "before_provider_request", reason: "OBSERVER_FAILED",
@@ -297,7 +300,7 @@ export function wireProviderObservation(pi, registry) {
 	});
 	pi.on("after_provider_response", (event, ctx) => {
 		try {
-			observeProviderResponse(registry.stationFor(ctx), event);
+			observeProviderResponse(engine.station(ctx), event);
 		} catch {
 			record("provider", "Provider response observation unavailable", {
 				layer: "provider", source: "after_provider_response", reason: "OBSERVER_FAILED",

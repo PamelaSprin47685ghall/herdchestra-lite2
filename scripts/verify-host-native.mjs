@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Select and verify the native addon for the pinned host checkout.
+// Select and verify the native addon for the current host checkout.
 import { appendFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";

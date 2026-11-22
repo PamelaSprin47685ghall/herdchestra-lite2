@@ -22,15 +22,22 @@ The three tools exist in every supported configuration. There is no `scope` tool
 
 The repository holds two packages. `herdchestra-host-omp` in `host-omp/` is the plugin: it declares `omp.extensions` and carries the omp wiring. Its only dependency, `herdchestra-lite2` at the repository root, is the host-agnostic core — ledgers, stations, tickets, prompts — and imports nothing from omp. Install once with `cd host-omp && bun install`; the core then resolves through `host-omp/node_modules/herdchestra-lite2`.
 
-omp loads the installed copy at `~/.omp/plugins/node_modules/herdchestra-host-omp`, not this working tree, so an edit here does not reach a running session by itself. After changing `src/`, `host-omp/src/`, or `resources/`:
+The boundary is one function in each direction. The core exports exactly `createEngine`; the host imports exactly that. The host hands `createEngine` its facts (five frozen groups: `session`, `model`, `accounting`, `fork`, `report`) and its verbs (the eight `tickets` capabilities), and receives one engine carrying the stations, the ready-to-register tool catalog, the scope read model, the text renderer, the resolved ports, and the fork wiring. Port assembly, the fork wiring, and the six tool bindings stay inside the core; the host never builds a table or an `execute`. The contract is code (`HOST_CONTRACT`, `TICKET_CONTRACT`, `ENGINE_ONLY_HOST_KEYS` in `src/engine.mjs`), and `tests/architecture/core-host-free.test.mjs` fails when a core file reaches outside it, when the core gains a second export, or when the host imports anything but `createEngine`.
+
+omp loads the installed plugin at `~/.omp/plugins/node_modules/herdchestra-host-omp`. Three shapes are possible, and only one of them belongs to `sync:plugin`:
 
 ```sh
-bun run sync:plugin                    # install both packages; the core lands under the plugin's node_modules
+omp plugins link host-omp              # dev: the working tree IS the install
+omp plugins install <git-url>          # host-owned copy, resolved by the host
+bun run sync:plugin                    # report the shape; write only for a vendor target
+bun scripts/sync-plugin.mjs --vendor   # fill a real directory from this tree
 bun scripts/sync-plugin.mjs --check    # report drift without copying
 bun run smoke:relay                    # check relay behavior in this working tree
 ```
 
-`sync:plugin` also mirrors the core `skills/` into the plugin root, because omp discovers skills from the package it loads, and removes the retired `herdchestra-lite2` plugin directory so the host cannot load two entries.
+With `omp plugins link`, `~/.omp/plugins/node_modules/herdchestra-host-omp` is a symlink at `host-omp/`, so every edit here is live after a restart — no sync step. `sync:plugin` detects that shape, prints `link install` and writes nothing; it also refuses to touch a link that points outside this repository. The six skills live in the core's `resources/skills/` and are inlined into the system prompt; the host package ships no `skills/` directory.
+
+With `omp plugins install <git-url>`, the host installs and resolves a copy under its own plugin directory. That directory is the host's, not this tree's, so `sync:plugin` classifies it as `installed copy` and writes nothing; refresh it by installing again. A `--vendor` run is the separate case: only an explicit `--vendor` (or `HERDCHESTRA_SYNC=vendor`) lets the script write a real directory — the host package at the target root, and the core under the target's `node_modules/herdchestra-lite2` (including `resources/skills/`). In that mode an edit here does not reach a running session until you sync again. `sync:plugin` never writes through a link, so it can no longer rewrite this repository's own `package.json`.
 
 Restart the session afterwards; modules load at process start. A `todo` result that shows a `Flow:` line comes from the current build, so a missing `Flow:` line means the session is still running an older copy.
 
@@ -38,7 +45,7 @@ Tests stay in the repository root and cover both packages: `bun test tests` runs
 
 ## Skills
 
-Guidance ships as ordinary omp skills under `skills/`. Direct execution needs no skill.
+Guidance ships as Markdown under `resources/skills/<name>/SKILL.md` in the core. `src/prompts/skills.mjs` reads all six at startup, strips the YAML frontmatter, and `src/prompts/inject.mjs` embeds every body in the managed system-prompt block. The host package ships no `skills/` directory, so no `skill://` read is needed. Direct execution needs no skill.
 
 | Skill | Question |
 |---|---|
@@ -49,7 +56,7 @@ Guidance ships as ordinary omp skills under `skills/`. Direct execution needs no
 | `skill-authoring` | How to split, name, and maintain a skill |
 | `tdd-crowdsource` | What and who: contracts, test seams, and a rolling dispatch plan |
 
-Read `skill://constitution` before work. Read `skill://prompt-craft` before changing model-facing text, `skill://skill-authoring` before creating or splitting a skill, and `skill://polish` before polishing an existing text. Read `skill://decision-framing` when the goal or limits are unclear. Read `skill://tdd-crowdsource` before writing code or tests.
+The inlined skills are authoritative: apply `constitution` before work, `prompt-craft` before changing model-facing text, `skill-authoring` before creating or splitting a skill, and `polish` before polishing an existing text. Apply `decision-framing` when the goal or limits are unclear, and `tdd-crowdsource` before writing code or tests.
 
 Red contracts may be written by the lead or delegated. As contracts become ready, pin the current dispatch plan instead of running Red, then start the corresponding Green slices without waiting for the rest. A child may pin unrun checks for its parent; only checks that ran count as verification. Keep design artifacts as skills under `.agent/skills/<name>/SKILL.md`.
 
@@ -141,11 +148,12 @@ checkout (`OMP_HOST`, default `~/Desktop/vibe/oh-my-pi`) and checks the two
 prototype seams this extension patches, the six registered tools, the host
 events it binds, and the append-only state log.
 
-A checkout whose native addon is older than its source cannot be imported.
-When `~/.omp/natives/<version>` already holds a matching prebuilt addon, the
-script borrows it and re-runs itself in a child process. CI sets
+A checkout whose native addon is older than its source may import and then
+fail on a symbol the newer source calls. Both smoke scripts read the addon's
+stamped build version and, when `~/.omp/natives/<version>` already holds a
+matching prebuilt addon, borrow it and re-run in a child process. CI sets
 `OMP_SMOKE_BORROW=0` and `OMP_SMOKE_STRICT=1`, builds the native addon from
-the pinned host source, and treats missing host capabilities as failures.
+the latest host source, and treats missing host capabilities as failures.
 
 `bun scripts/smoke-context.mjs` uses the same `OMP_HOST`. It runs the real
 Agent loop and ExtensionRunner with the host's mock model, for both `prompt()`
@@ -154,8 +162,10 @@ checks message order, stable prior prefixes, separate history arrays, and
 the absence of per-call markers on committed Skills. It makes no API calls
 and always fails if the host or its dependencies cannot load.
 
-CI pins the host to `57771ae562b9345e0579bceb2d68d585e3e6927e` and Bun
-`1.4.4`. A host upgrade should pass both smoke scripts before use.
+CI checks out the host's default branch (`latest`) and pins Bun `1.4.4`. A
+host upgrade should pass both smoke scripts before use; the native cache is
+keyed by the resolved host commit, so a new host rebuilds it instead of
+reusing an older addon.
 
 ## Model selection
 

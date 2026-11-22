@@ -2,15 +2,15 @@
 
 <skill version="1.0">Persistent operating rules
 
-Read `skill://constitution` before work; it is the standing stance. Load `skill://prompt-craft` before changing model-facing text; load `skill://skill-authoring` before creating or splitting a skill; load `skill://polish` before polishing an existing text.
+The `constitution` skill is inlined below and is the standing stance; apply it before work. Apply `prompt-craft` before changing model-facing text; apply `skill-authoring` before creating or splitting a skill; apply `polish` before polishing an existing text.
 
 ### Choose a workflow
 
 Choose by task nature. A refactor counts as development: for a feature, refactor, or design change, in principle submit a ledger. For operations, maintenance, diagnostics, or delivery, in principle do not submit one. Judge by the work and let that judgment override the default.
 
-Six skills ship with this plugin (constitution, decision-framing, polish, prompt-craft, skill-authoring, tdd-crowdsource). Load `skill://decision-framing` when the intended outcome or limits are unclear. The skills guide the work; the runtime enforces no stage gate.
+Six project skills are inlined below: constitution, decision-framing, polish, prompt-craft, skill-authoring, and tdd-crowdsource. Apply `decision-framing` when the intended outcome or limits are unclear. The skills guide the work; the runtime enforces no stage gate.
 
-Read `skill://tdd-crowdsource` before writing any code or test, including a one-line fix. The skill owns the acceptance goal, Red contracts, dispatch pin, and verification ownership.
+Apply `tdd-crowdsource` before writing any code or test, including a one-line fix. The skill owns the acceptance goal, Red contracts, dispatch pin, and verification ownership.
 
 For work larger than one context, leave continuable artifacts so the next generation can continue. Write design artifacts as `.agent/skills/<name>/SKILL.md` with YAML `name` and `description`, not under `docs/`. Put long detail in sibling files linked from the entry.
 

@@ -13,8 +13,9 @@
 
 import { errorResult, textResult } from "./results.mjs";
 import { PIN_INTERNAL_ERROR } from "../features/pin/index.mjs";
-import { levelKeyOf, ownerIdOf, returnAcceptedText, admitJoin } from "../station/fork-controls.mjs";
+import { levelKeyOf, ownerIdOf, returnAcceptedText, returnSupersededText, admitJoin } from "../station/fork-controls.mjs";
 import { loadDoc } from "../prompts/index.mjs";
+import { notifyWaiters, waitForJoin, waitForReady } from "../scope/fork-registry.mjs";
 
 const errors = loadDoc("errors");
 
@@ -39,8 +40,9 @@ export async function forkTicket(station, toolCallId, params, ctx, host = {}) {
 	} catch (error) {
 		return errorResult("FORK_INTERNAL_ERROR", String(error?.message ?? error));
 	}
-	if (!host.applyPendingModelSwitch) return result;
-	return await host.applyPendingModelSwitch(station, ctx, result);
+	const applyPending = station?.tickets?.applyPendingModelSwitch;
+	if (typeof applyPending !== "function") return result;
+	return await applyPending(station, ctx, result);
 }
 
 /**
@@ -55,7 +57,7 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 		if (first?.details?.code !== "NO_READY_CHILD") {
 			// A take closes one bracket. The child parked in scope_return is
 			// waiting for exactly that fact, so wake it before answering.
-			if (first?.details?.joined && wait) host.notifyWaiters?.(wait.registry);
+			if (first?.details?.joined && wait) notifyWaiters?.(wait.registry);
 			return first;
 		}
 		if (!wait) return first;
@@ -69,14 +71,14 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 				{ ownerId: ownerIdOf(station) },
 			);
 		}
-		if (!host.waitForReady) return first;
+		if (!waitForReady) return first;
 		const waited = await (async () => {
 			// The parent's own clock stops while it waits for a child. Hiring
 			// people does not spend the manager's personal time budget.
 			station.noteRootWait?.(1);
 			station.pauseBranchClock?.();
 			try {
-				return await host.waitForReady(wait.registry, wait.ledger, {
+				return await waitForReady(wait.registry, wait.ledger, {
 					ownerId: ownerIdOf(station),
 					levelKey: levelKeyOf(station),
 					signal,
@@ -101,10 +103,10 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 		// waitForReady already took the child. Rendering it here keeps the
 		// single take: calling executeJoin again would find an empty queue.
 		const taken = station.finalizeJoin(toolCallId, waited.fork, ctx);
-		if (taken?.details?.joined) host.notifyWaiters?.(wait.registry);
+		if (taken?.details?.joined) notifyWaiters?.(wait.registry);
 		return taken;
 	} catch (error) {
-		host.record?.("fork", error, { phase: "join", toolCallId, stack: error?.stack });
+		host?.report?.record?.("fork", error, { phase: "join", toolCallId, stack: error?.stack });
 		return errorResult("JOIN_INTERNAL_ERROR", String(error?.message ?? error));
 	}
 }
@@ -119,8 +121,8 @@ export async function returnTicket(station, toolCallId, params, ctx, signal = nu
 		const queued = station.executeReturn(toolCallId, params, ctx);
 		if (queued?.details?.awaitingReceipt !== true) return queued;
 		const wait = station.forkWaitPort?.() ?? null;
-		if (!wait || !host.waitForJoin) return queued;
-		host.notifyWaiters?.(wait.registry);
+		if (!wait || !waitForJoin) return queued;
+		notifyWaiters?.(wait.registry);
 		const waited = await (async () => {
 			// The child has finished its work. Waiting for the parent to take
 			// the record is not the child's own time, so its clock stops.
@@ -128,7 +130,7 @@ export async function returnTicket(station, toolCallId, params, ctx, signal = nu
 			// A child that has returned still waits for the parent to take the
 			// record, but its card is already settled.
 			try {
-				return await host.waitForJoin(wait.registry, wait.ledger, queued.details.forkId, {
+				return await waitForJoin(wait.registry, wait.ledger, queued.details.forkId, {
 					signal,
 				});
 			} finally {
@@ -137,6 +139,17 @@ export async function returnTicket(station, toolCallId, params, ctx, signal = nu
 		})();
 		if (!waited.ok) return errorResult(waited.code, waited.reason);
 		const { receiver, receiverText, scopeId } = queued.details;
+		if (waited.superseded === true) {
+			// The record is closed by reuse, not by a take. `accepted` is the
+			// host's terminal signal: the child stops here, and its frozen record
+			// stays history for the next generation.
+			return textResult(returnSupersededText(scopeId), {
+				...queued.details,
+				awaitingReceipt: false,
+				accepted: true,
+				superseded: true,
+			});
+		}
 		return textResult(returnAcceptedText(scopeId, receiverText ?? receiver), {
 			...queued.details,
 			awaitingReceipt: false,
@@ -168,7 +181,7 @@ export async function scopeContextTicket(station, toolCallId, params, host = {})
 	try {
 		return station.executeContext(toolCallId, args);
 	} catch (error) {
-		host.record?.("tickets", error, { kind: "scope_context", toolCallId });
+		host?.report?.record?.("tickets", error, { kind: "scope_context", toolCallId });
 		return errorResult(PIN_INTERNAL_ERROR, errors["pin-internal-error"]);
 	}
 }
@@ -181,7 +194,7 @@ export async function panhandleTicket(station, toolCallId, params, host = {}) {
 	try {
 		return station.executePanhandle(toolCallId, params);
 	} catch (error) {
-		host.record?.("tickets", error, { kind: "panhandle", toolCallId });
+		host?.report?.record?.("tickets", error, { kind: "panhandle", toolCallId });
 		return errorResult("PANHANDLE_INTERNAL_ERROR", errors["panhandle-internal-error"]);
 	}
 }

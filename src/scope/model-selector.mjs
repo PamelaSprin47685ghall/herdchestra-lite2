@@ -10,7 +10,7 @@
 // and the identity check below stops any split.
 
 /** Thinking levels the host accepts as a selector suffix. */
-export const THINKING_LEVELS = Object.freeze([
+const THINKING_LEVELS = Object.freeze([
   "off",
   "minimal",
   "low",

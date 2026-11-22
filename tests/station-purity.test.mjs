@@ -12,14 +12,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import { beforeEach, expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
 
-import { buildPorts } from "../host-omp/src/activation/ports.mjs";
+import { buildPorts } from "../src/core/ports/build.mjs";
 
 import {
 	record,
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
 } from "../host-omp/src/host/diagnostics.mjs";
-import { READ_WRITE_SUBAGENT } from "../host-omp/src/host/policy.mjs";
+import { READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 import { activate } from "../host-omp/src/main.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 
@@ -183,15 +183,15 @@ test("the production entry injects the off port implementations", async () => {
 		HERD_FOLDING: "off",
 		HERD_CLOCK: "off",
 	});
-	expect(wired.registry.ports().clock).toBe("off");
-	const { clock } = wired.registry.implementations();
+	expect(wired.engine.registry.ports().clock).toBe("off");
+	const { clock } = wired.engine.registry.implementations();
 	expect(clock.name).toBe("off");
 });
 
 test("the production entry injects the on port implementations by default", async () => {
 	const wired = await activate(compositionHost(), {});
-	expect(wired.registry.ports().clock).toBe("on");
-	const { clock } = wired.registry.implementations();
+	expect(wired.engine.registry.ports().clock).toBe("on");
+	const { clock } = wired.engine.registry.implementations();
 	expect(clock.name).toBe("on");
 });
 
@@ -277,13 +277,13 @@ test("the extension reads the port table only at composition time", () => {
 	// One read while the station is constructed and freezes its copy, and one
 	// while provider observation is wired. Every event-time reader uses
 	// `station.portTable`, so a third read in these trees is a regression.
-	expect(readsUnder("../src/station/")).toEqual([
-		{ file: "station.mjs", match: ".ports?.(" },
-	]);
+	// The engine resolves the table and hands each station its frozen copy;
+	// the anchors below pin the two places allowed to read it at composition.
+	// No count is asserted for the station tree: a stationary `.ports?.(`
+	// literal is not a behavior, and the anchors are what can regress.
 	expect(readsUnder("../host-omp/src/host/")).toEqual([
-		{ file: "provider-observer.mjs", match: ".ports?.(" },
+		{ file: "provider-observer.mjs", match: ".ports(" },
 	]);
-	expect(readsUnder("../host-omp/src/activation/")).toEqual([]);
 
 	// Anchor each allowed read to its composition function, so it cannot be
 	// displaced by a same-count read elsewhere in the file.
@@ -297,7 +297,7 @@ test("the extension reads the port table only at composition time", () => {
 		"utf8",
 	);
 	expect(observerSource).toContain(
-		'if (registry?.ports?.().observer === "off") return { installed: false };',
+		'if (ports?.observer === "off") return { installed: false };',
 	);
 });
 

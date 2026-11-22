@@ -30,10 +30,10 @@ const forkJoin = loadDoc("tools/fork-join");
 export const FORK_DESCRIPTION = forkJoin["fork.tool"];
 export const FORK_INTENT_DESCRIPTION = forkJoin["fork.intent"];
 export const FORK_BUDGET_DESCRIPTION = forkJoin["fork.budget"];
-export const FORK_TARGETS_DESCRIPTION = forkJoin["fork.targets"];
-export const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
-export const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
-export const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
+const FORK_TARGETS_DESCRIPTION = forkJoin["fork.targets"];
+const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
+const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
+const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
 export const JOIN_DESCRIPTION = forkJoin["join.tool"];
 export const RETURN_DESCRIPTION = forkJoin["return.tool"];
 

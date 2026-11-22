@@ -9,8 +9,8 @@ import { describe, expect, test } from "bun:test";
 import { executeJoin, executeReturn } from "../src/station/execute.mjs";
 import { renderJoinResult } from "../src/station/fork-controls.mjs";
 import { createProcessedLedger } from "../src/station/processed-ledger.mjs";
-import { joinTicket, returnTicket } from "../host-omp/src/host/host-tickets.mjs";
-import { createForkWiring } from "../host-omp/src/host/fork-wiring.mjs";
+import { joinTicket, returnTicket } from "../src/tools/tickets.mjs";
+import { createForkWiring } from "../src/scope/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
@@ -18,7 +18,7 @@ import {
   registerFork,
   takeReady,
 } from "../src/scope/forkjoin.mjs";
-import { notifyWaiters, pulse } from "../host-omp/src/host/fork-registry.mjs";
+import { notifyWaiters, pulse } from "../src/scope/fork-registry.mjs";
 
 function stateOf() {
   return {

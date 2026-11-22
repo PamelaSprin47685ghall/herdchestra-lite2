@@ -15,20 +15,20 @@ import { randomUUID } from "node:crypto";
 import {
 	adoptLedger,
 	createForkRegistry,
+	identityForAgent,
 	ledgerFor,
 	outcomeOf,
 	pulse,
 	setIdentity,
 	setOutcome,
 } from "./fork-registry.mjs";
-import { record } from "./diagnostics.mjs";
-import { createDisplayBinder } from "./child-display-holder.mjs";
-import { buildChildIdentity } from "./fork-identity.mjs";
-import { selectForkLedger } from "herdchestra-lite2";
+import { createDisplayBinder } from "../station/display-holder.mjs";
+import { buildChildIdentity } from "../station/domain/identity.mjs";
+import { selectForkLedger } from "../station/domain/fork-ledger.mjs";
 import {
 	spawnChildTicket,
 	writeFrozenOutcome,
-} from "./fork-spawn-ticket.mjs";
+} from "../tools/spawn-ticket.mjs";
 
 // One base attach and one host bind per station. The holder record lives on
 // the wiring object the composition root created, not in a module: a second
@@ -73,13 +73,13 @@ function bindForkPorts(station, { registry, ledger, identity }) {
  */
 export function attachBaseForkPorts(station, wiring, options = {}) {
 	if (!station || typeof station !== "object") {
-		const registry = wiring?.registry ?? createForkRegistry();
+		const registry = wiring?.registry ?? createForkRegistry(adapters);
 		return { registry, ledger: null, identity: null };
 	}
 	const existing = statesOf(wiring)?.get(station);
 	if (existing) return existing;
 
-	const registry = wiring?.registry ?? createForkRegistry();
+	const registry = wiring?.registry ?? createForkRegistry(adapters);
 	const identity =
 		options.identity && typeof options.identity === "object" ? options.identity : null;
 	const conversationKey = options.conversationKey ?? null;
@@ -100,11 +100,12 @@ export function attachBaseForkPorts(station, wiring, options = {}) {
 	// duplicate owner field: `forkOwnerId()` is the single owner seam.
 	bindForkPorts(station, { registry, ledger, identity });
 	const state = { registry, ledger, identity, phase: "base" };
+	if (!identity) wiring.ledger = ledger;
 	statesOf(wiring)?.set(station, state);
 	return state;
 }
 
-function spawnPortFor(station, base, binder, options) {
+function spawnPortFor(station, base, binder, options, wiring) {
 	if (typeof options.createSession !== "function") return undefined;
 	const createSession = options.createSession;
 	return () => (spec) => {
@@ -135,6 +136,8 @@ function spawnPortFor(station, base, binder, options) {
 			// before the UI is still attached when the port arrives.
 			display: { attach: binder.attachDisplay },
 			prepareChild: options.prepareChild ?? null,
+			report: (domain, error, detail) => wiring.report?.(domain, error, detail),
+			stopAfterReturn: options.stopAfterReturn ?? null,
 			// A finished spawn is a ledger change too. The parent's branch
 			// persists it, not the child's disappearing one.
 			persistLedger: () => station.persist?.(),
@@ -143,13 +146,15 @@ function spawnPortFor(station, base, binder, options) {
 					...input,
 					agentId,
 					ownerSession: options.ownerSession ?? null,
-					sessionManager: station.manager ?? null,
+					// The host factory reads `sessionManager`; the core passes the
+					// token as `manager`, so the boundary names its own key once.
+					manager: station.manager ?? null,
 				}),
 		};
 		// The receipt is returned in this beat, so the ticket must not be
 		// awaited here. The catch-all is the station's obligation.
-		spawnChildTicket(spec, ports).catch((error) => {
-			record("fork", error, { forkId: spec.forkId, phase: "ticket" });
+		(wiring.spawn ?? spawnChildTicket)(spec, ports).catch((error) => {
+			wiring.report?.("fork", error, { forkId: spec.forkId, phase: "ticket" });
 			writeFrozenOutcome(base.registry, spec.forkId, {
 				record: "",
 				failed: true,
@@ -190,7 +195,7 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 
 	// A holder passed in is shared with the parent; a port is wrapped in a
 	// fresh holder; null starts empty and accepts a late UI.
-	const binder = createDisplayBinder({ display: options.display });
+	const binder = createDisplayBinder({ display: options.display, report: (domain, error, detail) => wiring.report?.(domain, error, detail) });
 	station.displayPort = binder.currentDisplay;
 	station.setDisplayPort = (port) => binder.setDisplayPort(port);
 	station.noteRootWait = !base.identity
@@ -199,7 +204,7 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 	station.noteScopeRequest = base.ledger
 		? () => binder.currentDisplay()?.request(base.ledger, station.forkOwnerId?.() ?? null)
 		: null;
-	const spawn = spawnPortFor(station, base, binder, options);
+	const spawn = spawnPortFor(station, base, binder, options, wiring);
 	if (spawn) station.childSpawnPort = spawn;
 	if (base && typeof base === "object") {
 		base.binder = binder;
@@ -209,6 +214,21 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 }
 
 /** A fresh wiring: one registry and one station lifecycle for the process. */
-export function createForkWiring() {
-	return { registry: createForkRegistry(), states: new WeakMap() };
+export function createForkWiring(adapters = {}, bindings = {}) {
+	const wiring = {
+		registry: createForkRegistry(adapters),
+		states: new WeakMap(),
+		ledger: null,
+		report: bindings.report ?? null,
+		spawn: bindings.spawn ?? null,
+	};
+	// The two phases are methods on the object that owns their state: a second
+	// wiring cannot reach the first one's stations, and a caller never has to
+	// pass the wiring back to the module that made it.
+	wiring.attach = (station, options) => attachBaseForkPorts(station, wiring, options);
+	wiring.bind = (station, options) => bindHostForkPorts(station, wiring, options);
+	// Identity lookup needs the registry and nothing else. Exposing it on the
+	// wiring keeps ledger surgery out of the host package.
+	wiring.identityForAgent = (agentId) => identityForAgent(wiring.registry, agentId);
+	return wiring;
 }

@@ -5,12 +5,12 @@
 // or behaviour is on the object path; `names` keeps the resolved name for
 // reporting and domain checks. Do not invent a second table here.
 
-import { resolvePorts } from "herdchestra-lite2";
-import { createAmendOff, createAmendOn } from "herdchestra-lite2";
-import { createHerdOff, createHerdOn } from "herdchestra-lite2";
-import { createPinOff, createPinOn } from "herdchestra-lite2";
-import { relayImplementations } from "herdchestra-lite2";
-import { createClockOff, createClockOn } from "herdchestra-lite2";
+import { resolvePorts } from "./resolve.mjs";
+import { createAmendOff, createAmendOn } from "../../features/amend/index.mjs";
+import { createHerdOff, createHerdOn } from "../../features/herd/index.mjs";
+import { createPinOff, createPinOn } from "../../features/pin/index.mjs";
+import { relayImplementations } from "../../relay/policy.mjs";
+import { createClockOff, createClockOn } from "../../scope/clock.mjs";
 
 function detailOf(refusal) {
 	const available = Array.isArray(refusal.available) ? refusal.available.join(", ") : "";
@@ -53,8 +53,6 @@ export function buildPorts(env = process.env) {
 			},
 		},
 	};
-	// One table, built once. Freezing the bundle and the binders keeps a
-	// consumer from replacing an implementation behind the resolved switch.
 	for (const port of ["pin", "amend", "herd"]) {
 		Object.freeze(implementations[port]);
 	}

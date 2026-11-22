@@ -6,7 +6,7 @@
 // infinity. The caller decides what to do with an unproven case, and the
 // station keeps the ready result whenever admission refuses.
 
-export const DEFAULT_OUTPUT_RESERVE_TOKENS = 8192;
+const DEFAULT_OUTPUT_RESERVE_TOKENS = 8192;
 export const DEFAULT_SAFETY_MARGIN_TOKENS = 1024;
 
 function finiteCount(value) {

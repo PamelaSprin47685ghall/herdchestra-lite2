@@ -6,12 +6,12 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { wireTools } from "../host-omp/src/activation/tools.mjs";
+import { wireTools } from "../src/tools/catalog.mjs";
 import { createToolCallLedger } from "../src/station/domain/tool-call-ledger.mjs";
 import { executeContext } from "../src/station/execute.mjs";
 import { scopeContextParameters } from "../src/tools/descriptions.mjs";
 import { textResult } from "../src/tools/results.mjs";
-import { scopeContextTicket } from "../host-omp/src/host/host-tickets.mjs";
+import { scopeContextTicket } from "../src/tools/tickets.mjs";
 
 function registeredTools() {
 	const tools = new Map();

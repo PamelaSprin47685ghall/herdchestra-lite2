@@ -5,8 +5,8 @@ import { wireProviderObservation } from "../host-omp/src/host/provider-observer.
 import { installStatus } from "../host-omp/src/host/status.mjs";
 import { queueModelSwitch, takePendingModelSwitch } from "../src/station/models.mjs";
 import { SessionStation } from "../src/station/station.mjs";
-import { buildPorts } from "../host-omp/src/activation/ports.mjs";
-import { resolveWiringPorts } from "../host-omp/src/activation/index.mjs";
+import { buildPorts } from "../src/core/ports/build.mjs";
+import { createEngine } from "herdchestra-lite2";
 import { createStationRegistry } from "../src/station/registry.mjs";
 import { wireCommands } from "../host-omp/src/activation/commands.mjs";
 import { createState, deserializeState, serializeState } from "../src/scope/index.mjs";
@@ -245,7 +245,8 @@ test("one bare command toggles autopilot and sends optional text once", () => {
 
 test("a refused port switch throws at the composition root", () => {
 	// An empty table would wire every port to its fallback and hide the typo.
-	expect(() => resolveWiringPorts({ HERD_RELAY: "bogus" })).toThrow(
+	// The engine owns port resolution now, so the refusal surfaces there.
+	expect(() => createEngine({ host: {}, tickets: {}, env: { HERD_RELAY: "bogus" } })).toThrow(
 		/PORT_UNAVAILABLE port=relay wanted=bogus/,
 	);
 });

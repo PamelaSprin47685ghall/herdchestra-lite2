@@ -48,23 +48,27 @@ export const MAIN_AGENT = "main";
 export const READ_ONLY_SUBAGENT = "read-only-subagent";
 export const READ_WRITE_SUBAGENT = "read-write-subagent";
 
-function branchOf(ctx) {
-	try {
-		const branch = ctx?.branch?.();
-		return Array.isArray(branch) ? branch : [];
-	} catch {
-		return [];
-	}
+/**
+ * The only host-shaped value a station reads: `{ branch(), agent }`.
+ *
+ * `ctx` is an opaque token here; every field comes from the injected host bag,
+ * so a hostless station reads an empty branch and no agent instead of reaching
+ * into a host object.
+ */
+function sessionViewOf(ctx, host) {
+	return {
+		branch: () => host?.session?.branch?.(ctx) ?? [],
+		agent: host?.session?.agent?.(ctx) ?? null,
+	};
 }
 
-/** The newest session_init entry, or the runtime agent metadata fallback. */
-export function sessionInitFor(ctx) {
-	const branch = branchOf(ctx);
+function sessionInitFor(view) {
+	const branch = Array.isArray(view?.branch?.()) ? view.branch() : [];
 	for (let index = branch.length - 1; index >= 0; index -= 1) {
 		const entry = branch[index];
 		if (entry?.type === "session_init") return entry;
 	}
-	const agent = ctx?.agent;
+	const agent = view?.agent;
 	if (
 		agent &&
 		(agent.kind === "sub" ||
@@ -77,8 +81,8 @@ export function sessionInitFor(ctx) {
 }
 
 /** True when the branch carries the host's persisted session contract. */
-export function hasSessionInit(ctx) {
-	const branch = branchOf(ctx);
+export function hasSessionInit(view) {
+	const branch = Array.isArray(view?.branch?.()) ? view.branch() : [];
 	for (let index = branch.length - 1; index >= 0; index -= 1) {
 		if (branch[index]?.type === "session_init") return true;
 	}

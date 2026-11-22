@@ -6,6 +6,128 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — skills are inlined, not fetched
+
+- The six skills moved from `host-omp/skills/` to the core's
+  `resources/skills/`. `src/prompts/skills.mjs` loads them once, strips the
+  YAML frontmatter, and `src/prompts/inject.mjs` embeds every body in the
+  managed system-prompt block. Marker replacement keeps a second injection
+  byte-identical.
+- The persistent rules name the skills as inlined and no longer tell the model
+  to read `skill://constitution`, `skill://prompt-craft`,
+  `skill://skill-authoring`, `skill://polish`, or `skill://tdd-crowdsource`.
+- `herdchestra-host-omp` ships no `skills/` directory. `sync:plugin` drops the
+  host unit's `skills` copy and removes a stale plugin-root `skills/` left by
+  an older vendor install.
+
+### Fixed — a forked scope is a child again
+
+- The split's production host bag handed the core `session.agentId` (a string)
+  where the contract reads `session.agent(ctx)` (the identity object), and it
+  reimplemented `fork.identityForAgent` over a registry method the core never
+  exposed. Every child station therefore resolved no identity, treated itself
+  as root, and charged tools against a root that owns no budget.
+- `createEngine` now reuses the host's process-wide fork wiring instead of
+  creating one per engine. The host binds the extension again for every child
+  session; a per-engine registry hid the parent's fork records, ledger, and
+  waiter set from the child.
+- Identity lookup belongs to the core registry again. The host bag no longer
+  supplies a second `identityForAgent`, and `session.agent` returns the host's
+  `{ kind, id, depth }` object.
+- A fork identity now classifies its station as a writable subagent even when
+  the host's spawned session has no `session_init` and reports `kind: "main"`.
+- `conversationKeyOf` falls back to the manager object when a session has no
+  id, so unrelated id-less sessions cannot share one ledger.
+- The production host bag now supplies `model.query` (`ctx.models`); fork model
+  selection had no host facade to resolve against.
+- `tests/architecture/activation-bag.test.mjs` pins the production bag to the
+  contract, including a two-engine share of one wiring. The split's ratchet
+  compared only `shapeHost`, which is why the broken bag stayed green.
+
+### Changed — dependencies track the latest host
+
+- `eslint` is pinned to `10.15.0`, the latest release.
+- CI checks out the host's default branch instead of the pinned commit, and
+  keys the native cache by the resolved HEAD.
+- Both smoke scripts read the local addon's stamped build version before the
+  host import; when it differs from the host's package version, the shared
+  `scripts/host-native.mjs` borrows the installed matching addon. A 19.0.0
+  binary can import under a 19.1.0 source and fail later, which the
+  import-only fallback could not catch.
+
+### Fixed — a returned child always lands on a receiver that can join
+
+- `scope_return` resolves its receiver through the current adoption chain, so a
+  branch that already returned, joined, failed, or was never started hands the
+  result to the nearest live branch. Previously the record could be queued for
+  a branch that would never call `scope_join`, and the child stayed parked in
+  `scope_return` for the rest of the session.
+- `reparentOrphans` walks to the live receiver too, and a restore re-homes
+  every ready result whose stored owner disappeared. Reloading no longer
+  resurrects a return into an undrained queue.
+- A reused scope that supersedes a ready record wakes the parked child and
+  closes its return with an accepted superseded receipt instead of leaving it
+  waiting for a take that reuse cancelled.
+- The join nudge outranks every other nudge: a turn that ends with unreceived
+  children earns `scope_join`, at the root as well, even when the relay is off.
+  A natural stop with unreceived children arms no handoff and counts no empty
+  ledger; only a fully joined tree may submit either empty form. A pending
+  handoff no longer blocks `scope_join`, so a restored ready record can always
+  be received.
+- `appendAt` in `host-omp/src/host/branch-manager.mjs` is the synchronous leaf
+  scope again, not an array insert. Every flow append, read, and model-usage
+  write had failed with `entries.slice is not a function`, which also made
+  child creation fail.
+
+### Changed — one function across the package boundary
+
+- The core barrel shrinks from 94 named exports to one: `src/index.mjs` is
+  `export { createEngine }`. `host-omp` imports that symbol and nothing else;
+  `src/engine.mjs` owns port resolution, the fork wiring, the station
+  registry, the tool catalog, the scope read model, and the text renderer.
+- The host no longer hands the core a flat 24-key bag, a second `ticketHost`
+  bag, or a `capabilities(ctx)` probe. It hands five frozen fact groups
+  (`session`, `model`, `accounting`, `fork`, `report`; 27 keys) and eight
+  async verbs (`steer`, `prompt`, `activateTools`, `restoreScopedModel`,
+  `applyPendingModelSwitch`, `invokeTool`, `canSteer`, `canPrompt`).
+  `applyPendingModelSwitch` and the duplicated `record` leave the ticket
+  parameter path; `record` now exists once.
+- `fork-registry`, `fork-identity`, and `child-display-holder` move into the
+  core, together with the eight pure functions behind the child display
+  (`scopeActivity`, `stripToolCalls`, `assistantParts`, `partsText`,
+  `partsSignature`, `textBlocks`, `toolSummaryText`, `formatFallbackLine`).
+  The host keeps the session objects, the UI tray, the arbiter, and the
+  subscriptions. The scope ledger no longer crosses the boundary: the host
+  reads a frozen DTO from `engine.scopes` and never calls `forkOf`,
+  `markReady`, or `selectForkLedger`.
+- `HOST_CONTRACT`, `TICKET_CONTRACT`, and `ENGINE_ONLY_HOST_KEYS` are
+  executable declarations in `src/engine.mjs`. `core-host-free.test.mjs`
+  fails when a core file reads a key outside them, when the core gains a
+  second export, when the host imports anything but `createEngine`, when a
+  core line dereferences `ctx`, or when `shapeHost` and the contract drift
+  apart.
+
+### Fixed — the sync respects a linked install
+
+- `omp plugins link host-omp` is the development install: the plugin path is a
+  symlink at the working tree, so the tree *is* the plugin. `sync:plugin`
+  classifies the target first — a link into the repository prints `link
+  install` and writes nothing, a link outside it is an error, and only a real
+  directory is copied. This removes `materializeTarget`/`materializeCore`,
+  which deleted the user's link and, worse, let a "sanitized" core
+  `package.json` travel back through `link:..` and strip `scripts` and
+  `devDependencies` from the repository's own manifest.
+- `omp plugins install <git-url>` is the host's own install: the plugin path is
+  a real directory the host resolved, so the sync prints `installed copy` and
+  writes nothing. Filling a real directory from this tree is now an explicit
+  act — `--vendor` or `HERDCHESTRA_SYNC=vendor` — so an ordinary `bun run
+  sync:plugin` can never overwrite an install the host owns.
+- `host-omp/skills/` becomes the single source for the six shipped skills. The
+  host resolves a plugin's `skills/` directory and requires its realpath to stay
+  inside the plugin root, so `host-omp/skills -> ../skills` was skipped rather
+  than followed. The skills move into the host package; the core no longer
+  carries a `skills/` directory and the sync no longer mirrors one.
+
 ### Changed — the omp host layer is a package of its own
 
 - The host wiring and every omp-facing file move to `host-omp/`
@@ -23,9 +145,10 @@ All notable changes to this extension. The format follows
   `host-omp/src/host/host-tickets.mjs`, and `fork-spawn-ticket.mjs` moves to
   `host-omp/src/host/`.
 - `scripts/sync-plugin.mjs` installs two roots: the core under
-  `TARGET/node_modules/herdchestra-lite2`, the host package at `TARGET`, with
-  the core `skills/` mirrored to `TARGET/skills/`. It removes the retired
-  `herdchestra-lite2` plugin directory so the host cannot load two entries.
+  `TARGET/node_modules/herdchestra-lite2`, the host package at `TARGET`. The
+  host package owns `skills/`, so the copy carries the six skills without a
+  mirror step. It removes the retired `herdchestra-lite2` plugin directory so
+  the host cannot load two entries.
 
 ### Added — a repeated `scopeId` amends the existing scope
 

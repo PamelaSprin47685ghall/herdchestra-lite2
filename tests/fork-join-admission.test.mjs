@@ -21,7 +21,7 @@ import {
   takeReady,
 } from "../src/scope/forkjoin.mjs";
 import { handleJoinCall } from "../src/station/fork-controls.mjs";
-import { createForkRegistry, waitForReady } from "../host-omp/src/host/fork-registry.mjs";
+import { createForkRegistry, waitForReady } from "../src/scope/fork-registry.mjs";
 
 function ledgerWith(ids) {
   const ledger = createBracketLedger();

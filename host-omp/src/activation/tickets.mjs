@@ -2,9 +2,11 @@
 
 import {
 	activateToolsTicket,
+	applyPendingModelSwitch,
 	restoreScopedModelTicket,
 	sendSteerTicket,
 	sendUserMessageTicket,
+	switchModelTicket,
 } from "../host/host-tickets.mjs";
 import { record } from "../host/diagnostics.mjs";
 
@@ -27,7 +29,7 @@ function detach(start) {
 }
 
 export function buildTickets(pi) {
-	return {
+	return Object.freeze({
 		steer: (text) => detach(() => sendSteerTicket(pi, text)),
 		canSteer: typeof pi?.sendUserMessage === "function",
 		prompt: (text) => detach(() => sendUserMessageTicket(pi, text)),
@@ -35,5 +37,9 @@ export function buildTickets(pi) {
 		restoreScopedModel: restoreScopedModelTicket,
 		activateTools: (activeTools, prompt, changed) =>
 			activateToolsTicket(pi, activeTools, prompt, changed),
-	};
+		applyPendingModelSwitch: (station, ctx, result) =>
+			applyPendingModelSwitch(pi, station, ctx, result),
+		// The host token is opaque to the core: dereference it here, in the host.
+		invokeTool: (ctx, params) => ctx?.invokeTool?.(params),
+	});
 }

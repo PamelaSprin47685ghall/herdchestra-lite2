@@ -34,7 +34,7 @@ export function createHerdOff() {
 	};
 }
 
-export const HERD_IMPLEMENTATIONS = Object.freeze({
+const HERD_IMPLEMENTATIONS = Object.freeze({
 	on: createHerdOn,
 	off: createHerdOff,
 });

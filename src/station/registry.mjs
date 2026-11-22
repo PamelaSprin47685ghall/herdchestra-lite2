@@ -1,8 +1,58 @@
 // Station registry: one station per session manager, plus the active registry.
 
 import { PORT_NAMES } from "../core/ports/registry.mjs";
+import { identityForAgent } from "../scope/fork-registry.mjs";
 import { SessionStation } from "./station.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
+
+/**
+ * The registry takes the grouped `host` shape. A test double written against
+ * the older flat bag is widened here, in one place, so no station carries a
+ * second convention.
+ */
+function normalizeHost(host) {
+	const source = host && typeof host === "object" ? host : {};
+	if (source.session && source.report) return source;
+	const session = Object.freeze({
+		managerOf: source.managerOf,
+		conversationKey: source.conversationKeyOf,
+		branch: source.branchOf,
+		agent: source.agentOf,
+		activeTools: source.activeTools,
+		header: source.contextHeaderOf,
+		setMessages: source.setAgentMessages,
+		appendHistory: source.appendHistoryMessage,
+		abort: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
+	});
+	const model = Object.freeze({
+		of: source.modelOf,
+		thinkingOf: source.thinkingOf,
+		parseSpec: source.preparseModelSpec,
+		capabilities: source.capabilities,
+	});
+	return Object.freeze({
+		session,
+		model,
+		accounting: Object.freeze({
+			usage: source.usage,
+			pricing: source.pricing && {
+				...source.pricing,
+				emptyCatalog: source.createEmptyCatalog,
+			},
+		}),
+		fork: Object.freeze({
+			wiring: source.forkWiring,
+			attachBaseForkPorts: source.attachBaseForkPorts,
+			identityForAgent: source.identityForAgent,
+			agentIdOf: source.agentIdOf,
+			selectStopStation: source.selectStopStation,
+			sameManager: source.sameManager,
+			ledgerFor: source.ledgerFor,
+			adoptLedger: source.adoptLedger,
+		}),
+		report: Object.freeze({ record: source.record }),
+	});
+}
 
 /**
  * Read the one wiring shape the composition root sends:
@@ -55,7 +105,9 @@ function readWiring(input) {
  * reports the missing capability instead of failing the hook.
  */
 export function createStationRegistry(options = {}) {
-	const { host = {}, tickets, pricingCatalog = null } = options;
+	const { tickets, pricingCatalog = null } = options;
+	const host = normalizeHost(options.host);
+	const defaultAgentId = () => null;
 	if (
 		!tickets ||
 		typeof tickets.activateTools !== "function" ||
@@ -83,7 +135,7 @@ export function createStationRegistry(options = {}) {
 	// stations in different agents.
 	// The fork tree outlives one extension instance. The host owns the process
 	// singleton because it is a host-lifecycle fact, not a station fact.
-	const forkWiring = host.forkWiring?.() ?? null;
+	const forkWiring = options.forkWiring ?? host.fork?.wiring?.() ?? null;
 
 	/**
 	 * Give a freshly built station its fork ports, then let the composition
@@ -92,12 +144,15 @@ export function createStationRegistry(options = {}) {
 	 * registry sees.
 	 */
 	function attachStationPorts(station, ctx) {
-		const identity = host.identityForAgent?.(forkWiring?.registry, host.agentIdOf?.(ctx));
+		const identity = (host.fork?.identityForAgent ?? identityForAgent)(
+			forkWiring?.registry,
+			(host.fork?.agentIdOf ?? defaultAgentId)(ctx),
+		);
 		try {
-			host.attachBaseForkPorts?.(station, forkWiring, {
+			host.fork?.attachBaseForkPorts?.(station, forkWiring, {
 				identity,
-				conversationKey: host.conversationKeyOf?.(
-					host.managerOf?.(ctx) ?? station.manager ?? null,
+				conversationKey: host.session?.conversationKey?.(
+					host.session?.managerOf?.(ctx) ?? station.manager ?? null,
 				),
 				...(wiring.forkOptions ?? {}),
 			});
@@ -136,10 +191,10 @@ export function createStationRegistry(options = {}) {
 		 * every agent of one conversation pairs brackets against the same tree.
 		 */
 		forkWiring() {
-			return host.forkWiring?.() ?? null;
+			return forkWiring;
 		},
 		stationFor(ctx) {
-			const key = host.managerOf?.(ctx) ?? ctx ?? null;
+			const key = host.session?.managerOf?.(ctx) ?? ctx ?? null;
 			if (!key || (typeof key !== "object" && typeof key !== "function")) {
 				if (!orphanStation) {
 					orphanStation = new SessionStation(null, host, tickets, registry, pricingCatalog);
@@ -153,7 +208,7 @@ export function createStationRegistry(options = {}) {
 			let station = stations.get(key);
 			if (!station) {
 				station = new SessionStation(
-					host.managerOf?.(ctx) ?? null,
+					host.session?.managerOf?.(ctx) ?? null,
 					host,
 					tickets,
 					registry,
@@ -177,7 +232,7 @@ export function createStationRegistry(options = {}) {
 		},
 		stationForStop(ctx) {
 			const station = registry.stationFor(ctx);
-			const selected = host.selectStopStation?.({ station, pendingStation, ctx }) ?? {
+			const selected = host.fork?.selectStopStation?.({ station, pendingStation, ctx }) ?? {
 				station,
 				clearPending: false,
 			};

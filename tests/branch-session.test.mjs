@@ -10,7 +10,10 @@ import {
 	registerOwnerUI,
 } from "../host-omp/src/host/branch-session.mjs";
 
-import { createBranchManager } from "../host-omp/src/host/branch-manager.mjs";
+import {
+	createBranchManager,
+	sharedManagerOf,
+} from "../host-omp/src/host/branch-manager.mjs";
 
 const ASYNC_JOBS = { kind: "asyncJobManager" };
 const COST_GATE = { kind: "costGate" };
@@ -475,6 +478,11 @@ describe("createBranchSession", () => {
 		expect(shared.getLeafId()).toBe(rootTip);
 		expect(parent.getBranch().at(-1).message.role).toBe("assistant");
 		expect(result.session.sessionManager.getBranch().at(-1).message.content).toBe("child work");
+		// The flow manager is a proxy over the parent's manager, not a second
+		// session. One journal means incremental appends, not a full copy of the
+		// transcript per scope.
+		expect(result.session.sessionManager).not.toBe(shared);
+		expect(sharedManagerOf(result.session.sessionManager)).toBe(shared);
 	});
 	test("routes tool approvals to the owner UI under the flow's label", async () => {
 		const { options } = fixture();

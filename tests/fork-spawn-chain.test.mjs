@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { createBranchSession } from "../host-omp/src/host/branch-session.mjs";
-import { createForkWiring } from "../host-omp/src/host/fork-wiring.mjs";
+import { createForkWiring } from "../src/scope/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
@@ -25,7 +25,7 @@ import {
   outcomeOf,
   setOutcome,
   waitForReady,
-} from "../host-omp/src/host/fork-registry.mjs";
+} from "../src/scope/fork-registry.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 
 const AGENT_REGISTRY = { kind: "agentRegistry" };
@@ -144,7 +144,7 @@ describe("scope_fork through a real branch session", () => {
       createSession: (spec) =>
         createBranchSession({
           session: spec.ownerSession,
-          sessionManager: spec.sessionManager,
+          sessionManager: spec.manager ?? spec.sessionManager,
           flowId: spec.agentId,
           sourceToolCallId: spec.sourceToolCallId,
           agentDisplayName: "Parser",
@@ -257,7 +257,7 @@ describe("scope_fork through a real branch session", () => {
       createSession: (spec) =>
         createBranchSession({
           session: spec.ownerSession,
-          sessionManager: spec.sessionManager,
+          sessionManager: spec.manager ?? spec.sessionManager,
           flowId: spec.agentId,
           sourceToolCallId: spec.sourceToolCallId,
           agentRegistry: AGENT_REGISTRY,
@@ -318,7 +318,7 @@ describe("scope_fork through a real branch session", () => {
       createSession: (spec) =>
         createBranchSession({
           session: spec.ownerSession,
-          sessionManager: spec.sessionManager,
+          sessionManager: spec.manager ?? spec.sessionManager,
           flowId: spec.agentId,
           sourceToolCallId: spec.sourceToolCallId,
           agentRegistry: AGENT_REGISTRY,
@@ -394,7 +394,7 @@ describe("scope_fork through a real branch session", () => {
       createSession: (spec) =>
         createBranchSession({
           session: spec.ownerSession,
-          sessionManager: spec.sessionManager,
+          sessionManager: spec.manager ?? spec.sessionManager,
           flowId: spec.agentId,
           sourceToolCallId: spec.sourceToolCallId,
           agentRegistry: AGENT_REGISTRY,

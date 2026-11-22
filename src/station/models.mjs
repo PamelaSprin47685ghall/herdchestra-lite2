@@ -6,17 +6,17 @@ export function modelKey(model) {
 }
 
 export function actualModel(ctx, host = null) {
-	return host?.modelOf?.(ctx) ?? null;
+	return host?.model?.of?.(ctx) ?? null;
 }
 
 function liveSelector(ctx, key, host = null) {
-	const level = host?.thinkingOf?.(ctx);
+	const level = host?.model?.thinkingOf?.(ctx);
 	return level ? `${key}:${level}` : key;
 }
 
-export function modelChoice(station, ctx, spec, key) {
+function modelChoice(station, ctx, spec, key) {
 	const parsed = typeof spec === "string"
-		? station.host?.preparseModelSpec?.(station.pricingCatalog, ctx, spec) ?? null
+		? station.host?.model?.parseSpec?.(station.pricingCatalog, ctx, spec) ?? null
 		: null;
 	// The ledger is absent only on a station double that never measured usage.
 	const live = actualModel(ctx, station.host) ?? station.usage?.lastCtxModel;
@@ -47,10 +47,10 @@ function setChoice(state, scope, spec, key) {
 export function observeActualModel(station, ctx) {
 	const host = station.host;
 	if (!station.hostCapabilities) {
-		const caps = host?.capabilities?.(ctx);
+		const caps = host?.model?.capabilities?.(ctx);
 		if (caps) {
 			station.hostCapabilities = caps;
-			host.record?.("host", "capabilities", caps);
+			host.report?.record?.("host", "capabilities", caps);
 		}
 	}
 	const live = actualModel(ctx, host);

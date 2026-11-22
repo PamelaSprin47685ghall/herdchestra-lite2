@@ -3,20 +3,8 @@
  * tools. Mechanical only. No business logic lives here.
  */
 
-import { createStationRegistry } from "herdchestra-lite2";
-import {
-	attachBaseForkPorts,
-	bindHostForkPorts,
-	createForkWiring,
-} from "../host/fork-wiring.mjs";
-import {
-	adoptLedger,
-	agentIdOf,
-	conversationKeyOf,
-	identityForAgent,
-	ledgerFor,
-	selectStopStation,
-} from "../host/fork-registry.mjs";
+import { createEngine } from "herdchestra-lite2";
+import { agentIdOf, conversationKeyOf, sameManager, selectStopStation } from "../host/identity-adapters.mjs";
 import {
 	capabilities,
 	contextHeaderOf,
@@ -32,7 +20,6 @@ import {
 	refreshStationDisplay,
 	resolveStationBinding,
 } from "../host/activation-binding.mjs";
-import { buildPorts } from "./ports.mjs";
 
 import { record } from "../host/diagnostics.mjs";
 import { wireCommands } from "./commands.mjs";
@@ -40,32 +27,40 @@ import { wireHostDiagnosis } from "./diagnosis.mjs";
 import { buildTickets } from "./tickets.mjs";
 import { installCapture } from "./capture.mjs";
 import { wireHooks } from "./hooks.mjs";
-import { wireTools } from "./tools.mjs";
+import { bindScopeView } from "../host/child-display.mjs";
+import { stopAfterScopeReturn } from "../host/branch-context.mjs";
 
 export { installCapture };
 
 /**
- * One fork wiring per process. A fork tree spans agents, and every agent loads
- * the extension again, so the wiring outlives one extension instance.
+ * One fork wiring per process. A fork tree spans agents, and the host binds
+ * the extension again for every child session, so the wiring must outlive one
+ * engine. The core creates the object; this slot keeps it. Using one registry
+ * here is also what keeps every scope on the same ledger and the same shared
+ * journal: a per-engine wiring would give each child its own tree.
  */
 const FORK_WIRING_KEY = Symbol.for("herdchestra-lite2.fork-wiring.v1");
 
-function globalForkWiring() {
-	let wiring = globalThis[FORK_WIRING_KEY];
-	if (!wiring) {
-		wiring = createForkWiring();
+function globalForkWiring(wiring = null) {
+	if (wiring && !globalThis[FORK_WIRING_KEY]) {
 		Object.defineProperty(globalThis, FORK_WIRING_KEY, {
 			value: wiring,
 			enumerable: false,
 			configurable: true,
 		});
 	}
-	return wiring;
+	return globalThis[FORK_WIRING_KEY] ?? null;
 }
 
 /**
  * The capability bag the core package sees. Every entry reads a host shape and
  * returns a plain value; the core never receives `pi` or a host context.
+ *
+ * This is production wiring, not a test double: it must name the same keys the
+ * core contract declares. `session.agent` returns the host's agent identity
+ * object (`{ kind, id, depth }`), never its id string; a station classifies a
+ * session from the object. `fork.identityForAgent` is deliberately absent: the
+ * core owns that lookup, and a host copy would be a second registry.
  */
 export function createHostBag(pi) {
 	const branchOf = (ctx) => {
@@ -85,88 +80,89 @@ export function createHostBag(pi) {
 		}
 	};
 	return Object.freeze({
-		forkWiring: () => globalForkWiring(),
-		attachBaseForkPorts,
-		identityForAgent,
-		agentIdOf,
-		conversationKeyOf,
-		managerOf,
-		branchOf,
-		agentOf: (ctx) => ctx?.agent ?? null,
-		selectStopStation,
-		ledgerFor,
-		adoptLedger,
-		sessionFor,
-		setAgentMessages,
-		contextHeaderOf,
-		activeTools,
-		record,
-		createEmptyCatalog,
-		appendHistoryMessage,
-		preparseModelSpec,
-		capabilities,
-		modelOf,
-		thinkingOf,
-		usage: { entryUsage, totalInput, usageSnapshot },
-		pricing: { charsToTokens },
+		session: Object.freeze({
+			managerOf,
+			conversationKey: conversationKeyOf,
+			branch: branchOf,
+			agent: (ctx) => ctx?.agent ?? null,
+			activeTools,
+			header: contextHeaderOf,
+			setMessages: setAgentMessages,
+			appendHistory: appendHistoryMessage,
+			abort: (ctx, error) => sessionFor(ctx)?.agent?.abort?.(error),
+		}),
+		model: Object.freeze({
+			of: modelOf,
+			thinkingOf,
+			parseSpec: preparseModelSpec,
+			capabilities,
+			// The host's model facade lives on the extension context. The core
+			// treats `ctx` as opaque, so the host hands it over as a reader.
+			query: (ctx) => ctx?.models ?? null,
+		}),
+		accounting: Object.freeze({
+			usage: Object.freeze({ entryUsage, totalInput, usageSnapshot }),
+			pricing: Object.freeze({ charsToTokens, emptyCatalog: createEmptyCatalog }),
+		}),
+		fork: Object.freeze({
+			// Getter with an optional setter: the core creates the one wiring
+			// and stores it here, so a child engine reuses the parent's registry,
+			// ledger, and waiters. The first wiring wins.
+			wiring: globalForkWiring,
+			agentIdOf,
+			selectStopStation,
+			sameManager,
+		}),
+		report: Object.freeze({ record }),
 	});
-}
-
-/** Assemble the extension: registry, hooks, tools, and commands. */
-/**
- * Resolve every port once, at startup, and hand the answer to the registry.
- *
- * This is the only place in the extension that reads a switch. A refusal here
- * is a configuration error with both sides named, so it is recorded and thrown
- * rather than quietly falling back: a half-resolved table would wire a
- * different system than the one the user asked for.
- */
-export function resolveWiringPorts(env = process.env) {
-	const built = buildPorts(env);
-	if (built.ok) {
-		return { ports: built.names, implementations: built.implementations };
-	}
-	record("activation", new Error(built.detail), { port: built.port });
-	// Fail fast: an empty table would wire a different system than the one the
-	// user asked for, and every port would answer with its fallback.
-	const error = new Error(built.detail);
-	error.code = built.code ?? "PORT_UNAVAILABLE";
-	error.port = built.port;
-	throw error;
 }
 
 export function wireExtension(pi, pricingCatalog, diagnosis = null, env = process.env) {
-	const ports = resolveWiringPorts(env);
-	const table = ports.ports;
-	let registry = null;
-	// The composition root refreshes only the UI seam. The host returns a
-	// cached station before the interactive context exists; this fills the
-	// display later without touching the ledger or the spawner.
+	// The engine owns port resolution, fork wiring, the tool catalog, and the
+	// scope read model. This function only supplies host facts and binds the
+	// host's own surfaces.
+	let engine = null;
 	const refreshStationUI = (station, ctx) => {
-		refreshStationDisplay(station, ctx, registry.forkWiring());
+		refreshStationDisplay(station, ctx, engine.forkWiring());
 	};
 	const attachStation = (station, ctx) => {
-		const forkWiring = registry.forkWiring();
-		const binding = resolveStationBinding(station, ctx, forkWiring, {
-			stationFor: (childCtx) => registry.stationFor(childCtx),
-			refresh: attachStation,
-		});
-		bindHostForkPorts(station, forkWiring, binding);
+		const forkWiring = engine.forkWiring();
+		// A station must leave this hook with its ports bound, even when the
+		// host binding cannot be derived yet (no UI, no captured session). A
+		// refused binding is recorded and the refresh path retries; leaving the
+		// station unbound would make every later access report a missing port.
+		let binding = null;
+		try {
+			binding = resolveStationBinding(station, ctx, forkWiring, {
+				stationFor: (childCtx) => engine.station(childCtx),
+				refresh: attachStation,
+				stopAfterReturn: (agent) => stopAfterScopeReturn(agent),
+			});
+		} catch (error) {
+			record("activation", error, { phase: "station-binding" });
+		}
+		forkWiring.bind(station, binding ?? { display: null });
 	};
-	registry = createStationRegistry({
-		host: createHostBag(pi),
+	const hostBag = createHostBag(pi);
+	engine = createEngine({
+		host: {
+			...hostBag,
+			fork: Object.freeze({
+				...hostBag.fork,
+				attachStation,
+				refreshStation: refreshStationUI,
+			}),
+		},
 		tickets: buildTickets(pi),
+		env,
 		pricingCatalog,
-		ports: table,
-		implementations: ports.implementations,
-		onStation: attachStation,
-		onStationRefresh: refreshStationUI,
 	});
-	const hooks = wireHooks(pi, registry);
-	wireTools(pi, registry);
-	wireCommands(pi, registry);
+	bindScopeView(engine.scopes);
+	const hooks = wireHooks(pi, engine);
+	for (const tool of engine.tools) pi.registerTool(tool);
+	wireCommands(pi, engine);
 	wireHostDiagnosis(pi, diagnosis, hooks);
 	// The root needs the resolved table to decide whether the status widget
 	// exists at all; the decision stays here, not in the host renderer.
-	return { hooks, ports: table, registry };
+	return { hooks, ports: engine.ports, engine };
 }

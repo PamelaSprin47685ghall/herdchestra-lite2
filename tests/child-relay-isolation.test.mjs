@@ -16,7 +16,7 @@ import {
 	recordNaturalStop,
 } from "../src/station/handoff-state.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
-import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../host-omp/src/host/policy.mjs";
+import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 
 function relayState(overrides = {}) {
 	return { autopilot: true, relay: { ...createRelay(), ...overrides } };
@@ -39,6 +39,35 @@ function stopStation(ownerId, overrides = {}) {
 		},
 	};
 }
+
+describe("a root's natural stop with unreceived work", () => {
+	test("continues with the join steer before any relay rule", () => {
+		const child = { forkId: "fork_a", status: "running", ownerId: "root" };
+		const station = stopStation(null);
+		station.forkLedgerPort = () => ({ order: ["fork_a"], forks: { fork_a: child } });
+
+		const out = onSessionStop(station, {});
+
+		expect(out?.continue).toBe(true);
+		expect(out.additionalContext).toContain("1 unreceived child result");
+		expect(out.additionalContext).toContain("scope_join");
+		expect(station.recorded).toEqual([]);
+	});
+
+	test("holds even when the relay is off and autopilot is manual", () => {
+		const child = { forkId: "fork_a", status: "ready", ownerId: "root" };
+		const station = stopStation(null, { relay: {} });
+		station.state.autopilot = false;
+		station.relayOn = () => false;
+		station.forkLedgerPort = () => ({ order: ["fork_a"], forks: { fork_a: child } });
+
+		const out = onSessionStop(station, {});
+
+		expect(out?.continue).toBe(true);
+		expect(out.additionalContext).toContain("scope_join");
+		expect(station.recorded).toEqual([]);
+	});
+});
 
 describe("a child's natural stop", () => {
 	test("does not record a relay evaluation", () => {

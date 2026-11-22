@@ -2,12 +2,14 @@ import { afterEach, expect, test } from "bun:test";
 import {
 	ACTIVE_TOOLS_WIDGET_KEY,
 	CHILD_ACTIVITY_TYPE,
+	bindScopeView,
 	captureTranscriptSubscriptions,
 	childDisplayFor,
 	registerToolCardComponent,
 	renderChildActivity,
 } from "../host-omp/src/host/child-display.mjs";
 import { createBracketLedger, markReady, registerFork } from "../src/scope/forkjoin.mjs";
+import { createScopes } from "../src/scope/scopes.mjs";
 
 class Session {
 	#listeners = new Set();
@@ -230,6 +232,7 @@ test("the native working row follows the latest requester and omits Root", () =>
 	root.isStreaming = true;
 	let label;
 	const display = childDisplayFor(root, { setWorkingMessage: (value) => { label = value; } });
+	bindScopeView(createScopes({ forkWiring: { ledger } }));
 	display.request(ledger, "root");
 	expect(label()).toBe("[Busy: 3, Idle: 0]");
 	display.rootWait(1);
@@ -240,6 +243,7 @@ test("the native working row follows the latest requester and omits Root", () =>
 	display.rootWait(-1);
 	display.request(ledger, null);
 	expect(label()).toBe("[Busy: 2, Idle: 1]");
+	bindScopeView(null);
 });
 
 test("child thinking streams with host thinkingText italic style and stays distinct from prose", () => {

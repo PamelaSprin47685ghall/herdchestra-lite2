@@ -5,8 +5,8 @@
 //
 // * #freshEntryFields() reads the manager-global leaf. Every plain append
 //   (appendMessage, appendCustomEntry, appendCompaction, ...) therefore lands
-//   on whichever flow wrote last. appendAt() from transcript/branch-writes.mjs
-//   runs a synchronous write inside a leaf scope and restores the entry.
+//   on whichever flow wrote last. appendAt() below runs a synchronous write
+//   inside a leaf scope and restores the entry.
 // * appendMessageToBranch(message, parentId, options) appends off-branch and
 //   never moves the leaf; it records activeLeafId = the shared leaf.
 // * appendModelUsage(usage, { sessionId, parentId }) moves the leaf only when
@@ -57,10 +57,44 @@
 //    appends through the same proxy during that callback still sees the old
 //    tail, so its entry becomes a sibling. Observers must queue such writes.
 
-import { appendAt } from "herdchestra-lite2";
+// The live leaf is the branch tip; getLeafId() may point at a metadata entry
+// the host moved past, so the branch is the authority here.
+function leafId(shared) {
+	return shared.getBranch().at(-1)?.id ?? null;
+}
+
+/**
+ * Run one synchronous write with the journal leaf aimed at `tail`, then
+ * restore the leaf the caller had. Host writes read the manager-global leaf,
+ * so this is the only way a flow aims an append at its own branch.
+ */
+function appendAt(shared, tail, write) {
+	const saved = leafId(shared);
+	let value;
+	let failure;
+	let failed = false;
+	try {
+		selectLeaf(shared, tail);
+		value = write();
+		if (value && typeof value.then === "function") {
+			throw new TypeError("appendAt requires a synchronous write");
+		}
+	} catch (error) {
+		failed = true;
+		failure = error;
+	}
+	try {
+		selectLeaf(shared, saved);
+		if (leafId(shared) !== saved) throw new Error("leaf not restored");
+	} catch (error) {
+		throw new AggregateError(failed ? [failure, error] : [error], "leaf restore failed");
+	}
+	if (failed) throw failure;
+	return value;
+}
 
 /** A routing failure that the caller must resolve instead of retrying. */
-export class BranchManagerError extends Error {
+class BranchManagerError extends Error {
 	constructor(code, message, options) {
 		super(message, options);
 		this.name = "BranchManagerError";
@@ -69,7 +103,7 @@ export class BranchManagerError extends Error {
 }
 
 /** Marker every flow proxy carries; Symbol.for keeps it stable across instances. */
-export const BRANCH_MANAGER = Symbol.for("herdchestra-lite2.branch-manager.v1");
+const BRANCH_MANAGER = Symbol.for("herdchestra-lite2.branch-manager.v1");
 
 /** True only for a proxy built by createBranchManager(). */
 export function isBranchManager(value) {

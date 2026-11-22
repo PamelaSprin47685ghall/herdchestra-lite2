@@ -10,22 +10,23 @@
  * into the host package, this file moves with it unchanged.
  */
 
-import { textResult } from "herdchestra-lite2";
-import {
-	forkTicket as forkControlTicket,
-	joinTicket as joinControlTicket,
-	returnTicket as returnControlTicket,
-	scopeContextTicket as scopeContextControlTicket,
-	panhandleTicket as panhandleControlTicket,
-} from "herdchestra-lite2";
-import { notifyWaiters, waitForJoin, waitForReady } from "./fork-registry.mjs";
 import { sendSlashPrompt, sessionFor } from "./capture.mjs";
+
+const textResult = (text) => ({ content: [{ type: "text", text }] });
 import { modelFrom, modelOf, thinkingFrom, thinkingOf } from "./adapter.mjs";
 import { record } from "./diagnostics.mjs";
 
-import { loadDoc, render } from "herdchestra-lite2";
 
-const errors = loadDoc("errors");
+/**
+ * The warning a model switch appends when the host cannot prove the switch
+ * landed. The text lives with the host verb because only this package can
+ * observe the post-switch model.
+ */
+function modelSwitchWarning(vars = {}) {
+	const command = vars.command ?? "model switch";
+	const reason = vars.reason ?? "unverified";
+	return `⚠ The ${command} could not be verified: ${reason}. The next request may still use the previous model.`;
+}
 
 function safeSession(ctx) {
 	try {
@@ -305,7 +306,7 @@ export async function switchModelTicket(pi, ctx, req) {
 }
 
 function appendModelSwitchWarning(result, req, outcome) {
-	const warning = render(errors["model-switch-warning"], {
+	const warning = modelSwitchWarning({
 		command: req?.command ?? "model switch",
 		reason: outcome?.reason ?? outcome?.error ?? "unverified",
 	});
@@ -346,7 +347,7 @@ function appendModelSwitchWarning(result, req, outcome) {
  * `/model` choice lands on the next request whichever control tool comes
  * first.
  */
-async function applyPendingModelSwitch(station, ctx, result) {
+export async function applyPendingModelSwitch(pi, station, ctx, result) {
 	const req =
 		typeof station?.takePendingModelSwitch === "function"
 			? station.takePendingModelSwitch(ctx)
@@ -362,11 +363,11 @@ async function applyPendingModelSwitch(station, ctx, result) {
 }
 
 /**
- * The host capability bag the pure tickets read. One object, one place: a
- * later move into the host package changes this file's import specifiers and
- * nothing in `src/tools/tickets.mjs`.
+ * The host capability bag the pure tickets read. Ticket entries that are pure
+ * forwarders are not re-exported here: the wiring imports them from the core
+ * barrel, which is the single owner.
  */
-export function ticketHost() {
+function ticketHost() {
 	return {
 		record,
 		notifyWaiters,
@@ -376,19 +377,21 @@ export function ticketHost() {
 	};
 }
 
-// Host-bound entry points. The wiring and the tests call these names; the
-// implementation lives in the host-free node.
-export const forkTicket = (station, toolCallId, params, ctx) =>
-	forkControlTicket(station, toolCallId, params, ctx, ticketHost());
+/** The deps the core tickets read. One object, built at the call site. */
+function ticketDeps() {
+	return {
+		record,
+		applyPendingModelSwitch: (station, ctx, result) => applyPendingModelSwitch(null, station, ctx, result),
+	};
+}
 
+export const forkTicket = (station, toolCallId, params, ctx, signal = null) =>
+	forkControlTicket(station, toolCallId, params, ctx, signal, ticketDeps());
 export const joinTicket = (station, toolCallId, params, ctx, signal = null) =>
-	joinControlTicket(station, toolCallId, params, ctx, signal, ticketHost());
-
+	joinControlTicket(station, toolCallId, params, ctx, signal, ticketDeps());
 export const returnTicket = (station, toolCallId, params, ctx, signal = null) =>
-	returnControlTicket(station, toolCallId, params, ctx, signal, ticketHost());
-
+	returnControlTicket(station, toolCallId, params, ctx, signal, ticketDeps());
 export const scopeContextTicket = (station, toolCallId, params) =>
-	scopeContextControlTicket(station, toolCallId, params, ticketHost());
-
+	scopeContextControlTicket(station, toolCallId, params, ticketDeps());
 export const panhandleTicket = (station, toolCallId, params) =>
-	panhandleControlTicket(station, toolCallId, params, ticketHost());
+	panhandleControlTicket(station, toolCallId, params, ticketDeps());

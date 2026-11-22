@@ -105,7 +105,7 @@ const ctx = {
 	abort() {},
 };
 // The composition result owns the live registry; there is no module singleton.
-const station = wired.registry.stationFor(ctx);
+const station = wired.engine.station(ctx);
 // The shipped default is manual duty. This smoke exists to prove the relay,
 // so it turns the user-facing toggle on exactly as `/herd-autopilot` would.
 station.state.autopilot = true;

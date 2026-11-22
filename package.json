@@ -23,7 +23,6 @@
 	"files": [
 		"src/",
 		"resources/",
-		"skills/",
 		"README.md"
 	],
 	"engines": {
@@ -36,6 +35,6 @@
 		"smoke:relay": "bun scripts/smoke-relay.mjs"
 	},
 	"devDependencies": {
-		"eslint": "^9.0.0"
+		"eslint": "10.15.0"
 	}
 }

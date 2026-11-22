@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 
-import { wireTools } from "../host-omp/src/activation/tools.mjs";
+import { wireTools } from "../src/tools/catalog.mjs";
 import { loadDoc, placeholderNames, render } from "../src/prompts/index.mjs";
 import * as scopeTools from "../src/tools/descriptions.mjs";
 import * as todoTools from "../src/tools/todo-description.mjs";
 import {
 	injectSystemPrompt,
 	persistentOperatingSkill,
-} from "../host-omp/src/host/prompts.mjs";
+} from "../src/prompts/inject.mjs";
+import { inlinedSkills, SKILL_NAMES } from "../src/prompts/skills.mjs";
 
 const DOCS = [
 	"tools/fork-join",
@@ -141,46 +142,63 @@ describe("system prompts map to their documents", () => {
 		expect(doc["common-rules"]).toBeUndefined();
 		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
 		expect(persistentOperatingSkill).toContain("强制以简体中文");
-		expect(persistentOperatingSkill).toContain("skill://constitution");
-		expect(persistentOperatingSkill).toContain("skill://prompt-craft");
-		expect(persistentOperatingSkill).toContain("skill://skill-authoring");
-		expect(persistentOperatingSkill).toContain("skill://polish");
+		expect(persistentOperatingSkill).toContain("inlined below");
+		for (const name of SKILL_NAMES) {
+			expect(persistentOperatingSkill).toContain(name);
+			expect(persistentOperatingSkill).not.toContain(`skill://${name}`);
+		}
 	});
 
-	test("stage guidance is shipped as skills, not injected as a prompt block", () => {
-		expect(persistentOperatingSkill).toMatch(/skills ship with this plugin/);
+	test("stage guidance ships as inlined skills, not a prompt block", () => {
+		expect(SKILL_NAMES).toEqual([
+			"constitution",
+			"decision-framing",
+			"polish",
+			"prompt-craft",
+			"skill-authoring",
+			"tdd-crowdsource",
+		]);
+		expect(persistentOperatingSkill).toMatch(/project skills are inlined below/);
 		expect(persistentOperatingSkill).toContain("the runtime enforces no stage gate");
 		expect(persistentOperatingSkill).not.toContain("Stage Prompts block");
 	});
 
 	test("constitution is a shipped skill with a loadable description", () => {
 		const text = readFileSync(
-			new URL("../skills/constitution/SKILL.md", import.meta.url),
+			new URL("../resources/skills/constitution/SKILL.md", import.meta.url),
 			"utf8",
 		);
 		expect(text.startsWith("---\nname: constitution\n")).toBe(true);
 		expect(text).toContain("description:");
 		expect(text).toContain("Read before work.");
+		const body = inlinedSkills.find((skill) => skill.name === "constitution").body;
+		expect(body.startsWith("# Constitution")).toBe(true);
+		expect(body.startsWith("---")).toBe(false);
 	});
 
-	test("every skill the persistent rules name is in the package", () => {
-		const shipped = readdirSync(new URL("../skills/", import.meta.url), {
+	test("every skill the persistent rules name is inlined", () => {
+		const shipped = readdirSync(new URL("../resources/skills/", import.meta.url), {
 			withFileTypes: true,
 		})
 			.filter((entry) => entry.isDirectory())
-			.map((entry) => entry.name);
+			.map((entry) => entry.name)
+			.sort();
+		expect(shipped).toEqual([...SKILL_NAMES]);
+
 		const list = persistentOperatingSkill.match(
-			/skills ship with this plugin \(([^)]*)\)/,
+			/Six project skills are inlined below: ([^.]+)\./,
 		);
 		expect(list).not.toBeNull();
-		const named = list[1].split(",").map((name) => name.trim());
-		expect(named.sort()).toEqual([...shipped].sort());
+		const named = list[1]
+			.replace(/, and /g, ", ")
+			.split(",")
+			.map((name) => name.trim())
+			.sort();
+		expect(named).toEqual(shipped);
 
-		const referenced = [
-			...persistentOperatingSkill.matchAll(/skill:\/\/([a-z0-9-]+)/g),
-		].map((match) => match[1]);
-		expect(referenced.length).toBeGreaterThan(0);
-		for (const name of referenced) expect(shipped).toContain(name);
+		for (const name of shipped) {
+			expect(persistentOperatingSkill).not.toContain(`skill://${name}`);
+		}
 	});
 
 	test("task nature is documented in the system prompt, not repeated by todo", () => {
@@ -231,6 +249,34 @@ describe("template rendering", () => {
 
 	test("throws instead of rendering a half sentence", () => {
 		expect(() => render("a {{x}}", {})).toThrow(/Missing prompt variable: x/);
+	});
+});
+
+describe("inlined skills", () => {
+	test("every body appears exactly once and reinjection is byte-identical", () => {
+		const first = injectSystemPrompt("Host prompt.");
+		for (const { name, body } of inlinedSkills) {
+			expect(first.split(body)).toHaveLength(2);
+			expect(first).toContain(`<inlined-skill name="${name}">`);
+		}
+		expect(injectSystemPrompt(first)).toBe(first);
+
+		const array = injectSystemPrompt(["Host prompt."]);
+		const text = array.join("\n");
+		for (const { body } of inlinedSkills) expect(text.split(body)).toHaveLength(2);
+		expect(injectSystemPrompt(array)).toEqual(array);
+	});
+
+	test("frontmatter stays on disk and is stripped from the injected body", () => {
+		for (const { name, body } of inlinedSkills) {
+			expect(body.startsWith("---")).toBe(false);
+			expect(body.startsWith("# ")).toBe(true);
+			const file = readFileSync(
+				new URL(`../resources/skills/${name}/SKILL.md`, import.meta.url),
+				"utf8",
+			);
+			expect(file.startsWith("---\n")).toBe(true);
+		}
 	});
 });
 

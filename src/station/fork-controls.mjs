@@ -6,8 +6,10 @@
 // wiring, not here.
 
 import {
+  adoptFork,
   amendFork,
   forkOf,
+  liveReceiverOf,
   markReady,
   openChildren,
   readyChildren,
@@ -28,6 +30,7 @@ import {
   validateForkBatch,
 } from "./domain/fork-join.mjs";
 import { processedOf } from "./domain/tool-call-ledger.mjs";
+import { notifyWaiters } from "../scope/fork-registry.mjs";
 import { targetsText } from "../scope/targets.mjs";
 import { joinReceipt, renderChildRecord } from "../transcript/replay.mjs";
 import { filterAmends } from "../transcript/index.mjs";
@@ -199,7 +202,7 @@ export function admitJoin(station, record, options = {}) {
 }
 
 /** The first line of a child receipt, as the child's context carries it. */
-export function childReceiptMarker(forkId) {
+function childReceiptMarker(forkId) {
   return `You are the child of fork ${forkId},`;
 }
 
@@ -375,7 +378,7 @@ export function handleForkCall(station, call, options = {}) {
     items: batch.items,
     forks: ledger.order.map((id) => forkOf(ledger, id)),
     ownerId: ownerIdOf(station),
-    models: options.ctx?.models ?? null,
+    models: options.models ?? station.host?.model?.query?.(options.ctx) ?? null,
     hasSpawner: typeof spawner === "function",
     receiptChars,
     baseTokens: measuredBase(station),
@@ -610,6 +613,10 @@ export function handleForkCall(station, call, options = {}) {
         noteFailure(target.forkId, item, superseded.code);
         continue;
       }
+      // The old generation may be parked in scope_return, waiting for a take
+      // that reuse just cancelled. Wake it so it can close its bracket.
+      const wait = station.forkWaitPort?.() ?? null;
+      if (wait?.registry) notifyWaiters(wait.registry);
     }
     const budget = sumBudgets(target.remaining, item.budget);
     if (Object.keys(budget).length === 0) {
@@ -963,14 +970,16 @@ export function handleReturnCall(station, call) {
   const record = selfForkId === "" ? null : forkOf(ledger, selfForkId);
   // Adoption follows the current receiver, never the birth parent: a branch
   // that was itself adopted must hand its unreceived children to the branch
-  // that now answers for it.
+  // that now answers for it. The current receiver may already have returned
+  // too, so the whole chain is walked to the nearest live branch.
   const orphans = record
     ? [...openChildren(ledger, selfForkId), ...readyChildren(ledger, selfForkId)]
     : [];
+  const receiverId = liveReceiverOf(ledger, record?.ownerId ?? "");
   const decision = decideReturn({
     identityForkId: selfForkId,
     record,
-    receiverId: record?.ownerId ?? "",
+    receiverId,
     orphans,
   });
   if (!decision.ok) {
@@ -988,7 +997,12 @@ export function handleReturnCall(station, call) {
     }
     return errorResult("ORPHANS_WITHOUT_RECEIVER", E["orphans-without-receiver"]);
   }
-  const receiverId = decision.receiverId;
+  // Move this branch before it becomes ready: markReady queues the result
+  // under the record's current owner. Changing the owner afterwards would
+  // leave the queue and the record disagreeing, and the child would wait for
+  // a take from a branch that can never join.
+  const adopted = adoptFork(ledger, selfForkId, receiverId);
+  if (!adopted.ok) return errorResult(adopted.code, adopted.reason);
   // Freeze this branch's own record before the bracket becomes ready. The
   // parent may take it in the same tick, and a parent that reads an empty
   // record cannot tell a silent child from a broken one. Amends are filtered
@@ -1077,6 +1091,11 @@ export function handleReturnCall(station, call) {
 /** The receipt a child gets once the parent has taken its record. */
 export function returnAcceptedText(forkId, receiver) {
   return render(F["return.receipt"], { forkId, receiver });
+}
+
+/** The receipt a child gets when a reused scope superseded its record. */
+export function returnSupersededText(forkId) {
+  return render(F["return.superseded"], { forkId });
 }
 
 export { levelKeyOf, ownerIdOf, depthOf };

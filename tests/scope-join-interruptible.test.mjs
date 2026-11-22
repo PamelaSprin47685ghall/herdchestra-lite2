@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { wireTools } from "../host-omp/src/activation/tools.mjs";
+import { wireTools } from "../src/tools/catalog.mjs";
 
 function fakeHost() {
   const tools = new Map();

@@ -17,14 +17,13 @@
  * Exit codes: 0 when nothing failed, 1 when any check failed.
  */
 
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { SessionStation } from "../src/station/station.mjs";
 import { createTestStation } from "../tests/helpers/station-ports.mjs";
 import { restoreState } from "../src/station/restore.mjs";
 import { captureDiagnosis, installRunnerCapture } from "../host-omp/src/host/capture.mjs";
+import { borrowInstalledAddon, borrowStaleAddon } from "./host-native.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const AGENT_SESSION = join(HOST, "packages/coding-agent/src/session/agent-session.ts");
@@ -124,48 +123,10 @@ await check("host declares the extensionRunner getter", () => {
 	return "agent-session.ts";
 });
 
-/**
- * A checkout whose `packages/natives/native` addon predates its source cannot
- * be imported: the older binary is missing exports the source now reads.
- *
- * The host loader can use a matching prebuilt addon instead of a rebuild:
- * `PI_COMPILED` makes it look in the version cache, and `PI_NATIVES_DIR` names
- * the cache base. A matching addon is one the machine already extracted for
- * its installed omp, under `~/.omp/natives/<version>/`.
- */
-function findInstalledAddon() {
-	const nativesPackage = join(HOST, "packages/natives/package.json");
-	if (!existsSync(nativesPackage)) return null;
-	let version;
-	try {
-		version = JSON.parse(readFileSync(nativesPackage, "utf8")).version;
-	} catch {
-		return null;
-	}
-	if (typeof version !== "string" || version === "") return null;
-	const tag = `${process.platform}-${process.arch}`;
-	const filenames =
-		process.arch === "x64"
-			? [
-					`pi_natives.${tag}-modern.node`,
-					`pi_natives.${tag}-baseline.node`,
-					`pi_natives.${tag}.node`,
-				]
-			: [`pi_natives.${tag}.node`];
-	const bases = [];
-	if (process.env.PI_NATIVES_DIR) bases.push(process.env.PI_NATIVES_DIR);
-	if (process.env.XDG_DATA_HOME) {
-		bases.push(join(process.env.XDG_DATA_HOME, "omp", "natives"));
-	}
-	bases.push(join(homedir(), ".omp", "natives"));
-	for (const base of bases) {
-		const dir = join(base, version);
-		for (const filename of filenames) {
-			if (existsSync(join(dir, filename))) return { version, dir, base };
-		}
-	}
-	return null;
-}
+// A stale local addon may import cleanly and still lack a symbol the source
+// now calls. Compare the stamped version before the import; borrowing the
+// installed matching addon is the supported route.
+borrowStaleAddon(HOST, import.meta.path);
 
 let AgentSession = null;
 let loadFailure = null;
@@ -180,22 +141,7 @@ try {
 // The failed import is cached in this process, so the retry must be a child.
 // `OMP_SMOKE_BORROWED` marks that child, which keeps the fallback single-shot.
 if (!AgentSession && process.env.OMP_SMOKE_BORROW !== "0" && !process.env.OMP_SMOKE_BORROWED) {
-	const borrowed = findInstalledAddon();
-	if (borrowed) {
-		console.log(
-			`borrowing @oh-my-pi/pi-natives@${borrowed.version} from ${borrowed.dir}`,
-		);
-		const child = spawnSync(process.execPath, [import.meta.path], {
-			stdio: "inherit",
-			env: {
-				...process.env,
-				PI_COMPILED: "1",
-				PI_NATIVES_DIR: borrowed.base,
-				OMP_SMOKE_BORROWED: borrowed.dir,
-			},
-		});
-		process.exit(child.status ?? 1);
-	}
+	borrowInstalledAddon(HOST, import.meta.path);
 }
 
 if (process.env.OMP_SMOKE_BORROWED) {

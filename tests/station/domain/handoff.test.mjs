@@ -225,6 +225,30 @@ describe("decideNaturalStop", () => {
 		).toEqual({ kind: "evaluate" });
 	});
 
+	test("an unreceived child withholds every natural-stop submission", () => {
+		expect(
+			decideNaturalStop({
+				relay: relay(),
+				owesLedger: true,
+				autopilot: true,
+				unreceived: 1,
+			}),
+		).toBeNull();
+		const inherited = relay({
+			generation: 1,
+			firstEvaluation: "nonempty",
+			lastLedger: { empty: false, open: 1, total: 1, at: 1 },
+		});
+		expect(
+			decideNaturalStop({
+				relay: inherited,
+				owesLedger: true,
+				autopilot: true,
+				unreceived: 1,
+			}),
+		).toBeNull();
+	});
+
 	test("a known non-empty inheritance retires", () => {
 		const inherited = relay({
 			generation: 1,

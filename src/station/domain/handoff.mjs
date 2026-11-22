@@ -108,8 +108,14 @@ export function decideNaturalStop({
 	isChild,
 	autopilot,
 	owesLedger,
+	unreceived = 0,
 } = {}) {
 	if (!owesLedger || !autopilot || isChild) return null;
+	// No natural-stop submission may count before every child is received.
+	// The equivalent empty ledger is withheld for the same reason: the root
+	// still owes a take, and the child parked in scope_return cannot move
+	// until that take happens. The join nudge owns this turn instead.
+	if (unreceived > 0) return null;
 	if (!relay || relay.handoffPending || relay.canStop) return null;
 	const beforeFirstEvaluation =
 		relay.generation > 0 && relay.firstEvaluation === null;

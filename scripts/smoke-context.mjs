@@ -16,8 +16,10 @@ import { pathToFileURL } from "node:url";
 import { installContextPreparation, splitRequestHistory } from "../host-omp/src/host/context-preparation.mjs";
 import { contextHeaderOf } from "../host-omp/src/host/adapter.mjs";
 import { stopAfterScopeReturn } from "../host-omp/src/host/branch-context.mjs";
+import { borrowStaleAddon } from "./host-native.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
+borrowStaleAddon(HOST, import.meta.path);
 const TOOL_ROUNDS = 4;
 
 function hostModule(path) {

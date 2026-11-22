@@ -23,11 +23,11 @@ import {
 } from "../src/scope/forkjoin.mjs";
 import { createFlowState, createState } from "../src/scope/state.mjs";
 import { deserializeState, serializeState } from "../src/scope/persistence.mjs";
-import { createForkWiring } from "../host-omp/src/host/fork-wiring.mjs";
+import { createForkWiring } from "../src/scope/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
-import { ledgerFor } from "../host-omp/src/host/fork-registry.mjs";
+import { ledgerFor } from "../src/scope/fork-registry.mjs";
 import { handleReturnCall } from "../src/station/fork-controls.mjs";
 
 function running(ledger, forkId, ownerId = "root", extra = {}) {

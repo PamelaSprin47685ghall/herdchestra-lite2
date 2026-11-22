@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { sameManager, selectStopStation } from "../../host-omp/src/host/fork-registry.mjs";
+import { sameManager, selectStopStation } from "../../host-omp/src/host/identity-adapters.mjs";
 
 function station(manager, handoffPending = false) {
 	return { manager, state: { relay: { handoffPending } } };

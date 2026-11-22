@@ -6,8 +6,8 @@ import { describe, expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
 
 import { installToolDispatch } from "../host-omp/src/host/tool-dispatch.mjs";
-import { createForkRegistry, notifyWaiters } from "../host-omp/src/host/fork-registry.mjs";
-import { joinTicket, returnTicket } from "../host-omp/src/host/host-tickets.mjs";
+import { createForkRegistry, notifyWaiters } from "../src/scope/fork-registry.mjs";
+import { joinTicket, returnTicket } from "../src/tools/tickets.mjs";
 import {
 	createBracketLedger,
 	createClockOn,

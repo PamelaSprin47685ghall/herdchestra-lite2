@@ -9,7 +9,7 @@ The standing constitution applies; this skill adds only the development and acce
 
 Tests are a means, not a ritual. The goal is a change a successor can take over: automated where it pays, manual where it does not. One acceptance goal before Red; one dispatch pin before Green; verification goes to the level with context and authority. Repeat as work becomes ready; unrelated red contracts or running Green slices do not gate the next dispatch.
 
-Use skill://decision-framing when the goal itself is unclear. This skill assumes the goal exists and turns it into contracts, dispatch, and acceptance.
+Use the inlined `decision-framing` skill when the goal itself is unclear. This skill assumes the goal exists and turns it into contracts, dispatch, and acceptance.
 
 ## Before Red
 

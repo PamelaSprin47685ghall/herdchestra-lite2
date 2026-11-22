@@ -3,8 +3,23 @@
 // unsettled call (scope_join, scope_return, or any slow tool) never pins the
 // transcript retirement frontier; finished tools append at full size.
 import { record } from "./diagnostics.mjs";
-import { forkOf, RUNNING, READY } from "herdchestra-lite2";
-import { publicScopeId, scopeTitle } from "herdchestra-lite2";
+import {
+	stripToolCalls,
+	textBlocks,
+	toolSummaryText,
+	formatFallbackLine,
+	assistantParts,
+	partsText,
+	partsSignature,
+} from "./activity.mjs";
+
+// The engine's scope read model, bound once at activation. A display is a host
+// surface; it reads DTOs and never a ledger.
+let scopeView = null;
+export function bindScopeView(view) {
+	scopeView = view;
+}
+const scopes = () => scopeView ?? { of: () => null, status: () => null, label: () => null, activity: () => "" };
 
 export const CHILD_ACTIVITY_TYPE = "herd.fork-activity";
 export const ACTIVE_TOOLS_WIDGET_KEY = "herd-tools";
@@ -53,12 +68,6 @@ export function captureTranscriptSubscriptions(prototype) {
 	};
 }
 
-function stripToolCalls(event) {
-	const message = event?.message;
-	if (!message || message.role !== "assistant" || !Array.isArray(message.content)) return event;
-	const kept = message.content.filter((block) => block?.type !== "toolCall");
-	return kept.length === message.content.length ? event : { ...event, message: { ...message, content: kept } };
-}
 
 function resolveTool(session, toolName) {
 	try {
@@ -159,26 +168,8 @@ function publish(state, event) {
 	}
 }
 
-function textBlocks(content, type, field) {
-	if (!Array.isArray(content)) return "";
-	return content.flatMap((block) => block.type === type && block[field]?.trim() ? [block[field]] : []).join("\n");
-}
 
-function toolSummaryText(event) {
-	if (event.type === "tool_execution_end") {
-		const output = textBlocks(event.result?.content, "text", "text");
-		return `${event.toolName} · ${event.isError ? "failed" : "completed"}${output ? `\n${output}` : ""}`;
-	}
-	return `${event.toolName} · running`;
-}
 
-function formatFallbackLine(entry, now) {
-	const elapsed = Math.max(0, Math.floor((now - entry.startedAt) / 1000));
-	const title = entry.definition?.label ?? entry.toolName;
-	const prefix = entry.label ? `${entry.label} ` : "";
-	const tail = entry.partialText ? ` · ${entry.partialText}` : " · running";
-	return `${prefix}• ${title}${tail} ${elapsed}s`;
-}
 
 function createActiveToolTray(getUi, current) {
 	const entries = new Map();
@@ -355,51 +346,11 @@ function createActiveToolTray(getUi, current) {
 	};
 }
 
-export function scopeActivity(ledger, lastOwnerId, rootBusy, clock = null) {
-	let busy = Number(rootBusy);
-	let idle = Number(!rootBusy);
-	for (const id of ledger.order) {
-		const branch = forkOf(ledger, id);
-		const paused = branch?.clockPausedAt != null &&
-			(!clock || clock.info(branch).bounded !== false);
-		if (branch?.status === RUNNING && !paused) busy++;
-		else if (branch?.status === READY || branch?.status === RUNNING) idle++;
-	}
-	const lineage = [];
-	const seen = new Set();
-	for (let id = lastOwnerId; id && id !== "root" && !seen.has(id);) {
-		seen.add(id);
-		const branch = forkOf(ledger, id);
-		if (!branch) break;
-		lineage.push(scopeTitle(publicScopeId(branch)));
-		id = branch.ownerId;
-	}
-	lineage.reverse();
-	return `[Busy: ${busy}, Idle: ${idle}]${lineage.length ? ` ${lineage.join(" > ")}` : ""}`;
-}
 
 const ROOT = Symbol("root");
 
-function assistantParts(message) {
-	if (!Array.isArray(message?.content)) return [];
-	const parts = [];
-	for (const block of message.content) {
-		if (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
-			parts.push({ kind: "thinking", text: block.thinking });
-		} else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
-			parts.push({ kind: "text", text: block.text });
-		}
-	}
-	return parts;
-}
 
-function partsText(parts) {
-	return parts.map((part) => part.text).join("\n");
-}
 
-function partsSignature(parts) {
-	return parts.map((part) => `${part.kind}:${part.text}`).join("\0");
-}
 
 function displayArbiter(state, tray, suppressApprovalPreview) {
 	let owner = null;
@@ -620,10 +571,10 @@ export function childDisplayFor(root, ui) {
 	};
 	return binding.port = {
 		rootWait(delta) { rootWaits += delta; },
-		request(ledger, ownerId) {
+		request(_ledger, ownerId) {
 			if (!current() || typeof binding.ui?.setWorkingMessage !== "function") return;
 			lastOwnerId = ownerId ?? "root";
-			binding.ui.setWorkingMessage(() => current() ? scopeActivity(ledger, lastOwnerId, root.isStreaming === true && rootWaits === 0) : "Working…");
+			binding.ui.setWorkingMessage(() => current() ? scopes().activity(lastOwnerId, root.isStreaming === true && rootWaits === 0) : "Working…");
 		},
 		attach(id, child) {
 			const unsubscribe = child.subscribe((event) => {

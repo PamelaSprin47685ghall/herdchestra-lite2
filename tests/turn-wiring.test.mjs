@@ -13,8 +13,8 @@ import {
 	adoptLedger,
 	createForkRegistry,
 	ledgerFor,
-} from "../host-omp/src/host/fork-registry.mjs";
-import { resolveForkLedger } from "../host-omp/src/host/fork-identity.mjs";
+} from "../src/scope/fork-registry.mjs";
+import { resolveForkLedger } from "../src/station/domain/identity.mjs";
 import {
 	createBracketLedger,
 	restoreLedger,
@@ -209,7 +209,7 @@ describe("message_end does not treat a user message as a turn", () => {
 			},
 		};
 		wireHooks(pi, {
-			stationFor: () => ({
+			station: () => ({
 				onUsageMessage: (message) => seen.push(message.role),
 				noteScopeRequest() {},
 				beginRequestSample() {},

@@ -109,7 +109,7 @@ describe("retired mechanisms stay retired", () => {
 		expect(controls).not.toContain("FORK_MESSAGE_MIXED");
 		expect(controls).not.toContain("exclusiveCallRefusal");
 		expect(controls).not.toContain("mixedForkCalls");
-		const tools = source("../host-omp/src/activation/tools.mjs");
+		const tools = source("../src/tools/catalog.mjs");
 		// No tool serializes itself. A multi-call message is ordered by the
 		// model: place the two blocking right brackets last.
 		expect(tools).not.toContain('concurrency: "exclusive"');
@@ -139,7 +139,7 @@ describe("retired mechanisms stay retired", () => {
 		const tickets = source("../src/tools/tickets.mjs");
 		expect(tickets.match(/pauseBranchClock\?\.\(\)/g)?.length).toBe(2);
 		expect(tickets.match(/resumeBranchClock\?\.\(\)/g)?.length).toBe(2);
-		const tools = source("../host-omp/src/activation/tools.mjs");
+		const tools = source("../src/tools/catalog.mjs");
 		expect(tools).not.toContain("executionMode");
 	});
 
@@ -151,8 +151,8 @@ describe("retired mechanisms stay retired", () => {
 		expect(activation).toContain("resolveStationBinding");
 		const binding = source("../host-omp/src/host/activation-binding.mjs");
 		expect(binding).toContain("prepareChildContext");
-		const wiring = source("../host-omp/src/host/fork-wiring.mjs");
-		const spawn = source("../host-omp/src/host/fork-spawn-ticket.mjs");
+		const wiring = source("../src/scope/fork-wiring.mjs");
+		const spawn = source("../src/tools/spawn-ticket.mjs");
 		expect(wiring).toContain("spawnChildTicket");
 		expect(spawn).toContain("ports.prepareChild");
 		expect(spawn.indexOf("ports.prepareChild")).toBeLessThan(

@@ -9,11 +9,9 @@
 import { wireExtension, installCapture } from "./activation/index.mjs";
 import { installStatus, loadPricingCatalog } from "./host/index.mjs";
 import { total as diagnosticsTotal } from "./host/diagnostics.mjs";
-import { preloadDocs } from "herdchestra-lite2";
 import { CHILD_ACTIVITY_TYPE, registerToolCardComponent, renderChildActivity } from "./host/child-display.mjs";
 
 export async function activate(pi, env = process.env) {
-	preloadDocs();
 	// Broadcasts are custom messages; register before startup so transcript
 	// replay and live streams use the same readable presentation.
 	if (typeof pi.registerMessageRenderer === "function") {

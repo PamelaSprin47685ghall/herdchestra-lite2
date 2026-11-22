@@ -19,7 +19,7 @@
  *   and tool dispatch. Scope transitions are processed there.
  * - `pi.on("tool_call", ...)` can block a call with `{ block, reason }`.
  * - `pi.on("context", ...)` returns the outbound message list only.
- * - `ctx.sessionManager` exposes getBranch/appendMessage/branch/
+ * - a session token exposes getBranch/appendMessage/branch/
  *   buildSessionContext/appendCustomEntry.
  * - `pi.sendUserMessage(text, { deliverAs: "steer" })` queues a user prompt.
  */
@@ -36,6 +36,14 @@ import {
 	serializeState,
 	unreceivedChildren,
 } from "../scope/index.mjs";
+import {
+	adoptLedger as adoptLedgerDefault,
+	conversationKeyOf,
+	ledgerFor as ledgerForDefault,
+} from "../scope/fork-registry.mjs";
+const ledgerFor = ledgerForDefault;
+const adoptLedger = adoptLedgerDefault;
+
 import {
 	findAmendTarget,
 	findToolCallIndex,
@@ -158,15 +166,70 @@ function mergeHost(fromRegistry, fromConstructor) {
 	return { ...fromConstructor, ...fromRegistry };
 }
 
+/**
+ * Read one host shape. The interface is grouped by role (`session`, `model`,
+ * `accounting`, `fork`, `report`); a double written against the older flat bag
+ * is widened here so no station carries a second convention.
+ */
+export function shapeHost(host) {
+	const source = host && typeof host === "object" ? host : {};
+	const session = source.session ?? {};
+	const model = source.model ?? {};
+	const accounting = source.accounting ?? {};
+	const fork = source.fork ?? {};
+	const report = source.report ?? {};
+	const pick = (grouped, flat) => grouped ?? flat;
+	return {
+		session: {
+			managerOf: pick(session.managerOf, source.managerOf),
+			conversationKey: pick(session.conversationKey, source.conversationKeyOf),
+			branch: pick(session.branch, source.branchOf),
+			agent: pick(session.agent, source.agentOf),
+			activeTools: pick(session.activeTools, source.activeTools),
+			header: pick(session.header, source.contextHeaderOf),
+			setMessages: pick(session.setMessages, source.setAgentMessages),
+			appendHistory: pick(session.appendHistory, source.appendHistoryMessage),
+			abort: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
+		},
+		model: {
+			of: pick(model.of, source.modelOf),
+			thinkingOf: pick(model.thinkingOf, source.thinkingOf),
+			parseSpec: pick(model.parseSpec, source.preparseModelSpec),
+			capabilities: pick(model.capabilities, source.capabilities),
+			query: pick(model.query, source.models),
+		},
+		accounting: {
+			usage: pick(accounting.usage, source.usage),
+			pricing: pick(accounting.pricing, source.pricing) && {
+				...pick(accounting.pricing, source.pricing),
+				emptyCatalog:
+					pick(accounting.pricing, source.pricing)?.emptyCatalog ??
+					source.createEmptyCatalog,
+			},
+		},
+		fork: {
+			wiring: pick(fork.wiring, source.forkWiring),
+			attachBaseForkPorts: pick(fork.attachBaseForkPorts, source.attachBaseForkPorts),
+			identityForAgent: pick(fork.identityForAgent, source.identityForAgent),
+			agentIdOf: pick(fork.agentIdOf, source.agentIdOf),
+			selectStopStation: pick(fork.selectStopStation, source.selectStopStation),
+			sameManager: pick(fork.sameManager, source.sameManager),
+			ledgerFor: pick(fork.ledgerFor, source.ledgerFor),
+			adoptLedger: pick(fork.adoptLedger, source.adoptLedger),
+		},
+		report: { record: pick(report.record, source.record) },
+	};
+}
+
 export class SessionStation {
 	constructor(manager, host, tickets, registry, pricingCatalog) {
 		this.manager = manager;
-		this.host = mergeHost(registry?.host?.(), host);
+		this.host = shapeHost(mergeHost(registry?.host?.(), host));
 		this.tickets = tickets;
 		this.registry = registry;
 		this.pricingCatalog =
-			pricingCatalog ?? this.host?.createEmptyCatalog?.() ?? null;
-		this.state = restoreState(manager, this.host?.record);
+			pricingCatalog ?? this.host?.accounting?.pricing?.emptyCatalog?.() ?? null;
+		this.state = restoreState(manager, this.host?.report?.record);
 		// A replayable base on disk anchors a delta; a fresh session, or a
 		// chain whose anchor fell outside the replay window, starts with a
 		// checkpoint instead.
@@ -202,10 +265,10 @@ export class SessionStation {
 		// empty ledger instead of growing two.
 		const forkWiring = registry?.forkWiring?.() ?? null;
 		this.forkWiring = forkWiring;
-		const key = this.host?.conversationKeyOf?.(manager ?? null) ?? null;
+		const key = (this.host?.session?.conversationKey ?? conversationKeyOf)(manager ?? null);
 		const indexed =
 			forkWiring && key !== null
-				? (this.host?.ledgerFor?.(forkWiring.registry, key) ?? null)
+				? ((this.host?.fork?.ledgerFor ?? ledgerFor)(forkWiring.registry, key) ?? null)
 				: null;
 		const restored = this.state.brackets ?? null;
 		const indexedLive = (indexed?.order?.length ?? 0) > 0;
@@ -227,8 +290,8 @@ export class SessionStation {
 			if (!chosenHasSamples && otherHasSamples) chosen.totals = otherTotals;
 		}
 		this.brackets = chosen;
-		if (forkWiring && key !== null && !indexedLive) {
-			this.host?.adoptLedger?.(forkWiring.registry, key, this.brackets);
+		if (forkWiring && key !== null && (chosen !== indexed || !indexedLive)) {
+			(this.host?.fork?.adoptLedger ?? adoptLedger)(forkWiring.registry, key, this.brackets);
 		}
 		this.state.brackets = this.brackets;
 		// Attached by the host wiring; null means this station cannot wait.
@@ -250,8 +313,8 @@ export class SessionStation {
 			noteError: (domain, error) => this.noteError(domain, error),
 			modelKeyOf: (message) => modelKey(message),
 			actualModelOf: (ctx) => actualModel(ctx, this.host),
-			usage: this.host?.usage ?? null,
-			pricing: this.host?.pricing ?? null,
+			usage: this.host?.accounting?.usage ?? null,
+			pricing: this.host?.accounting?.pricing ?? null,
 		});
 		this.usage.restoreFromBranch(this.manager);
 		// The composition root builds one complete bundle; bind each
@@ -370,9 +433,9 @@ export class SessionStation {
 	 */
 	noteError(domain, error, detail = undefined) {
 		this.lastError = String(error?.message ?? error);
-		this.host?.record?.(domain, error, detail);
+		const record = this.host?.report?.record ?? this.host?.record;
+		record?.(domain, error, detail);
 	}
-
 	/**
 	 * Record a scoped model switch the host refused. The ticket reports the
 	 * outcome; the station owns the failure field and the diagnostics ring.
@@ -410,12 +473,21 @@ export class SessionStation {
 	 */
 	sessionView(ctx) {
 		return {
-			branch: () => this.host?.branchOf?.(ctx) ?? [],
-			agent: this.host?.agentOf?.(ctx) ?? null,
+			branch: () => this.host?.session?.branch?.(ctx) ?? [],
+			agent: this.host?.session?.agent?.(ctx) ?? null,
 		};
 	}
 
 	policy(ctx) {
+		// A fork scope is a writable subagent by construction: it owns a budget
+		// and a bracket. The host may classify the spawned session as a plain
+		// main identity (a branch has no `session_init`, and its extension
+		// context can still say `kind: "main"`), so the bound fork identity is
+		// the authoritative marker. Without this check a child is treated as
+		// read-only and every station transition stops.
+		if (typeof this.forkOwnerId === "function" && this.forkOwnerId() !== null) {
+			return READ_WRITE_SUBAGENT;
+		}
 		if (this.agentPolicy !== null) return this.agentPolicy;
 		const view = this.sessionView(ctx);
 		const policy = agentPolicy(view);
@@ -441,7 +513,7 @@ export class SessionStation {
 		if (policy !== READ_WRITE_SUBAGENT) return;
 		let active = [];
 		try {
-			active = this.host?.activeTools?.() ?? [];
+			active = this.host?.session?.activeTools?.() ?? [];
 		} catch {
 			active = [];
 		}
@@ -473,7 +545,7 @@ export class SessionStation {
 	 */
 	todoReady() {
 		try {
-			const active = this.host?.activeTools?.();
+			const active = this.host?.session?.activeTools?.();
 			return Array.isArray(active) && active.includes("todo");
 		} catch {
 			return false;
@@ -837,10 +909,18 @@ export class SessionStation {
 	maybeNudge(message, ctx) {
 		if (!message || message.role !== "assistant") return;
 		if (message.stopReason === "aborted" || message.stopReason === "error") return;
-		if (!this.relayOn(ctx)) return;
+		// Keep the observable relay verdict current, but never let it veto the
+		// join nudge: an unreceived bracket is liveness, not relay policy.
+		this.relayOn(ctx);
 		if (this.nudged.has(message)) return;
-		const decision = nudgeDecision(this.state, {
+		const ledger =
+			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+		const ownerId =
+			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+		const decision = nudgeDecision({
 			hasToolCalls: toolCalls(message).length > 0,
+			ledger,
+			ownerId,
 		});
 		if (decision.kind === "none") return;
 		this.nudged.add(message);
@@ -853,7 +933,7 @@ export class SessionStation {
 		if (!this.anchor.needsRebase()) return;
 		const tree = this.contextMessages();
 		if (!shouldRebase({ needsRebase: true, tree, outbound })) return;
-		if (this.host?.setAgentMessages?.(ctx, tree)) this.anchor.clearRebase();
+		if (this.host?.session?.setMessages?.(ctx, tree)) this.anchor.clearRebase();
 	}
 
 	// -- Context transform (sync) -----------------------------------------------
@@ -872,13 +952,13 @@ export class SessionStation {
 					needsRebase,
 					ports: this.portTable,
 					modelKey: key,
-					header: key ? (this.host?.contextHeaderOf?.(ctx) ?? null) : null,
+					header: key ? (this.host?.session?.header?.(ctx) ?? null) : null,
 				},
 			);
 			// Commit: the projection is complete. Write the host rebase and the
 			// usage snapshot. No ticket dispatch follows, so no ticket can
 			// observe a half-written state.
-			if (projection.rebase && tree && this.host?.setAgentMessages?.(ctx, tree)) {
+			if (projection.rebase && tree && this.host?.session?.setMessages?.(ctx, tree)) {
 				this.anchor.clearRebase();
 			}
 			if (projection.usage) this.usage.noteSentContext(projection.usage);
@@ -888,7 +968,7 @@ export class SessionStation {
 			if (error?.code === "FOLD_ROLLBACK_FAILED") {
 				// The host catches context-handler errors. Cancel the live Agent
 				// too, so a broken journal cannot reach the provider unchanged.
-				this.host?.sessionFor?.(ctx)?.agent?.abort?.(error);
+				this.host?.session?.abort?.(ctx, error);
 				throw error;
 			}
 			return { messages: original };

@@ -5,5 +5,4 @@ node_modules/
 coverage/
 host-omp/node_modules/
 host-omp/bun.lock
-host-omp/skills/
 local-report-w1.md

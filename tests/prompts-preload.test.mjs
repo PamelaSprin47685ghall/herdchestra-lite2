@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import { DOCUMENTS, preloadDocs } from "../src/prompts/index.mjs";
+import { inlinedSkills, preloadSkills } from "../src/prompts/skills.mjs";
 
 const ROOT = new URL("../resources/prompts/", import.meta.url);
 
@@ -23,5 +24,10 @@ describe("prompt preload", () => {
 
 	test("preloadDocs loads every document", () => {
 		expect(preloadDocs()).toBe(DOCUMENTS.length);
+	});
+
+	test("preloadSkills loads every shipped skill body", () => {
+		expect(preloadSkills()).toBe(inlinedSkills.length);
+		expect(inlinedSkills).toHaveLength(6);
 	});
 });

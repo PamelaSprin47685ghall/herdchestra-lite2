@@ -24,7 +24,7 @@ import {
   ledgerFor,
   notifyWaiters,
   waitForJoin,
-} from "../host-omp/src/host/fork-registry.mjs";
+} from "../src/scope/fork-registry.mjs";
 
 function state() {
   return { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };

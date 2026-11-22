@@ -206,7 +206,7 @@ async function start() {
 		ctx,
 	);
 	if (prepared?.systemPrompt) session.agent.state.systemPrompt = prepared.systemPrompt;
-	activeStation = wired.registry.stationFor(ctx);
+	activeStation = wired.engine.station(ctx);
 	// Every case in this file exercises the relay; manual duty has its own
 	// cases at the end and flips the flag off explicitly.
 	activeStation.state.autopilot = true;

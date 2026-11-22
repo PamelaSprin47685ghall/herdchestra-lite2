@@ -68,7 +68,7 @@ function noteFailure(station, error) {
 		return;
 	}
 	if (station) station.lastError = String(error?.message ?? error);
-	station?.host?.record?.("gates", error);
+	(station?.host?.report?.record ?? station?.host?.record)?.("gates", error);
 }
 
 function onAssistantMessage(station, message, ctx) {
@@ -270,8 +270,6 @@ function onSessionStop(station, ctx, evidence = null) {
 	if (evidence?.signal?.aborted || evidence?.reason === "aborted" || evidence?.reason === "error") {
 		return undefined;
 	}
-	if (!station.state.autopilot) return undefined;
-	if (!station.relayOn(ctx)) return undefined;
 	const ledger =
 		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
 	const ownerId = ownerIdOf(station);
@@ -282,9 +280,15 @@ function onSessionStop(station, ctx, evidence = null) {
 		ledger && typeof unreceivedChildren === "function"
 			? unreceivedChildren(ledger, ownerId ?? "root").length
 			: 0;
+	// Join first, before autopilot and relay checks. The child may be parked
+	// in scope_return, so this nudge outranks every relay, handoff, and
+	// successor nudge; none of them can release that child. The rule binds the
+	// root too, including a root whose relay is off.
 	if (unreceived > 0) {
 		return continueFeedback(insideScopeNudge(unreceived));
 	}
+	if (!station.state.autopilot) return undefined;
+	if (!station.relayOn(ctx)) return undefined;
 	// A child's natural stop is not a ledger submission. The host's branch
 	// contract keeps it working until `scope_return`; the root relay must not
 	// arm a handoff or capture the child's prose as the root's report.

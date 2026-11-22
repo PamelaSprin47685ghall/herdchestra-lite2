@@ -11,18 +11,6 @@ export {
 	installBuiltinSlashExecutor,
 } from "./capture.mjs";
 export { createHeadlessTuiContext } from "./headless-tui.mjs";
-export {
-	MAIN_AGENT,
-	READ_ONLY_SUBAGENT,
-	READ_WRITE_SUBAGENT,
-	sessionInitFor,
-	agentPolicy,
-} from "./policy.mjs";
-export {
-	rewriteVibeModeContext,
-	injectSystemPrompt,
-	persistentOperatingSkill,
-} from "./prompts.mjs";
 export { createStatusRuntime, installStatus } from "./status.mjs";
 export {
 	usageNumber,
@@ -54,11 +42,4 @@ export {
 	activateToolsTicket,
 	switchModelTicket,
 	restoreScopedModelTicket,
-	forkTicket,
-	joinTicket,
-	returnTicket,
-	scopeContextTicket,
-	panhandleTicket,
-	ticketHost,
 } from "./host-tickets.mjs";
-export { spawnChildTicket, writeFrozenOutcome } from "./fork-spawn-ticket.mjs";

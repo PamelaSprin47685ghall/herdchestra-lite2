@@ -5,8 +5,9 @@
 // module is the holder the wiring injects as the four ports. It holds no host
 // objects: a ledger is plain data, and every wait is a plain Promise.
 
-import { emptyTotals, forkOf, markReady, takeReady } from "herdchestra-lite2";
-import { normalizeTargets, validTargets } from "herdchestra-lite2";
+import { forkOf, markReady, takeReady } from "./forkjoin.mjs";
+import { emptyTotals } from "./turn-stats.mjs";
+import { normalizeTargets, validTargets } from "./targets.mjs";
 
 function failure(code, reason) {
   return { ok: false, code, reason };
@@ -22,8 +23,12 @@ function createWaiter() {
   return { promise, resolve, reject };
 }
 
-export function createForkRegistry() {
+export function createForkRegistry({ conversationKeyOf: keyOf = conversationKeyOf, sameManager: same = sameManager } = {}) {
   return {
+    // The host supplies the two session predicates. The defaults below read
+    // only a session-id string, so a test or a bare registry works unchanged.
+    conversationKeyOf: keyOf,
+    sameManager: same,
     // One ledger per conversation key. A SessionManager, a session object, or
     // a test string all work as a key.
     ledgers: new WeakMap(),
@@ -103,14 +108,6 @@ export function identityForAgent(registry, agentId) {
   return forkId ? identityOf(registry, forkId) : null;
 }
 
-/** The host's agent id for a context, or null. */
-export function agentIdOf(ctx) {
-  const direct = ctx?.agent?.id;
-  if (typeof direct === "string" && direct !== "") return direct;
-  const fallback = ctx?.agentId;
-  return typeof fallback === "string" && fallback !== "" ? fallback : null;
-}
-
 /**
  * Attach the host's agent id to a fork that was already registered. The id
  * only exists after the child session is built, while the fork itself exists
@@ -160,8 +157,8 @@ export function conversationKeyOf(manager) {
  * must never route the next stop to the old station; the session id survives a
  * branch manager proxy, so compare it when the manager object differs.
  */
-export function sameManager(station, ctx) {
-  const key = ctx?.sessionManager ?? ctx;
+export function sameManager(station, token) {
+  const key = token ?? null;
   if (!key || !station?.manager) return false;
   if (station.manager === key) return true;
   try {
@@ -178,10 +175,10 @@ export function sameManager(station, ctx) {
  * one session; a different manager clears it. Return `clearPending` so the
  * registry keeps the only mutable field.
  */
-export function selectStopStation({ station, pendingStation, ctx }) {
+export function selectStopStation({ station, pendingStation, ctx, sameManager: same = sameManager }) {
   if (station.state.relay?.handoffPending) return { station, clearPending: false };
   if (!pendingStation) return { station, clearPending: false };
-  if (!sameManager(pendingStation, ctx)) return { station, clearPending: true };
+  if (!same(pendingStation, ctx)) return { station, clearPending: true };
   if (pendingStation.state.relay?.handoffPending) {
     return { station: pendingStation, clearPending: false };
   }
@@ -359,6 +356,11 @@ export async function waitForJoin(registry, ledger, forkId, options = {}) {
     const current = forkOf(ledger, forkId);
     if (!current) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
 		if (current.status === "joined") return { ok: true, fork: current };
+		// A reused scope supersedes its ready record and no join will take it.
+		// The child must stop instead of waiting for a take that reuse cancelled.
+		if (current.supersededAt) {
+			return { ok: true, superseded: true, fork: current };
+		}
 		// A failed bracket will never be taken. Waiting on it would hang the
 		// child for the life of the session, so the failure ends the wait.
 		if (current.status === "failed") {

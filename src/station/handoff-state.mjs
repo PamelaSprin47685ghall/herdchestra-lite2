@@ -7,17 +7,23 @@ import { record } from "../host/diagnostics.mjs";
 import { truncateForHostBoundary, openChildren, readyChildren } from "../scope/index.mjs";
 import { childReturnNudge } from "../scope/return-nudge.mjs";
 import {
-	applyLedgerEvaluation,
-	applyRetirement,
-	beginGenerationAfterHandoff,
 	collectUserPrompts,
 	handoffDemand,
 	handoffToolBlockedReason,
-	ledgerStats,
 	mergeUserPrompts,
 	successorOpeningText,
 } from "../relay/index.mjs";
 import { relayImplementations } from "../relay/policy.mjs";
+import {
+	decideHandoffAdvance,
+	decideHandoffArm,
+	decideHandoffReport,
+	decideInheritedLedgerViewed,
+	decideNaturalStop,
+	decideRelayEvaluation,
+	decideRetirement,
+	decideSelfHandoff,
+} from "./domain/handoff.mjs";
 
 function isChild(station) {
 	return typeof station.forkOwnerId === "function" && station.forkOwnerId() !== null;
@@ -40,33 +46,31 @@ function relayPolicyOf(station) {
 }
 
 function armHandoff(station, _ctx) {
-	if (isChild(station)) return false;
 	// Only the `handoff` degree may arm a transfer. `ledger` owes a ledger but
 	// never hands off, and `none` owes nothing at all.
-	if (!relayPolicyOf(station).canHandoff()) return false;
-	const relay = station.state.relay;
-	if (!relay || relay.canStop) return false;
+	const decision = decideHandoffArm({
+		relay: station.state.relay,
+		isChild: isChild(station),
+		canHandoff: relayPolicyOf(station).canHandoff(),
+	});
+	if (!decision.arm) return false;
 	station.handoffReport = null;
-	station.state.relay = {
-		...relay,
-		handoffPending: true,
-	};
+	station.state.relay = decision.relay;
 	station.persist();
 	station.registry?.markPending?.(station);
 	return true;
 }
 
 function advanceRelayForHandoff(station, options = {}) {
-	if (isChild(station)) return false;
-	if (!relayPolicyOf(station).canHandoff()) return false;
-	const relay = station.state.relay;
-	if (!relay || !relay.handoffPending || relay.canStop) return false;
-	const expected = options.expectedGeneration;
-	if (Number.isInteger(expected) && expected !== relay.generation) return false;
-	station.state.relay = beginGenerationAfterHandoff(relay, {
+	const decision = decideHandoffAdvance({
+		relay: station.state.relay,
+		isChild: isChild(station),
+		canHandoff: relayPolicyOf(station).canHandoff(),
+		expectedGeneration: options.expectedGeneration,
 		at: Number.isFinite(options.at) ? options.at : Date.now(),
-		fromGeneration: relay.generation,
 	});
+	if (!decision.advance) return false;
+	station.state.relay = decision.relay;
 	station.persist();
 	return true;
 }
@@ -87,50 +91,34 @@ function unreceivedChildren(station) {
 }
 
 function recordLedgerEvaluation(station, phases, op, options = {}) {
-	// `none` owes nothing, so a ledger write must not turn the full flow on.
-	// The caller still gets the shared answer shape, with `changed: false`.
-	if (!relayPolicyOf(station).owesLedger()) {
-		return {
-			relay: station.state.relay,
-			stats: { empty: true, open: 0, total: 0 },
-			action: null,
-			changed: false,
-		};
-	}
-	const before = station.state.relay;
-	const stats = ledgerStats(phases);
-	// An empty ledger is a claim that nothing remains. While this root still
-	// owns an unreceived child, that claim is false: the write is accepted and
-	// reported, but the relay does not advance, no handoff is armed, and no
-	// stop is allowed. The tool itself stays available.
-	if (options.isError !== true && op !== "view" && stats.empty) {
-		const unreceived = unreceivedChildren(station);
-		if (unreceived > 0) {
-			return { relay: before, stats, action: "held", changed: false, unreceived };
-		}
-	}
-	const applied = applyLedgerEvaluation(before, phases, {
+	const decision = decideRelayEvaluation({
+		relay: station.state.relay,
+		owesLedger: relayPolicyOf(station).owesLedger(),
+		phases,
 		op,
-		...options,
+		options,
+		unreceived: unreceivedChildren(station),
 	});
-	station.state.relay = applied.relay;
-	station.persist();
+	const { commit, ...applied } = decision;
+	if (commit) {
+		station.state.relay = applied.relay;
+		station.persist();
+	}
 	return applied;
 }
 
 /**
- * Record one natural stop as the empty-ledger submission it is.
- *
- * A stop outside every scope is not a violation to correct: it is the same
- * evaluation a holder would submit with `todo({ list: [] })`. The transition
- * decides the outcome. When the stop arms a handoff, the demand goes out as a
- * user prompt carrying the same text the todo result carries, so the holder
- * writes the report immediately instead of receiving a second wording.
+ * Record one retirement: the holder is exhausted, the non-empty ledger is
+ * inherited, and the next generation continues the work. A retirement never
+ * promotes; it only arms the handoff.
  */
 function recordRetirement(station) {
 	// `none` owes nothing, so a retirement must not arm a handoff either.
-	if (!relayPolicyOf(station).owesLedger()) return null;
-	const applied = applyRetirement(station.state.relay);
+	const applied = decideRetirement({
+		relay: station.state.relay,
+		owesLedger: relayPolicyOf(station).owesLedger(),
+	});
+	if (!applied) return null;
 	station.state.relay = applied.relay;
 	station.persist();
 	return applied;
@@ -147,26 +135,17 @@ function recordRetirement(station) {
  * prompt.
  */
 function recordNaturalStop(station, ctx) {
-	if (!relayPolicyOf(station).owesLedger()) return null;
-	// The relay is an autopilot protocol. With autopilot off, a natural stop
-	// is a manual stop; no empty evaluation, retirement, or handoff runs.
-	if (!station.state.autopilot) return null;
-	// The relay is a root protocol. A child's stop is the host's return gate;
-	// this transition must not touch the shared relay even if a future caller
-	// forgets the identity check.
-	const ownerId =
-		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
-	if (ownerId !== null) return null;
-	const relay = station.state.relay;
-	if (!relay || relay.handoffPending || relay.canStop) return null;
-	// After a handoff the recorded ledger belongs to the predecessor; the
-	// successor's own stop is its first evaluation, so it is judged as empty.
-	const beforeFirstEvaluation =
-		relay.generation > 0 && relay.firstEvaluation === null;
-	const retired = !beforeFirstEvaluation && relay.lastLedger?.empty === false;
-	const applied = retired
-		? recordRetirement(station)
-		: recordLedgerEvaluation(station, [], "natural-stop");
+	const plan = decideNaturalStop({
+		relay: station.state.relay,
+		isChild: isChild(station),
+		autopilot: station.state.autopilot,
+		owesLedger: relayPolicyOf(station).owesLedger(),
+	});
+	if (!plan) return null;
+	const applied =
+		plan.kind === "retire"
+			? recordRetirement(station)
+			: recordLedgerEvaluation(station, [], "natural-stop");
 	if (!applied || applied.action === null) return applied;
 	if (applied.action !== "handoff" && applied.action !== "retire") return applied;
 	if (!armHandoff(station, ctx)) return applied;
@@ -182,26 +161,29 @@ function recordNaturalStop(station, ctx) {
 
 /** Clear the inherited-ledger requirement once the successor has looked. */
 function markInheritedLedgerViewed(station) {
-	const relay = station.state.relay;
-	if (!relay?.viewRequired) return false;
-	station.state.relay = { ...relay, viewRequired: false };
+	const decision = decideInheritedLedgerViewed({ relay: station.state.relay });
+	if (!decision) return false;
+	station.state.relay = decision.relay;
 	station.persist();
 	return true;
 }
 
 function captureHandoffReport(station, text) {
-	if (isChild(station)) return false;
-	if (!station.state.relay?.handoffPending) return false;
-	const trimmed = typeof text === "string" ? text.trim() : "";
-	if (!trimmed) return false;
-	station.handoffReport = trimmed;
+	const decision = decideHandoffReport({
+		relay: station.state.relay,
+		isChild: isChild(station),
+		text,
+	});
+	if (!decision.capture) return false;
+	station.handoffReport = decision.text;
 	return true;
 }
 
 function commitSelfHandoff(station, ctx, report) {
-	if (isChild(station)) return { ok: false };
 	const relay = station.state.relay;
-	if (!relay || !relay.handoffPending || relay.canStop) return { ok: false };
+	if (!decideSelfHandoff({ relay, isChild: isChild(station) })) {
+		return { ok: false };
+	}
 	// A handoff compacts the branch: the successor reads the summary, not the
 	// transcript. The archive keeps the user's own prompts across generations
 	// and a reload, so the report never has to restate them.

@@ -121,8 +121,10 @@ describe("retired mechanisms stay retired", () => {
 		expect(gates).not.toContain("TODO_WHILE_CHILDREN_OPEN");
 		// The relay is what waits: an empty ledger while a child is unreceived
 		// is held, not turned into a handoff.
-		const handoff = source("../src/station/handoff-state.mjs");
+		const handoff = source("../src/station/domain/handoff.mjs");
 		expect(handoff).toContain('action: "held"');
+		const adapter = source("../src/station/handoff-state.mjs");
+		expect(adapter).toContain("decideRelayEvaluation");
 		const relayText = source("../resources/prompts/receipts/relay.md");
 		expect(relayText).toContain("## next.held-children");
 	});

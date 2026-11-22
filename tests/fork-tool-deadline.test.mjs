@@ -97,6 +97,20 @@ describe("fork branch wall clock", () => {
 		expect(verdict.reason.length).toBeGreaterThan(0);
 	});
 
+	test("a receipt without an admission is refused, not free", () => {
+		const { ledger } = ledgerWith(60, Date.now());
+		const station = stationFor(ledger, "child-1");
+		// A host may call only the post-execution seam. The result must not be
+		// free merely because the pre-execution gate never ran.
+		const verdict = station.admitToolDispatch("call-receipt", "read", {}, {
+			elapsedMs: 0,
+			limitMs: 1_000,
+		});
+		expect(verdict?.block).toBe(true);
+		expect(typeof verdict.reason).toBe("string");
+		expect(Object.hasOwn(station.state.charges, "call-receipt")).toBe(false);
+	});
+
 	test("scope_join and scope_return are never time-gated, even past the deadline", () => {
 		const { ledger, record } = ledgerWith(1, Date.now() - 5_000);
 		const station = stationFor(ledger, "child-1");

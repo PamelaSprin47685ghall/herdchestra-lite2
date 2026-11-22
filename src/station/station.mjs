@@ -546,6 +546,15 @@ export class SessionStation {
 					}),
 				};
 			}
+			// A receipt is the post-execution half of a guarded call, so it
+			// normally follows an admission and this cache check is a hit. If
+			// the bounded gate cache evicted the id, or a host uses only this
+			// seam, admit now instead of letting a result skip the branch
+			// budget. Charging is idempotent through `state.charges`.
+			if (!this.toolGateVerdict(id).hit) {
+				const verdict = this.admitToolDispatch(id, name, ctx);
+				if (verdict?.block) return verdict;
+			}
 			return undefined;
 		}
 		// Two seams admit one tool call: the host's `tool_call` hook and this

@@ -154,11 +154,14 @@ ratchet.
 - `bun test tests` on the worktree: **1094 pass / 0 fail**, 97 files, 4044
   expect calls. The worktree also carries 12 user/concurrent uncommitted files
   (listed under Open items), so this is not a clean-tree number.
-- The previous committed HEAD `ec4951b` measured **1093 pass / 0 fail**, 97
-  files, 4036 expect calls.
+- The worktree at `ec4951b` (with the then-uncommitted 12 files, before this
+  pass) measured **1093 pass / 0 fail**, 97 files, 4036 expect calls.
 - Clean committed-tree replay at `6cb59213` (`git archive`): **1081 pass / 0
   fail**, 96 files, 3937 expect calls. It excludes the user's uncommitted
   prompt files.
+- Clean committed-tree replay at `9290997` (code tree `ffaf49a`): **1082 pass
+  / 0 fail**, 96 files, 3945 expect calls. The 12-test difference from the
+  worktree is the 12 uncommitted user/concurrent files.
 - `bunx eslint .`: **0** with no output.
 - `bun run smoke:relay`: **11/11**.
 - `git diff --check` on the generation-5 files: clean.
@@ -250,7 +253,8 @@ ratchet.
   through `SessionStation.markPending`/`clearPending`, let `ensureTools` own
   the read-write gate, and widen the port-table ratchet to host and
   activation.
-- This STATUS commit (HEAD): record generation-5 station compliance.
+- `9290997` docs: record generation-5 station compliance; this follow-up adds
+  the clean-tree replay at that commit.
 
 ## Final state
 

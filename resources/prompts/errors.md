@@ -1,3 +1,7 @@
+## scope-context-empty
+
+Give at least one of `pin` or `amend`; the call changed nothing.
+
 ## amend-reflection
 
 Provide a non-empty `reflection` to replace the beat.
@@ -62,9 +66,25 @@ Do not pass `time`. The system derives the wall-clock budget from the session's 
 
 No bracket ledger is attached; fork/join is unavailable in this session. Continue in the current scope, or report the configuration.
 
-## duplicate-scope-id
+## missing-intent
 
-Scope {{scopeId}} is already declared. Choose another `scopeId`.
+A new scope needs a non-empty `intent`. Only an amendment of an existing `scopeId` may omit it.
+
+## foreign-scope-id
+
+Scope {{scopeId}} belongs to another owner. Only its owner may amend it.
+
+## scope-running-blocked
+
+Scope {{scopeId}} is running, so it cannot be marked blocked. Amend its budget or requirements instead.
+
+## scope-reuse-empty
+
+Reusing `{{scopeId}}` changed nothing. Add budget, intent, or targets.
+
+## scope-not-amendable
+
+This scope cannot be amended in its current state. Fork a new scope instead.
 
 ## child-spawner-unavailable
 
@@ -75,34 +95,14 @@ No child spawner is attached; this session cannot start child scopes. Continue i
 forks[{{index}}]: {{reason}}
 The batch did not start. Reduce the parent context or use a model with a larger window, then fork again.
 
-## elder-report-type
-
-`elder_report` is a string or null.
-
-## elder-report-empty
-
-`elder_report` is a non-empty string or null.
-
 ## no-ready-child
 
 No child has returned yet. Keep working, or wait for one with `scope_join`.
-
-## elder-report-missing
-
-Receipt {{scopeId}} is still unreported. Summarize it in `elder_report`, then join again.
 
 ## join-context-exceeded
 
 {{detail}}
 The record stays ready; use a model with a larger window or shorten the record, then join again.
-
-## stale-elder-reported
-
-Receipt {{scopeId}} already has a summary. Retry with `elder_report: null`.
-
-## stale-elder-uncommitted
-
-The join took no result; its summary was not committed. Retry with an `elder_report` for {{scopeId}}.
 
 ## not-a-child
 
@@ -150,7 +150,7 @@ The native todo call returned no result object. The ledger is unchanged.
 
 ## no-unreceived-work
 
-This scope owns no unreceived work. This call created no receipt and any `elder_report` it carried was not committed. Fork a child, or continue your own scope.
+This scope owns no unreceived work. This call created no receipt. Fork a child, or continue your own scope.
 
 ## tool-budget-exhausted
 
@@ -187,11 +187,3 @@ forks[{{index}}]: model `{{selector}}` is not available. Available: {{available}
 ## fork-register-failed
 
 The fork could not be registered ({{code}}). Retry the fork; if it fails again, report the code.
-
-## elder-report-too-short
-
-`elder_report` needs at least {{minimum}} characters. Say what the successor still needs from that record; the content decides its format.
-
-## elder-report-too-long
-
-`elder_report` exceeds {{maximum}} characters. Shorten it to what a successor cannot recover elsewhere.

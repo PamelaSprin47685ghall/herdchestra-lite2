@@ -45,7 +45,7 @@ describe("host seam announcement", () => {
 		expect(notices[0].level).toBe("error");
 		expect(notices[0].text).toContain("host seam missing");
 		expect(notices[0].text).toContain("extensionRunner");
-		expect(notices[0].text).toContain("folding and relay are disabled");
+		expect(notices[0].text).toContain("the relay is disabled");
 	});
 
 	test("names every missing seam", () => {

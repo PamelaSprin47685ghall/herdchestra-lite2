@@ -193,7 +193,7 @@ describe("the request has limits and a reason", () => {
 			.toBe("PANHANDLE_TOOL_LIMIT");
 		expect(call("g2", { seconds: 301, because: "more" }).details.code)
 			.toBe("PANHANDLE_SECONDS_LIMIT");
-		expect(call("g3", { tools: { pin: 1 }, because: "more" }).details.code)
+		expect(call("g3", { tools: { scope_context: 1 }, because: "more" }).details.code)
 			.toBe("PANHANDLE_FREE_TOOL");
 	});
 

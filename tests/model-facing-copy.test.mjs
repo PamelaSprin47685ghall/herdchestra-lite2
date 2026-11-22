@@ -120,12 +120,24 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 	expect(text).toContain("Unreceived work: earlier, latest.");
 });
 
-test("the registered scope_return explains why no elder report is needed", () => {
+test("the registered scope_return explains the sealed final receipt and the digest rule", () => {
 	const tools = new Map();
 	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
 	const returning = tools.get("scope_return");
 	expect(returning.parameters.properties).toEqual({});
 	expect(returning.description).toMatch(/(?:last|latest|final)[^.]*receipt[^.]*seal/i);
+	expect(returning.description).toContain("bare names of the tools");
+	expect(returning.description).not.toContain("elder_report");
+});
+
+test("the registered scope_fork reads a repeated scopeId as an amendment", () => {
+	const tools = new Map();
+	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
+	const item = tools.get("scope_fork").parameters.properties.forks.items;
+	expect(item.properties.scopeId.description).toMatch(/amends? that scope/i);
+	expect(item.properties.scopeId.description).toContain("only its owner");
+	expect(item.properties.intent.description).toMatch(/next turn boundary/i);
+	expect(item.required).not.toContain("intent");
 });
 
 test("the root receipt reports unreceived work until the root joins it", () => {

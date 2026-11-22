@@ -8,6 +8,8 @@
 import { decideAbandon } from "./abandon.mjs";
 import { deadlineInfo } from "./clock.mjs";
 import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
+import { publicScopeId } from "./scope-id.mjs";
+import { grantBudget } from "./panhandle.mjs";
 
 const RUNNING = "running";
 const READY = "ready";
@@ -106,6 +108,17 @@ export function registerFork(ledger, spec, options = {}) {
     intent: s.intent.trim(),
     depth: s.depth,
     childDepth: s.depth + 1,
+    // Reuse identity: a later generation continues the same public scope.
+    generation:
+      Number.isInteger(s.generation) && s.generation > 0 ? s.generation : 1,
+    continuesForkId: isNonEmptyString(s.continuesForkId)
+      ? s.continuesForkId
+      : null,
+    // Requirements queued after the birth intent, and how many the child has
+    // been handed. A blocked entry can collect them before it ever runs.
+    requirements: [],
+    requirementsDelivered: 0,
+    supersededAt: null,
     openSeq: ledger.seq,
     closeSeq: null,
     closedOrder: null,
@@ -177,8 +190,99 @@ export function markReady(ledger, forkId, outcome = {}) {
 }
 
 /**
+ * Reuse an existing scope: add budget and seconds, then queue a requirement.
+ * A closed bracket is refused; the station opens the next generation instead.
+ */
+export function amendFork(ledger, forkId, request = {}, options = {}) {
+  const record = forkOf(ledger, forkId);
+  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
+  if (record.status !== RUNNING && record.status !== BLOCKED) {
+    return failure(
+      "FORK_CLOSED",
+      `Fork "${forkId}" is ${record.status}; open the next generation instead.`,
+    );
+  }
+  const source = request && typeof request === "object" ? request : {};
+  const tools =
+    source.budget && typeof source.budget === "object" ? source.budget : {};
+  const seconds = Number.isInteger(source.seconds) && source.seconds > 0 ? source.seconds : 0;
+  let granted = { ok: true, tools: {}, seconds: 0 };
+  if (Object.keys(tools).length > 0 || seconds > 0) {
+    granted = grantBudget(
+      record,
+      { tools, ...(seconds > 0 ? { seconds } : {}) },
+      { ...options, allowClockOff: true, totalCap: true },
+    );
+    if (!granted.ok) return granted;
+  }
+  const intent = typeof source.intent === "string" ? source.intent.trim() : "";
+  if (intent !== "") {
+    if (!Array.isArray(record.requirements)) record.requirements = [];
+    record.requirements.push(intent);
+  }
+  if (Array.isArray(source.targets) && source.targets.length > 0) {
+    if (!Array.isArray(record.targets)) record.targets = [];
+    for (const target of source.targets) {
+      const text = typeof target === "string" ? target.trim() : "";
+      if (text !== "" && !record.targets.includes(text)) {
+        record.targets.push(text);
+      }
+    }
+  }
+  return {
+    ok: true,
+    added: { tools: { ...granted.tools }, seconds: granted.seconds },
+    queued: Array.isArray(record.requirements) ? record.requirements.length : 0,
+    status: record.status,
+    record,
+  };
+}
+
+/** Mark a ready record as replaced by the next generation and unqueue it. */
+export function supersedeFork(ledger, forkId, now = Date.now()) {
+  const record = forkOf(ledger, forkId);
+  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
+  if (record.status !== READY) {
+    return failure(
+      "FORK_NOT_READY",
+      `Fork "${forkId}" is ${record.status}; only a ready result can be superseded.`,
+    );
+  }
+  record.supersededAt = Number.isFinite(now) ? now : Date.now();
+  removeFromQueues(ledger, forkId);
+  return { ok: true, record };
+}
+
+/**
+ * The newest live record for a public scope id. Superseded records are
+ * history: addressable, never delivered, never counted as open work.
+ */
+export function liveRecordForScope(ledger, scopeId) {
+  const key = typeof scopeId === "string" ? scopeId.toLowerCase() : "";
+  if (key === "") return null;
+  let best = null;
+  for (const forkId of ledger?.order ?? []) {
+    const record = forkOf(ledger, forkId);
+    if (!record) continue;
+    if (publicScopeId(record).toLowerCase() !== key) continue;
+    if (!best) {
+      best = record;
+      continue;
+    }
+    const generation = Number.isInteger(record.generation)
+      ? record.generation
+      : 1;
+    const bestGeneration = Number.isInteger(best.generation)
+      ? best.generation
+      : 1;
+    if (generation >= bestGeneration) best = record;
+  }
+  return best;
+}
+
+/**
  * Parent side takes the earliest ready child. Stale queue entries (already
- * joined, or moved away by reparenting) are dropped on the way.
+ * joined, superseded, or moved away by reparenting) are dropped on the way.
  */
 export function takeReady(ledger, options = {}) {
   const ownerId = options?.ownerId;
@@ -191,7 +295,12 @@ export function takeReady(ledger, options = {}) {
   const blocked = [];
   for (let index = 0; index < queue.length; index += 1) {
     const record = forkOf(ledger, queue[index]);
-    if (!record || record.status !== READY || record.ownerId !== ownerId) {
+    if (
+      !record ||
+      record.status !== READY ||
+      record.ownerId !== ownerId ||
+      record.supersededAt
+    ) {
       queue.splice(index, 1);
       index -= 1;
       continue;
@@ -327,7 +436,7 @@ export function openChildren(ledger, ownerId) {
  * Work this owner still owes a receive. A running child and a returned child
  * that no join has taken are both unreceived; a blocked plan entry never runs
  * and a joined child is already delivered. The order is the ledger's
- * registration order, so a receipt lists the same set every time it is read.
+ * registration order, so the parent sees the same set every time it reads.
  */
 export function unreceivedChildren(ledger, ownerId) {
   const out = [];
@@ -335,6 +444,7 @@ export function unreceivedChildren(ledger, ownerId) {
     const record = forkOf(ledger, forkId);
     if (!record) continue;
     if (record.ownerId !== ownerId) continue;
+    if (record.supersededAt) continue;
     if (record.status !== RUNNING && record.status !== READY) continue;
     out.push(forkId);
   }
@@ -346,7 +456,13 @@ export function readyChildren(ledger, ownerId) {
   for (const forkId of ledger.order) {
     const record = forkOf(ledger, forkId);
     if (!record) continue;
-    if (record.ownerId !== ownerId || record.status !== READY) continue;
+    if (
+      record.ownerId !== ownerId ||
+      record.status !== READY ||
+      record.supersededAt
+    ) {
+      continue;
+    }
     out.push(forkId);
   }
   out.sort((a, b) => {
@@ -606,7 +722,7 @@ export function restoreLedgerChecked(value) {
   }
   const ready = out.order
     .map((forkId) => out.forks[forkId])
-    .filter((record) => record.status === READY)
+    .filter((record) => record.status === READY && !record.supersededAt)
     .sort((left, right) => (left.readySeq ?? 0) - (right.readySeq ?? 0));
   for (const record of ready) {
     if (!Number.isInteger(record.readySeq) || record.readySeq <= 0) {
@@ -627,9 +743,7 @@ export function restoreLedgerChecked(value) {
 
 /**
  * Rebuild a ledger, discarding the tree when its queues and levels do not
- * pair. Callers that also carry a receipt chain must use the checked form:
- * keeping receipts for a tree that just reset would leave a pending report
- * pointing at a fork no longer in the ledger.
+ * pair.
  */
 export function restoreLedger(value) {
   return restoreLedgerChecked(value).ledger;

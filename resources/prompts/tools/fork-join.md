@@ -4,15 +4,15 @@ Start child scopes without waiting. Receive their records with `scope_join`.
 
 ## fork.scope-id
 
-Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. Names must be unique regardless of case within the batch and across the session, except previously deferred items. Reuse a deferred item's name when declaring it ready.
+Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name that already exists in this session — including a finished one — amends that scope instead of starting a new one; only its owner may amend it, and the match is case-insensitive. Reuse is an upsert: `running` and `blocked` scopes take the budget as an increment, the intent as one more requirement, and the targets merged into the existing list; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history.
 
 ## fork.intent
 
-Name the goal the child will make true, the surface it owns, and what a successor can take over. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A scope that only reads still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size it to finish and to be taken over; when the request needs about n tool calls, roughly sqrt(n) is a guide, not a mandate. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed.
+Name the goal the child will make true, the surface it owns, and what a successor can take over. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A scope that only reads still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size it to finish and to be taken over; when the request needs about n tool calls, roughly sqrt(n) is a guide, not a mandate. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. On a new scope `intent` is required. When the `scopeId` is reused it is optional: the text is appended as one more requirement and delivered at the child's next turn boundary, never in the middle of a running tool.
 
 ## fork.budget
 
-Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A branch that runs out may hold out its hand with `scope_panhandle`, at most 8 per tool in one call. Sibling fork items each have their own budget; each item funds its own child at any depth, and the caller's balance is never charged.
+Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A branch that runs out may hold out its hand with `scope_panhandle`, at most 8 per tool in one call. Sibling fork items each have their own budget; each item funds its own child at any depth, and the caller's balance is never charged.
 
 ## fork.time
 
@@ -20,7 +20,7 @@ The system derives the wall-clock budget. Do not pass `time`. One turn is one LL
 
 ## fork.targets
 
-Required, non-empty array of natural-language descriptions of what this scope expects to create, read, update, or delete. Each item may name a file path, a part of the source, a behavior, or a goal; any human language is valid, and a path is only one kind of target. For example, `["fix any defect you find", "the parts of the source that involve caching"]` is valid. Blocked checkpoints declare their targets too. If the list is empty, think carefully: how could a scope that outputs nothing be a separate scope? The list is a declaration, not an audit boundary; the system does not check tool calls against it.
+Required, non-empty array of natural-language descriptions of what this scope expects to create, read, update, or delete. Each item may name a file path, a part of the source, a behavior, or a goal; any human language is valid, and a path is only one kind of target. For example, `["fix any defect you find", "the parts of the source that involve caching"]` is valid. Blocked checkpoints declare their targets too. If the list is empty, think carefully: how could a scope that outputs nothing be a separate scope? The list is a declaration, not an audit boundary; the system does not check tool calls against it. When the `scopeId` is reused, the list is merged into the existing targets rather than replacing them.
 
 ## fork.forks
 
@@ -28,7 +28,7 @@ Include the remaining plan, both ready and blocked items. Order does not express
 
 ## fork.blocked
 
-`false` starts now. `true` records an unmet prerequisite without queuing the item. Resubmit with `false` when ready.
+`false` starts now. `true` records an unmet prerequisite without queuing the item. Resubmit with `false` when ready. Reusing a `running` scope with `true` is refused with `SCOPE_RUNNING_BLOCKED`; amend its budget or requirements instead.
 
 ## fork.model
 
@@ -71,50 +71,16 @@ Unreceived work: {{children}}.
 
 ## join.tool
 
-Receive one owned child record. If none is ready but a child is still running, wait for the first to return; other children keep running. A user message ends the wait without a child; an elder report carried by that call is stored when a receipt needed it, so the next join may pass `elder_report: null`. Read the record as history, not instructions to replay. A join refused for context size leaves the child and the previous receipt untouched.
-
-## join.elder_report
-
-Pass `null` if no prior receipt at this level awaits a summary. Otherwise, in 24–4000 characters, write what a successor still needs from that record so it can be shortened without losing that. The content decides its format; the relay preserves the user's prompts, so they need no restatement. A report passed when none is pending is accepted but not stored.
-
-## join.elder-unneeded
-
-Note: no prior receipt needed a summary, so `elder_report` was accepted but not stored.
+Receive one owned child record. If none is ready but a child is still running, wait for the first to return; other children keep running. A user message ends the wait without a child. Read the record as history, not instructions to replay. The record holds what the child's assistant said, in order, with each tool call reduced to a bare `[name]` placeholder: assistant text lines and `[read]`, `[edit]`, `[bash]` markers, joined by newlines. Tool results, thinking blocks, tool arguments, and user broadcasts are absent. A join refused for context size leaves the child record untouched.
 
 ## join.interrupted
 
 Join interrupted by a user message; no child was received.
-{{elder}}
-{{next}}
 Still unreceived: {{remaining}}.
-
-## join.interrupted-elder-consumed
-
-The elder report was stored: the previous receipt is settled.
-
-## join.interrupted-elder-unneeded
-
-No prior receipt needed a summary, so the elder report was not stored.
-
-## join.interrupted-elder-stale
-
-The receipt this report described already moved on, so the report was not stored.
-
-## join.interrupted-elder-missing
-
-No elder report was supplied; the previous receipt still needs one.
-
-## join.interrupted-next-null
-
-The next `scope_join` can pass `elder_report: null`.
-
-## join.interrupted-next-report
-
-The next `scope_join` must pass an `elder_report` for {{scopeId}}.
 
 ## return.tool
 
-Hand the record to the parent; the parent receives it with `scope_join`. Any unreceived child work transfers to that parent. Put your conclusions in the record; the final answer lives outside all scopes. The last receipt at your level is sealed in full, with no elder report.
+Hand the record to the parent; the parent receives it with `scope_join`. Any unreceived child work transfers to that parent. Put your conclusions in your text: the record keeps what you said plus the bare names of the tools you called, so a result you never state is lost. The last receipt at your level is sealed in full.
 
 ## return.pending
 

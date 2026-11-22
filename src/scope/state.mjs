@@ -10,6 +10,9 @@ const CONTROL_TOOLS = new Set([
   "scope_fork",
   "scope_join",
   "scope_return",
+  "scope_context",
+  // The retired names are never registered now, but an older transcript
+  // still carries amend and pin calls that the scan path must process.
   "amend",
   "pin",
 ]);
@@ -61,10 +64,6 @@ export function createState() {
     epoch: 0,
     charges: {},
     amends: [],
-    // Fork/join receipts of this branch, in the order `scope_join` committed
-    // them. Each record names both brackets and may carry the summary of the
-    // receipt before it. See receipts.mjs for the fold gates.
-    receipts: [],
     // The bracket tree itself: fork ids, owners, budgets, ready order and the
     // frozen record of every child that returned. It is persisted with the
     // state because a reload must be able to close or explain every bracket.

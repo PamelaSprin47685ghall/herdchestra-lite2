@@ -20,7 +20,7 @@ Root is outside all scopes. It plans, forks, joins, and answers; ordinary tools 
 
 ### Run scopes
 
-- Every level, root included, holds the free control tools (`scope_fork`, `scope_join`, `amend`, `pin`, `todo`, `ask`, `wait`). A `read` or `write` whose path is a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free too: no tool point, at any depth, on a scope with zero budget or on the root.
+- Every level, root included, holds the free control tools (`scope_fork`, `scope_join`, `scope_context`, `todo`, `ask`, `wait`). A `read` or `write` whose path is a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free too: no tool point, at any depth, on a scope with zero budget or on the root.
 - Word to the wise, at every depth: `scope_fork` costs nothing, and the child's budget and clock are minted with the item that starts it — the caller's balance never notices. Plan the split the moment the task arrives: decide then which parts go to fresh children — they can fork again in turn — and join their records before returning. A scope that waits until a clean handoff is still affordable has already started cramming; forking is cheaper than any handout.
 - A running branch may hold out its hand with `scope_panhandle` for more tool points and wall-clock seconds. It lands at once, and it is the only call that survives a budget refusal.
 - Fork independent work as soon as its inputs exist. Give every child a self-contained intent, owned files, and the evidence the next worker needs to continue. Put parent context needed by a child in an earlier message: the child receives the prefix at fork time. When batching with other calls, place `scope_join` and `scope_return` last.

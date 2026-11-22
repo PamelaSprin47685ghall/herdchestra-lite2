@@ -31,7 +31,7 @@ function ledgerWithReady(id, record = "child says done") {
 }
 
 function stationFor(ledger, options = {}) {
-  const state = { receipts: [], relay: { generation: 0, fullFlow: false } };
+  const state = { relay: { generation: 0, fullFlow: false } };
   return {
     state,
     forkLedgerPort: () => ledger,
@@ -42,13 +42,12 @@ function stationFor(ledger, options = {}) {
     tokensPerCharFor: () => 1,
     childOutcomePort: () => null,
     usage: { lastUsageModelKey: null },
-    recordJoinReceipt: (entry) => state.receipts.push(entry),
     ...options,
   };
 }
 
 function joinCall(id = "j1") {
-  return { id, arguments: { elder_report: null } };
+  return { id, arguments: {} };
 }
 
 describe("an immediate join and its durable receipt", () => {
@@ -61,8 +60,6 @@ describe("an immediate join and its durable receipt", () => {
     expect(out.details.joined).toBe(true);
     expect(out.details.persisted).toBe(false);
     expect(out.content[0].text).toContain("Persistence warning");
-    expect(station.state.receipts).toHaveLength(1);
-    expect(station.state.receipts[0].forkId).toBe("f1");
   });
 
   test("a successful write carries persisted true and no warning", () => {
@@ -72,7 +69,6 @@ describe("an immediate join and its durable receipt", () => {
 
     expect(out.details.persisted).toBe(true);
     expect(out.content[0].text).not.toContain("Persistence warning");
-    expect(station.state.receipts[0].forkId).toBe("f2");
   });
 
   test("a station without persist is not judged", () => {
@@ -99,8 +95,6 @@ describe("a wait-finalized join and its durable receipt", () => {
       "wait-1",
       taken.fork,
       {},
-      {},
-      null,
     );
   }
 
@@ -114,7 +108,7 @@ describe("a wait-finalized join and its durable receipt", () => {
 
     expect(out.details.persisted).toBe(false);
     expect(out.content[0].text).toContain("Persistence warning");
-    // The receipt write and the control-state write both report false.
+    // `confirmJoinPersistence` and the final control-state write each report.
     expect(writes).toBe(2);
   });
 
@@ -127,14 +121,13 @@ describe("a wait-finalized join and its durable receipt", () => {
   });
 });
 
-describe("the receipt itself survives the failed write", () => {
-  test("the in-memory chain still holds the closed receipt", () => {
+describe("the bracket closes even when the write fails", () => {
+  test("the in-memory ledger still holds the closed bracket", () => {
     const ledger = ledgerWithReady("h1");
     const station = stationFor(ledger, { persist: () => false });
     handleJoinCall(station, joinCall("j4"));
 
     const record = forkOf(ledger, "h1");
     expect(record.status).toBe("joined");
-    expect(station.state.receipts[0].closeToolCallId).toBe("j4");
   });
 });

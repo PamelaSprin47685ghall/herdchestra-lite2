@@ -2,7 +2,7 @@
 //
 // host/capture.mjs patches two AgentSession members and writes one message
 // array. When the host renames any of them, the extension still loads and the
-// `scope` tool still appears, but folding and the relay degrade in silence.
+// `scope` tool still appears, but the relay degrades in silence.
 // This module turns that silence into one visible error per session.
 
 /**
@@ -36,7 +36,7 @@ export function wireHostDiagnosis(pi, diagnosis, hookDiagnosis = null) {
 	const parts = [];
 	if (seams.length > 0) {
 		parts.push(
-			`seam missing — ${seams.join(", ")}; folding and relay are disabled`,
+			`seam missing — ${seams.join(", ")}; the relay is disabled`,
 		);
 	}
 	if (events.length > 0) {

@@ -153,7 +153,7 @@ describe("todo", () => {
 });
 
 describe("control tools", () => {
-	for (const name of ["pin", "scope_fork", "scope_join", "scope_return"]) {
+	for (const name of ["scope_context", "scope_fork", "scope_join", "scope_return"]) {
 		test(`${name} is a free control tool`, () => {
 			const decision = decide({
 				call: { toolName: name, toolCallId: `call-${name}`, input: {} },
@@ -166,28 +166,28 @@ describe("control tools", () => {
 		});
 	}
 
-	test("amend is routed to directAmend only when the call is not handled", () => {
+	test("scope_context routes its amend half to directAmend only when the call is not handled", () => {
 		const unhandled = decide({
 			call: {
-				toolName: "amend",
+				toolName: "scope_context",
 				toolCallId: "call-amend",
-				input: { rationale: "the lexer owns the token" },
+				input: { amend: { reflection: "the lexer owns the token" } },
 			},
 		});
 
 		expect(unhandled.verdict).toBe("allow");
 		expect(unhandled.controls.process).toBe(true);
 		expect(unhandled.controls.directAmend).toEqual({
-			args: { rationale: "the lexer owns the token" },
+			args: { reflection: "the lexer owns the token" },
 		});
 		expect(unhandled.charge).toBeNull();
 		expect(unhandled.persist).toBe(false);
 
 		const handled = decide({
 			call: {
-				toolName: "amend",
+				toolName: "scope_context",
 				toolCallId: "call-amend",
-				input: { rationale: "the lexer owns the token" },
+				input: { amend: { reflection: "the lexer owns the token" } },
 			},
 			processed: { handled: true, hasCall: true },
 		});
@@ -198,18 +198,31 @@ describe("control tools", () => {
 		expect(handled.persist).toBe(false);
 	});
 
-	test("amend accepts a JSON string input", () => {
+	test("scope_context accepts a JSON string input", () => {
 		const decision = decide({
 			call: {
-				toolName: "amend",
+				toolName: "scope_context",
 				toolCallId: "call-amend",
-				input: '{"rationale":"the lexer owns the token"}',
+				input: '{"amend":{"reflection":"the lexer owns the token"}}',
 			},
 		});
 
 		expect(decision.controls.directAmend).toEqual({
-			args: { rationale: "the lexer owns the token" },
+			args: { reflection: "the lexer owns the token" },
 		});
+	});
+
+	test("a pin-only scope_context has no direct amend", () => {
+		const decision = decide({
+			call: {
+				toolName: "scope_context",
+				toolCallId: "call-pin",
+				input: { pin: { finding: "kept" } },
+			},
+		});
+
+		expect(decision.controls.directAmend).toBeNull();
+		expect(decision.charge).toBeNull();
 	});
 
 	test("steer is not a control tool; it is charged like a normal tool", () => {

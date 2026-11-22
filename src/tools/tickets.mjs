@@ -392,10 +392,6 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 			if (first?.details?.joined && wait) notifyWaiters(wait.registry);
 			return first;
 		}
-		// The binding the model saw when it called. `null` is a binding too: a
-		// receipt that appears during the wait must not be skipped, because
-		// this join carries no summary for it.
-		const pending = first?.details?.pending ?? null;
 		if (!wait) return first;
 		// Nothing running and nothing ready means no receipt can ever arrive
 		// for this owner. Parking here would wait forever for work that does
@@ -417,13 +413,6 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 					ownerId: ownerIdOf(station),
 					levelKey: levelKeyOf(station),
 					signal,
-					// A summary binds to one receipt. Re-check before every take,
-					// so a concurrent commit cannot make this join file its
-					// summary against a receipt the model never read.
-					canTake: () =>
-						typeof station.joinBindingGuard === "function"
-							? station.joinBindingGuard(pending)
-							: { ok: true },
 					// Capacity belongs to this model and this record. The record
 					// stays ready when it cannot fit, and the ticket answers
 					// instead of parking for an event that cannot change it.
@@ -436,24 +425,15 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 		})();
 		if (!waited.ok) {
 			// A queued user message ends the wait like the host's `wait` tool.
-			// The join received nothing, but the elder report belongs to the
-			// receipt the model read before calling: file it and tell the model
-			// the next join may pass null. Any other abort is a cancellation,
-			// which leaves the previous receipt untouched.
-			if (
-				waited.code === "JOIN_INTERRUPTED" &&
-				isUserInputInterrupt(signal) &&
-				typeof station.settleInterruptedJoin === "function"
-			) {
-				return station.settleInterruptedJoin(toolCallId, params, pending);
-			}
+			// The join received nothing and no report is owed, so the interrupt
+			// answers as a plain refusal.
 			return errorResult(waited.code, waited.reason, {
 				blocked: waited.blocked ?? [],
 			});
 		}
 		// waitForReady already took the child. Rendering it here keeps the
 		// single take: calling executeJoin again would find an empty queue.
-		const taken = station.finalizeJoin(toolCallId, waited.fork, ctx, params, pending);
+		const taken = station.finalizeJoin(toolCallId, waited.fork, ctx);
 		if (taken?.details?.joined) notifyWaiters(wait.registry);
 		return taken;
 	} catch (error) {
@@ -500,21 +480,28 @@ export async function returnTicket(station, toolCallId, params, ctx, signal = nu
 	}
 }
 
-export async function amendTicket(station, toolCallId, params) {
-	try {
-		return station.executeAmend(toolCallId, params);
-	} catch (error) {
-		return errorResult("AMEND_INTERNAL_ERROR", String(error?.message ?? error));
+/**
+ * One call that may carry a note, an amend, or both. The amend half runs
+ * first so its refund is already in the ledger when the note is saved. The
+ * two halves use derived cache keys: the host retries the outer call id, and
+ * the direct-amend path may already have answered that id before this ticket.
+ */
+export async function scopeContextTicket(station, toolCallId, params) {
+	let args = params;
+	if (typeof args === "string") {
+		try {
+			args = JSON.parse(args);
+		} catch {
+			args = null;
+		}
 	}
-}
-
-export async function pinTicket(station, toolCallId, params) {
+	if (args?.pin === undefined && args?.amend === undefined) {
+		return errorResult("scope_context-empty", errors["scope-context-empty"]);
+	}
 	try {
-		return station.executePin(toolCallId, params);
+		return station.executeContext(toolCallId, args);
 	} catch (error) {
-		// A throw means the note never reached a durable exit. Reporting OK
-		// would tell the caller the notebook kept it.
-		record("tickets", error, { kind: "pin", toolCallId });
+		record("tickets", error, { kind: "scope_context", toolCallId });
 		return errorResult(PIN_INTERNAL_ERROR, errors["pin-internal-error"]);
 	}
 }

@@ -1,6 +1,6 @@
 // Station execute cores. Structural control calls mutate one ledger.
 
-import { errorResult } from "../tools/results.mjs";
+import { errorResult, textResult } from "../tools/results.mjs";
 import { lastStructuralCallId } from "../transcript/index.mjs";
 import { handoffToolBlockedReason } from "../relay/index.mjs";
 import { handlePinCall, handleAmendCall } from "./controls.mjs";
@@ -39,6 +39,49 @@ function executePin(station, toolCallId, params) {
 		return errorResult("RELAY_HANDOFF_PENDING", handoffToolBlockedReason());
 	}
 	const result = handlePinCall(station, { id: toolCallId, arguments: params });
+	processedOf(station).setHandled(toolCallId, result);
+	return result;
+}
+
+/**
+ * One control call that may carry both a note and an amend. Both halves are
+ * synchronous station work; the ticket only chose this entry point. A host
+ * retry of the outer id must not repeat either half, so the amend half reads
+ * the result the direct-amend path may already have cached under that id.
+ */
+function executeContext(station, toolCallId, params) {
+	const cached = processedOf(station).handledFor(toolCallId);
+	if (cached?.details?.scopeContext === true) return cached;
+	const amendParams = params?.amend;
+	const pinParams = params?.pin;
+	// A single-half call that a previous delivery already answered returns
+	// that answer: the direct-amend path caches under this same id, and the
+	// half's own execute caches under its derived id.
+	if (cached && (amendParams === undefined) !== (pinParams === undefined)) {
+		return cached;
+	}
+	const amend = amendParams === undefined
+		? null
+		: cached ?? station.executeAmend(`${toolCallId}#amend`, amendParams);
+	const pin = pinParams === undefined
+		? null
+		: station.executePin(`${toolCallId}#pin`, pinParams);
+	if (amend === null || pin === null) {
+		const single = amend ?? pin;
+		processedOf(station).setHandled(toolCallId, single);
+		return single;
+	}
+	const failed = amend.isError === true || pin.isError === true;
+	const text = [amend, pin]
+		.map((result) => result.content?.[0]?.text ?? "")
+		.join("\n\n");
+	const result = failed
+		? errorResult("scope_context-partial", text, {
+			scopeContext: true,
+			amend: amend.details,
+			pin: pin.details,
+		})
+		: textResult(text, { scopeContext: true, amend: amend.details, pin: pin.details });
 	processedOf(station).setHandled(toolCallId, result);
 	return result;
 }
@@ -196,6 +239,7 @@ function executePanhandle(station, toolCallId, params) {
 export {
 	executeAmend,
 	executePin,
+	executeContext,
 	executeFork,
 	executeJoin,
 	executeReturn,

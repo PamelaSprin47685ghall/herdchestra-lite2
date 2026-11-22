@@ -167,14 +167,6 @@ function historyRevision(station) {
 			generation: state.relay?.generation ?? 0,
 			hostBoundary: station.hostBoundaryKey ?? null,
 			amends: Array.isArray(state.amends) ? state.amends : [],
-			receipts: Array.isArray(state.receipts)
-				? state.receipts.map((item) => ({
-						fork: item.forkToolCallId ?? null,
-						close: item.closeToolCallId ?? null,
-						report: item.report ?? null,
-						collapsed: item.collapsed === true,
-					}))
-				: [],
 		});
 	} catch {
 		return null;

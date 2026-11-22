@@ -33,14 +33,12 @@ const RUNTIME_DIRS = ["src", "resources", "skills"];
 const FINGERPRINTS = [
   { file: "src/relay/texts.mjs", needle: "status.flow", min: 1 },
   { file: "src/relay/texts.mjs", needle: 'case "reopened"', min: 1 },
-  // The scope protocol is the three fork/join/return tools. These needles
-  // prove the installed copy registers that face and keeps the receipt chain;
-  // counting an old fullFlow snippet only described a retired code shape.
+  // The scope protocol is the four fork/join/return/panhandle tools. The
+  // receipt chain is gone, so no needle may depend on it.
   { file: "src/activation/tools.mjs", needle: 'name: "scope_fork"', min: 1 },
   { file: "src/activation/tools.mjs", needle: 'name: "scope_join"', min: 1 },
   { file: "src/activation/tools.mjs", needle: 'name: "scope_return"', min: 1 },
   { file: "src/activation/tools.mjs", needle: 'name: "scope_panhandle"', min: 1 },
-  { file: "src/scope/receipts.mjs", needle: "foldableReceipts", min: 1 },
 ];
 const checkOnly = process.argv.includes("--check");
 
@@ -169,5 +167,5 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
-console.log("fingerprints ok: status.flow, reopened, fullFlow gates");
+console.log("fingerprints ok: status.flow, reopened, scope tools");
 console.log("restart the session before relying on this build.");

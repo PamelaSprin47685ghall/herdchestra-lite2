@@ -2,10 +2,8 @@
 // to a ticket.
 
 import {
-	PIN_DESCRIPTION,
-	pinParameters,
-	AMEND_DESCRIPTION,
-	amendParameters,
+	SCOPE_CONTEXT_DESCRIPTION,
+	scopeContextParameters,
 	FORK_DESCRIPTION,
 	forkParameters,
 	JOIN_DESCRIPTION,
@@ -16,11 +14,10 @@ import {
 	panhandleParameters,
 } from "../tools/descriptions.mjs";
 import {
-	amendTicket,
 	forkTicket,
 	panhandleTicket,
 	joinTicket,
-	pinTicket,
+	scopeContextTicket,
 	returnTicket,
 } from "../tools/tickets.mjs";
 import {
@@ -68,22 +65,13 @@ export function wireTools(pi, registry) {
 			returnTicket(registry.stationFor(ctx), toolCallId, params, ctx, signal),
 	});
 	pi.registerTool({
-		name: "amend",
-		label: "Amend",
-		description: AMEND_DESCRIPTION,
-		parameters: amendParameters,
+		name: "scope_context",
+		label: "Scope Context",
+		description: SCOPE_CONTEXT_DESCRIPTION,
+		parameters: scopeContextParameters,
 		loadMode: "essential",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-			amendTicket(registry.stationFor(ctx), toolCallId, params),
-	});
-	pi.registerTool({
-		name: "pin",
-		label: "Pin",
-		description: PIN_DESCRIPTION,
-		parameters: pinParameters,
-		loadMode: "essential",
-		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-			pinTicket(registry.stationFor(ctx), toolCallId, params),
+			scopeContextTicket(registry.stationFor(ctx), toolCallId, params),
 	});
 	pi.registerTool({
 		name: "scope_panhandle",

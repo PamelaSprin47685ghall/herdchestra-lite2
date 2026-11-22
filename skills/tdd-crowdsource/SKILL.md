@@ -15,7 +15,7 @@ Use skill://decision-framing when the goal itself is unclear. This skill assumes
 
 Write the goal from the user's side: who acts, what becomes true, what they see, what stays out. Ignore implementation feasibility for now. No scores, thresholds, rubrics, coverage targets, or quality points; those are proxies, not the goal. A test that cannot fail for a user-visible reason is coverage, not acceptance.
 
-Pin it only when it changes the bet. If the work has no user-visible acceptance, skip the pin; do not manufacture ceremony.
+Pin it only when it changes the bet (`scope_context({ pin })`). If the work has no user-visible acceptance, skip the pin; do not manufacture ceremony.
 
 When a manual step cannot be automated, create or extend the project's `.agent/skills/manual-acceptance/SKILL.md` entry, with surface-specific siblings such as `cli.md`, `tui.md`, and `relay.md`. One entry plus siblings is the single source of truth; do not copy the procedure into every task. Pin only the run-specific difference: environment, values, owner, what to observe, and what would make you adjust. The skill is a control loop, not a diary.
 

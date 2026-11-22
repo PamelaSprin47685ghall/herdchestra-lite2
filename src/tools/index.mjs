@@ -2,9 +2,10 @@
 
 export { textResult, errorResult, continueFeedback } from "./results.mjs";
 export {
-	AMEND_DESCRIPTION,
+	SCOPE_CONTEXT_DESCRIPTION,
+	AMEND_PARAMETER_DESCRIPTION,
+	PIN_PARAMETER_DESCRIPTION,
 	REFLECTION_DESCRIPTION,
-	PIN_DESCRIPTION,
 	PIN_ASSUMPTION_DESCRIPTION,
 	PIN_DEDUCTION_DESCRIPTION,
 	PIN_INDUCTION_DESCRIPTION,
@@ -20,8 +21,7 @@ export {
 	PANHANDLE_TOOLS_DESCRIPTION,
 	PANHANDLE_SECONDS_DESCRIPTION,
 	PANHANDLE_BECAUSE_DESCRIPTION,
-	amendParameters,
-	pinParameters,
+	scopeContextParameters,
 	panhandleParameters,
 } from "./descriptions.mjs";
 export {
@@ -30,8 +30,7 @@ export {
 	forkTicket,
 	joinTicket,
 	returnTicket,
-	amendTicket,
-	pinTicket,
+	scopeContextTicket,
 	panhandleTicket,
 } from "./tickets.mjs";
 export {

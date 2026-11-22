@@ -138,8 +138,6 @@ function spawnPortFor(station, base, binder, options) {
 			// A finished spawn is a ledger change too. The parent's branch
 			// persists it, not the child's disappearing one.
 			persistLedger: () => station.persist?.(),
-			maxResultChars: options.maxResultChars,
-			maxThinkingChars: options.maxThinkingChars,
 			createSession: (input) =>
 				createSession({
 					...input,

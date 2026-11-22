@@ -20,12 +20,16 @@ export {
 } from "./budget.mjs";
 export {
   applyPanhandle,
+  grantBudget,
   PANHANDLE_MAX_PER_TOOL,
   PANHANDLE_MAX_SECONDS,
 } from "./panhandle.mjs";
 export {
   createBracketLedger,
   registerFork,
+  amendFork,
+  supersedeFork,
+  liveRecordForScope,
   forkOf,
   markReady,
   takeReady,

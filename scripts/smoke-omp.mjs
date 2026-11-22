@@ -27,7 +27,7 @@ import { captureDiagnosis, installRunnerCapture } from "../src/host/capture.mjs"
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const AGENT_SESSION = join(HOST, "packages/coding-agent/src/session/agent-session.ts");
-const REQUIRED_TOOLS = ["scope_fork", "scope_join", "scope_return", "amend", "pin", "todo"];
+const REQUIRED_TOOLS = ["scope_fork", "scope_join", "scope_return", "scope_context", "todo"];
 const STRICT = process.env.OMP_SMOKE_STRICT === "1";
 
 const results = [];
@@ -301,7 +301,7 @@ await check("activate() completes", async () => {
 	return "no throw";
 });
 
-await check("all six control tools register", () => {
+await check("all five control tools register", () => {
 	const missing = REQUIRED_TOOLS.filter((name) => !harness.tools.has(name));
 	assert(missing.length === 0, `not registered: ${missing.join(", ")}`);
 	return REQUIRED_TOOLS.join(", ");

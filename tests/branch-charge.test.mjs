@@ -54,7 +54,7 @@ describe("branch charging", () => {
     const s = state();
     const ledger = ledgerWith("f1", { read: 2 });
     for (const [toolName, input] of [
-      ["pin", { finding: "kept" }],
+      ["scope_context", { pin: { finding: "kept" } }],
       ["scope_fork", { forks: [] }],
       ["read", { path: "skill://tdd-crowdsource" }],
       ["write", { path: "xd://resolve" }],
@@ -119,7 +119,7 @@ describe("branch charging", () => {
     const charged = chargeBranch(s, ledger, {
       ownerId: "f1",
       toolCallId: "c1",
-      toolName: "pin",
+      toolName: "scope_context",
     });
     expect(charged.ok).toBe(true);
     expect(ledger.forks.f1.remaining.read).toBe(1);

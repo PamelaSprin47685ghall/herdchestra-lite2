@@ -6,12 +6,14 @@
 // wiring, not here.
 
 import {
+  amendFork,
   forkOf,
   markReady,
   openChildren,
   readyChildren,
   registerFork,
   reparentOrphans,
+  supersedeFork,
   takeReady,
   unreceivedChildren,
 } from "../scope/forkjoin.mjs";
@@ -20,8 +22,6 @@ import { createClockOn } from "../scope/clock.mjs";
 import { deriveTimeBudgetSeconds } from "../scope/turn-stats.mjs";
 import {
   decideJoinAdmission,
-  decideJoinBinding,
-  decidePendingReport,
   decideRegister,
   decideReady,
   decideReturn,
@@ -34,7 +34,6 @@ import { filterAmends } from "../transcript/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 import { parseArgs } from "./messages.mjs";
-import { elderReportProblem } from "../scope/elder-report.mjs";
 
 const F = loadDoc("tools/fork-join");
 const S = loadDoc("receipts/scope");
@@ -276,6 +275,71 @@ export function childReceiptText(spec) {
 // its intent alone.
 const FORK_RECEIPT_PREFIX_CHARS = 600;
 
+/** Add two tool-count maps, dropping zeros. */
+function sumBudgets(base, extra) {
+  const out = {};
+  for (const source of [base, extra]) {
+    if (!source || typeof source !== "object") continue;
+    for (const [tool, amount] of Object.entries(source)) {
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      out[tool] = (out[tool] ?? 0) + amount;
+    }
+  }
+  return out;
+}
+
+/** Merge target lists without duplicates. */
+function unionTargets(first, second) {
+  const out = [];
+  for (const list of [first, second]) {
+    for (const target of Array.isArray(list) ? list : []) {
+      const text = typeof target === "string" ? target.trim() : "";
+      if (text !== "" && !out.includes(text)) out.push(text);
+    }
+  }
+  return out;
+}
+
+/** Human-readable budget delta for a fork result line. */
+function budgetDelta(added) {
+  const points = Object.entries(added?.tools ?? {})
+    .map(([tool, amount]) => `${amount} ${tool}`)
+    .join(", ");
+  const seconds = Number.isInteger(added?.seconds) && added.seconds > 0
+    ? `${added.seconds}s`
+    : "";
+  return [points, seconds].filter(Boolean).join(" + ") || "no budget";
+}
+
+/** The text a later generation reads as its predecessor's history. */
+function priorRecordText(record) {
+  const text = typeof record.record === "string" ? record.record.trim() : "";
+  if (text !== "") return text;
+  if (record.outcome === "failed" && typeof record.reason === "string" && record.reason !== "") {
+    return `Previous attempt failed: ${record.reason}`;
+  }
+  return "(the previous generation published no record)";
+}
+
+/** Receipt for a generation that continues an already closed scope. */
+function generationReceiptText({ scopeId, childDepth, generation, standing, intent, budget, targets, prior }) {
+  return [
+    render(S["fork.child-status"], {
+      marker: childReceiptMarker(scopeId),
+      depth: childDepth,
+      intent: standing,
+      budget: budgetText(budget),
+      targets: targetsText(targets),
+    }),
+    `[Continuing scope ${scopeId} — generation ${generation}]`,
+    "History only; do not re-execute it.",
+    prior,
+    ...(intent === "" ? [] : ["", "[New requirement]", intent]),
+    S["fork.child-return"],
+    S["fork.child-routing"],
+  ].join("\n");
+}
+
 /**
  * Open one child scope. Never blocks: the parent keeps its depth, its model,
  * and its own work. Several forks may share one assistant message.
@@ -310,6 +374,7 @@ export function handleForkCall(station, call, options = {}) {
   const decision = decideRegister({
     items: batch.items,
     forks: ledger.order.map((id) => forkOf(ledger, id)),
+    ownerId: ownerIdOf(station),
     models: options.ctx?.models ?? null,
     hasSpawner: typeof spawner === "function",
     receiptChars,
@@ -326,8 +391,8 @@ export function handleForkCall(station, call, options = {}) {
         : undefined,
   });
   if (!decision.ok) {
-    if (decision.code === "DUPLICATE_SCOPE_ID") {
-      return errorResult(decision.code, render(E["duplicate-scope-id"], {
+    if (decision.code === "FOREIGN_SCOPE_ID") {
+      return errorResult(decision.code, render(E["foreign-scope-id"] || "That scope id belongs to another owner.", {
         scopeId: decision.scopeId,
       }));
     }
@@ -368,73 +433,233 @@ export function handleForkCall(station, call, options = {}) {
     });
   }
 
+  const blankIntent = decision.items.find(
+    (item) => item.action === "create" && item.intent === "",
+  );
+  if (blankIntent) {
+    return errorResult(
+      "MISSING_INTENT",
+      render(E["missing-intent"] || "A new scope needs an intent.", { scopeId: blankIntent.scopeId }),
+      { scopeId: blankIntent.scopeId },
+    );
+  }
+
   const parentOwnerId = ownerIdOf(station);
   const clock = typeof station.clockPort === "function" ? station.clockPort() : createClockOn();
   const totals = ledger.totals;
   const timeOf = (budget) => deriveTimeBudgetSeconds({ totals, budget });
   const baseId = typeof call.id === "string" && call.id !== "" ? call.id : `fork-${Date.now()}`;
   const started = [];
+  const amended = [];
+  const revived = [];
+  const continued = [];
   const deferred = [];
   const failed = [];
   const pending = [];
+  const forkIdByScope = new Map();
+
+  const nextForkId = (index, generation) => {
+    const base = decision.items.length === 1 ? baseId : `${baseId}:${index}`;
+    if (!Object.hasOwn(ledger.forks, base)) return base;
+    return `${base}:g${generation}`;
+  };
+
+  const specOf = (fork, item, intent) => ({
+    forkId: fork.forkId,
+    scopeId: fork.scopeId,
+    sourceToolCallId: baseId,
+    childDepth: fork.childDepth,
+    intent,
+    budget: fork.budget,
+    time: fork.timeBudgetMs == null ? null : fork.timeBudgetMs / 1000,
+    targets: fork.targets,
+    model: fork.model,
+    modelOverride: item.modelOverride,
+    thinkingLevel: item.thinkingLevel,
+    parentOwnerId,
+    parentDepth: depth,
+  });
+
+  const queueChild = (fork, item, intent, receipt, kind = "created") => {
+    const spec = specOf(fork, item, intent);
+    spec.receipt = receipt;
+    pending.push({
+      forkId: fork.forkId,
+      scopeId: item.scopeId,
+      intent,
+      childDepth: fork.childDepth,
+      kind,
+      spec,
+    });
+  };
+
+  const noteFailure = (forkId, item, reason) => {
+    failed.push({
+      forkId,
+      scopeId: item.scopeId,
+      intent: item.intent,
+      reason,
+    });
+  };
+
   for (let index = 0; index < decision.items.length; index += 1) {
     const item = decision.items[index];
-    const forkId = decision.items.length === 1 ? baseId : `${baseId}:${index}`;
+    const key = item.scopeId.toLowerCase();
+
+    if (item.action === "create") {
+      const forkId = nextForkId(index, 1);
+      const registered = registerFork(ledger, {
+        forkId,
+        scopeId: item.scopeId,
+        ownerId: parentOwnerId,
+        levelKey: levelKeyOf(station),
+        intent: item.intent,
+        depth,
+        blocked: item.blocked === true,
+        budget: item.budget,
+        time: timeOf(item.budget),
+        startedAt: Date.now(),
+      }, { clock });
+      if (!registered.ok) {
+        noteFailure(forkId, item, render(E["fork-register-failed"], { code: registered.code }));
+        continue;
+      }
+      const fork = registered.fork;
+      // `registerFork` is the only place a budget is born, and it copies the
+      // input into both `budget` and `remaining`. Assigning the budget here
+      // after the fact would leave `remaining` at the empty object the ledger
+      // started with, and the child's first normal tool call would be refused
+      // as exhausted.
+      fork.targets = item.targets;
+      fork.model = item.model;
+      forkIdByScope.set(key, fork.forkId);
+      if (item.blocked === true) {
+        deferred.push({ forkId, scopeId: item.scopeId, intent: item.intent });
+        continue;
+      }
+      queueChild(fork, item, item.intent, childReceiptText({
+        scopeId: item.scopeId,
+        childDepth: fork.childDepth,
+        intent: item.intent,
+        budget: fork.budget,
+        targets: fork.targets,
+      }));
+      continue;
+    }
+
+    const targetForkId = item.targetStatus === "batch"
+      ? forkIdByScope.get(key)
+      : item.targetForkId;
+    const target = targetForkId ? forkOf(ledger, targetForkId) : null;
+    if (!target) {
+      noteFailure(targetForkId ?? item.scopeId, item, "The earlier item in this batch left no record to amend.");
+      continue;
+    }
+    if (target.status === "running" && item.blocked === true) {
+      noteFailure(target.forkId, item, render(E["scope-running-blocked"] || "A running scope cannot be blocked.", {
+        scopeId: item.scopeId,
+      }));
+      continue;
+    }
+    if (target.status === "running" || target.status === "blocked") {
+      const before = Array.isArray(target.requirements) ? target.requirements.length : 0;
+      const out = amendFork(ledger, target.forkId, {
+        budget: item.budget,
+        intent: item.intent,
+        targets: item.targets,
+      }, { clock });
+      if (!out.ok) {
+        noteFailure(target.forkId, item, out.code);
+        continue;
+      }
+      forkIdByScope.set(key, target.forkId);
+      const entry = {
+        forkId: target.forkId,
+        scopeId: item.scopeId,
+        intent: item.intent,
+        added: out.added,
+        queued: Math.max(0, (Array.isArray(target.requirements) ? target.requirements.length : 0) - before),
+      };
+      if (target.status === "blocked" && item.blocked !== true) {
+        if (typeof spawner !== "function") {
+          noteFailure(target.forkId, item, E["child-spawner-unavailable"] || "No child spawner is wired.");
+          continue;
+        }
+        target.status = "running";
+        target.startedAt = Date.now();
+        if (clock && typeof clock.start === "function") {
+          clock.start(target, target.timeBudgetMs, target.startedAt);
+        }
+        queueChild(target, item, target.intent, childReceiptText({
+          scopeId: item.scopeId,
+          childDepth: target.childDepth,
+          intent: target.intent,
+          budget: target.budget,
+          targets: target.targets,
+        }), "revived");
+        revived.push(entry);
+      } else {
+        amended.push(entry);
+      }
+      continue;
+    }
+
+    if (target.status === "ready") {
+      const superseded = supersedeFork(ledger, target.forkId);
+      if (!superseded.ok) {
+        noteFailure(target.forkId, item, superseded.code);
+        continue;
+      }
+    }
+    const budget = sumBudgets(target.remaining, item.budget);
+    if (Object.keys(budget).length === 0) {
+      noteFailure(target.forkId, item, render(E["scope-reuse-empty"] || "This reuse adds no budget and the previous generation has none left.", {
+        scopeId: item.scopeId,
+      }));
+      continue;
+    }
+    const generation = (Number.isInteger(target.generation) ? target.generation : 1) + 1;
+    const forkId = nextForkId(index, generation);
+    const standing = item.intent === "" ? target.intent : item.intent;
     const registered = registerFork(ledger, {
       forkId,
       scopeId: item.scopeId,
       ownerId: parentOwnerId,
       levelKey: levelKeyOf(station),
-      intent: item.intent,
+      intent: standing,
       depth,
-      blocked: item.blocked === true,
-      budget: item.budget,
-      time: timeOf(item.budget),
+      blocked: false,
+      budget,
+      time: timeOf(budget),
       startedAt: Date.now(),
+      generation,
+      continuesForkId: target.forkId,
     }, { clock });
     if (!registered.ok) {
-      failed.push({
-        forkId,
-        scopeId: item.scopeId,
-        intent: item.intent,
-        reason: render(E["fork-register-failed"], { code: registered.code }),
-      });
+      noteFailure(forkId, item, render(E["fork-register-failed"], { code: registered.code }));
       continue;
     }
     const fork = registered.fork;
-    // `registerFork` is the only place a budget is born, and it copies the
-    // input into both `budget` and `remaining`. Assigning the budget here
-    // after the fact would leave `remaining` at the empty object the ledger
-    // started with, and the child's first normal tool call would be refused
-    // as exhausted.
-    fork.targets = item.targets;
-    fork.model = item.model;
-    if (item.blocked === true) {
-      deferred.push({ forkId, scopeId: item.scopeId, intent: item.intent });
-      continue;
-    }
-    const spec = {
-      forkId,
+    fork.targets = unionTargets(target.targets, item.targets);
+    fork.model = item.model ?? target.model ?? null;
+    forkIdByScope.set(key, fork.forkId);
+    queueChild(fork, item, standing, generationReceiptText({
       scopeId: item.scopeId,
-      sourceToolCallId: baseId,
       childDepth: fork.childDepth,
+      generation,
+      standing: target.intent,
       intent: item.intent,
-      budget: item.budget,
-      time: fork.timeBudgetMs == null ? null : fork.timeBudgetMs / 1000,
-      targets: item.targets,
-      model: item.model,
-      modelOverride: item.modelOverride,
-      thinkingLevel: item.thinkingLevel,
-      parentOwnerId,
-      parentDepth: depth,
-    };
-    spec.receipt = childReceiptText(spec);
-    pending.push({
+      budget,
+      targets: fork.targets,
+      prior: priorRecordText(target),
+    }), "continued");
+    continued.push({
       forkId,
       scopeId: item.scopeId,
       intent: item.intent,
-      childDepth: fork.childDepth,
-      spec,
+      generation,
+      priorForkId: target.forkId,
+      added: item.budget,
     });
   }
 
@@ -445,12 +670,14 @@ export function handleForkCall(station, call, options = {}) {
   for (const entry of pending) {
     try {
       spawner(entry.spec);
-      started.push({
-        forkId: entry.forkId,
-        scopeId: entry.scopeId,
-        intent: entry.intent,
-        childDepth: entry.childDepth,
-      });
+      if (entry.kind === "created") {
+        started.push({
+          forkId: entry.forkId,
+          scopeId: entry.scopeId,
+          intent: entry.intent,
+          childDepth: entry.childDepth,
+        });
+      }
     } catch (error) {
       const reason = String(error?.message ?? error);
       // The bracket stays registered as running so the parent can still see
@@ -462,6 +689,11 @@ export function handleForkCall(station, call, options = {}) {
         reason,
       });
       markReady(ledger, entry.forkId, { ok: false, reason: `did not start: ${reason}` });
+      if (entry.kind !== "created") {
+        const bucket = entry.kind === "revived" ? revived : continued;
+        const at = bucket.findIndex((item) => item.forkId === entry.forkId);
+        if (at >= 0) bucket.splice(at, 1);
+      }
     }
   }
 
@@ -482,6 +714,30 @@ export function handleForkCall(station, call, options = {}) {
           .join("\n"),
       }),
     );
+  }
+  if (amended.length > 0) {
+    sections.push([
+      `Amended ${amended.length} existing scope${amended.length === 1 ? "" : "s"}:`,
+      ...amended.map((entry) =>
+        `- ${entry.scopeId}: ${budgetDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`,
+      ),
+    ].join("\n"));
+  }
+  if (revived.length > 0) {
+    sections.push([
+      `Revived ${revived.length} blocked scope${revived.length === 1 ? "" : "s"}:`,
+      ...revived.map((entry) =>
+        `- ${entry.scopeId}: ${budgetDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`,
+      ),
+    ].join("\n"));
+  }
+  if (continued.length > 0) {
+    sections.push([
+      `Continued ${continued.length} finished scope${continued.length === 1 ? "" : "s"}:`,
+      ...continued.map((entry) =>
+        `- ${entry.scopeId}: generation ${entry.generation}, after ${entry.priorForkId}, ${budgetDelta(entry.added)} added.`,
+      ),
+    ].join("\n"));
   }
   if (deferred.length > 0) {
     sections.push(
@@ -525,6 +781,9 @@ export function handleForkCall(station, call, options = {}) {
   }
   return textResult(sections.join("\n\n"), {
     started: started.map((entry) => entry.forkId),
+    amended: amended.map((entry) => entry.forkId),
+    revived: revived.map((entry) => entry.forkId),
+    continued: continued.map((entry) => entry.forkId),
     deferred: deferred.map((entry) => entry.forkId),
     failed: failed.map((entry) => entry.forkId),
   });
@@ -551,21 +810,9 @@ function levelKeyOf(station) {
  * waits for one in the wired flow.
  */
 export function handleJoinCall(station, call, options = {}) {
-  const args = parseArgs(call);
   const ledger = ledgerOf(station);
   if (!ledger) {
     return errorResult("FORK_LEDGER_UNAVAILABLE", E["fork-ledger-unavailable"]);
-  }
-  if (args.elder_report !== undefined && args.elder_report !== null &&
-      typeof args.elder_report !== "string") {
-    return errorResult("INVALID_ARGUMENT", E["elder-report-type"]);
-  }
-  // A summary is evidence, not whitespace. Accepting "  " would pass the gate
-  // while the receipt writer refuses to store it: the join would look
-  // successful, the obligation would survive, and the next refusal would ask
-  // for a report the model already believed it had given.
-  if (typeof args.elder_report === "string" && args.elder_report.trim() === "") {
-    return errorResult("INVALID_ARGUMENT", E["elder-report-empty"]);
   }
   const ownerId = ownerIdOf(station);
   // With nothing running and nothing ready, no join can succeed. Answering
@@ -577,47 +824,6 @@ export function handleJoinCall(station, call, options = {}) {
       active: 0,
       pending: null,
     });
-  }
-  // The previous successful receipt must be reported before this join takes
-  // another child. Checking before takeReady keeps the refusal free of side
-  // effects: a rejected call leaves the queue exactly as it found it.
-  //
-  // The obligation is derived from the persisted receipt chain first, then
-  // from the in-memory owner map. A reload restores `state.receipts`, so the
-  // first join after a restart still demands the summary instead of silently
-  // dropping the fold gate. The map remains for fixtures that drive the
-  // handlers without a persistence layer.
-  const pendingReport = pendingReportOf(station, ownerId);
-  const elderReportRaw =
-    typeof args.elder_report === "string" ? args.elder_report : null;
-  const elderReport = elderReportRaw === null ? null : elderReportRaw.trim();
-  if (pendingReport !== null && elderReport === null) {
-    const named = publicScopeId(forkOf(ledger, pendingReport.forkId));
-    return errorResult(
-      "INVALID_ELDER_REPORT",
-      render(E["elder-report-missing"], { scopeId: named }),
-      { pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId },
-    );
-  }
-  // A report with nothing to archive is harmless. Refusing it would cost the
-  // model a whole turn for an argument the join can ignore, so the result says
-  // it was not needed instead.
-  const elderUnneeded = pendingReport === null && elderReport !== null;
-  if (pendingReport !== null && elderReport !== null) {
-    // The stored report is trimmed, so the bound applies to its trimmed
-    // length. The schema's pattern measures the same span on the raw string.
-    const problem = elderReportProblem(elderReportRaw);
-    if (problem !== null) {
-      const message = problem.details?.minimum
-        ? render(E["elder-report-too-short"], problem.details)
-        : problem.details?.maximum
-          ? render(E["elder-report-too-long"], problem.details)
-          : problem.message;
-      return errorResult(problem.code, message, {
-        pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId,
-        ...problem.details,
-      });
-    }
   }
   // A reparented child closes at the receiver's level, not at the level of
   // the branch that gave birth to it. The explicit key is what puts it in the
@@ -640,7 +846,6 @@ export function handleJoinCall(station, call, options = {}) {
         {
           ownerId,
           active: openChildren(ledger, ownerId).length,
-          pending: pendingReport,
           blocked: taken.blocked ?? [],
         },
       );
@@ -648,13 +853,9 @@ export function handleJoinCall(station, call, options = {}) {
     return errorResult("NO_READY_CHILD", E["no-ready-child"], {
       ownerId,
       active: openChildren(ledger, ownerId).length,
-      // The waiting ticket commits with exactly this binding. Recomputing it
-      // after the take would let the summary land on a receipt the model never
-      // read.
-      pending: pendingReport,
     });
   }
-  commitJoin(station, taken.fork, call.id, elderReport, pendingReport);
+  commitJoin(station, taken.fork, call.id);
   const persisted = confirmJoinPersistence(station);
   if (persisted === false) {
     station.noteError?.("fork", new Error("join receipt was not persisted"), {
@@ -667,33 +868,7 @@ export function handleJoinCall(station, call, options = {}) {
     ownerId,
     closeToolCallId: call.id,
     persisted,
-    elderUnneeded,
   });
-}
-
-/**
- * Re-check the elder binding a waiting join was admitted with.
- *
- * The summary belongs to the receipt the model read when it called. If another
- * join commits while this one waits, the pending receipt moves on. Committing
- * now would attach the summary to a receipt the model never read, and would
- * leave the newly pending receipt with no summary that can ever be filed. The
- * check runs before the take, so a refusal leaves both the child and the
- * receipt chain exactly as they were.
- */
-export function checkJoinBinding(station, expected) {
-  const current = pendingReportOf(station, ownerIdOf(station));
-  const decision = decideJoinBinding({ expected, current });
-  if (decision.ok) return { ok: true };
-  const named = publicScopeId(forkOf(ledgerOf(station), decision.forkId));
-  return {
-    ok: false,
-    code: decision.code,
-    reason: render(
-      E[decision.side === "cleared" ? "stale-elder-reported" : "stale-elder-uncommitted"],
-      { scopeId: named },
-    ),
-  };
 }
 
 /**
@@ -701,42 +876,8 @@ export function checkJoinBinding(station, expected) {
  * take and the ticket's later take use this one commit, so a waited join and
  * an immediate join leave the same persisted evidence.
  */
-export function commitJoin(station, record, closeToolCallId, elderReport, pending = undefined) {
-  const ownerId = ownerIdOf(station);
-  const pendingReport = pending === undefined ? pendingReportOf(station, ownerId) : pending;
-  const ledger = ledgerOf(station);
-  if (pendingReport !== null) {
-    const elder = ledger ? forkOf(ledger, pendingReport.forkId) : null;
-    if (elder) elder.elderReport = elderReport;
-  }
-  if (typeof station.recordJoinReceipt === "function") {
-    // The receipt chain is a persisted domain fact, not a render detail.
-    // Write it before the result leaves, so a reload keeps the order.
-    station.recordJoinReceipt({
-      forkId: record.forkId,
-      scopeId: publicScopeId(record),
-      closeToolCallId,
-      levelKey: record.levelKey,
-      closedOrder: record.closedOrder,
-      elderReport,
-      pending: pendingReport,
-    });
-  }
-  reportsOf(station).set(ownerId, {
-    forkId: record.forkId,
-    closeToolCallId,
-  });
+export function commitJoin(station, record) {
   return record;
-}
-
-/** The receipt the next join must summarize, or null when none is pending. */
-function pendingReportOf(station, ownerId) {
-  return decidePendingReport({
-    receipts: Array.isArray(station.state?.receipts) ? station.state.receipts : [],
-    levelKey: levelKeyOf(station),
-    reports: reportsOf(station),
-    ownerId,
-  });
 }
 
 /**
@@ -750,11 +891,6 @@ function pendingReportOf(station, ownerId) {
 export function confirmJoinPersistence(station) {
   if (typeof station.persist !== "function") return undefined;
   return station.persist() !== false;
-}
-
-function reportsOf(station) {
-  if (!(station.forkReports instanceof Map)) station.forkReports = new Map();
-  return station.forkReports;
 }
 
 /**
@@ -794,11 +930,9 @@ export function renderJoinResult(station, record, options = {}) {
     failed: childFailed,
     reason: childReason,
     remaining: remaining.map((entry) => entry.scopeId),
-    pendingReceipt: publicScopeId(record),
 	});
   const persisted = options.persisted;
   const notes = [];
-  if (options.elderUnneeded === true) notes.push(F["join.elder-unneeded"]);
   if (persisted === false) {
     notes.push(
       "Persistence warning: this join receipt exists in memory, but the shared tree was not written.",
@@ -809,82 +943,8 @@ export function renderJoinResult(station, record, options = {}) {
     forkId: record.forkId,
     joined: true,
     remaining,
-    ...(options.elderUnneeded === true ? { elderUnneeded: true } : {}),
     ...(persisted === undefined ? {} : { persisted }),
   });
-}
-
-/**
- * Settle a join that a queued user message interrupted while it waited.
- *
- * The wait took no child, but the summary the model supplied belongs to the
- * receipt it read before calling. Filing it here discharges that obligation,
- * so the next join may pass `elder_report: null`. The binding is re-checked
- * first: a concurrent join may have moved the chain, and a report the model
- * never read must not be attached to the receipt that replaced it.
- */
-export function settleInterruptedJoin(station, toolCallId, params, pending = null) {
-  const ledger = ledgerOf(station);
-  const ownerId = ownerIdOf(station);
-  const raw = typeof params?.elder_report === "string" ? params.elder_report : null;
-  const elderReport = raw === null ? null : raw.trim();
-  const binding = checkJoinBinding(station, pending);
-  let consumed = false;
-  if (binding.ok && pending !== null && elderReport !== null) {
-    if (typeof station.recordElderReport === "function") {
-      station.recordElderReport({
-        closeToolCallId: pending.closeToolCallId,
-        report: elderReport,
-      });
-    }
-    reportsOf(station).delete(ownerId);
-    consumed = true;
-  }
-  const persisted = consumed ? confirmJoinPersistence(station) : undefined;
-  if (persisted === false) {
-    station.noteError?.("fork", new Error("interrupted join report was not persisted"), {
-      forkId: pending?.forkId ?? null,
-      phase: "join",
-    });
-  }
-  const next = pendingReportOf(station, ownerId);
-  const elderLine = consumed
-    ? F["join.interrupted-elder-consumed"]
-    : pending !== null && elderReport === null
-      ? F["join.interrupted-elder-missing"]
-      : binding.ok
-        ? F["join.interrupted-elder-unneeded"]
-        : F["join.interrupted-elder-stale"];
-  const nextLine =
-    next === null
-      ? F["join.interrupted-next-null"]
-      : render(F["join.interrupted-next-report"], {
-          scopeId: publicScopeId(forkOf(ledger, next.forkId)),
-        });
-  const remaining = unreceivedChildren(ledger, ownerId).map((id) =>
-    publicScopeId(forkOf(ledger, id)),
-  );
-  const result = textResult(
-    render(F["join.interrupted"], {
-      elder: elderLine,
-      next: nextLine,
-      remaining: remaining.length === 0 ? "none" : remaining.join(", "),
-    }),
-    {
-      interrupted: true,
-      joined: false,
-      elderConsumed: consumed,
-      nextElderReport: next === null ? null : next.forkId,
-      remaining,
-      ...(persisted === undefined ? {} : { persisted }),
-    },
-  );
-  // The interruption is this tool call's final answer. Caching it keeps a
-  // replay from filing the same report twice.
-  processedOf(station)?.setHandled?.(toolCallId, result);
-  processedOf(station)?.markCall?.(toolCallId);
-  station.persist?.();
-  return result;
 }
 
 /**

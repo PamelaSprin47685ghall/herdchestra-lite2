@@ -112,9 +112,14 @@ export function decideToolCall({
 	}
 
 	if (CONTROL_TOOLS.has(toolName)) {
+		// The amend half of `scope_context` lands before the ordinary calls of
+		// the same message, so the refund is in the ledger already when the
+		// model reads the result.
+		const parsed =
+			toolName === "scope_context" ? parseArgs({ arguments: input }) : null;
 		const directAmend =
-			toolName === "amend" && !processed.handled
-				? { args: parseArgs({ arguments: input }) }
+			parsed?.amend !== undefined && !processed.handled
+				? { args: parsed.amend }
 				: null;
 		return allow({
 			controls: { process: true, directAmend },

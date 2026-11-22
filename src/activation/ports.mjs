@@ -7,7 +7,6 @@
 
 import { resolvePorts } from "../core/ports/resolve.mjs";
 import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
-import { foldingOff, foldingOn } from "../features/folding/index.mjs";
 import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
 import { createPinOff, createPinOn } from "../features/pin/index.mjs";
 import { relayImplementations } from "../relay/policy.mjs";
@@ -31,7 +30,6 @@ export function buildPorts(env = process.env) {
 	}
 	const names = { ...resolved.ports };
 	const implementations = {
-		folding: names.folding === "off" ? foldingOff() : foldingOn(),
 		clock: names.clock === "off" ? createClockOff() : createClockOn(),
 		relay: relayImplementations[names.relay],
 		pin: {

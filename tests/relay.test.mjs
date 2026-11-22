@@ -330,7 +330,6 @@ describe("state version migration", () => {
 			scopes: [],
 			charges: {},
 			amends: [],
-			collapses: [],
 		};
 		const migrated = deserializeState(legacy);
 		expect(migrated.version).toBe(2);

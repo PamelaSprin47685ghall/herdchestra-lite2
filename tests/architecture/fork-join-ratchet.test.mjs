@@ -34,21 +34,15 @@ describe("fork/join ratchet", () => {
 	test("the decisions live in the domain and the controls import them", () => {
 		expect(domain).toContain("export function decideJoinAdmission");
 		expect(domain).toContain("export function decideForkAdmission");
-		expect(domain).toContain("export function decidePendingReport");
-		expect(domain).toContain("export function decideJoinBinding");
 		expect(domain).toContain("export function decideRegister");
 		expect(domain).toContain("export function decideReturn");
 		expect(domain).toContain("export function decideReady");
 		expect(domain).toContain("decideAbandon");
 		expect(controls).toContain("decideJoinAdmission");
-		expect(controls).toContain("decidePendingReport");
-		expect(controls).toContain("decideJoinBinding");
 		expect(controls).toContain("decideRegister");
 		expect(controls).toContain("decideReady");
 		expect(controls).toContain("decideReturn");
 		expect(controls).toContain("validateForkBatch");
-		expect(controls).not.toContain("function lastUnreportedReceipt");
-		expect(controls).not.toContain("function pendingOf");
 	});
 
 	test("no station-taking free function was added", () => {

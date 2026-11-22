@@ -152,7 +152,7 @@ describe("host diagnosis announcement", () => {
 			ui: { notify: (text, level) => notices.push([text, level]) },
 		});
 		expect(notices[0][0]).toBe(
-			"Herdchestra: host seam missing — extensionRunner; folding and relay are disabled",
+			"Herdchestra: host seam missing — extensionRunner; the relay is disabled",
 		);
 	});
 });

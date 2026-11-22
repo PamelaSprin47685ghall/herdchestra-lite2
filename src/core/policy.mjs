@@ -36,7 +36,9 @@ const READ_ONLY_TOOL_NAMES = new Set([
 // Tools this extension registers itself. They record bookkeeping, not file
 // writes, so they must not turn a read-only agent into a read-write one when
 // only the legacy `tools` list is available.
-const NEUTRAL_TOOL_NAMES = new Set(["amend", "pin"]);
+// `scope_context` is the current name. The retired `amend` and `pin` stay
+// listed because a persisted session_init may still name them.
+const NEUTRAL_TOOL_NAMES = new Set(["scope_context", "amend", "pin"]);
 
 function isReadTier(name) {
 	return READ_ONLY_TOOL_NAMES.has(name) || NEUTRAL_TOOL_NAMES.has(name);

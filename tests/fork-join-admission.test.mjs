@@ -161,7 +161,7 @@ describe("the join handler refuses before the take", () => {
       forkReservePort: () => 0,
       forkMarginPort: () => 0,
     });
-    const out = handleJoinCall(station, { id: "j1", arguments: { elder_report: null } });
+    const out = handleJoinCall(station, { id: "j1" });
     expect(out.isError).toBe(true);
     expect(out.details.code).toBe("JOIN_CONTEXT_EXCEEDED");
     expect(out.details.blocked[0].forkId).toBe("f1");
@@ -173,7 +173,7 @@ describe("the join handler refuses before the take", () => {
     const ledger = ledgerWith(["f1"]);
     markReady(ledger, "f1", { ok: true, record: "x".repeat(200) });
     const station = stationFor(ledger, { currentContextTokens: () => 900 });
-    const out = handleJoinCall(station, { id: "j1", arguments: { elder_report: null } });
+    const out = handleJoinCall(station, { id: "j1" });
     expect(out.isError).toBeUndefined();
     expect(out.details.joined).toBe(true);
   });

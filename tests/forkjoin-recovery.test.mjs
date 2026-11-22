@@ -23,7 +23,6 @@ import {
 } from "../src/scope/forkjoin.mjs";
 import { createFlowState, createState } from "../src/scope/state.mjs";
 import { deserializeState, serializeState } from "../src/scope/persistence.mjs";
-import { addReceipt, createReceiptRecord } from "../src/scope/receipts.mjs";
 import { createForkWiring } from "../src/host/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
@@ -129,31 +128,21 @@ describe("the bracket tree survives a reload", () => {
     expect(restored.forks).toEqual({});
   });
 
-  test("an unpaired tree resets the receipt chain with the brackets", () => {
+  test("an unpaired tree resets the brackets", () => {
     const state = createState();
     running(state.brackets, "f1");
-    state.receipts = addReceipt(
-      [],
-      createReceiptRecord({ forkToolCallId: "f1", closeToolCallId: "j1", closedOrder: 1 }),
-    );
     const payload = serializeState(state);
     payload.brackets.forks.f1.childDepth = payload.brackets.forks.f1.depth;
     expect(validLedger(payload.brackets)).toBe(true);
     const restored = deserializeState(payload);
-    expect(restored.receipts).toEqual([]);
     expect(restored.brackets.order).toEqual([]);
   });
 
   test("a reload that carries a corrupt ledger starts clean", () => {
     const state = createState();
-    state.receipts = addReceipt(
-      [],
-      createReceiptRecord({ forkToolCallId: "f1", closeToolCallId: "j1", closedOrder: 1 }),
-    );
     const payload = serializeState(state);
     payload.brackets = { version: 1, forks: { broken: true } };
     const restored = deserializeState(payload);
-    expect(restored.receipts).toEqual([]);
     expect(restored.brackets.order).toEqual([]);
   });
 });
@@ -221,7 +210,7 @@ describe("the scope state owns the tree", () => {
     expect(forkOf(ledger, "c1").status).toBe("ready");
   });
 
-  test("serialize and deserialize keep the tree and the receipt chain together", () => {
+  test("serialize and deserialize keep the tree", () => {
     const state = createState();
     const out = registerFork(state.brackets, {
       forkId: "f1",
@@ -235,22 +224,10 @@ describe("the scope state owns the tree", () => {
     });
     expect(out.ok).toBe(true);
     markReady(state.brackets, "f1", { ok: true, record: "the record" });
-    state.receipts = addReceipt(
-      [],
-      createReceiptRecord({
-        forkToolCallId: "f0",
-        closeToolCallId: "j0",
-        levelKey: "root|0|0",
-        closedOrder: 1,
-        report: "elder",
-      }),
-    );
 
     const restored = deserializeState(serializeState(state));
     expect(forkOf(restored.brackets, "f1").status).toBe("ready");
     expect(forkOf(restored.brackets, "f1").record).toBe("the record");
-    expect(restored.receipts).toHaveLength(1);
-    expect(restored.receipts[0].report).toBe("elder");
   });
 
   test("an old snapshot without a ledger still loads", () => {

@@ -160,7 +160,25 @@ export async function spawnChildTicket(spec, ports) {
 			return finish();
 		}
 		if (typeof session.agent?.abort === "function") detachTermination = stopAfterScopeReturn(session.agent);
+		// Requirements arrive in the ledger while the child works. The child
+		// has no inbox or session handle; it checks the ledger at each turn
+		// boundary, so a requirement never interrupts a running tool call.
+		const deliverRequirements = async () => {
+			const record = forkOf(ledger, spec.forkId);
+			if (!record || !Array.isArray(record.requirements)) return false;
+			const delivered = Number.isInteger(record.requirementsDelivered)
+				? record.requirementsDelivered
+				: 0;
+			const pending = record.requirements.slice(delivered);
+			if (pending.length === 0) return false;
+			record.requirementsDelivered = record.requirements.length;
+			await prompt(
+				["Additional requirements from your parent:", ...pending.map((text) => `- ${text}`)].join("\n"),
+			);
+			return true;
+		};
 		await prompt(spec.receipt);
+		await deliverRequirements();
 		// A natural stop submits nothing. Only scope_return closes the bracket,
 		// so a RUNNING bracket after the prompt proves the child stopped short.
 		// The ticket says so and hands the loop back, once per stop.
@@ -168,6 +186,11 @@ export async function spawnChildTicket(spec, ports) {
 		let nudges = 0;
 		let unpublished = false;
 		while (bracket && bracket.status === "running") {
+			if (await deliverRequirements()) {
+				nudges = 0;
+				bracket = forkOf(ledger, spec.forkId);
+				continue;
+			}
 			const stop = stopReasonOf(session);
 			if (stop !== null && stop !== "stop" && stop !== "end") {
 				failed = true;
@@ -185,12 +208,7 @@ export async function spawnChildTicket(spec, ports) {
 			bracket = forkOf(ledger, spec.forkId);
 		}
 		const added = messagesOf(session).slice(before);
-		const text = unpublished
-			? ""
-			: renderChildRecord(added, {
-					maxResultChars: ports.maxResultChars,
-					maxThinkingChars: ports.maxThinkingChars,
-				});
+		const text = unpublished ? "" : renderChildRecord(added, { start: 0 });
 		// An empty record is not a silent success. The parent cannot tell a
 		// child that did nothing from one whose provider rejected the turn, so
 		// the spawner names the failure instead of handing over a blank page.

@@ -5,8 +5,8 @@ import { describe, expect, test } from "bun:test";
 
 import { createPinOff, createPinOn } from "../src/features/pin/index.mjs";
 import { handlePinCall } from "../src/station/controls.mjs";
-import { pinParameters } from "../src/tools/descriptions.mjs";
-import { pinTicket } from "../src/tools/tickets.mjs";
+import { scopeContextParameters } from "../src/tools/descriptions.mjs";
+import { scopeContextTicket } from "../src/tools/tickets.mjs";
 
 function stationWith({ persist = () => true, port = null, description } = {}) {
   const state = { pins: [] };
@@ -42,12 +42,13 @@ describe("pin arguments", () => {
   });
 
   test("the schema requires a non-blank field", () => {
-    expect(pinParameters.additionalProperties).toBe(false);
-    expect(pinParameters.anyOf).toHaveLength(5);
+    const pin = scopeContextParameters.properties.pin;
+    expect(pin.additionalProperties).toBe(false);
+    expect(pin.anyOf).toHaveLength(5);
     for (const field of ["assumption", "deduction", "induction", "finding", "conclusion"]) {
-      expect(pinParameters.anyOf).toContainEqual({ required: [field] });
-      expect(pinParameters.properties[field].pattern).toBe("\\S");
-      expect(pinParameters.properties[field].minLength).toBe(1);
+      expect(pin.anyOf).toContainEqual({ required: [field] });
+      expect(pin.properties[field].pattern).toBe("\\S");
+      expect(pin.properties[field].minLength).toBe(1);
     }
   });
 
@@ -99,28 +100,31 @@ describe("pin persistence", () => {
   });
 });
 
-describe("pin ticket boundary", () => {
-  test("a throwing port add is an internal error, never OK", async () => {
-    const inner = stationWith({
-      port: {
-        add() {
-          throw new Error("disk gone");
-        },
-      },
-    });
+describe("scope_context ticket boundary", () => {
+  test("a throwing execute is an internal error, never OK", async () => {
     const ticket = {
-      executePin: (id, params) => handlePinCall(inner, { id, arguments: params }),
+      executeContext() {
+        throw new Error("disk gone");
+      },
     };
-    const first = await pinTicket(ticket, "pin-call", {
-      finding: "the parser leaves the lexer open",
+    const out = await scopeContextTicket(ticket, "pin-call", {
+      pin: { finding: "the parser leaves the lexer open" },
     });
-    expect(first.isError).toBe(true);
-    expect(first.details.code).toBe("PIN_INTERNAL_ERROR");
-    const second = await pinTicket(ticket, "pin-call", {
-      finding: "the parser leaves the lexer open",
-    });
-    expect(second.isError).toBe(true);
-    expect(second.details.code).toBe("PIN_INTERNAL_ERROR");
-    expect(inner.state.pins).toEqual([]);
+    expect(out.isError).toBe(true);
+    expect(out.details.code).toBe("PIN_INTERNAL_ERROR");
+  });
+
+  test("a call with neither half is refused before any work", async () => {
+    let called = 0;
+    const ticket = {
+      executeContext() {
+        called += 1;
+        return { content: [{ type: "text", text: "OK" }] };
+      },
+    };
+    const out = await scopeContextTicket(ticket, "empty", {});
+    expect(out.isError).toBe(true);
+    expect(out.details.code).toBe("scope_context-empty");
+    expect(called).toBe(0);
   });
 });

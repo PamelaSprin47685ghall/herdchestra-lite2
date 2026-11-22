@@ -12,8 +12,8 @@ import { readSwitch, resolvePorts } from "../src/core/ports/resolve.mjs";
 const EMPTY = {};
 
 describe("port registry", () => {
-	test("eleven ports, each with a default that is one of its implementations", () => {
-		expect(PORT_NAMES).toHaveLength(11);
+	test("ten ports, each with a default that is one of its implementations", () => {
+		expect(PORT_NAMES).toHaveLength(10);
 		for (const port of PORT_NAMES) {
 			const entry = PORTS[port];
 			expect(entry.implementations.length).toBeGreaterThanOrEqual(2);
@@ -83,11 +83,6 @@ describe("environment resolution", () => {
 
 	test("a two-implementation port reads its name form", () => {
 		expect(readSwitch("clock", { HERD_CLOCK: "off" })).toEqual({
-			ok: true,
-			implementation: "off",
-			explicit: true,
-		});
-		expect(readSwitch("folding", { HERD_FOLDING: "off" })).toEqual({
 			ok: true,
 			implementation: "off",
 			explicit: true,

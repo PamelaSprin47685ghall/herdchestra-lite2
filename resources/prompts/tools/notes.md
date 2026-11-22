@@ -1,3 +1,7 @@
+## scope_context.tool
+
+Save a durable note, rewrite the record of the beat that just delivered, or both in one call. `pin` is for what a successor must still know; `amend` is for dropping a search that no longer earns its space.
+
 ## amend.tool
 
 Replace the most recent completed beat in your current scope that amend can still reach: one assistant message and its tool traffic. Commands and edits already made stay in effect; only the record changes. The next model request reads your reflection instead of the beat.

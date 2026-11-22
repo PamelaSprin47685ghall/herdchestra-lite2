@@ -21,7 +21,6 @@ export const PORTS = Object.freeze({
 	herd: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	pin: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	amend: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
-	folding: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	modelSwitch: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	status: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	observer: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),

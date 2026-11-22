@@ -15,11 +15,6 @@ import {
   reparentOrphans,
 } from "../src/scope/forkjoin.mjs";
 import {
-  addReceipt,
-  attachReport,
-  createReceiptRecord,
-} from "../src/scope/receipts.mjs";
-import {
   handleForkCall,
   handleJoinCall,
   handleReturnCall,
@@ -98,7 +93,7 @@ describe("an idle join answers instead of waiting", () => {
     const ledger = createBracketLedger();
     const out = handleJoinCall(stationFor(ledger), {
       id: "j",
-      arguments: { elder_report: null },
+      arguments: {},
     });
     expect(out.isError).toBe(true);
     expect(out.details.active).toBe(0);
@@ -155,63 +150,11 @@ describe("repeated right brackets do not double-count", () => {
     registerFork(ledger, { forkId: "f1", ownerId: "root", intent: "child", depth: 0 });
     markReady(ledger, "f1");
     const station = stationFor(ledger);
-    const first = handleJoinCall(station, { id: "j1", arguments: { elder_report: null } });
+    const first = handleJoinCall(station, { id: "j1", arguments: {} });
     expect(first.isError).toBeUndefined();
-    const second = handleJoinCall(station, { id: "j2", arguments: { elder_report: "the first child summarized its parser findings" } });
+    const second = handleJoinCall(station, { id: "j2", arguments: {} });
     expect(second.isError).toBe(true);
     expect(second.details.code).toBe("NO_READY_CHILD");
-  });
-});
-
-describe("the report obligation survives a reload", () => {
-  test("a persisted receipt still demands its summary", () => {
-    const ledger = createBracketLedger();
-    registerFork(ledger, { forkId: "f2", ownerId: "root", intent: "second", depth: 0 });
-    markReady(ledger, "f2");
-    const station = stationFor(ledger);
-    // No in-memory owner map: this is a fresh process reading a restored state.
-    station.state.receipts = [
-      createReceiptRecord({
-        forkToolCallId: "f1",
-        closeToolCallId: "j1",
-        levelKey: "root|0|0",
-        closedOrder: 1,
-        report: null,
-      }),
-    ];
-    // The persisted surface the real station exposes: the summary attaches to
-    // the previous receipt, and the new join appends its own.
-    station.recordJoinReceipt = (spec) => {
-      let receipts = station.state.receipts;
-      if (spec.pending) {
-        receipts = attachReport(receipts, spec.pending.closeToolCallId, spec.elderReport);
-      }
-      receipts = addReceipt(
-        receipts,
-        createReceiptRecord({
-          forkToolCallId: spec.forkId,
-          closeToolCallId: spec.closeToolCallId,
-          levelKey: spec.levelKey,
-          closedOrder: spec.closedOrder,
-          report: null,
-        }),
-      );
-      station.state.receipts = receipts;
-    };
-    const refused = handleJoinCall(station, { id: "j2", arguments: { elder_report: null } });
-    expect(refused.isError).toBe(true);
-    expect(refused.details.code).toBe("INVALID_ELDER_REPORT");
-    // The refusal must not consume the ready child.
-    expect(readyChildren(ledger, "root")).toEqual(["f2"]);
-
-    const accepted = handleJoinCall(station, {
-      id: "j2",
-      arguments: { elder_report: "f1 measured 42 and left the parser path open" },
-    });
-    expect(accepted.isError).toBeUndefined();
-    expect(station.state.receipts[0].report).toBe(
-      "f1 measured 42 and left the parser path open",
-    );
   });
 });
 
@@ -238,7 +181,7 @@ describe("a join leaves the parent where it was", () => {
       receipts: [],
     };
     const before = structuredClone(station.state);
-    const out = handleJoinCall(station, { id: "j1", arguments: { elder_report: null } });
+    const out = handleJoinCall(station, { id: "j1" });
     expect(out.isError).toBeUndefined();
     expect(out.details.forkId).toBe("f1");
     expect(out.details.joined).toBe(true);

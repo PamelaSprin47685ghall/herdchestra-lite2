@@ -1,4 +1,4 @@
-// Model pricing catalog for the folding economics.
+// Model pricing catalog for the cache economics.
 //
 // loadPricingCatalog() is async and runs once at activation. Every other
 // export is a pure synchronous query over an immutable, in-memory catalog.

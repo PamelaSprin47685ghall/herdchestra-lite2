@@ -1,10 +1,9 @@
 // Pure fork/join decisions for the Station.
 //
-// The Station owns the bracket ledger, the receipt chain, the identity, and
-// every side effect (take, commit, persistence, rendering). This module owns
-// admission, the pending-report obligation, and the elder binding. It takes
-// plain snapshots, returns plain values, never mutates its inputs, and imports
-// no Station or host module.
+// The Station owns the bracket ledger, the identity, and every side effect
+// (take, commit, persistence, rendering). This module owns admission and
+// fork validation. It takes plain snapshots, returns plain values, never
+// mutates its inputs, and imports no Station or host module.
 
 import {
 	estimateJoinTokens,
@@ -15,7 +14,6 @@ import { normalizeBudget, validBudget } from "../../scope/budget.mjs";
 import { normalizeTargets, validTargets } from "../../scope/targets.mjs";
 import { publicScopeId, validScopeId } from "../../scope/scope-id.mjs";
 import { resolveModelSelector } from "../../scope/model-selector.mjs";
-import { latestReceiptOf } from "../../scope/receipts.mjs";
 import { trimText } from "../messages.mjs";
 
 export { decideAbandon };
@@ -68,103 +66,14 @@ export function decideForkAdmission({
 }
 
 /**
- * The receipt the next join must summarize, or null when none is pending.
- *
- * The level key carries the relay generation and epoch, so a handoff or a
- * promotion changes it. The obligation itself does not disappear with the
- * key: an unreported receipt still names the elder the next join must
- * summarize, so fall back to the chain itself.
- */
-export function decidePendingReport({
-	receipts = [],
-	levelKey = "",
-	reports = null,
-	ownerId = "root",
-} = {}) {
-	const list = Array.isArray(receipts) ? receipts : [];
-	const latest = latestReceiptOf(list, levelKey) ?? lastUnreportedReceipt(list);
-	if (latest) {
-		// A receipt that already carries a report has discharged its obligation.
-		// Without this check a persisted chain whose youngest receipt was reported
-		// would demand the same summary forever.
-		if (typeof latest.report === "string" && latest.report.trim() !== "") return null;
-		return {
-			forkId: latest.forkToolCallId,
-			closeToolCallId: latest.closeToolCallId,
-		};
-	}
-	return pendingOf(
-		reports instanceof Map ? reports.get(ownerId) : reports?.[ownerId],
-	);
-}
-
-/** The youngest receipt anywhere in the chain that still owes a report. */
-function lastUnreportedReceipt(receipts) {
-	let best = null;
-	for (const entry of receipts) {
-		if (!entry || typeof entry.closeToolCallId !== "string") continue;
-		if (typeof entry.report === "string" && entry.report.trim() !== "") continue;
-		if (!best || entry.closedOrder >= best.closedOrder) best = entry;
-	}
-	return best;
-}
-
-/** Accept the legacy string form as well as the record written now. */
-function pendingOf(value) {
-	if (typeof value === "string" && value !== "") {
-		return { forkId: value, closeToolCallId: null };
-	}
-	if (value && typeof value === "object" && typeof value.forkId === "string") {
-		return {
-			forkId: value.forkId,
-			closeToolCallId: value.closeToolCallId ?? null,
-		};
-	}
-	return null;
-}
-
-/**
- * Is a waiting join's elder binding still the receipt the model read?
- *
- * `cleared` means the chain no longer owes the expected report; `moved` means
- * another join advanced it. The caller renders the named receipt; this module
- * only names the side and the fork id.
- */
-export function decideJoinBinding({ expected = null, current = null } = {}) {
-	const want = expected && typeof expected === "object" ? expected : null;
-	const now = current && typeof current === "object" ? current : null;
-	if (want === null && now === null) return { ok: true };
-	if (
-		want !== null &&
-		now !== null &&
-		(want.closeToolCallId ?? want.forkId) ===
-			(now.closeToolCallId ?? now.forkId)
-	) {
-		return { ok: true };
-	}
-	if (now === null) {
-		return {
-			ok: false,
-			code: "STALE_ELDER_REPORT",
-			side: "cleared",
-			forkId: want?.forkId ?? null,
-		};
-	}
-	return {
-		ok: false,
-		code: "STALE_ELDER_REPORT",
-		side: "moved",
-		forkId: now.forkId ?? null,
-	};
-}
-
-/**
  * Check every fork argument without changing state. Returns the normalized
  * budget on success so the caller never normalizes twice.
  */
 export function validateFork(args) {
+	// Empty is valid here: a repeated scope id may carry only budget or
+	// targets. A *new* scope still needs an intent, and the handler enforces
+	// that after it knows whether the name already exists.
 	const intent = trimText(args?.intent);
-	if (intent === "") return { ok: false, code: "INVALID_INTENT" };
 	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}
@@ -221,6 +130,7 @@ export function validateForkBatch(args) {
 export function decideRegister({
 	items = [],
 	forks = [],
+	ownerId = "",
 	models = null,
 	hasSpawner = false,
 	receiptChars = [],
@@ -230,12 +140,30 @@ export function decideRegister({
 	reserve,
 	margin,
 } = {}) {
-	const known = new Set();
+	// One live record per public name. A blocked entry is live: it is a
+	// checkpoint that a later fork may amend and then start. Superseded
+	// records are history and never answer a name.
+	const live = new Map();
 	for (const fork of Array.isArray(forks) ? forks : []) {
-		if (!fork || fork.status === "blocked") continue;
-		known.add(publicScopeId(fork).toLowerCase());
+		if (!fork) continue;
+		const key = publicScopeId(fork).toLowerCase();
+		const previous = live.get(key);
+		if (!previous) {
+			live.set(key, fork);
+			continue;
+		}
+		const generation = Number.isInteger(fork.generation) ? fork.generation : 1;
+		const previousGeneration = Number.isInteger(previous.generation)
+			? previous.generation
+			: 1;
+		if (generation >= previousGeneration) live.set(key, fork);
 	}
 	const next = [];
+	// A repeated name inside one batch is not an error: the first item owns
+	// the name and every later item amends that same record. The handler
+	// resolves `targetStatus: "batch"` to the fork it created or amended
+	// earlier in the same loop.
+	const claimed = new Map();
 	let needsSpawn = false;
 	for (let index = 0; index < items.length; index += 1) {
 		const item = items[index];
@@ -243,24 +171,63 @@ export function decideRegister({
 			return { ok: false, code: "INVALID_SCOPE_ID", index };
 		}
 		const key = item.scopeId.toLowerCase();
-		if (known.has(key)) {
-			return {
-				ok: false,
-				code: "DUPLICATE_SCOPE_ID",
-				index,
-				scopeId: item.scopeId,
-			};
+		if (claimed.has(key)) {
+			next.push({
+				...item,
+				action: "amend",
+				targetForkId: null,
+				targetStatus: "batch",
+				spawnNextGeneration: false,
+			});
+			continue;
 		}
-		known.add(key);
+		claimed.set(key, index);
+		const existing = live.get(key);
+		if (existing) {
+			const recordOwner = existing.ownerId;
+			if (
+				typeof ownerId === "string" &&
+				ownerId !== "" &&
+				typeof recordOwner === "string" &&
+				recordOwner !== "" &&
+				recordOwner !== ownerId
+			) {
+				return {
+					ok: false,
+					code: "FOREIGN_SCOPE_ID",
+					index,
+					scopeId: item.scopeId,
+				};
+			}
+			const spawning =
+				existing.status === "ready" ||
+				existing.status === "joined" ||
+				existing.status === "failed";
+			if (spawning) needsSpawn = true;
+			next.push({
+				...item,
+				action: "amend",
+				targetForkId: existing.forkId,
+				targetStatus: existing.status,
+				spawnNextGeneration: spawning,
+			});
+			continue;
+		}
 		if (item.blocked !== true) needsSpawn = true;
-		next.push({ ...item });
+		next.push({ ...item, action: "create" });
 	}
 	if (needsSpawn && hasSpawner !== true) {
 		return { ok: false, code: "CHILD_SPAWNER_UNAVAILABLE" };
 	}
 	for (let index = 0; index < next.length; index += 1) {
 		const item = next[index];
-		if (item.model == null || item.blocked === true) continue;
+		if (
+			item.model == null ||
+			item.blocked === true ||
+			item.action === "amend"
+		) {
+			continue;
+		}
 		const resolved = resolveModelSelector(models, item.model);
 		if (!resolved.ok) {
 			return {
@@ -280,7 +247,7 @@ export function decideRegister({
 	}
 	for (let index = 0; index < next.length; index += 1) {
 		const item = next[index];
-		if (item.blocked === true) continue;
+		if (item.blocked === true || item.action === "amend") continue;
 		const override = item.modelOverride?.contextWindow;
 		const itemWindow =
 			Number.isFinite(override) && override > 0 ? override : window;
@@ -307,7 +274,19 @@ export function decideRegister({
 			};
 		}
 	}
-	return { ok: true, items: next, needsSpawn };
+	const single = next.length === 1 ? next[0] : null;
+	return {
+		ok: true,
+		items: next,
+		needsSpawn,
+		...(single
+			? {
+					action: single.action,
+					targetForkId: single.targetForkId ?? null,
+					targetStatus: single.targetStatus ?? null,
+				}
+			: {}),
+	};
 }
 
 /** The return gate: identity, record, status and receiver, before any commit. */

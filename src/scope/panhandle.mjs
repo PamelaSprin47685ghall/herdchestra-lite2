@@ -87,23 +87,12 @@ function readSeconds(value) {
 }
 
 /**
- * Add tool points and seconds to one branch's own account. Validation runs
- * before any mutation, so a refused panhandle leaves the ledger untouched.
+ * Validate and add tool points and seconds to one record's account. The
+ * caller owns the status gate; validation runs before any mutation.
  */
-export function applyPanhandle(ledger, forkId, request = {}, options = {}) {
-  const record = forkOf(ledger, forkId);
-  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (record.status === "blocked") {
-    return failure(
-      "PANHANDLE_BLOCKED",
-      "This branch is blocked and has not started; declare the budget when you resubmit the fork.",
-    );
-  }
-  if (record.status !== RUNNING) {
-    return failure(
-      "PANHANDLE_CLOSED",
-      `This branch is ${record.status} and no longer spends budget.`,
-    );
+export function grantBudget(record, request = {}, options = {}) {
+  if (!record || typeof record !== "object") {
+    return failure("UNKNOWN_FORK", "No branch record to grant.");
   }
   const source = isPlainObject(request) ? request : {};
   const wanted = readTools(source.tools);
@@ -118,13 +107,29 @@ export function applyPanhandle(ledger, forkId, request = {}, options = {}) {
       "Name at least one tool budget or ask for seconds.",
     );
   }
-  if (seconds > 0 && !Number.isFinite(record.deadlineAt)) {
+  if (
+    seconds > 0 &&
+    !Number.isFinite(record.deadlineAt) &&
+    record.status !== "blocked" &&
+    options?.allowClockOff !== true
+  ) {
     return failure(
       "PANHANDLE_CLOCK_OFF",
       "This branch has no wall clock to extend; ask for tool budget instead.",
     );
   }
 
+  if (options?.totalCap === true) {
+    for (const tool of Object.keys(tools)) {
+      const current = Number.isFinite(record.budget?.[tool]) ? record.budget[tool] : 0;
+      if (current + tools[tool] > PANHANDLE_MAX_PER_TOOL) {
+        return failure(
+          "PANHANDLE_TOOL_LIMIT",
+          `This branch would exceed ${PANHANDLE_MAX_PER_TOOL} points of "${tool}".`,
+        );
+      }
+    }
+  }
   if (!isPlainObject(record.budget)) record.budget = {};
   if (!isPlainObject(record.remaining)) record.remaining = copyCounts(record.budget);
   for (const tool of Object.keys(tools)) {
@@ -144,17 +149,47 @@ export function applyPanhandle(ledger, forkId, request = {}, options = {}) {
     record.timeBudgetMs =
       (Number.isFinite(record.timeBudgetMs) ? record.timeBudgetMs : 0) +
       seconds * 1000;
-    record.deadlineAt += seconds * 1000;
+    if (Number.isFinite(record.deadlineAt)) {
+      record.deadlineAt += seconds * 1000;
+    }
     // A grant that moves the deadline back into the future ends overtime.
     record.overtimeAt = null;
   }
+  return { ok: true, tools: { ...tools }, seconds, record };
+}
+
+/**
+ * Panhandle entry: the caller funds its own running branch, and the grant
+ * stays on the record for the budget line.
+ */
+export function applyPanhandle(ledger, forkId, request = {}, options = {}) {
+  const record = forkOf(ledger, forkId);
+  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
+  if (record.status === "blocked") {
+    return failure(
+      "PANHANDLE_BLOCKED",
+      "This branch is blocked and has not started; declare the budget when you resubmit the fork.",
+    );
+  }
+  if (record.status !== RUNNING) {
+    return failure(
+      "PANHANDLE_CLOSED",
+      `This branch is ${record.status} and no longer spends budget.`,
+    );
+  }
+  const granted = grantBudget(record, request, options);
+  if (!granted.ok) return granted;
   if (!Array.isArray(record.panhandles)) record.panhandles = [];
   const at = Number.isFinite(options.now) ? options.now : Date.now();
-  record.panhandles.push({ at, tools: { ...tools }, seconds });
+  record.panhandles.push({
+    at,
+    tools: { ...granted.tools },
+    seconds: granted.seconds,
+  });
   return {
     ok: true,
-    tools: { ...tools },
-    seconds,
+    tools: granted.tools,
+    seconds: granted.seconds,
     count: record.panhandles.length,
     record,
   };

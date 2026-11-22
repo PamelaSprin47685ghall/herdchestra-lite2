@@ -1,6 +1,6 @@
 // Amend port: the beat ledger and the budget refund that belongs to it.
 //
-// `retired()` is the fact folding asks for: a beat that was amended must not
+// `retired()` is the fact the amend filter asks for: a beat that was amended must not
 // come back through any later rewrite. `off` refuses, because a silent no-op
 // would leave the caller believing the beat was retracted.
 

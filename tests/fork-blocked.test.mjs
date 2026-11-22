@@ -175,10 +175,7 @@ describe("batch fork with a checkpoint", () => {
       arguments: { forks: [item("run"), item("later", true)] },
     });
     markReady(ledger, "call-pair:0");
-    const joined = handleJoinCall(station, {
-      id: "call-j",
-      arguments: { elder_report: null },
-    });
+    const joined = handleJoinCall(station, { id: "call-j" });
     expect(joined.isError).toBeUndefined();
     expect(joined.content[0].text).toContain("[Child record — fork run]");
     expect(joined.content[0].text).toContain("Unreceived: 0.");
@@ -193,7 +190,6 @@ describe("batch fork with a checkpoint", () => {
     for (const [suffix, scopeId, code] of [
       ["invalid", "provider|id", "INVALID_SCOPE_ID"],
       ["root", "Root", "INVALID_SCOPE_ID"],
-      ["duplicate", "FIRST", "DUPLICATE_SCOPE_ID"],
     ]) {
       const result = handleForkCall(station, {
         id: `internal-${suffix}`,

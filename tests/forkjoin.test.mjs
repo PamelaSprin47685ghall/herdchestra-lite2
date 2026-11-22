@@ -56,16 +56,34 @@ describe("registration", () => {
     expect(again.code).toBe("DUPLICATE_FORK");
   });
 
-  test("refuses an empty intent", () => {
-    const ledger = createBracketLedger();
-    const result = registerFork(ledger, {
-      forkId: "f1",
-      ownerId: "root",
+  test("refuses an empty intent on a new scope", async () => {
+    const { handleForkCall } = await import("../src/station/fork-controls.mjs");
+    const item = {
+      scopeId: "probe",
       intent: "   ",
-      depth: 0,
+      blocked: false,
+      budget: { read: 1 },
+      targets: ["src/parser.mjs"],
+    };
+    const ledger = createBracketLedger();
+    const spawned = [];
+    const station = {
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
+      forkLedgerPort: () => ledger,
+      childSpawnPort: () => (spec) => {
+        spawned.push(spec);
+      },
+    };
+    const result = handleForkCall(station, {
+      id: "call-empty-intent",
+      arguments: { forks: [item] },
     });
-    expect(result.ok).toBe(false);
-    expect(result.code).toBe("INVALID_INTENT");
+    expect(result.isError).toBe(true);
+    expect(result.details.code).toBe("MISSING_INTENT");
+    expect(result.details.scopeId).toBe("probe");
+    expect(result.content[0].text).toContain("A new scope needs a non-empty");
+    expect(spawned).toHaveLength(0);
+    expect(ledger.order).toEqual([]);
   });
 
   test("accepts several forks in one beat", () => {
@@ -333,7 +351,7 @@ describe("owner queries", () => {
 
     const early = handleJoinCall(station, {
       id: "call-j1",
-      arguments: { elder_report: null },
+      arguments: {},
     });
     expect(early.isError).toBe(true);
     expect(early.content[0].text).toContain("No child has returned yet");
@@ -345,7 +363,7 @@ describe("owner queries", () => {
     };
     const returned = handleReturnCall(child, {
       id: "call-r1",
-      arguments: { elder_report: null },
+      arguments: {},
     });
     expect(returned.isError).toBeUndefined();
     // The station queues; only the ticket's wait turns this into acceptance.
@@ -354,7 +372,7 @@ describe("owner queries", () => {
 
     const joined = handleJoinCall(station, {
       id: "call-j2",
-      arguments: { elder_report: null },
+      arguments: {},
     });
     expect(joined.isError).toBeUndefined();
     expect(joined.content[0].text).toContain("[Child record — fork cache-probe]");
@@ -395,7 +413,10 @@ describe("owner queries", () => {
       targets: ["src/parser.mjs"],
     };
     expect(validateFork(base).ok).toBe(true);
-    expect(validateFork({ ...base, intent: "  " }).code).toBe("INVALID_INTENT");
+    // An empty intent is legal for an amendment; a *new* scope rejects it in
+    // the handler, where the name's existence is known.
+    expect(validateFork({ ...base, intent: "  " }).ok).toBe(true);
+    expect(validateFork({ ...base, intent: "  " }).intent).toBe("");
     expect(validateFork({ ...base, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
     expect(validateFork({ ...base, time: 0 }).ok).toBe(true);
     expect(validateFork({ ...base, time: 0 }).time).toBeUndefined();
@@ -468,19 +489,19 @@ describe("owner queries", () => {
     };
     const returned = handleReturnCall(child, {
       id: "call-rp",
-      arguments: { elder_report: null },
+      arguments: {},
     });
     expect(returned.content[0].text).toContain("queued for Root");
     expect(returned.content[0].text).toContain("scope-2");
     expect(returned.details.awaitingReceipt).toBe(true);
     const taken = handleJoinCall(station, {
       id: "call-jp",
-      arguments: { elder_report: null },
+      arguments: {},
     });
     expect(taken.details.joined).toBe(true);
     expect(taken.content[0].text).toContain("[Child record — fork scope-1]");
     expect(taken.content[0].text).toContain("Unreceived: 1 (scope-2).");
-    expect(taken.content[0].text).toContain("Call scope_join again with an elder_report for receipt scope-1.");
+    expect(taken.content[0].text).toContain("Call scope_join again to take the next one.");
   });
 
   test("refuses scope_return outside a forked child", async () => {
@@ -491,7 +512,7 @@ describe("owner queries", () => {
     };
     const out = handleReturnCall(station, {
       id: "call-x",
-      arguments: { elder_report: null },
+      arguments: {},
     });
     expect(out.isError).toBe(true);
     const text = out.content[0].text;
@@ -570,9 +591,9 @@ describe("owner queries", () => {
       "../src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
-    setOutcome(registry, "c1", { record: "[call read] {}", failed: false });
+    setOutcome(registry, "c1", { record: "[read]", failed: false });
     expect(outcomeOf(registry, "c1")).toEqual({
-      record: "[call read] {}",
+      record: "[read]",
       failed: false,
       reason: null,
     });

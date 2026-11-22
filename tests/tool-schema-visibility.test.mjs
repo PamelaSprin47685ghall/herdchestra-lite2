@@ -13,8 +13,7 @@ test("every registered tool keeps its schema in the top-level request", () => {
 	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
 
 	expect([...tools.keys()].sort()).toEqual([
-		"amend",
-		"pin",
+		"scope_context",
 		"scope_fork",
 		"scope_join",
 		"scope_panhandle",

@@ -92,4 +92,50 @@ describe("amend marking order", () => {
 		expect(targets.calls).toBe(2);
 		expect(station.persistedCount()).toBe(1);
 	});
+
+	test("the scan path reads the amend half of a scope_context message", () => {
+		const targets = {
+			calls: 0,
+			next: () => ({ ok: false, code: "AMEND_UNAVAILABLE", reason: "no target" }),
+		};
+		const station = fakeStation(targets);
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{
+					type: "toolCall",
+					id: "ctx-1",
+					name: "scope_context",
+					arguments: { amend: { reflection: "drop it" }, pin: { finding: "kept" } },
+				},
+			],
+		};
+
+		SessionStation.prototype.processAssistantMessage.call(station, message);
+
+		expect(targets.calls).toBe(1);
+		expect(station.toolCallLedger.processed.hasCall("ctx-1")).toBe(true);
+	});
+
+	test("a pin-only scope_context is not an amend target", () => {
+		const targets = { calls: 0, next: () => ({ ok: false }) };
+		const station = fakeStation(targets);
+		const message = {
+			role: "assistant",
+			timestamp: 1,
+			content: [
+				{
+					type: "toolCall",
+					id: "ctx-2",
+					name: "scope_context",
+					arguments: { pin: { finding: "kept" } },
+				},
+			],
+		};
+
+		SessionStation.prototype.processAssistantMessage.call(station, message);
+
+		expect(targets.calls).toBe(0);
+	});
 });

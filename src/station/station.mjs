@@ -55,6 +55,7 @@ import {
 	directAmend,
 	executePin,
 	executeAmend,
+	executeContext,
 	executeFork,
 	executePanhandle,
 	executeJoin,
@@ -62,17 +63,10 @@ import {
 } from "./execute.mjs";
 import { PANHANDLE_TOOL } from "./domain/panhandle.mjs";
 import {
-	checkJoinBinding,
 	commitJoin,
 	confirmJoinPersistence,
 	renderJoinResult,
-	settleInterruptedJoin,
 } from "./fork-controls.mjs";
-import {
-	addReceipt,
-	attachReport,
-	createReceiptRecord,
-} from "../scope/receipts.mjs";
 import {
 	advanceRelayForHandoff,
 	armHandoff,
@@ -97,7 +91,6 @@ import {
 import { controlsIn, processedKey } from "./messages.mjs";
 import {
 	projectContext,
-	settleReceipts,
 	shouldRebase,
 } from "./domain/context.mjs";
 import {
@@ -133,6 +126,25 @@ export function receiptTextOf(message) {
 import { loadDoc, render } from "../prompts/index.mjs";
 
 const E = loadDoc("errors");
+
+/**
+ * The amend arguments a control call carries, or null when it carries none.
+ * A retired `amend` call is still in old transcripts, so the scan path reads
+ * both names; the new name nests the same object under `amend`.
+ */
+function amendArgumentsOf(call) {
+	if (call?.name === "amend") return call.arguments ?? {};
+	if (call?.name !== "scope_context") return null;
+	let args = call.arguments;
+	if (typeof args === "string") {
+		try {
+			args = JSON.parse(args);
+		} catch {
+			return null;
+		}
+	}
+	return args?.amend ?? null;
+}
 
 export class SessionStation {
 	constructor(manager, pi, tickets, registry, pricingCatalog) {
@@ -250,7 +262,6 @@ export class SessionStation {
 		this.ports = Object.freeze({
 			relay: implementations.relay,
 			clock: implementations.clock,
-			folding: implementations.folding,
 			pin: implementations.pin.bindState(this.state),
 			amend: implementations.amend.bindState(this.state),
 			herd: implementations.herd.bindState(this.state),
@@ -680,10 +691,17 @@ export class SessionStation {
 		const currentIndex = currentPersisted ? firstIndex : base.length - 1;
 		let changed = false;
 		for (const call of controls) {
-			if (call.name !== "amend") continue;
+			const amendArgs = amendArgumentsOf(call);
+			if (amendArgs === null) continue;
 			if (this.toolCallLedger.hasCall(call.id)) continue;
 			const boundary = this.amendBoundary(currentIndex, message);
-			const result = handleAmendCall(this, call, base, currentIndex, boundary);
+			const result = handleAmendCall(
+				this,
+				{ id: call.id, name: "amend", arguments: amendArgs },
+				base,
+				currentIndex,
+				boundary,
+			);
 			this.toolCallLedger.setHandled(call.id, result);
 			// Mark after the work succeeded. A throw must leave both the call
 			// and the message unmarked, so the scan path can retry it; the
@@ -717,16 +735,8 @@ export class SessionStation {
 	 * The station caches the result, so a later replay of the same call sees
 	 * the same answer instead of looking for a child that is already closed.
 	 */
-	finalizeJoin(toolCallId, record, ctx, params = {}, pending = undefined) {
-		const elderReport =
-			typeof params?.elder_report === "string" ? params.elder_report.trim() : null;
-		// A report the caller brought when no receipt was pending was ignored;
-		// the receipt says so instead of failing the join.
-		const elderUnneeded = pending === null && elderReport !== null;
-		// The binding travels with the waiting ticket, not from a second read of
-		// the chain: a join that waited must file its summary against the
-		// receipt the model saw, or refuse.
-		commitJoin(this, record, toolCallId, elderReport, pending);
+	finalizeJoin(toolCallId, record, ctx) {
+		commitJoin(this, record, toolCallId);
 		const persisted = confirmJoinPersistence(this);
 		if (persisted === false) {
 			this.noteError?.("fork", new Error("join receipt was not persisted"), {
@@ -737,27 +747,12 @@ export class SessionStation {
 		const result = renderJoinResult(this, record, {
 			closeToolCallId: toolCallId,
 			persisted,
-			elderUnneeded,
 		});
 		const processed = processedOf(this);
 		processed?.setHandled?.(toolCallId, result);
 		processed?.markCall?.(toolCallId);
 		this.persist();
 		return result;
-	}
-
-	/**
-	 * Settle a join whose wait a queued user message interrupted. The station
-	 * files the elder report the caller brought and answers in one sync beat;
-	 * the ticket only waited.
-	 */
-	settleInterruptedJoin(toolCallId, params, pending = null) {
-		return settleInterruptedJoin(this, toolCallId, params, pending);
-	}
-
-	/** The guard a waiting join runs before every take. */
-	joinBindingGuard(expected) {
-		return checkJoinBinding(this, expected);
 	}
 
 	executeReturn(toolCallId, params, ctx) {
@@ -793,6 +788,10 @@ export class SessionStation {
 
 	directAmend(toolCallId, params) {
 		return directAmend(this, toolCallId, params);
+	}
+
+	executeContext(toolCallId, params) {
+		return executeContext(this, toolCallId, params);
 	}
 
 	observeActualModel(ctx) {
@@ -831,68 +830,16 @@ export class SessionStation {
 		if (this.host?.setAgentMessages?.(ctx, tree)) this.anchor.clearRebase();
 	}
 
-	// -- Fork/join receipts (sync) ----------------------------------------------
-
-	/**
-	 * Record one successful join. The pending receipt gets the summary this
-	 * join carried; the new receipt becomes the newest one at its level.
-	 * Both facts live in the persisted scope state, so a reload keeps the
-	 * difference between an elder record and the newest one.
-	 */
-	recordJoinReceipt(entry) {
-		const spec = entry && typeof entry === "object" ? entry : {};
-		let receipts = Array.isArray(this.state.receipts) ? this.state.receipts : [];
-		const pending = spec.pending && typeof spec.pending === "object" ? spec.pending : null;
-		if (pending && typeof pending.closeToolCallId === "string") {
-			receipts = attachReport(receipts, pending.closeToolCallId, spec.elderReport);
-		}
-		const record = createReceiptRecord({
-			forkToolCallId: spec.forkId,
-			...(spec.scopeId ? { scopeId: spec.scopeId } : {}),
-			closeToolCallId: spec.closeToolCallId,
-			levelKey: spec.levelKey,
-			closedOrder: spec.closedOrder,
-		});
-		if (record) receipts = addReceipt(receipts, record);
-		this.state.receipts = receipts;
-		return record;
-	}
-
-	/**
-	 * File a summary onto an existing receipt without taking a child. Used
-	 * when a join wait was interrupted: the model already read the receipt it
-	 * summarized, so the obligation is discharged even though no new record
-	 * arrived.
-	 */
-	recordElderReport(entry) {
-		const spec = entry && typeof entry === "object" ? entry : {};
-		let receipts = Array.isArray(this.state.receipts) ? this.state.receipts : [];
-		if (typeof spec.closeToolCallId === "string") {
-			receipts = attachReport(receipts, spec.closeToolCallId, spec.report);
-		}
-		this.state.receipts = receipts;
-		return receipts;
-	}
-
-	/** Mark the receipts whose text the projection has shortened. */
-	settleReceiptFolds(closeToolCallIds) {
-		this.state.receipts = settleReceipts(
-			this.state.receipts,
-			closeToolCallIds,
-		);
-	}
-
 	// -- Context transform (sync) -----------------------------------------------
 
 	transformContext(original, ctx) {
 		try {
 			const model = actualModel(ctx, this.host);
 			const key = modelKey(model);
-			const folding = this.ports.folding;
 			const needsRebase = this.anchor.needsRebase();
 			const tree = needsRebase ? this.contextMessages() : null;
 			const projection = projectContext(
-				{ receipts: this.state.receipts, amends: this.state.amends },
+				{ amends: this.state.amends },
 				{
 					original,
 					tree,
@@ -901,14 +848,10 @@ export class SessionStation {
 					modelKey: key,
 					header: key ? (this.host?.contextHeaderOf?.(ctx) ?? null) : null,
 				},
-				{ folding },
 			);
-			// Commit: the projection is complete. Write the folds it used,
-			// then the host rebase and the usage snapshot. No ticket dispatch
-			// follows, so no ticket can observe a half-written state.
-			if (projection.collapsed.length > 0) {
-				this.state.receipts = projection.nextState.receipts;
-			}
+			// Commit: the projection is complete. Write the host rebase and the
+			// usage snapshot. No ticket dispatch follows, so no ticket can
+			// observe a half-written state.
 			if (projection.rebase && tree && this.host?.setAgentMessages?.(ctx, tree)) {
 				this.anchor.clearRebase();
 			}

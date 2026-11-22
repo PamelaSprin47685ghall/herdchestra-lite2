@@ -5,22 +5,20 @@
 
 import { loadDoc, render } from "../prompts/index.mjs";
 import {
-	ELDER_REPORT_PATTERN,
-	MIN_ELDER_REPORT_CHARS,
-} from "../scope/elder-report.mjs";
-import {
 	PANHANDLE_MAX_PER_TOOL,
 	PANHANDLE_MAX_SECONDS,
 } from "../scope/panhandle.mjs";
 
 const notes = loadDoc("tools/notes");
 
-// amend and pin are the only working-level control tools. The concurrency
-// protocol is the three fork/join/return tools; the retired `scope` container
-// has no schema, no description and no handler.
-export const AMEND_DESCRIPTION = notes["amend.tool"];
+// `scope_context` is the one working-level control tool. The retired tool
+// prose now lives on its two optional objects, where the model chooses the
+// field that needs it. The concurrency protocol is the three fork/join/return
+// tools; the retired `scope` container has no schema, description or handler.
+export const SCOPE_CONTEXT_DESCRIPTION = notes["scope_context.tool"];
+export const AMEND_PARAMETER_DESCRIPTION = notes["amend.tool"];
 export const REFLECTION_DESCRIPTION = notes["amend.reflection"];
-export const PIN_DESCRIPTION = notes["pin.tool"];
+export const PIN_PARAMETER_DESCRIPTION = notes["pin.tool"];
 export const PIN_ASSUMPTION_DESCRIPTION = notes["pin.assumption"];
 export const PIN_DEDUCTION_DESCRIPTION = notes["pin.deduction"];
 export const PIN_INDUCTION_DESCRIPTION = notes["pin.induction"];
@@ -37,7 +35,6 @@ export const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
 export const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
 export const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
 export const JOIN_DESCRIPTION = forkJoin["join.tool"];
-export const JOIN_ELDER_DESCRIPTION = forkJoin["join.elder_report"];
 export const RETURN_DESCRIPTION = forkJoin["return.tool"];
 
 import { SCOPE_ID_PATTERN, MAX_SCOPE_ID_LENGTH } from "../scope/scope-id.mjs";
@@ -55,7 +52,10 @@ export const PANHANDLE_BECAUSE_DESCRIPTION = panhandle["panhandle.because"];
 const forkItem = {
 	type: "object",
 	additionalProperties: false,
-	required: ["scopeId", "intent", "blocked", "budget", "targets"],
+	// `intent` is optional here because a reused `scopeId` may carry only a
+	// budget increment, merged targets, or one more requirement. A new scope
+	// still needs it: the station refuses with MISSING_INTENT.
+	required: ["scopeId", "blocked", "budget", "targets"],
 	properties: {
 		scopeId: { type: "string", pattern: SCOPE_ID_PATTERN, maxLength: MAX_SCOPE_ID_LENGTH, description: forkJoin["fork.scope-id"] },
 		intent: { type: "string", minLength: 1, description: FORK_INTENT_DESCRIPTION },
@@ -92,28 +92,10 @@ export const forkParameters = {
 	},
 };
 
-const elderReportProperty = (description) => ({
-	anyOf: [
-		{
-			type: "string",
-			minLength: MIN_ELDER_REPORT_CHARS,
-			// The same acceptance rule as the runtime: the stored report is
-			// trimmed, so the pattern measures the span between the first and
-			// last non-space characters. A blank value has no such span.
-			pattern: ELDER_REPORT_PATTERN,
-		},
-		{ type: "null" },
-	],
-	description,
-});
-
 export const joinParameters = {
 	type: "object",
 	additionalProperties: false,
-	required: ["elder_report"],
-	properties: {
-		elder_report: elderReportProperty(JOIN_ELDER_DESCRIPTION),
-	},
+	properties: {},
 };
 
 // scope_return takes no arguments. A returning child does not summarize the
@@ -125,10 +107,11 @@ export const returnParameters = {
 	properties: {},
 };
 
-export const amendParameters = {
+const amendObject = {
 	type: "object",
 	additionalProperties: false,
 	required: ["reflection"],
+	description: AMEND_PARAMETER_DESCRIPTION,
 	properties: {
 		reflection: { type: "string", minLength: 1, description: REFLECTION_DESCRIPTION },
 	},
@@ -142,9 +125,10 @@ const pinField = (description) => ({
 	description,
 });
 
-export const pinParameters = {
+const pinObject = {
 	type: "object",
 	additionalProperties: false,
+	description: PIN_PARAMETER_DESCRIPTION,
 	// At least one field must be present with content. The runtime refuses a
 	// call that satisfies the property types but names no non-blank field.
 	anyOf: [
@@ -160,6 +144,18 @@ export const pinParameters = {
 		induction: pinField(PIN_INDUCTION_DESCRIPTION),
 		finding: pinField(PIN_FINDING_DESCRIPTION),
 		conclusion: pinField(PIN_CONCLUSION_DESCRIPTION),
+	},
+};
+
+// Both objects are optional; one must arrive. The runtime refuses an empty
+// call rather than reporting a change it did not make.
+export const scopeContextParameters = {
+	type: "object",
+	additionalProperties: false,
+	anyOf: [{ required: ["pin"] }, { required: ["amend"] }],
+	properties: {
+		pin: pinObject,
+		amend: amendObject,
 	},
 };
 

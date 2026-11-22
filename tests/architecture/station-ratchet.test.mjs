@@ -33,32 +33,27 @@ function count(text, pattern) {
 }
 
 const transform = methodBody("transformContext");
-const settle = methodBody("settleReceiptFolds");
 const rebase = methodBody("maybeRebase");
 
 describe("context ratchet", () => {
-	test("transformContext commits once and delegates the decision", () => {
+	test("transformContext delegates to the pure projection", () => {
 		expect(transform.length).toBeGreaterThan(0);
-		expect(count(transform, /this\.state\.[A-Za-z0-9_$]+\s*=/g)).toBe(1);
-		expect(count(transform, /this\.state\.receipts\s*=/g)).toBe(1);
-		expect(count(transform, /this\.(settleReceiptFolds|maybeRebase)\(/g)).toBe(0);
 		expect(transform).toContain("projectContext(");
+		expect(count(transform, /this\.state\.[A-Za-z0-9_$]+\s*=/g)).toBe(0);
+		expect(count(transform, /this\.(settleReceiptFolds|maybeRebase)\(/g)).toBe(0);
 	});
 
-	test("the compatibility methods use the pure decisions", () => {
-		expect(settle).toContain("settleReceipts(");
-		expect(settle).not.toContain("markCollapsed(");
+	test("the compatibility method uses the pure decision", () => {
 		expect(rebase).toContain("shouldRebase(");
 		expect(rebase).not.toContain("sameTail(");
 	});
 
-	test("receipt writes do not grow past the post-slice baseline", () => {
-		expect(count(source, /this\.state\.receipts\s*=/g)).toBeLessThanOrEqual(4);
+	test("no receipt writes remain in the station", () => {
+		expect(count(source, /this\.state\.receipts\s*=/g)).toBe(0);
 	});
 
-	test("the context compatibility methods are not one-line station forwarders", () => {
+	test("the compatibility method is not a one-line station forwarder", () => {
 		const forwarder = /^\{\s*return [A-Za-z0-9_$]+\(this,/;
-		expect(forwarder.test(settle.trim())).toBe(false);
 		expect(forwarder.test(rebase.trim())).toBe(false);
 	});
 });

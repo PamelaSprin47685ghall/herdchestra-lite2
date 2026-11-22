@@ -14,24 +14,9 @@ import {
 	registerFork,
 	takeReady,
 } from "../src/scope/forkjoin.mjs";
-import {
-	addReceipt,
-	attachReport,
-	createReceiptRecord,
-} from "../src/scope/receipts.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { createEmptyCatalog } from "../src/host/pricing.mjs";
 import { createToolCallLedger } from "../src/station/domain/tool-call-ledger.mjs";
-
-function receipt(forkId, closeId, closedOrder, levelKey = "root|0|0", report = null) {
-	return createReceiptRecord({
-		forkToolCallId: forkId,
-		closeToolCallId: closeId,
-		levelKey,
-		closedOrder,
-		report,
-	});
-}
 
 /** A root station with only the ports the control handlers read. */
 function rootStation(ledger, state = createState()) {
@@ -39,7 +24,7 @@ function rootStation(ledger, state = createState()) {
 	station.state = state;
 	station.manager = null;
 	station.pricingCatalog = createEmptyCatalog();
-	station.registry = { ports: () => ({ folding: "on" }) };
+	station.registry = { ports: () => ({}) };
 	station.ports = bindStationPorts(state);
 	station.toolCallLedger = createToolCallLedger();
 	station.hostBoundaryKey = null;
@@ -178,16 +163,11 @@ describe("adoption files the result at the receiver's level", () => {
 		handleReturnCall(childStation(ledger, "p"), { id: "return-p", arguments: {} });
 
 		const root = rootStation(ledger, state);
-		const first = handleJoinCall(root, { id: "j1", arguments: { elder_report: null } });
+		const first = handleJoinCall(root, { id: "j1", arguments: {} });
 		expect(first.details.joined).toBe(true);
-		const second = handleJoinCall(root, {
-			id: "j2",
-			arguments: { elder_report: "parent said what it found" },
-		});
+		const second = handleJoinCall(root, { id: "j2", arguments: {} });
 		expect(second.details.joined).toBe(true);
 
-		const c1Receipt = state.receipts.find((entry) => entry.closeToolCallId === "j2");
-		expect(c1Receipt.levelKey).toBe("root|0|0");
 		expect(ledger.levels["root|0|0"]).toEqual(["p", "c1"]);
 	});
 });
@@ -215,55 +195,7 @@ describe("a child record is frozen before the parent can take it", () => {
 	});
 });
 
-describe("elder_report is exact", () => {
-	test("a summary with no pending receipt is accepted and noted", () => {
-		const ledger = createBracketLedger();
-		registerFork(ledger, {
-			forkId: "c1",
-			ownerId: "root",
-			levelKey: "root|0|0",
-			intent: "child",
-			depth: 0,
-		});
-		markReady(ledger, "c1");
-		const station = rootStation(ledger);
-
-		const out = handleJoinCall(station, {
-			id: "j1",
-			arguments: { elder_report: "nothing is pending" },
-		});
-		expect(out.isError).toBeUndefined();
-		expect(out.details.joined).toBe(true);
-		expect(out.details.elderUnneeded).toBe(true);
-		expect(out.content[0].text).toContain("was accepted but not stored");
-		// The stray report changes nothing; the child is still received.
-		expect(forkOf(ledger, "c1").status).toBe("joined");
-	});
-
-	test("a pending receipt demands a non-empty summary", () => {
-		const ledger = createBracketLedger();
-		const state = createState();
-		state.receipts = addReceipt([], receipt("f0", "j0", 1));
-		registerFork(ledger, {
-			forkId: "c1",
-			ownerId: "root",
-			levelKey: "root|0|0",
-			intent: "child",
-			depth: 0,
-		});
-		markReady(ledger, "c1");
-		const station = rootStation(ledger, state);
-
-		const out = handleJoinCall(station, {
-			id: "j1",
-			arguments: { elder_report: null },
-		});
-		expect(out.isError).toBe(true);
-		expect(forkOf(ledger, "c1").status).toBe("ready");
-	});
-});
-
-describe("the outbound projection shortens receipts", () => {
+describe("the outbound projection keeps a plain record", () => {
 	function projectionStation(state) {
 		const station = rootStation(null, state);
 		station.registry = { ports: () => ({}) };
@@ -271,41 +203,18 @@ describe("the outbound projection shortens receipts", () => {
 		return station;
 	}
 
-	test("a foldable receipt loses its work text and keeps both brackets", () => {
+	test("a join leaves the outbound messages untouched", () => {
 		const state = createState();
-		let receipts = addReceipt([], receipt("f1", "j1", 1));
-		receipts = addReceipt(receipts, receipt("f2", "j2", 2));
-		receipts = attachReport(receipts, "j1", "found the parser path");
-		state.receipts = receipts;
-
 		const messages = [
 			assistantWith("f1", "scope_fork", { forks: [] }),
 			toolResult("f1", "scope_fork", "[fork f1] intent: \"probe\""),
-			assistantWith("j1", "scope_join", { elder_report: null }),
-			toolResult(
-				"j1",
-				"scope_join",
-				'full child record for f1\n' +
-					"work text that must disappear. ".repeat(20) +
-					'\n[fork g1] intent: "grandchild" | budget: read 1',
-			),
-			assistantWith("j2", "scope_join", { elder_report: "found the parser path" }),
-			toolResult("j2", "scope_join", "the youngest record stays complete"),
+			assistantWith("j1", "scope_join", {}),
+			toolResult("j1", "scope_join", "full child record for f1"),
 		];
 
 		const station = projectionStation(state);
 		const out = station.transformContext(messages, {});
-		const texts = out.messages.map((message) =>
-			typeof message.content === "string"
-				? message.content
-				: (message.content ?? []).map((block) => block.text ?? "").join(""),
-		);
-
-		expect(texts[3]).toContain("found the parser path");
-		expect(texts[3]).not.toContain("full child record for f1");
-		expect(texts[3]).toContain("[fork g1]");
-		expect(texts[5]).toBe("the youngest record stays complete");
-		expect(out.messages[0]).toBe(messages[0]);
-		expect(out.messages[1]).toBe(messages[1]);
+		expect(out.messages).toHaveLength(messages.length);
+		expect(out.messages[3].content[0].text).toBe("full child record for f1");
 	});
 });

@@ -69,14 +69,20 @@ describe("tool contracts map to their documents", () => {
 		expect(scopeTools.FORK_BUDGET_DESCRIPTION).toBe(doc["fork.budget"]);
 		expect(scopeTools.FORK_TIME_DESCRIPTION).toBeUndefined();
 		expect(scopeTools.JOIN_DESCRIPTION).toBe(doc["join.tool"]);
+		// join takes no argument: the child record arrives as a digest, so no
+		// elder_report and no other parameter may survive.
+		expect(scopeTools.joinParameters).toBeDefined();
+		expect(scopeTools.joinParameters.required).toBeUndefined();
+		expect(scopeTools.joinParameters.properties).not.toHaveProperty("elder_report");
 		expect(scopeTools.RETURN_DESCRIPTION).toBe(doc["return.tool"]);
 		// The retired working-level container has no description and no
 		// schema; amend and pin live in their own document.
 		expect(scopeTools.SCOPE_DESCRIPTION).toBeUndefined();
 		expect(scopeTools.scopeParameters).toBeUndefined();
-		expect(scopeTools.AMEND_DESCRIPTION).toBe(notes["amend.tool"]);
+		expect(scopeTools.SCOPE_CONTEXT_DESCRIPTION).toBe(notes["scope_context.tool"]);
+		expect(scopeTools.AMEND_PARAMETER_DESCRIPTION).toBe(notes["amend.tool"]);
 		expect(scopeTools.REFLECTION_DESCRIPTION).toBe(notes["amend.reflection"]);
-		expect(scopeTools.PIN_DESCRIPTION).toBe(notes["pin.tool"]);
+		expect(scopeTools.PIN_PARAMETER_DESCRIPTION).toBe(notes["pin.tool"]);
 		expect(scopeTools.PIN_ASSUMPTION_DESCRIPTION).toBe(notes["pin.assumption"]);
 		expect(scopeTools.PIN_DEDUCTION_DESCRIPTION).toBe(notes["pin.deduction"]);
 		expect(scopeTools.PIN_INDUCTION_DESCRIPTION).toBe(notes["pin.induction"]);
@@ -101,19 +107,17 @@ describe("tool contracts map to their documents", () => {
 		const item = tools.get("scope_fork").parameters.properties.forks.items;
 		const { description } = item.properties.scopeId;
 		expect(description).toMatch(/\broot`? is reserved\b[^.]*\b(?:any capitalization|regardless of case|case-insensitive)\b/i);
-		expect(description).toMatch(/\bunique\b[^.]*\b(?:case-insensitive|regardless of case)\b|\bcase-insensitive\b[^.]*\bunique\b/i);
+		expect(description).toMatch(/amends? that scope/i);
+		expect(description).toContain("only its owner");
+		expect(description).toMatch(/case-insensitive/i);
+		expect(description).not.toMatch(/must be unique/i);
 	});
 
 	test("schemas carry the mapped text", () => {
 		const doc = loadDoc("tools/fork-join");
 		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual([
-			"scopeId",
-			"intent",
-			"blocked",
-			"budget",
-			"targets",
-		]);
+		expect(item.required).toEqual(["scopeId", "blocked", "budget", "targets"]);
+		expect(item.required).not.toContain("intent");
 		expect(item.properties.intent.description).toBe(doc["fork.intent"]);
 		expect(item.properties.budget.description).toBe(doc["fork.budget"]);
 		expect(item.properties.time).toBeUndefined();
@@ -121,7 +125,7 @@ describe("tool contracts map to their documents", () => {
 		expect(item.properties).not.toHaveProperty("stage");
 		expect(item.properties).not.toHaveProperty("fission");
 		expect(item.properties).not.toHaveProperty("permission");
-		expect(scopeTools.amendParameters.properties.reflection.description).toBe(
+		expect(scopeTools.scopeContextParameters.properties.amend.properties.reflection.description).toBe(
 			loadDoc("tools/notes")["amend.reflection"],
 		);
 		const todo = loadDoc("tools/todo");
@@ -295,5 +299,29 @@ describe("fork item schema", () => {
 		expect(item.required).not.toContain("time");
 		expect(item.properties.time).toBeUndefined();
 		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
+	});
+
+	test("a reused scopeId amends, and intent may be omitted", () => {
+		const item = scopeTools.forkParameters.properties.forks.items;
+		expect(item.required).toEqual(["scopeId", "blocked", "budget", "targets"]);
+		expect(item.required).not.toContain("intent");
+		expect(item.properties.intent.description).toMatch(/next turn boundary/i);
+		expect(item.properties.scopeId.description).toMatch(/ready.*supersedes/i);
+		expect(item.properties.scopeId.description).toMatch(/joined.*failed.*new generation/i);
+	});
+
+	test("reuse errors replace duplicate-scope-id", () => {
+		const errors = loadDoc("errors");
+		expect(errors["duplicate-scope-id"]).toBeUndefined();
+		for (const key of [
+			"missing-intent",
+			"foreign-scope-id",
+			"scope-running-blocked",
+			"scope-reuse-empty",
+			"scope-not-amendable",
+		]) {
+			expect(typeof errors[key]).toBe("string");
+			expect(errors[key].length).toBeGreaterThan(0);
+		}
 	});
 });

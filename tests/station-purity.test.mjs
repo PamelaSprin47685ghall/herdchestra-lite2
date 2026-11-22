@@ -183,19 +183,15 @@ test("the production entry injects the off port implementations", async () => {
 		HERD_FOLDING: "off",
 		HERD_CLOCK: "off",
 	});
-	expect(wired.registry.ports().folding).toBe("off");
 	expect(wired.registry.ports().clock).toBe("off");
-	const { folding, clock } = wired.registry.implementations();
-	expect(folding.name).toBe("off");
+	const { clock } = wired.registry.implementations();
 	expect(clock.name).toBe("off");
 });
 
 test("the production entry injects the on port implementations by default", async () => {
 	const wired = await activate(compositionHost(), {});
-	expect(wired.registry.ports().folding).toBe("on");
 	expect(wired.registry.ports().clock).toBe("on");
-	const { folding, clock } = wired.registry.implementations();
-	expect(folding.name).toBe("on");
+	const { clock } = wired.registry.implementations();
 	expect(clock.name).toBe("on");
 });
 
@@ -223,7 +219,7 @@ test("a station without a complete port table refuses to start", () => {
 		error = caught;
 	}
 	expect(error?.code).toBe("MISSING_PORTS");
-	expect(error?.missing).toContain("folding");
+	expect(error?.missing).toContain("clock");
 });
 
 // Match every call spelling, whichever object holds the table: `registry.ports(`,

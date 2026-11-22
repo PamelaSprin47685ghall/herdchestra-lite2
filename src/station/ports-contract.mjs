@@ -7,7 +7,6 @@
  * path would wire a different system than the one the user asked for.
  */
 export const IMPLEMENTATION_KEYS = Object.freeze([
-	"folding",
 	"clock",
 	"relay",
 	"pin",

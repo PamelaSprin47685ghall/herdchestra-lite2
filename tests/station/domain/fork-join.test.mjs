@@ -7,8 +7,6 @@ import {
 	decideAbandon,
 	decideForkAdmission,
 	decideJoinAdmission,
-	decideJoinBinding,
-	decidePendingReport,
 	decideReady,
 	decideRegister,
 	decideReturn,
@@ -16,18 +14,6 @@ import {
 } from "../../../src/station/domain/fork-join.mjs";
 
 const WINDOW = 100_000;
-
-function receipt(overrides = {}) {
-	return {
-		forkToolCallId: "f1",
-		closeToolCallId: "j1",
-		levelKey: "root|0|0",
-		closedOrder: 1,
-		report: null,
-		collapsed: false,
-		...overrides,
-	};
-}
 
 describe("admission decisions", () => {
 	test("a measured request under the window is admitted", () => {
@@ -91,167 +77,6 @@ describe("admission decisions", () => {
 	});
 });
 
-describe("pending report", () => {
-	test("no receipts and no reports is no obligation", () => {
-		expect(
-			decidePendingReport({
-				receipts: [],
-				levelKey: "root|0|0",
-				reports: new Map(),
-				ownerId: "root",
-			}),
-		).toBeNull();
-	});
-
-	test("the youngest unreported receipt at the level is the obligation", () => {
-		const receipts = [
-			receipt({ forkToolCallId: "f1", closeToolCallId: "j1", closedOrder: 1 }),
-			receipt({ forkToolCallId: "f2", closeToolCallId: "j2", closedOrder: 2 }),
-		];
-		expect(
-			decidePendingReport({
-				receipts,
-				levelKey: "root|0|0",
-				reports: new Map(),
-				ownerId: "root",
-			}),
-		).toEqual({ forkId: "f2", closeToolCallId: "j2" });
-	});
-
-	test("a reported youngest receipt is discharged", () => {
-		const receipts = [receipt({ report: "done" })];
-		expect(
-			decidePendingReport({
-				receipts,
-				levelKey: "root|0|0",
-				reports: new Map(),
-				ownerId: "root",
-			}),
-		).toBeNull();
-	});
-
-	test("a reported receipt at another level does not hide an unreported one", () => {
-		const receipts = [
-			receipt({
-				forkToolCallId: "f1",
-				closeToolCallId: "j1",
-				levelKey: "root|0|0",
-				closedOrder: 1,
-			}),
-			receipt({
-				forkToolCallId: "f2",
-				closeToolCallId: "j2",
-				levelKey: "root|1|0",
-				closedOrder: 2,
-				report: "done",
-			}),
-		];
-		expect(
-			decidePendingReport({
-				receipts,
-				levelKey: "root|0|0",
-				reports: new Map(),
-				ownerId: "root",
-			}),
-		).toEqual({ forkId: "f1", closeToolCallId: "j1" });
-	});
-
-	test("the legacy reports map string is accepted", () => {
-		const reports = new Map([["root", "f-legacy"]]);
-		expect(
-			decidePendingReport({
-				receipts: [],
-				levelKey: "root|0|0",
-				reports,
-				ownerId: "root",
-			}),
-		).toEqual({ forkId: "f-legacy", closeToolCallId: null });
-	});
-
-	test("the reports map object is copied, not returned", () => {
-		const pending = { forkId: "f1", closeToolCallId: "j1" };
-		const reports = new Map([["root", pending]]);
-		const out = decidePendingReport({
-			receipts: [],
-			levelKey: "root|0|0",
-			reports,
-			ownerId: "root",
-		});
-		expect(out).toEqual(pending);
-		expect(out).not.toBe(pending);
-	});
-
-	test("frozen inputs are not mutated", () => {
-		const receipts = Object.freeze([Object.freeze(receipt())]);
-		const reports = new Map([
-			["root", Object.freeze({ forkId: "f-old", closeToolCallId: null })],
-		]);
-		expect(() =>
-			decidePendingReport({
-				receipts,
-				levelKey: "root|0|0",
-				reports,
-				ownerId: "root",
-			}),
-		).not.toThrow();
-	});
-});
-
-describe("join binding", () => {
-	const expected = { forkId: "f1", closeToolCallId: "j1" };
-	const same = { forkId: "f1", closeToolCallId: "j1" };
-	const moved = { forkId: "f2", closeToolCallId: "j2" };
-
-	test("both empty is current", () => {
-		expect(decideJoinBinding({ expected: null, current: null })).toEqual({
-			ok: true,
-		});
-	});
-
-	test("the same receipt key is current", () => {
-		expect(decideJoinBinding({ expected, current: same })).toEqual({ ok: true });
-		expect(
-			decideJoinBinding({
-				expected: { forkId: "f1", closeToolCallId: null },
-				current: { forkId: "f1", closeToolCallId: null },
-			}),
-		).toEqual({ ok: true });
-	});
-
-	test("a cleared chain names the receipt that never got its report", () => {
-		expect(decideJoinBinding({ expected, current: null })).toEqual({
-			ok: false,
-			code: "STALE_ELDER_REPORT",
-			side: "cleared",
-			forkId: "f1",
-		});
-	});
-
-	test("a moved chain names the receipt the model never read", () => {
-		expect(decideJoinBinding({ expected, current: moved })).toEqual({
-			ok: false,
-			code: "STALE_ELDER_REPORT",
-			side: "moved",
-			forkId: "f2",
-		});
-		expect(decideJoinBinding({ expected: null, current: moved })).toEqual({
-			ok: false,
-			code: "STALE_ELDER_REPORT",
-			side: "moved",
-			forkId: "f2",
-		});
-	});
-
-	test("binding does not mutate frozen inputs", () => {
-		expect(() =>
-			decideJoinBinding({
-				expected: Object.freeze(expected),
-				current: Object.freeze(same),
-			}),
-		).not.toThrow();
-	});
-});
-
 describe("fork validation and register", () => {
 	const item = {
 		scopeId: "probe",
@@ -261,9 +86,9 @@ describe("fork validation and register", () => {
 		targets: ["src/parser.mjs"],
 	};
 
-	test("validateFork normalizes targets and refuses malformed input", () => {
+	test("validateFork normalizes targets and leaves intent to the decision", () => {
 		expect(validateFork(item).ok).toBe(true);
-		expect(validateFork({ ...item, intent: "  " }).code).toBe("INVALID_INTENT");
+		expect(validateFork({ ...item, intent: "  " })).toMatchObject({ ok: true, intent: "" });
 		expect(validateFork({ ...item, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
 		expect(validateFork({ ...item, targets: [] }).code).toBe("INVALID_TARGETS");
 		expect(
@@ -271,15 +96,42 @@ describe("fork validation and register", () => {
 		).toEqual(["src/parser.mjs", "src/cache.mjs"]);
 	});
 
-	test("decideRegister refuses a duplicate scope id", () => {
+	test("decideRegister amends a live scope id instead of refusing", () => {
 		const out = decideRegister({
 			items: [validateFork(item)],
-			forks: [{ forkId: "f1", scopeId: "probe", status: "running" }],
+			forks: [
+				{
+					forkId: "f1",
+					scopeId: "probe",
+					ownerId: "root",
+					status: "running",
+					generation: 1,
+				},
+			],
+			hasSpawner: true,
+		});
+		expect(out.ok).toBe(true);
+		expect(out.items[0].action).toBe("amend");
+		expect(out.items[0].targetForkId).toBe("f1");
+	});
+
+	test("decideRegister refuses a scope id owned by another branch", () => {
+		const out = decideRegister({
+			items: [validateFork(item)],
+			forks: [
+				{
+					forkId: "f1",
+					scopeId: "probe",
+					ownerId: "someone-else",
+					status: "running",
+					generation: 1,
+				},
+			],
+			ownerId: "root",
 			hasSpawner: true,
 		});
 		expect(out.ok).toBe(false);
-		expect(out.code).toBe("DUPLICATE_SCOPE_ID");
-		expect(out.scopeId).toBe("probe");
+		expect(out.code).toBe("FOREIGN_SCOPE_ID");
 	});
 
 	test("decideRegister requires a spawner only for a runnable batch", () => {

@@ -6,6 +6,60 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added — a repeated `scopeId` amends the existing scope
+
+- `scope_fork` now treats an existing `scopeId` (case-insensitive, finished
+  scopes included) as an amendment instead of a duplicate. `running` and
+  `blocked` scopes take the budget as an increment, the `intent` as one more
+  requirement, and merged `targets`; `ready` supersedes the old record and
+  starts the next generation; `joined` and `failed` start a new generation
+  with the old record as prior history. Only the owner may amend; another
+  caller gets `FOREIGN_SCOPE_ID`.
+- A requirement enters at the child's next turn boundary; it never interrupts
+  a tool already running. `scope_fork` no longer reports
+  `DUPLICATE_SCOPE_ID`: a new scope with no intent is refused with
+  `MISSING_INTENT`, `blocked: true` on a running scope with
+  `SCOPE_RUNNING_BLOCKED`, and an amendment that changes nothing with
+  `SCOPE_REUSE_EMPTY`.
+- `intent` is optional in the fork item schema; the station still requires it
+  for a new scope and refuses with `MISSING_INTENT`.
+
+### Changed — a child record is a digest, and `scope_join` takes no argument
+
+- The record a child hands its parent no longer carries the full working
+  transcript. It holds the child assistant's text in order, with every tool
+  call reduced to a bare `[name]` placeholder — `[read]`, `[edit]`, `[bash]`,
+  `[scope_fork]` — and the lines joined by newlines. Tool results, thinking
+  blocks, tool arguments, and user broadcasts are absent.
+- `scope_join` lost `elder_report` and takes no parameter. With the record
+  this small, the receipt chain no longer needs a summary step, so the
+  `elder_report` validation, the stored receipt summaries, the transcript
+  collapse pass, and the folding feature are removed together; no path can
+  fold an older receipt any more. A join refused for context size still
+  leaves the child record untouched.
+- `resources/prompts/tools/fork-join.md` and `resources/prompts/errors.md`
+  drop every `elder_report` section; `tests/prompts.test.mjs` pins that
+  `joinParameters` has no `required` field and no `elder_report` property.
+
+### Changed — one `scope_context` tool replaces `pin` and `amend`
+
+- `pin` and `amend` are now two optional objects of one tool:
+  `scope_context({ pin, amend })`. Either may be omitted; a call that names
+  neither is refused with `scope_context-empty` and changes nothing. When both
+  arrive, amend runs first so the refund is in the ledger before the note is
+  saved; a failed half does not cancel the other, and the combined result says
+  which half failed.
+- The old tool prose moved to the parameter descriptions: the model reads the
+  pin judgment where it chooses the fields, and the amend judgment where it
+  writes the reflection. The tool description itself is one sentence. This
+  keeps the tool family under one `scope_` prefix.
+- The retired names are no longer registered, but old transcripts still
+  render (`[pin]`, `[amend]`) and the scan path still processes an `amend`
+  call that predates the merge. `scope_context` is free at every level.
+- `tests/scope-context.test.mjs` pins the schema, the order, the derived cache
+  keys, the partial-failure result, and the empty refusal; the existing pin,
+  amend, transcript, and charging tests were retargeted to the new name.
+
 ### Added — a built-in protocol read or write costs no tool point
 
 - `isFreeCall` treats any `read` or `write` whose path carries a built-in

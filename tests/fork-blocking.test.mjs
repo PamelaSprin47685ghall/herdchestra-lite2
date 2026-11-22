@@ -110,38 +110,6 @@ describe("scope_join as a ticket", () => {
     expect(ledger.forks.j1.status).toBe("joined");
   });
 
-  test("refuses a second join until the previous receipt is reported", async () => {
-    const wiring = createForkWiring();
-    const ledger = ledgerFor(wiring);
-    const station = stationOf(wiring.registry, ledger);
-    opened(ledger, "e1");
-    wiring.registry.outcomes.set("e1", { record: "first", failed: false, reason: null });
-    pulse(wiring.registry, ledger, "e1", { failed: false });
-    const first = await joinTicket(station, "call-e1", { elder_report: null }, {});
-    expect(first.isError).toBeUndefined();
-
-    opened(ledger, "e2");
-    wiring.registry.outcomes.set("e2", { record: "second", failed: false, reason: null });
-    pulse(wiring.registry, ledger, "e2", { failed: false });
-
-    const refused = await joinTicket(station, "call-e2", { elder_report: null }, {});
-    expect(refused.isError).toBe(true);
-    expect(refused.details.code).toBe("INVALID_ELDER_REPORT");
-    expect(ledger.forks.e2.status).toBe("ready");
-
-    // A retry is a new tool call in the next assistant message, so it carries
-    // a new id; the refused call keeps its cached refusal.
-    const accepted = await joinTicket(
-      station,
-      "call-e2-retry",
-      { elder_report: "e1 found the parser path" },
-      {},
-    );
-    expect(accepted.isError).toBeUndefined();
-    expect(ledger.forks.e1.elderReport).toBe("e1 found the parser path");
-    expect(ledger.forks.e2.status).toBe("joined");
-  });
-
   test("a cancelled wait keeps the child running", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring);

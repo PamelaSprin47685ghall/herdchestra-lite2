@@ -111,7 +111,7 @@ test("unsettled root and child tools stay in the one-row active area and never l
 		role: "assistant",
 		content: [
 			{ type: "text", text: "Waiting on child." },
-			{ type: "toolCall", id: "join-1", name: "scope_join", arguments: { elder_report: null } },
+			{ type: "toolCall", id: "join-1", name: "scope_join", arguments: {} },
 		],
 	};
 	root.emit({ type: "message_start", message: originalAssistant });
@@ -122,7 +122,7 @@ test("unsettled root and child tools stay in the one-row active area and never l
 
 	// Root join, child join, child slow bash, grandchild return all stay active
 	// simultaneously without emitting raw tool_execution_start into the transcript.
-	root.emit({ type: "tool_execution_start", toolCallId: "join-1", toolName: "scope_join", args: { elder_report: null } });
+	root.emit({ type: "tool_execution_start", toolCallId: "join-1", toolName: "scope_join", args: {} });
 	child.emit({ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "sleep 10" } });
 	grandchild.emit({ type: "tool_execution_start", toolCallId: "ret-1", toolName: "scope_return", args: {} });
 	expect(seen.some((event) => event.type.startsWith("tool_execution_"))).toBe(false);

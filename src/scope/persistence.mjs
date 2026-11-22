@@ -10,7 +10,6 @@ import {
   createState,
 } from "./state.mjs";
 import { copyRelay, createRelay, isValidRelay } from "../relay/state.mjs";
-import { copyReceipt, validReceipts } from "./receipts.mjs";
 import {
   createBracketLedger,
   restoreLedgerChecked,
@@ -87,7 +86,6 @@ export function serializeState(state) {
     seq: state.seq ?? 0,
     charges: copyCharges(state.charges),
     amends: Array.isArray(state.amends) ? state.amends.slice() : [],
-    receipts: (state.receipts ?? []).map(copyReceipt).filter(Boolean),
     brackets: serializeLedger(state.brackets),
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
@@ -227,13 +225,10 @@ export function deserializeState(input) {
     }
     // `scopes` and `collapses` are retired history: a snapshot that still
     // carries them loads them by dropping both, never by rebuilding a second
-    // account or a second folding path.
-    if (data.receipts !== undefined && !validReceipts(data.receipts)) {
-      return createState();
-    }
+    // account.
     if (data.brackets !== undefined && !validLedger(data.brackets)) {
-      // A half-readable tree is worse than an honest reset: the receipt chain
-      // and the brackets must describe the same history.
+      // A half-readable tree is worse than an honest reset: the brackets must
+      // describe the same history.
       return createState();
     }
     if (
@@ -257,9 +252,8 @@ export function deserializeState(input) {
       data.brackets === undefined
         ? { ok: true, ledger: createBracketLedger() }
         : restoreLedgerChecked(data.brackets);
-    // A tree whose queues and levels do not pair is not partially loadable:
-    // its receipt chain describes a history the brackets cannot address, so
-    // both are dropped together.
+    // A tree whose queues and levels do not pair is not partially loadable, so
+    // it is dropped whole.
     if (!restoredBrackets.ok) return createState();
     return {
       version: VERSION,
@@ -269,7 +263,6 @@ export function deserializeState(input) {
         Number.isInteger(data.epoch) && data.epoch >= 0 ? data.epoch : 0,
       charges: copyCharges(data.charges),
       amends: amends.slice(),
-      receipts: (data.receipts ?? []).map(copyReceipt).filter(Boolean),
       brackets: restoredBrackets.ledger,
       autopilot: data.autopilot === true,
       pins: copyPins(data.pins),

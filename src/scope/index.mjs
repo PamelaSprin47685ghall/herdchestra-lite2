@@ -15,8 +15,8 @@ export {
   formatAmount,
   beatShares,
   isFreeCall,
-  isSkillRead,
-  isResolutionWrite,
+  internalScheme,
+  isInternalUriCall,
 } from "./budget.mjs";
 export {
   applyPanhandle,

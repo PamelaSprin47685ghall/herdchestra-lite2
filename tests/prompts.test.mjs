@@ -50,6 +50,17 @@ describe("prompt documents", () => {
 });
 
 describe("tool contracts map to their documents", () => {
+	test("a nested fork is funded by its item, not the caller's balance", () => {
+		const budget = loadDoc("tools/fork-join")["fork.budget"];
+		expect(budget).toContain("each item funds its own child at any depth");
+		expect(budget).toContain("never charged");
+		expect(budget).not.toContain("draws from that flow's remaining balance");
+	});
+
+	test("the panhandle description points at the fork that avoids it", () => {
+		expect(loadDoc("tools/panhandle")["panhandle.tool"]).toContain("`scope_fork`");
+	});
+
 	test("the three fork/join tools carry their mapped text", () => {
 		const doc = loadDoc("tools/fork-join");
 		const notes = loadDoc("tools/notes");
@@ -176,6 +187,34 @@ describe("system prompts map to their documents", () => {
 		expect(persistentOperatingSkill).toContain("in principle do not submit one");
 		expect(persistentOperatingSkill).toContain("let that judgment override the default");
 		expect(todo.tool).not.toContain("Choose by task nature.");
+	});
+
+	test("every level hears the free-fork tip before the handout", () => {
+		expect(persistentOperatingSkill).toContain("Every level, root included");
+		expect(persistentOperatingSkill).toContain("Word to the wise, at every depth");
+		expect(persistentOperatingSkill).toContain(
+			"Plan the split the moment the task arrives",
+		);
+		expect(persistentOperatingSkill).toContain("already started cramming");
+		expect(persistentOperatingSkill).toContain("forking is cheaper than any handout");
+	});
+
+	test("an exhausted budget names the free fork before the handout", () => {
+		const text = loadDoc("errors")["tool-budget-exhausted"];
+		expect(text).toContain("scope_fork");
+		expect(text.indexOf("scope_fork")).toBeLessThan(text.indexOf("scope_panhandle"));
+	});
+
+	test("a built-in protocol read or write is free wherever the budget is explained", () => {
+		expect(persistentOperatingSkill).toContain("built-in protocol URI");
+		expect(persistentOperatingSkill).toContain("no tool point, at any depth");
+		expect(persistentOperatingSkill).not.toContain("may read `skill://` paths");
+		expect(loadDoc("tools/fork-join")["fork.budget"]).toContain(
+			"is free at any depth, so it needs no entry either",
+		);
+		expect(loadDoc("errors")["root-has-no-budget"]).toContain(
+			"built-in protocol URI",
+		);
 	});
 });
 

@@ -23,41 +23,62 @@ export function isFreeTool(name) {
   );
 }
 
-// Reading a skill is instruction reading, not project work, so it is free at
-// every level. The rule reads the call, not the scope: the same path gets the
-// same verdict wherever it runs.
-const SKILL_READ_PREFIX = "skill://";
+// Built-in protocol URIs the runtime resolves itself. A `read` or `write` on
+// one of them addresses harness state — skill text, the shared artifact store,
+// a child's record or transcript, a job's streams, settings, an issue, an MCP
+// resource, a remote host's file, a staged ast_edit preview — through the
+// protocol layer instead of the project tree. That is instruction reading and
+// bookkeeping, not project work, so the call is free at every level, exactly
+// like a control tool. The path decides, not the call site: a scope minted with
+// no budget for `read` or `write` still runs the call, and the root still runs
+// it without a fork.
+//
+// `http(s)://` and `file:` are deliberately absent: they fetch a live page or
+// name a local file outside the protocol layer, which is work wherever it
+// lands. A plain filesystem path stays charged as before.
+const INTERNAL_URI_SCHEMES = new Set([
+  "agent",
+  "cfg",
+  "help",
+  "history",
+  "issue",
+  "local",
+  "mcp",
+  "omp",
+  "pr",
+  "proc",
+  "skill",
+  "ssh",
+  "xd",
+]);
 
-export function isSkillRead(toolName, input) {
-  return (
-    toolName === "read" &&
-    input !== null &&
-    typeof input === "object" &&
-    typeof input.path === "string" &&
-    input.path.startsWith(SKILL_READ_PREFIX)
-  );
+/** The scheme of a built-in protocol URI, or null for any other path. */
+export function internalScheme(path) {
+  if (typeof path !== "string") return null;
+  const end = path.indexOf("://");
+  if (end <= 0) return null;
+  const scheme = path.slice(0, end).toLowerCase();
+  return INTERNAL_URI_SCHEMES.has(scheme) ? scheme : null;
 }
 
-// Resolving a staged ast_edit preview is a bookkeeping write, not work: the
-// harness refuses to run any other tool until it lands. Charging it would let a
-// scope with no write budget deadlock on its own proposal.
-const RESOLUTION_WRITE_PATHS = new Set(["xd://resolve", "xd://reject"]);
-
-export function isResolutionWrite(toolName, input) {
+/**
+ * A read or write on a built-in protocol URI spends no tool point.
+ *
+ * Resolving a staged ast_edit preview belongs here as well: the harness refuses
+ * to run any other tool until it lands, so charging it would deadlock a scope
+ * with no write budget on its own proposal.
+ */
+export function isInternalUriCall(toolName, input) {
+  if (toolName !== "read" && toolName !== "write") return false;
   return (
-    toolName === "write" &&
     input !== null &&
     typeof input === "object" &&
-    RESOLUTION_WRITE_PATHS.has(input.path)
+    internalScheme(input.path) !== null
   );
 }
 
 export function isFreeCall(toolName, input) {
-  return (
-    isFreeTool(toolName) ||
-    isSkillRead(toolName, input) ||
-    isResolutionWrite(toolName, input)
-  );
+  return isFreeTool(toolName) || isInternalUriCall(toolName, input);
 }
 
 function validBudget(budget) {

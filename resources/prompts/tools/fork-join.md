@@ -12,7 +12,7 @@ Name the goal the child will make true, the surface it owns, and what a successo
 
 ## fork.budget
 
-Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. Free tools need no entry; an empty budget is valid when only free tools are used. A branch that runs out may hold out its hand with `scope_panhandle`, at most 8 per tool in one call. Sibling fork items each have their own budget; a scope nested inside a flow draws from that flow's remaining balance.
+Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A branch that runs out may hold out its hand with `scope_panhandle`, at most 8 per tool in one call. Sibling fork items each have their own budget; each item funds its own child at any depth, and the caller's balance is never charged.
 
 ## fork.time
 

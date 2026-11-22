@@ -2,7 +2,7 @@
 
 You burned what you were given and now you are on the corner with your hand out. Say what the next handout buys before anyone reaches for a wallet.
 
-`scope_panhandle` adds tool points and wall-clock seconds to this scope at once. It is free, it needs no approval, and it is the only call that still works after a budget refusal has stopped everything else. Strangers do not audit you; the record does. The alternative is to return the work half-done and admit the allowance beat you.
+`scope_panhandle` adds tool points and wall-clock seconds to this scope at once. It is free, it needs no approval, and it is the only call that still works after a budget refusal has stopped everything else. Strangers do not audit you; the record does. The scopes that never beg have already handed the work a fresh child can own to `scope_fork`; a handout is for what only this scope can finish. The alternative is to return the work half-done and admit the allowance beat you.
 
 This is not a funding round. It is a hand held out in public: every handout stays on this scope's record beside the words you used to ask for it, and the parent sees the tally when you return. Ask for the smallest amount that reaches the next checkpoint. A second panhandle for the same shortfall does not prove the work was underfunded; it proves you cannot plan.
 

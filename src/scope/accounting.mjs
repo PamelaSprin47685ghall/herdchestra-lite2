@@ -20,8 +20,9 @@ const E = loadDoc("errors");
  * A branch's tool budget exists only on its fork record. The root has no fork
  * record, so it has no budget: an ordinary tool is refused there and the work
  * must be delegated with `scope_fork`. A forked branch spends its own fork
- * record, never the parent's. Free calls (control tools, `todo`, `ask`, `wait`,
- * skill reads and staged-preview resolution) pass at every level. The per-call
+ * record, never the parent's. Free calls (the control tools, `todo`, `ask`,
+ * `wait`, and a `read` or `write` of a built-in protocol URI) pass at every
+ * level. The per-call
  * detail stays in `state.charges` so an amend can refund exactly what one beat
  * spent, and repeating the same call or beat group changes nothing.
  */

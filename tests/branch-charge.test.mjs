@@ -50,7 +50,7 @@ describe("branch charging", () => {
     expect(s.charges).toEqual({});
   });
 
-  test("the root still runs free control tools and skill reads", () => {
+  test("the root still runs free control tools and free protocol reads", () => {
     const s = state();
     const ledger = ledgerWith("f1", { read: 2 });
     for (const [toolName, input] of [

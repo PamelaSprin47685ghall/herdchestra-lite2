@@ -6,6 +6,40 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added — a built-in protocol read or write costs no tool point
+
+- `isFreeCall` treats any `read` or `write` whose path carries a built-in
+  protocol scheme (`xd://`, `omp://`, `local://`, `skill://`, `agent://`,
+  `history://`, `proc://`, `cfg://`, `issue://`, `pr://`, `mcp://`, `ssh://`,
+  `help://`) as free: no tool point, and no fork record needed. The rule
+  replaces the `skill://`-only read and the `xd://resolve`/`xd://reject` write
+  special cases, so a scope minted with zero budget for `read` or `write` still
+  runs them, and the root keeps resolving staged ast_edit previews.
+- `http(s)://` and `file:` stay charged: they fetch a live page or name a local
+  file outside the protocol layer, which is work wherever it lands. A plain
+  filesystem path is charged as before.
+- `src/scope/budget.mjs` owns the scheme table (`internalScheme`,
+  `isInternalUriCall`). `tests/free-uri.test.mjs` pins the free and charged
+  paths; `tests/prompts.test.mjs` pins the root refusal text and the system
+  prompt line.
+
+### Changed — the prompt tells every level about the free fork
+
+- `system.md#persistent-rules` no longer says only the root holds the control
+  tools. Every level, root included, may fork; the text states the economics
+  as a tip: `scope_fork` costs nothing, the child's budget and clock are born
+  with the item that starts it, and the caller's balance never moves. A scope
+  plans the split the moment the task arrives: it decides then which parts go
+  to fresh children — they can fork again in turn — and joins their records
+  before returning; waiting until a clean handoff is still affordable is
+  already cramming. The fork still pays less than any handout.
+- `tools/fork-join.md#fork.budget` drops the claim that a nested scope draws
+  from the enclosing flow's balance. Each item funds its own child at any
+  depth; the caller is never charged.
+- `tools/panhandle.md` and `errors.md#tool-budget-exhausted` name the fork
+  before the handout at the point of refusal. `tests/prompts.test.mjs` pins
+  the persistent tip, the corrected budget line, and the refusal order.
+
 ### Added — `scope_panhandle` buys a branch more budget at once
 
 - A running branch that runs out can call `scope_panhandle` to add tool points

@@ -44,7 +44,7 @@ Give the child a non-empty `intent`.
 
 ## invalid-budget
 
-`budget` maps tool names to non-negative integers. Free tools need no entry.
+`budget` maps tool names to non-negative integers. Free tools need no entry; neither does a `read` or `write` of a built-in protocol URI, which spends no point at any level.
 
 ## invalid-time
 
@@ -122,7 +122,7 @@ No receiving scope owns this fork. Join its children first.
 
 ## root-has-no-budget
 
-The root is outside all scopes and has no ordinary tool budget. Delegate the work with `scope_fork`; control tools and `skill://` reads remain available.
+The root is outside all scopes and has no ordinary tool budget. Delegate the work with `scope_fork`; control tools stay available, and so does every `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…), which costs no tool point at any level.
 
 ## no-branch-budget
 
@@ -154,7 +154,7 @@ This scope owns no unreceived work. This call created no receipt and any `elder_
 
 ## tool-budget-exhausted
 
-Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}, budget {{budget}}). Continue with another tool, return with `scope_return`, or hold out your hand with `scope_panhandle` when the work must finish.
+Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}, budget {{budget}}). The cheap exit is `scope_fork` (free) for whatever another scope can own. Failing that: another tool, `scope_return`, or `scope_panhandle` when only this scope can finish.
 
 ## panhandle-no-budget
 

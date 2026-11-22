@@ -24,13 +24,6 @@ function globalForkWiring() {
 	return wiring;
 }
 
-const nullTickets = {
-	steer: () => {},
-	canSteer: false,
-	activateTools: (activeTools, prompt, changed) =>
-		changed ? { systemPrompt: prompt } : undefined,
-};
-
 /**
  * Accept both the new `{ ports, implementations, onStation }` shape and the
  * older flat table. The table holds names only; hooks and implementations are
@@ -61,7 +54,19 @@ function normalizePorts(input) {
 	};
 }
 
-export function createStationRegistry(pi, tickets = nullTickets, pricingCatalog, ports = {}) {
+export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
+	if (
+		!tickets ||
+		typeof tickets.activateTools !== "function" ||
+		typeof tickets.steer !== "function" ||
+		typeof tickets.prompt !== "function"
+	) {
+		const error = new Error(
+			"MISSING_TICKETS: createStationRegistry requires activateTools/steer/prompt",
+		);
+		error.code = "MISSING_TICKETS";
+		throw error;
+	}
 	const wiring = normalizePorts(ports);
 	// The resolved port table, decided once by the composition root. Domain code
 	// reads this instead of asking a switch, so there is exactly one place where

@@ -4,6 +4,7 @@ import { wireProviderObservation } from "../src/host/provider-observer.mjs";
 import { installStatus } from "../src/host/status.mjs";
 import { queueModelSwitch, takePendingModelSwitch } from "../src/station/models.mjs";
 import { SessionStation } from "../src/station/station.mjs";
+import { buildPorts } from "../src/activation/ports.mjs";
 import { wireCommands } from "../src/activation/commands.mjs";
 import { createState, deserializeState, serializeState } from "../src/scope/index.mjs";
 
@@ -24,6 +25,21 @@ test("pin on writes through the station's persisted list", () => {
 	const station = stationWith({ pin: "on" }, { pins: [] });
 	expect(station.pinPort().add("note")).toEqual({ ok: true, count: 1 });
 	expect(station.state.pins).toEqual(["note"]);
+});
+
+test("the station binds one session port object, not one per call", () => {
+	const built = buildPorts({ HERD_PIN: "on" });
+	const station = new SessionStation(
+		{ getSessionId: () => "s1" },
+		{},
+		{},
+		{ ports: () => built.names, implementations: () => built.implementations },
+		null,
+	);
+	const first = station.pinPort();
+	expect(first).toBe(station.pinPort());
+	expect(first.add("note")).toEqual({ ok: true, count: 1 });
+	expect(station.state.pins).toContain("note");
 });
 
 test("amend off refuses before applyAmend can mutate the ledger", () => {

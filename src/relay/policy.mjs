@@ -30,6 +30,12 @@ function normalizeLedger(input) {
  */
 export const relayNone = Object.freeze({
 	name: "none",
+	owesLedger() {
+		return false;
+	},
+	canHandoff() {
+		return false;
+	},
 	record() {
 		return { ok: true, recorded: false };
 	},
@@ -46,6 +52,12 @@ export const relayNone = Object.freeze({
  */
 export const relayLedger = Object.freeze({
 	name: "ledger",
+	owesLedger() {
+		return true;
+	},
+	canHandoff() {
+		return false;
+	},
 	record(input) {
 		const ledger = normalizeLedger(input);
 		if (ledger === null) return refusal("INVALID_LEDGER", "record() expects a ledger object");
@@ -71,6 +83,12 @@ export const relayLedger = Object.freeze({
  */
 export const relayHandoff = Object.freeze({
 	name: "handoff",
+	owesLedger() {
+		return true;
+	},
+	canHandoff() {
+		return true;
+	},
 	record(input) {
 		const ledger = normalizeLedger(input);
 		if (ledger === null) return refusal("INVALID_LEDGER", "record() expects a ledger object");

@@ -59,6 +59,7 @@ import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
 import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
 import { createPinOff, createPinOn } from "../features/pin/index.mjs";
 import { foldingOn } from "../features/folding/index.mjs";
+import { relayHandoff, relayImplementations } from "../relay/policy.mjs";
 import { handleAmendCall } from "./controls.mjs";
 import {
 	directAmend,
@@ -202,41 +203,14 @@ export class SessionStation {
 			actualModelOf: (ctx) => actualModel(ctx),
 		});
 		this.usage.restoreFromBranch(this.manager);
-	}
-
-	forkForFlow(flowState, flowManager) {
-		const view = Object.create(this);
-		view.manager = flowManager ?? this.manager;
-		view.state = flowState;
-		view.anchor = createPersistenceAnchor({
-			manager: view.manager,
-			state: () => view.state,
-			initialState: null,
-			initialEntryId: null,
-			serialize: serializeState,
-			plan: planStateEntry,
-			type: SESSION_STATE_TYPE,
-			noteError: (domain, error) => view.noteError(domain, error),
-		});
-		view.processed = createProcessedLedger();
-		view.dispatch = createDispatchTracker();
-		view.nudged = new WeakSet();
-		view.lastError = null;
-		view.hostBoundaryKey = null;
-		view.agentPolicy = null;
-		view.handoffReport = null;
-		view.todoGrantKey = null;
-		view.pendingModelSwitch = null;
-		view.modelSwitchInFlight = null;
-		view.usage = createUsageLedger({
-			state: view.state,
-			contextMessages: () => view.contextMessages(),
-			persist: () => view.persist(),
-			noteError: (domain, error) => view.noteError(domain, error),
-			modelKeyOf: (message) => modelKey(message),
-			actualModelOf: (ctx) => actualModel(ctx),
-		});
-		return view;
+		// The session ports are built once by the composition root; bind each
+		// implementation to this station's persisted state exactly once. A
+		// unit double without implementations keeps the per-call factory
+		// fallback in pinPort/amendPort/herdPort.
+		const implementations = registry?.implementations?.() ?? {};
+		this.pinPortImpl = implementations.pin?.bindState?.(this.state) ?? null;
+		this.amendPortImpl = implementations.amend?.bindState?.(this.state) ?? null;
+		this.herdPortImpl = implementations.herd?.bindState?.(this.state) ?? null;
 	}
 
 	// -- Usage ledger ---------------------------------------------------------
@@ -357,10 +331,17 @@ export class SessionStation {
 	 * must hold. A read-write subagent whose host filters the tool out stays
 	 * relay-off, because a nudge would demand a call the model cannot make.
 	 */
+	relayPort() {
+		const implementations = this.registry?.implementations?.();
+		if (implementations?.relay) return implementations.relay;
+		const name = this.registry?.ports?.().relay ?? "handoff";
+		return relayImplementations[name] ?? relayHandoff;
+	}
+
 	relayOn(ctx) {
-		// `relay=none` means no ledger is owed, so the relay nudge and the
-		// todo override stay off for every agent tier.
-		if (this.registry?.ports?.().relay === "none") {
+		// No ledger owed means no relay nudge and no todo override for any
+		// agent tier. The policy object owns that decision, not a name string.
+		if (!this.relayPort().owesLedger()) {
 			this.relayState = false;
 			return false;
 		}
@@ -621,23 +602,26 @@ export class SessionStation {
 		return executePin(this, toolCallId, params);
 	}
 
-	// The three session ports read the resolved table on every call, so a
-	// switch flipped by the composition root cannot leave a stale
-	// implementation behind. Each `on` form writes through this station's
-	// persisted state, never a module-level copy.
+	// The three session ports are built once by the composition root and
+	// bound to this station's persisted state in the constructor. A unit
+	// double without implementations keeps a per-call factory fallback; a
+	// production station never constructs a second on object.
 	pinPort() {
+		if (this.pinPortImpl) return this.pinPortImpl;
 		return this.registry?.ports?.().pin === "off"
 			? createPinOff()
 			: createPinOn({ notes: this.state.pins });
 	}
 
 	amendPort() {
+		if (this.amendPortImpl) return this.amendPortImpl;
 		return this.registry?.ports?.().amend === "off"
 			? createAmendOff()
 			: createAmendOn({ retired: this.state.amends });
 	}
 
 	herdPort() {
+		if (this.herdPortImpl) return this.herdPortImpl;
 		return this.registry?.ports?.().herd === "off"
 			? createHerdOff()
 			: createHerdOn(this.state);

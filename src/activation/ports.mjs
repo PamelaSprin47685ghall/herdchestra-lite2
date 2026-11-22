@@ -6,7 +6,11 @@
 // name in `names`; do not invent a second table here.
 
 import { resolvePorts } from "../core/ports/resolve.mjs";
+import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
 import { foldingOff, foldingOn } from "../features/folding/index.mjs";
+import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
+import { createPinOff, createPinOn } from "../features/pin/index.mjs";
+import { relayImplementations } from "../relay/policy.mjs";
 import { createClockOff, createClockOn } from "../scope/clock.mjs";
 
 function detailOf(refusal) {
@@ -29,6 +33,27 @@ export function buildPorts(env = process.env) {
 	const implementations = {
 		folding: names.folding === "off" ? foldingOff() : foldingOn(),
 		clock: names.clock === "off" ? createClockOff() : createClockOn(),
+		relay: relayImplementations[names.relay],
+		pin: {
+			name: names.pin,
+			bindState(store) {
+				return names.pin === "off" ? createPinOff() : createPinOn({ notes: store.pins });
+			},
+		},
+		amend: {
+			name: names.amend,
+			bindState(store) {
+				return names.amend === "off"
+					? createAmendOff()
+					: createAmendOn({ retired: store.amends });
+			},
+		},
+		herd: {
+			name: names.herd,
+			bindState(store) {
+				return names.herd === "off" ? createHerdOff() : createHerdOn(store);
+			},
+		},
 	};
 	return { ok: true, names, implementations };
 }

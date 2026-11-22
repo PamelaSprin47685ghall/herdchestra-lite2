@@ -34,7 +34,7 @@ export function readSwitch(port, env) {
 	const entry = PORTS[port];
 	if (!entry) return refusal(port, null, []);
 	const source = environment(env);
-	// Every port reads its name form. `scope`/`relay` always did; the
+	// Every port reads its name form. `relay` always did; the
 	// two-implementation ports used to read only the older disable flag. The
 	// name form is the port's own vocabulary, so it wins over that flag.
 	const raw = source[switchName(port)];
@@ -54,7 +54,7 @@ export function readSwitch(port, env) {
 /**
  * Resolve a ticket's `uses` map together with the environment.
  *
- * `uses` is data: `{ scope: "single", relay: "ledger" }`. A port not named in
+ * `uses` is data: `{ relay: "ledger" }`. A port not named in
  * `uses` takes its environment value. An explicit environment choice wins over
  * a ticket: asking for something else is refused rather than silently granted.
  */

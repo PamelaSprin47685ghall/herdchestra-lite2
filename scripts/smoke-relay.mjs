@@ -167,19 +167,6 @@ await check("the registry exposes three fork/join tools", async () => {
 	expect(!host.tools.has("scope"), "the retired scope tool is still registered");
 });
 
-await check("the retired one-container backend is refused", async () => {
-	// `single` is not in the port table any more, so asking for it is a
-	// configuration error instead of a silent fallback to `batch`.
-	const { readSwitch } = await import("../src/core/ports/resolve.mjs");
-	const setting = readSwitch("scope", { HERD_SCOPE: "single" });
-	expect(!setting.ok, "the retired backend was accepted");
-	expect(setting.code === "PORT_UNAVAILABLE", `wrong refusal code: ${setting.code}`);
-	expect(
-		setting.available.join(",") === "bare,batch",
-		`wrong available list: ${setting.available.join(",")}`,
-	);
-});
-
 await check("scope_fork refuses without a child spawner", async () => {
 	const out = await call("scope_fork", {
 		forks: [

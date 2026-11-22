@@ -17,18 +17,33 @@ import {
 	mergeUserPrompts,
 	successorOpeningText,
 } from "../relay/index.mjs";
+import { relayImplementations } from "../relay/policy.mjs";
 
 function isChild(station) {
 	return typeof station.forkOwnerId === "function" && station.forkOwnerId() !== null;
 }
 
+/**
+ * The resolved relay policy for this station.
+ *
+ * Production passes `implementations` through the registry; a unit double may
+ * pass only the old name table, so the name is resolved here as a fallback.
+ * The name is read once, never compared.
+ */
+function relayPolicyOf(station) {
+	const direct = station.relayPort?.();
+	if (direct) return direct;
+	const implemented = station.registry?.implementations?.()?.relay;
+	if (implemented) return implemented;
+	const name = station.registry?.ports?.()?.relay ?? "handoff";
+	return relayImplementations[name] ?? relayImplementations.handoff;
+}
+
 function armHandoff(station, _ctx) {
 	if (isChild(station)) return false;
 	// Only the `handoff` degree may arm a transfer. `ledger` owes a ledger but
-	// never hands off, and `none` owes nothing at all. A station built without
-	// a registry (unit doubles) keeps the default: handoff.
-	const relayPort = station.registry?.ports?.().relay;
-	if (relayPort === "none" || relayPort === "ledger") return false;
+	// never hands off, and `none` owes nothing at all.
+	if (!relayPolicyOf(station).canHandoff()) return false;
 	const relay = station.state.relay;
 	if (!relay || relay.canStop) return false;
 	station.handoffReport = null;
@@ -43,8 +58,7 @@ function armHandoff(station, _ctx) {
 
 function advanceRelayForHandoff(station, options = {}) {
 	if (isChild(station)) return false;
-	const relayPort = station.registry?.ports?.().relay;
-	if (relayPort === "none" || relayPort === "ledger") return false;
+	if (!relayPolicyOf(station).canHandoff()) return false;
 	const relay = station.state.relay;
 	if (!relay || !relay.handoffPending || relay.canStop) return false;
 	const expected = options.expectedGeneration;
@@ -75,7 +89,7 @@ function unreceivedChildren(station) {
 function recordLedgerEvaluation(station, phases, op, options = {}) {
 	// `none` owes nothing, so a ledger write must not turn the full flow on.
 	// The caller still gets the shared answer shape, with `changed: false`.
-	if (station.registry?.ports?.().relay === "none") {
+	if (!relayPolicyOf(station).owesLedger()) {
 		return {
 			relay: station.state.relay,
 			stats: { empty: true, open: 0, total: 0 },
@@ -115,7 +129,7 @@ function recordLedgerEvaluation(station, phases, op, options = {}) {
  */
 function recordRetirement(station) {
 	// `none` owes nothing, so a retirement must not arm a handoff either.
-	if (station.registry?.ports?.().relay === "none") return null;
+	if (!relayPolicyOf(station).owesLedger()) return null;
 	const applied = applyRetirement(station.state.relay);
 	station.state.relay = applied.relay;
 	station.persist();
@@ -133,7 +147,7 @@ function recordRetirement(station) {
  * prompt.
  */
 function recordNaturalStop(station, ctx) {
-	if (station.registry?.ports?.().relay === "none") return null;
+	if (!relayPolicyOf(station).owesLedger()) return null;
 	// The relay is an autopilot protocol. With autopilot off, a natural stop
 	// is a manual stop; no empty evaluation, retirement, or handoff runs.
 	if (!station.state.autopilot) return null;

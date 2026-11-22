@@ -1,6 +1,12 @@
 // Relay domain index. This node only lists its children's public keys.
 
 export { createRelay, copyRelay, isValidRelay } from "./state.mjs";
+export {
+	relayNone,
+	relayLedger,
+	relayHandoff,
+	relayImplementations,
+} from "./policy.mjs";
 export { collectUserPrompts, mergeUserPrompts } from "./prompts.mjs";
 export {
 	isTodoView,

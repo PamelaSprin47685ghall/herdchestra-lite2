@@ -3,23 +3,14 @@
 //
 // A switch names an implementation of a port; it never says whether the port
 // exists. Two-implementation ports use the names `on` and `off`, so the older
-// boolean variable keeps one meaning. `scope` and `relay` carry three, and
-// their names describe the shape or the obligation rather than a switch
-// position.
+// boolean variable keeps one meaning. `relay` carries three, and its names
+// describe the obligation rather than a switch position.
 //
 // Pure data, frozen. Resolution lives in resolve.mjs so this table stays the
 // single source for both the resolver and the documentation.
 
 /** Port name -> { implementations: readonly string[], fallback: string }. */
 export const PORTS = Object.freeze({
-	scope: Object.freeze({
-		// `single` was the one-container begin/end protocol. It is retired: the
-		// scope port now only names whether fork/join exists (`batch`) or not
-		// (`bare`). An explicit `single` is refused by the resolver with the
-		// available list, which is the retirement notice.
-		implementations: Object.freeze(["bare", "batch"]),
-		fallback: "batch",
-	}),
 	relay: Object.freeze({
 		implementations: Object.freeze(["none", "ledger", "handoff"]),
 		fallback: "handoff",
@@ -54,7 +45,7 @@ export function disableName(port) {
  * Ports whose switch takes an implementation name. Every other port keeps the
  * boolean form `HERD_DISABLE_<PORT>=1`, which means "choose off".
  */
-export const NAMED_SWITCHES = Object.freeze(new Set(["scope", "relay"]));
+export const NAMED_SWITCHES = Object.freeze(new Set(["relay"]));
 
 /** Every port name, in table order. */
 export const PORT_NAMES = Object.freeze(Object.keys(PORTS));

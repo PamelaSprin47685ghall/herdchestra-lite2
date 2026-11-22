@@ -8,7 +8,7 @@
 import { expect } from "bun:test";
 
 import { defineContract, expectRefusal } from "./_harness.mjs";
-import { relayImplementations } from "../../src/features/relay/index.mjs";
+import { relayImplementations } from "../../src/relay/policy.mjs";
 
 const OPEN = { empty: false, open: 3, total: 5 };
 const EMPTY = { empty: true, open: 0, total: 5 };
@@ -17,10 +17,21 @@ defineContract("relay", {
 	implementations: relayImplementations,
 	cases: {
 		"answers the same method set"(impl) {
-			for (const method of ["record", "status", "advance"]) {
+			for (const method of [
+				"record",
+				"status",
+				"advance",
+				"owesLedger",
+				"canHandoff",
+			]) {
 				expect(typeof impl[method]).toBe("function");
 			}
 			expect(typeof impl.name).toBe("string");
+		},
+
+		"the capability flags follow the level"(impl) {
+			expect(impl.owesLedger()).toBe(impl.name !== "none");
+			expect(impl.canHandoff()).toBe(impl.name === "handoff");
 		},
 
 		"status is always a verdict with a kind"(impl) {

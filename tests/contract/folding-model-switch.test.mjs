@@ -1,9 +1,8 @@
-// Contract tests for folding and model-switch.
+// Contract tests for folding.
 //
-// Both ports answer the same shape through every implementation. Folding's
-// extra requirement is the bill-split direction made executable: the fold reads
-// a retired-key lookup that arrives as an argument, and a retired key can never
-// reappear in `kept`.
+// Folding's requirement is the bill-split direction made executable: the fold
+// reads a retired-key lookup that arrives as an argument, and a retired key can
+// never reappear in `kept`.
 
 import { describe, expect, test } from "bun:test";
 
@@ -14,12 +13,6 @@ import {
 	foldingOn,
 } from "../../src/features/folding/index.mjs";
 import { FOLDED_MARKER } from "../../src/transcript/collapse.mjs";
-import {
-	MODEL_SWITCH_IMPLEMENTATIONS,
-	modelSwitchOff,
-	modelSwitchOn,
-} from "../../src/features/model-switch/index.mjs";
-
 function receiptFixture() {
 	const receipts = [
 		{
@@ -82,38 +75,5 @@ describe("folding: the port shortens only the elder receipt", () => {
 		expect(folded.messages).toBe(messages);
 		expect(folded.collapsed).toEqual([]);
 		expect(folded.messages[0].content[0].text).not.toContain(FOLDED_MARKER);
-	});
-});
-
-defineContract("modelSwitch", {
-	implementations: {
-		on: MODEL_SWITCH_IMPLEMENTATIONS.on("base"),
-		off: MODEL_SWITCH_IMPLEMENTATIONS.off("base"),
-	},
-	cases: {
-		"current always answers a spec"(impl) {
-			const current = impl.current("scope-1");
-			expect(current.ok).toBe(true);
-			expect(typeof current.spec).toBe("string");
-		},
-	},
-});
-
-describe("model-switch: off is a constant, not a silent no-op", () => {
-	test("on remembers a choice per scope", () => {
-		const models = modelSwitchOn("base");
-		expect(models.choose("s1", "fast").ok).toBe(true);
-		expect(models.current("s1")).toEqual({ ok: true, spec: "fast", switched: true });
-		expect(models.current("s2")).toEqual({ ok: true, spec: "base", switched: false });
-	});
-
-	test("off refuses to switch and keeps the baseline", () => {
-		const models = modelSwitchOff("base");
-		expect(models.choose("s1", "fast")).toEqual({
-			ok: false,
-			code: "MODEL_SWITCH_DISABLED",
-			port: "modelSwitch",
-		});
-		expect(models.current("s1")).toEqual({ ok: true, spec: "base", switched: false });
 	});
 });

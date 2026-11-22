@@ -7,7 +7,7 @@ description: Pin the user-side acceptance goal, write red contracts, then dispat
 
 The standing constitution applies; this skill adds only the development and acceptance method.
 
-Tests are a means, not a ritual. The goal is a change a successor can accept: automated where it pays, manual where it does not. One acceptance goal before Red; one dispatch pin before Green; verification goes to the level with context and authority. Repeat as work becomes ready; unrelated red contracts or running Green slices do not gate the next dispatch.
+Tests are a means, not a ritual. The goal is a change a successor can take over: automated where it pays, manual where it does not. One acceptance goal before Red; one dispatch pin before Green; verification goes to the level with context and authority. Repeat as work becomes ready; unrelated red contracts or running Green slices do not gate the next dispatch.
 
 Use skill://decision-framing when the goal itself is unclear. This skill assumes the goal exists and turns it into contracts, dispatch, and acceptance.
 

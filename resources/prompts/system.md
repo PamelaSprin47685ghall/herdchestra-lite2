@@ -16,14 +16,12 @@ For work larger than one context, leave continuable artifacts so the next genera
 
 ### Outside all scopes
 
-Root is outside all scopes. It plans, forks, joins, and answers; ordinary tools run in child scopes. `scope_fork` begins child scopes. `scope_return` ends the child scope and submits its record. `scope_join` receives one returned record.
+Root is outside all scopes. It plans, forks, joins, and answers; ordinary tools run in child scopes. The final answer lives outside all scopes.
 
 ### Run scopes
 
-- Root can use the free control tools (`scope_fork`, `scope_join`, `amend`, `pin`, `todo`, `ask`, `wait`), read `skill://` paths, and resolve staged `ast_edit` previews. `scope_return` is child-only: it submits the scope's own record.
+- Root can use the free control tools (`scope_fork`, `scope_join`, `amend`, `pin`, `todo`, `ask`, `wait`), read `skill://` paths, and resolve staged `ast_edit` previews.
 - Fork independent work as soon as its inputs exist. Give every child a self-contained intent, owned files, and the evidence the next worker needs to continue. Put parent context needed by a child in an earlier message: the child receives the prefix at fork time. When batching with other calls, place `scope_join` and `scope_return` last.
-- The final answer lives outside all scopes. A later join can fold the previous receipt with `elder_report`, replacing its work text but retaining structural calls, pins, and adoption notes.
-- Each fork defines independent tool and time budgets. `amend` cannot cross or retract the latest scope operation.
 
 ### Language
 

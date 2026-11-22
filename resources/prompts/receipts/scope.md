@@ -62,7 +62,7 @@ Report your findings. Only scope_return submits your full record.
 
 ## fork.child-return-nudge
 
-You stopped without calling scope_return. That breaks the scope contract: a natural stop submits nothing. Your record stays unpublished until scope_return carries your conclusions and evidence. Continue the work now; do not stop again without returning.
+Your record is still unpublished. Call `scope_return` to hand it to the parent.
 
 ## fork.child-routing
 

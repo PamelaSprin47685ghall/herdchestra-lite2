@@ -14,7 +14,9 @@ import { appendHistoryMessage } from "../host/hack-context.mjs";
 import { sessionFor, setAgentMessages } from "../host/capture.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { createEmptyCatalog, preparseModelSpec } from "../host/pricing.mjs";
+import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { SessionStation } from "./station.mjs";
+import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 
 /**
  * One fork registry per process. A fork tree spans agents, and every agent
@@ -37,26 +39,37 @@ function globalForkWiring() {
 }
 
 /**
- * Accept both the new `{ ports, implementations, onStation }` shape and the
- * older flat table. The table holds names only; hooks and implementations are
- * separate so `ports()` cannot leak them back into a domain check.
+ * Read the one wiring shape the composition root sends:
+ * `{ ports, implementations, onStation, onStationRefresh, forkOptions }`.
+ * A flat name table is refused instead of silently read as an empty one.
  */
-function normalizePorts(input) {
-	const source = input && typeof input === "object" ? input : {};
-	const nested = source.ports && typeof source.ports === "object" && !Array.isArray(source.ports);
-	const table = nested ? { ...source.ports } : { ...source };
-	if (!nested) {
-		delete table.onStation;
-		delete table.onStationRefresh;
-		delete table.forkOptions;
-		delete table.implementations;
+function completeBundle(implementations) {
+	if (
+		!implementations ||
+		typeof implementations !== "object" ||
+		Array.isArray(implementations)
+	) {
+		throw missingPortsError([...IMPLEMENTATION_KEYS]);
 	}
-	const implementations =
-		source.implementations &&
-		typeof source.implementations === "object" &&
-		!Array.isArray(source.implementations)
-			? { ...source.implementations }
+	const missing = IMPLEMENTATION_KEYS.filter((key) => !implementations[key]);
+	if (missing.length > 0) throw missingPortsError(missing);
+	return Object.freeze({ ...implementations });
+}
+
+function readWiring(input) {
+	const source = input && typeof input === "object" ? input : {};
+	if (PORT_NAMES.some((name) => Object.hasOwn(source, name))) {
+		const error = new TypeError(
+			"LEGACY_PORTS_SHAPE: pass { ports, implementations, ... }, not a flat name table",
+		);
+		error.code = "LEGACY_PORTS_SHAPE";
+		throw error;
+	}
+	const table =
+		source.ports && typeof source.ports === "object" && !Array.isArray(source.ports)
+			? { ...source.ports }
 			: {};
+	const implementations = completeBundle(source.implementations);
 	return {
 		table,
 		implementations,
@@ -79,13 +92,13 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 		error.code = "MISSING_TICKETS";
 		throw error;
 	}
-	const wiring = normalizePorts(ports);
+	const wiring = readWiring(ports);
 	// The resolved port table, decided once by the composition root. Domain code
 	// reads this instead of asking a switch, so there is exactly one place where
 	// "which implementation" is answered. Implementations are the object form of
 	// the same decision for the ports that have one.
-	let resolvedPorts = wiring.table;
-	let resolvedImplementations = wiring.implementations;
+	const resolvedPorts = wiring.table;
+	const resolvedImplementations = wiring.implementations;
 	const stations = new WeakMap();
 	let orphanStation = null;
 	let pendingStation = null;
@@ -113,27 +126,23 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 			// missing capability instead of inventing a ledger.
 			station.noteError?.("fork", error);
 		}
-		wiring.onStation?.(station, ctx ?? null);
+		try {
+			wiring.onStation?.(station, ctx ?? null);
+		} catch (error) {
+			// The host binding is a capability like the ports: a station without
+			// it still works and reports the failure instead of failing the hook.
+			station.noteError?.("activation", error);
+		}
 	}
 
 	const registry = {
 		/** The port table chosen at startup; null until the wiring resolves it. */
-		setPorts(table, implementations = null) {
-			if (table === null || typeof table !== "object") {
-				throw new TypeError("setPorts() expects the resolved port table");
-			}
-			resolvedPorts = { ...table };
-			if (implementations && typeof implementations === "object") {
-				resolvedImplementations = { ...implementations };
-			}
-			return { ...resolvedPorts };
-		},
 		ports() {
 			return { ...resolvedPorts };
 		},
-		/** Object implementations for the ports that have one. */
+		/** Object implementations for the ports that have one; frozen once. */
 		implementations() {
-			return { ...resolvedImplementations };
+			return resolvedImplementations;
 		},
 		/**
 		 * Host capabilities for the Station. The Station imports no host module;

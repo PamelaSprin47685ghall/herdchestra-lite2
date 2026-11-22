@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createTestStation } from "./helpers/station-ports.mjs";
 
 import { createRelay } from "../src/relay/index.mjs";
 import { SessionStation } from "../src/station/station.mjs";
@@ -7,7 +8,7 @@ const WORK = Object.freeze([{ phase: "Work", items: ["one"] }]);
 const EMPTY = Object.freeze([]);
 
 function stationWith(relay) {
-	const station = new SessionStation(
+	const station = createTestStation(SessionStation, 
 		{ getSessionId: () => "s1" },
 		{},
 		{},

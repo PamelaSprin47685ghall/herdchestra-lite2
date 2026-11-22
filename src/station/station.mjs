@@ -26,7 +26,6 @@
 
 import {
 	createBracketLedger,
-	createClockOn,
 	abandonRequest,
 	beginRequest,
 	createTurnClock,
@@ -49,11 +48,7 @@ import {
 	MAIN_AGENT,
 	READ_WRITE_SUBAGENT,
 } from "../core/policy.mjs";
-import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
-import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
-import { createPinOff, createPinOn } from "../features/pin/index.mjs";
-import { foldingOn } from "../features/folding/index.mjs";
-import { relayHandoff, relayImplementations } from "../relay/policy.mjs";
+import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 import { handleAmendCall } from "./controls.mjs";
 import {
 	directAmend,
@@ -233,14 +228,24 @@ export class SessionStation {
 			actualModelOf: (ctx) => actualModel(ctx, this.host),
 		});
 		this.usage.restoreFromBranch(this.manager);
-		// The session ports are built once by the composition root; bind each
+		// The composition root builds one complete bundle; bind each
 		// implementation to this station's persisted state exactly once. A
-		// unit double without implementations keeps the per-call factory
-		// fallback in pinPort/amendPort/herdPort.
-		const implementations = registry?.implementations?.() ?? {};
-		this.pinPortImpl = implementations.pin?.bindState?.(this.state) ?? null;
-		this.amendPortImpl = implementations.amend?.bindState?.(this.state) ?? null;
-		this.herdPortImpl = implementations.herd?.bindState?.(this.state) ?? null;
+		// station without a complete bundle cannot start: a fallback here
+		// would be a second composition root and would hide the missing
+		// capability until the port was first used.
+		const implementations = registry?.implementations?.();
+		const missing = IMPLEMENTATION_KEYS.filter(
+			(key) => !implementations?.[key],
+		);
+		if (missing.length > 0) throw missingPortsError(missing);
+		this.ports = Object.freeze({
+			relay: implementations.relay,
+			clock: implementations.clock,
+			folding: implementations.folding,
+			pin: implementations.pin.bindState(this.state),
+			amend: implementations.amend.bindState(this.state),
+			herd: implementations.herd.bindState(this.state),
+		});
 	}
 
 	/**
@@ -279,7 +284,6 @@ export class SessionStation {
 		} else if (!identity) {
 			this.persistLedger = () => this.persist?.();
 		}
-		this.forkPortsPhase = "base";
 		return { registry, ledger, identity };
 	}
 
@@ -334,6 +338,16 @@ export class SessionStation {
 	noteError(domain, error, detail = undefined) {
 		this.lastError = String(error?.message ?? error);
 		this.host?.record?.(domain, error, detail);
+	}
+
+	/**
+	 * Record a scoped model switch the host refused. The ticket reports the
+	 * outcome; the station owns the failure field and the diagnostics ring.
+	 */
+	noteScopedModelFailure(req, outcome) {
+		const command = req?.command || "/switch";
+		const reason = outcome?.reason ?? "host reported model switch failure";
+		this.noteError("model", new Error(`${command}: ${reason}`));
 	}
 
 	/**
@@ -427,10 +441,7 @@ export class SessionStation {
 	 * relay-off, because a nudge would demand a call the model cannot make.
 	 */
 	relayPort() {
-		const implementations = this.registry?.implementations?.();
-		if (implementations?.relay) return implementations.relay;
-		const name = this.registry?.ports?.().relay ?? "handoff";
-		return relayImplementations[name] ?? relayHandoff;
+		return this.ports.relay;
 	}
 
 	relayOn(ctx) {
@@ -462,14 +473,14 @@ export class SessionStation {
 
 	deliverSteer(text) {
 		if (!text || !this.tickets.canSteer) return false;
-		this.tickets.steer(text);
+		this.dispatchFireAndForget("tickets", () => this.tickets.steer(text));
 		return true;
 	}
 
 	/** Send one plain user message; the host starts a turn for it. */
 	deliverUserMessage(text) {
 		if (!text || !this.tickets.canPrompt) return false;
-		this.tickets.prompt(text);
+		this.dispatchFireAndForget("tickets", () => this.tickets.prompt(text));
 		return true;
 	}
 
@@ -528,9 +539,11 @@ export class SessionStation {
 			}
 			return undefined;
 		}
-		// Dispatch admission may be the first entry for this call. Reconstruct
-		// the arguments from the carrying message so a free skill read or a
-		// staged-preview resolution is not charged as ordinary work.
+		// Two seams admit one tool call: the host's `tool_call` hook and this
+		// dispatch seam. `onToolCall` caches its verdict by tool-call id, so
+		// whichever seam runs second is a cache read and never a second charge.
+		// Reconstruct the arguments from the carrying message so a free skill
+		// read or a staged-preview resolution is not charged as ordinary work.
 		const carrying = this.messageForToolCall(id);
 		const call = toolCalls(carrying).find((candidate) => candidate.id === id);
 		let input = call?.arguments ?? {};
@@ -564,7 +577,7 @@ export class SessionStation {
 
 	/** The injected clock implementation; `on` is the port's default. */
 	clockPort() {
-		return this.registry?.implementations?.()?.clock ?? createClockOn();
+		return this.ports.clock;
 	}
 
 	/**
@@ -746,29 +759,18 @@ export class SessionStation {
 		return executePanhandle(this, toolCallId, params);
 	}
 
-	// The three session ports are built once by the composition root and
-	// bound to this station's persisted state in the constructor. A unit
-	// double without implementations keeps a per-call factory fallback; a
-	// production station never constructs a second on object.
+	// The three session ports are bound to this station's persisted state in
+	// the constructor. One object per station; no per-call factory.
 	pinPort() {
-		if (this.pinPortImpl) return this.pinPortImpl;
-		return this.registry?.ports?.().pin === "off"
-			? createPinOff()
-			: createPinOn({ notes: this.state.pins });
+		return this.ports.pin;
 	}
 
 	amendPort() {
-		if (this.amendPortImpl) return this.amendPortImpl;
-		return this.registry?.ports?.().amend === "off"
-			? createAmendOff()
-			: createAmendOn({ retired: this.state.amends });
+		return this.ports.amend;
 	}
 
 	herdPort() {
-		if (this.herdPortImpl) return this.herdPortImpl;
-		return this.registry?.ports?.().herd === "off"
-			? createHerdOff()
-			: createHerdOn(this.state);
+		return this.ports.herd;
 	}
 
 	directAmend(toolCallId, params) {
@@ -868,7 +870,7 @@ export class SessionStation {
 		try {
 			const model = actualModel(ctx, this.host);
 			const key = modelKey(model);
-			const folding = this.registry?.implementations?.()?.folding ?? foldingOn();
+			const folding = this.ports.folding;
 			const needsRebase = this.anchor.needsRebase();
 			const tree = needsRebase ? this.contextMessages() : null;
 			const projection = projectContext(

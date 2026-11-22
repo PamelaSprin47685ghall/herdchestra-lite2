@@ -12,7 +12,9 @@ import { describe, expect, test } from "bun:test";
 
 import { createBranchSession } from "../src/host/branch-session.mjs";
 import { createForkWiring } from "../src/host/fork-wiring.mjs";
+import { SessionStation } from "../src/station/station.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
+import { bindStationPorts } from "./helpers/station-ports.mjs";
 import {
   forkOf,
   markReady,
@@ -100,11 +102,12 @@ function forkCall(id = "fork-call") {
 }
 
 function spawnStation(shared, wiring, extra = {}) {
-  const station = {
-    state: { relay: { generation: 0, fullFlow: false }, epoch: 0 },
-    manager: shared,
-    ...extra,
-  };
+  const station = Object.create(SessionStation.prototype);
+  station.state = { relay: { generation: 0, fullFlow: false }, epoch: 0 };
+  station.manager = shared;
+  station.persist = () => {};
+  station.ports = bindStationPorts(station.state);
+  Object.assign(station, extra);
   return station;
 }
 

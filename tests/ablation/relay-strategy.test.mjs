@@ -6,6 +6,7 @@
 // that calls the object passes.
 
 import { describe, expect, test } from "bun:test";
+import { createTestStation } from "../helpers/station-ports.mjs";
 import { readFileSync } from "node:fs";
 
 import {
@@ -111,6 +112,9 @@ function stationWith(relayObject, relayName) {
 	const station = {
 		state: { relay: createRelay() },
 		persist() {},
+		// The resolved object port is the one truth. The registry below still
+		// carries the contradictory name, to prove the name is never read.
+		relayPort: () => relayObject,
 		registry: {
 			ports: () => ({ relay: relayName }),
 			implementations: () => ({ relay: relayObject }),
@@ -159,7 +163,7 @@ describe("production calls the relay object", () => {
 });
 
 function stationWithImplementation(relayObject, relayName) {
-	const station = new SessionStation(
+	const station = createTestStation(SessionStation, 
 		{ getSessionId: () => "s1" },
 		{},
 		{},

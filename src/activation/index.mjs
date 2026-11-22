@@ -33,15 +33,20 @@ export { installCapture };
 export function resolveWiringPorts(env = process.env) {
 	const built = buildPorts(env);
 	if (built.ok) {
-		return { ok: true, ports: built.names, implementations: built.implementations };
+		return { ports: built.names, implementations: built.implementations };
 	}
 	record("activation", new Error(built.detail), { port: built.port });
-	return built;
+	// Fail fast: an empty table would wire a different system than the one the
+	// user asked for, and every port would answer with its fallback.
+	const error = new Error(built.detail);
+	error.code = built.code ?? "PORT_UNAVAILABLE";
+	error.port = built.port;
+	throw error;
 }
 
 export function wireExtension(pi, pricingCatalog, diagnosis = null, env = process.env) {
 	const ports = resolveWiringPorts(env);
-	const table = ports.ok ? ports.ports : {};
+	const table = ports.ports;
 	let registry = null;
 	// The composition root refreshes only the UI seam. The host returns a
 	// cached station before the interactive context exists; this fills the
@@ -59,7 +64,7 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 	};
 	registry = createStationRegistry(pi, buildTickets(pi), pricingCatalog, {
 		ports: table,
-		implementations: ports.ok ? ports.implementations : {},
+		implementations: ports.implementations,
 		onStation: attachStation,
 		onStationRefresh: refreshStationUI,
 	});

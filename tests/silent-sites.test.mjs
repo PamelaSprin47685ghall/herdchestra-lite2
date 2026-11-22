@@ -163,6 +163,7 @@ describe("self handoff", () => {
 			usage: { lastTotalInput: 0 },
 			persist() {},
 			resetUsageWatermark() {},
+			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 			registry: { clearPending() {} },
 			host: { record },
 		};

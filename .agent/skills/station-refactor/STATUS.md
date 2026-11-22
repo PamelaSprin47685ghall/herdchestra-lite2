@@ -41,6 +41,62 @@ synchronous aggregate, Tickets own the awaits, and Wiring only composes.
   is mechanical through `src/host/activation-binding.mjs`, and the combined
   `attachForkPorts` exists only in `tests/helpers/fork-attach.mjs`.
 
+## Enforcement pass (2026-11-22)
+
+Closed the defects the two audits found; every fix has a behavioral test or a
+ratchet.
+
+- **Station dispatch order and failure routing.** `deliverSteer` /
+  `deliverUserMessage` go through `dispatchFireAndForget("tickets", …)`, so a
+  rejected or synchronously thrown ticket is recorded, never an unhandled
+  rejection. Ticket-side model failures report through
+  `station.noteScopedModelFailure`; no ticket writes `lastError`. `gates.mjs`
+  commits model/switch/receipt state before it tail-dispatches `ensureTools`
+  and `restoreScopedModel`. `fork-controls.mjs` registers the whole batch
+  before it starts any spawner, so a throwing spawner cannot swallow a later
+  fork.
+- **One station composition root.** `buildPorts` freezes names and a complete
+  implementation bundle; `createStationRegistry` requires it and throws
+  `MISSING_PORTS` (missing keys named) and still refuses the legacy flat table.
+  `SessionStation` stores `this.ports` once; it imports no feature factory,
+  reads no implementation name, and has no per-call fallback. All test
+  construction goes through `tests/helpers/station-ports.mjs`.
+- **Mechanical wiring.** Ledger precedence is the pure
+  `src/station/domain/fork-ledger.mjs`; the owner/display choice is the pure
+  `src/host/domain/binding.mjs`. `createForkWiring()` owns the per-station
+  lifecycle on `wiring.states`; both module-level WeakMaps and the plain-double
+  monkey patch are gone, and the station no longer carries `forkPortsPhase`.
+- **Activation.** A refused port throws `PORT_UNAVAILABLE` instead of running on
+  an empty table; a failing `wiring.onStation` is recorded like the base attach;
+  activation ticket calls detach with a catch-all; `implementations()` returns
+  one frozen reference. `registry.setPorts` (no caller, stale-port footgun) is
+  deleted.
+- **Relay single truth.** `handoff-state` reads `station.relayPort()` only; the
+  registry name table is no longer a second source.
+- **Ratchets.** No bare `this.tickets.*(` statement; no `void`/discarded
+  `*Ticket(` call in `src/activation` or `src/host`; no ticket writes
+  `lastError`; no station imports host except the registry bridge.
+- **Tool-call double entry is intentional.** The host `tool_call` hook and the
+  dispatch admission are two seams for one call; `onToolCall` caches its verdict
+  by tool-call id, so the second seam is a cache read, never a second charge
+  (`station.mjs`, `admitToolDispatch` comment).
+
+## Verification (this pass, 2026-11-22)
+
+- `bun test tests`: **1078 pass / 0 fail**, 96 files, 3917 expect calls.
+- `bunx eslint .`: **0**.
+- `bun run smoke:relay`: **11/11**.
+- Station construction sites: 24, all through the production `buildPorts`
+  helper. No `forkPortsPhase`, `baseStates`, or `hostStates` remains.
+
+## Open items
+
+- `resources/prompts/{system,errors,tools/fork-join,tools/panhandle}.md` plus
+  `tests/model-facing-copy.test.mjs`, `tests/prompts.test.mjs`, and the matching
+  `CHANGELOG.md` hunk are a coherent prompt-copy change that no enforcement
+  slice authored. They stay uncommitted and unowned until their author claims
+  them; the code above does not depend on them.
+
 ## Verification (2026-11-22, committed HEAD `35bfc39`)
 
 - `bun test tests`: **988 pass / 0 fail**, 87 files, 3628 expect calls.

@@ -31,6 +31,7 @@ function stationWith(children, { ownerId = "root", viewer = null } = {}) {
 		persist: () => {},
 		policy: () => "main",
 		relayOn: () => false,
+		relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 		registry: { ports: () => ({}) },
 	};
 }

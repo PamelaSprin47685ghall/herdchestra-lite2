@@ -15,6 +15,7 @@ import {
 	identityForAgent,
 } from "./fork-registry.mjs";
 import { scopeTitle } from "../scope/scope-id.mjs";
+import { planStationBinding } from "./domain/binding.mjs";
 
 function agentIdOfSession(session) {
 	const id = session?.agent?.id;
@@ -41,14 +42,22 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 	// owner session so a fork's approval appears there, with the child's label,
 	// instead of a headless prompt nobody sees. A headless root keeps the honest
 	// OWNER_UI_ABSENT limitation.
-	if (owner && !childIdentity && ctx?.hasUI !== false && ctx?.ui) {
-		registerOwnerUI(owner, ctx.ui);
-	}
+	const plan = planStationBinding({
+		owner,
+		childIdentity,
+		hasUI: ctx?.hasUI,
+		ui: ctx?.ui,
+	});
+	if (plan.registerOwnerUI) registerOwnerUI(owner, ctx.ui);
 	// Descendants use the same root display sink, regardless of adoption.
 	const display =
-		childIdentity?.displayHolder ??
-		childIdentity?.display ??
-		(!childIdentity && ctx?.hasUI !== false ? childDisplayFor(owner, ctx?.ui) : null);
+		plan.displayKind === "holder"
+			? childIdentity.displayHolder
+			: plan.displayKind === "child"
+				? childIdentity.display
+				: plan.displayKind === "owner"
+					? childDisplayFor(owner, ctx?.ui)
+					: null;
 	// The session id is the conversation key, not the manager object: a fork
 	// branch holds a per-branch manager proxy, and an object key would give
 	// parent and child two different ledgers.

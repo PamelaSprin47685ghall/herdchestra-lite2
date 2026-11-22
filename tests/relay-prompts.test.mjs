@@ -167,6 +167,7 @@ describe("commitSelfHandoff", () => {
 			},
 			usage: { lastTotalInput: 0 },
 			handoffReport: null,
+			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 			registry: { ports: () => ({ relay: "handoff" }) },
 			contextMessages: () => context.messages,
 			persist: () => {},

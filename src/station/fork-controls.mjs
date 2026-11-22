@@ -376,6 +376,7 @@ export function handleForkCall(station, call, options = {}) {
   const started = [];
   const deferred = [];
   const failed = [];
+  const pending = [];
   for (let index = 0; index < decision.items.length; index += 1) {
     const item = decision.items[index];
     const forkId = decision.items.length === 1 ? baseId : `${baseId}:${index}`;
@@ -428,15 +429,39 @@ export function handleForkCall(station, call, options = {}) {
       parentDepth: depth,
     };
     spec.receipt = childReceiptText(spec);
+    pending.push({
+      forkId,
+      scopeId: item.scopeId,
+      intent: item.intent,
+      childDepth: fork.childDepth,
+      spec,
+    });
+  }
+
+  // Register the whole batch before any child starts. A spawner that throws,
+  // and a child that inspects the ledger from its first synchronous beat, both
+  // see a complete batch: no later fork can be left unregistered by an earlier
+  // start.
+  for (const entry of pending) {
     try {
-      spawner(spec);
-      started.push({ forkId, scopeId: item.scopeId, intent: item.intent, childDepth: fork.childDepth });
+      spawner(entry.spec);
+      started.push({
+        forkId: entry.forkId,
+        scopeId: entry.scopeId,
+        intent: entry.intent,
+        childDepth: entry.childDepth,
+      });
     } catch (error) {
       const reason = String(error?.message ?? error);
       // The bracket stays registered as running so the parent can still see
       // that this fork exists; it is reported as failed to start.
-      failed.push({ forkId, scopeId: item.scopeId, intent: item.intent, reason });
-      markReady(ledger, forkId, { ok: false, reason: `did not start: ${reason}` });
+      failed.push({
+        forkId: entry.forkId,
+        scopeId: entry.scopeId,
+        intent: entry.intent,
+        reason,
+      });
+      markReady(ledger, entry.forkId, { ok: false, reason: `did not start: ${reason}` });
     }
   }
 

@@ -3,6 +3,7 @@
 // prose in the child's receipt.
 
 import { describe, expect, test } from "bun:test";
+import { createTestStation } from "./helpers/station-ports.mjs";
 
 import { installToolDispatch } from "../src/host/tool-dispatch.mjs";
 import { createForkRegistry, notifyWaiters } from "../src/host/fork-registry.mjs";
@@ -43,7 +44,7 @@ function ledgerWith(time, startedAt) {
 }
 
 function stationFor(ledger, ownerId) {
-	const station = new SessionStation(manager(), {}, {}, null, null);
+	const station = createTestStation(SessionStation, manager(), {}, {}, null, null);
 	station.forkLedgerPort = () => ledger;
 	station.forkOwnerId = () => ownerId;
 	return station;

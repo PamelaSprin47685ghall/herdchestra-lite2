@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { SessionStation } from "../src/station/station.mjs";
+import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { handleJoinCall, handleReturnCall } from "../src/station/fork-controls.mjs";
 import {
 	createBracketLedger,
@@ -39,6 +40,7 @@ function rootStation(ledger, state = createState()) {
 	station.manager = null;
 	station.pricingCatalog = createEmptyCatalog();
 	station.registry = { ports: () => ({ folding: "on" }) };
+	station.ports = bindStationPorts(state);
 	station.toolCallLedger = createToolCallLedger();
 	station.hostBoundaryKey = null;
 	station.lastError = null;
@@ -63,6 +65,7 @@ function rootStation(ledger, state = createState()) {
 function childStation(ledger, forkId, messages = []) {
 	const station = Object.create(SessionStation.prototype);
 	station.state = createState();
+	station.ports = bindStationPorts(station.state);
 	station.manager = null;
 	station.forkLedgerPort = () => ledger;
 	station.forkIdentityPort = () => ({ forkId });

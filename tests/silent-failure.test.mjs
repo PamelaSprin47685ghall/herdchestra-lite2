@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { createTestStation } from "./helpers/station-ports.mjs";
 import {
 	record,
 	reset as resetDiagnostics,
@@ -45,7 +46,7 @@ describe("failures that used to vanish", () => {
 				return "entry-1";
 			},
 		};
-		const station = new SessionStation(
+		const station = createTestStation(SessionStation, 
 		manager,
 		{},
 		{},

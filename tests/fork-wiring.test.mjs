@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { createTestStation } from "./helpers/station-ports.mjs";
+import { SessionStation } from "../src/station/station.mjs";
 
 import {
   attachBaseForkPorts,
@@ -19,10 +21,11 @@ import { markReady, openChildren, registerFork, RUNNING } from "../src/scope/for
 import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 
 function stationOf() {
-  return {
-    state: { autopilot: false, relay: { generation: 0, fullFlow: false } },
-    manager: null,
-  };
+  const station = Object.create(SessionStation.prototype);
+  station.state = { autopilot: false, relay: { generation: 0, fullFlow: false } };
+  station.manager = null;
+  station.persist = () => {};
+  return station;
 }
 
 function assistant(text) {
@@ -151,12 +154,11 @@ describe("attachForkPorts", () => {
 
   test("a frozen child record survives a spawn failure after the work", async () => {
     const wiring = createForkWiring();
-    const station = {
-      state: { autopilot: false, relay: { generation: 0, fullFlow: false } },
-      manager: null,
-      persist: () => {
-        throw new Error("persist exploded");
-      },
+    const station = Object.create(SessionStation.prototype);
+    station.state = { autopilot: false, relay: { generation: 0, fullFlow: false } };
+    station.manager = null;
+    station.persist = () => {
+      throw new Error("persist exploded");
     };
     const attached = attachForkPorts(station, wiring, {
       conversationKey: "c",
@@ -458,14 +460,14 @@ describe("two-phase attach", () => {
     const wiring = createForkWiring();
     const station = stationOf();
     const first = attachBaseForkPorts(station, wiring, { conversationKey: "phase" });
-    expect(station.forkPortsPhase).toBe("base");
+    expect(wiring.states.get(station).phase).toBe("base");
     const second = attachBaseForkPorts(station, wiring, { conversationKey: "other" });
     expect(second.ledger).toBe(first.ledger);
     expect(station.forkLedgerPort()).toBe(first.ledger);
-    expect(station.forkPortsPhase).toBe("base");
+    expect(wiring.states.get(station).phase).toBe("base");
 
     bindHostForkPorts(station, wiring, { display: null });
-    expect(station.forkPortsPhase).toBe("host");
+    expect(wiring.states.get(station).phase).toBe("host");
     expect(station.forkLedgerPort()).toBe(first.ledger);
     const display = { rootWait() {}, request() {}, attach() { return () => {}; }, activeTools: 0 };
     station.setDisplayPort(display);
@@ -624,8 +626,8 @@ describe("ledger sharing across stations", () => {
       host: () => ({ conversationKeyOf, ledgerFor, adoptLedger }),
     };
     const manager = { getSessionId: () => "conversation-1" };
-    const first = new SessionStation(manager, pi, tickets, registry, null);
-    const second = new SessionStation(manager, pi, tickets, registry, null);
+    const first = createTestStation(SessionStation, manager, pi, tickets, registry, null);
+    const second = createTestStation(SessionStation, manager, pi, tickets, registry, null);
     expect(first.brackets).toBe(second.brackets);
     // The key is the shared session id, not the manager object: a forked child
     // holds a different manager proxy and must still land on this ledger.
@@ -641,16 +643,16 @@ describe("ledger sharing across stations", () => {
     const registry = { forkWiring: () => wiring, ports: () => ({}) };
     const one = { getSessionId: () => "conversation-1" };
     const two = { getSessionId: () => "conversation-2" };
-    const a = new SessionStation(one, pi, tickets, registry, null);
-    const b = new SessionStation(two, pi, tickets, registry, null);
+    const a = createTestStation(SessionStation, one, pi, tickets, registry, null);
+    const b = createTestStation(SessionStation, two, pi, tickets, registry, null);
     expect(a.brackets).not.toBe(b.brackets);
   });
 
   test("a station without a fork wiring keeps its own ledger", async () => {
     const { SessionStation } = await import("../src/station/station.mjs");
     const manager = { getSessionId: () => "solo" };
-    const plain = new SessionStation(manager, pi, tickets, null, null);
-    const other = new SessionStation(manager, pi, tickets, null, null);
+    const plain = createTestStation(SessionStation, manager, pi, tickets, null, null);
+    const other = createTestStation(SessionStation, manager, pi, tickets, null, null);
     expect(plain.brackets).not.toBe(other.brackets);
   });
 
@@ -664,8 +666,8 @@ describe("ledger sharing across stations", () => {
       host: () => ({ conversationKeyOf, ledgerFor, adoptLedger }),
     };
     const manager = { getSessionId: () => "conversation-3" };
-    const parent = new SessionStation(manager, pi, tickets, registry, null);
-    const child = new SessionStation(manager, pi, tickets, registry, null);
+    const parent = createTestStation(SessionStation, manager, pi, tickets, registry, null);
+    const child = createTestStation(SessionStation, manager, pi, tickets, registry, null);
     registerFork(parent.brackets, {
       forkId: "f-shared",
       ownerId: "root",
@@ -1126,7 +1128,7 @@ describe("bracket ledger sharing", () => {
 
   async function station(manager, registry) {
     const { SessionStation } = await import("../src/station/station.mjs");
-    return new SessionStation(manager, {}, {}, registry, null);
+    return createTestStation(SessionStation, manager, {}, {}, registry, null);
   }
 
   test("two stations of one conversation share the ledger", async () => {

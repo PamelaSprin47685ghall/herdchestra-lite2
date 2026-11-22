@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { activate } from "../src/main.mjs";
 import { createForkWiring } from "../src/host/fork-wiring.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
+import { SessionStation } from "../src/station/station.mjs";
 import { registerFork } from "../src/scope/forkjoin.mjs";
 import { rememberSession } from "../src/host/capture.mjs";
 import { identityOf } from "../src/host/fork-registry.mjs";
@@ -65,7 +66,8 @@ function uiOf() {
 describe("a station with no display at attach time", () => {
 	test("accepts the display later and uses it for the next child", async () => {
 		const wiring = createForkWiring();
-		const station = { state: { brackets: null } };
+		const station = Object.create(SessionStation.prototype);
+	station.state = { brackets: null };
 		const attached = attachForkPorts(station, wiring, {
 			conversationKey: "ui-init-child",
 			createSession: async () => ({
@@ -172,7 +174,8 @@ function resolvedDisplayOf(identity) {
 
 async function spawnBeforeDisplay() {
 	const wiring = createForkWiring();
-	const station = { state: { brackets: null } };
+	const station = Object.create(SessionStation.prototype);
+	station.state = { brackets: null };
 	const sessions = [];
 	let releaseFirst = null;
 	const attached = attachForkPorts(station, wiring, {
@@ -233,7 +236,9 @@ describe("a child spawned before the UI appears", () => {
 		// The child station receives the identity's display value, which may be
 		// a live holder. A holder must resolve to its current port, never leak
 		// through as the display object itself.
-		const childStation = { state: { brackets: null } };
+		const childStation = Object.create(SessionStation.prototype);
+		childStation.state = { brackets: null };
+		childStation.persist = () => {};
 		attachForkPorts(childStation, wiring, {
 			identity: childIdentity,
 			display: childIdentity?.displayHolder ?? childIdentity?.display ?? null,
@@ -296,7 +301,9 @@ describe("a grandchild spawned before the UI appears", () => {
 	test("is attached when the root display arrives", async () => {
 		const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 		const wiring = createForkWiring();
-		const root = { state: { brackets: null } };
+		const root = Object.create(SessionStation.prototype);
+		root.state = { brackets: null };
+		root.persist = () => {};
 		const sessions = [];
 		const releases = [];
 		const createPendingSession = async (spec) => {
@@ -333,7 +340,9 @@ describe("a grandchild spawned before the UI appears", () => {
 
 		const childIdentity = identityOf(wiring.registry, "child-before-ui");
 		expect(childIdentity).toBeTruthy();
-		const childStation = { state: { brackets: null } };
+		const childStation = Object.create(SessionStation.prototype);
+		childStation.state = { brackets: null };
+		childStation.persist = () => {};
 		attachForkPorts(childStation, wiring, {
 			identity: childIdentity,
 			display: childIdentity?.displayHolder ?? childIdentity?.display ?? null,

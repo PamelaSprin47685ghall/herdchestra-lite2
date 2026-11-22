@@ -8,6 +8,7 @@
 // diagnostics ring instead of becoming an unhandled promise rejection.
 
 import { beforeEach, expect, test } from "bun:test";
+import { createTestStation } from "./helpers/station-ports.mjs";
 
 import {
 	record,
@@ -36,7 +37,7 @@ function rwContext() {
 }
 
 function stationWith(tickets, pi = { getActiveTools: () => ["read"] }) {
-	return new SessionStation(
+	return createTestStation(SessionStation, 
 		{ getSessionId: () => "s1", getBranch: () => [] },
 		pi,
 		tickets,
@@ -119,6 +120,58 @@ test("a synchronous throw from the ticket capability is recorded, not thrown", (
 
 	expect(() => station.syncTodo(READ_WRITE_SUBAGENT)).not.toThrow();
 	expect(diagnosticsSnapshot().some((entry) => entry.domain === "tickets")).toBe(true);
+});
+
+test("a rejecting steer and prompt ticket is recorded, not left unhandled", async () => {
+	const station = stationWith({
+		canSteer: true,
+		canPrompt: true,
+		steer: () => Promise.reject(new Error("steer moved")),
+		prompt: () => Promise.reject(new Error("prompt moved")),
+	});
+
+	expect(station.deliverSteer("steer")).toBe(true);
+	expect(station.deliverUserMessage("prompt")).toBe(true);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(
+		diagnosticsSnapshot()
+			.filter((entry) => entry.domain === "tickets")
+			.map((entry) => entry.message),
+	).toEqual(["steer moved", "prompt moved"]);
+});
+
+test("a synchronously throwing steer and prompt capability is recorded, not thrown", () => {
+	const station = stationWith({
+		canSteer: true,
+		canPrompt: true,
+		steer: () => {
+			throw new Error("steer is not installed");
+		},
+		prompt: () => {
+			throw new Error("prompt is not installed");
+		},
+	});
+
+	expect(() => station.deliverSteer("steer")).not.toThrow();
+	expect(() => station.deliverUserMessage("prompt")).not.toThrow();
+	expect(
+		diagnosticsSnapshot()
+			.filter((entry) => entry.domain === "tickets")
+			.map((entry) => entry.message),
+	).toEqual(["steer is not installed", "prompt is not installed"]);
+});
+
+test("a refused scoped model switch is recorded through the station", () => {
+	const station = stationWith({});
+
+	station.noteScopedModelFailure(
+		{ command: "/model fast" },
+		{ reason: "host refused" },
+	);
+	expect(station.lastError).toBe("/model fast: host refused");
+	expect(diagnosticsSnapshot().some((entry) => entry.domain === "model")).toBe(
+		true,
+	);
 });
 
 test("the production entry injects the off port implementations", async () => {

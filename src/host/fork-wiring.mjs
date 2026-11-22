@@ -23,63 +23,44 @@ import {
 } from "./fork-registry.mjs";
 import { record } from "./diagnostics.mjs";
 import { createDisplayBinder } from "./child-display-holder.mjs";
-import { buildChildIdentity, resolveForkLedger } from "./fork-identity.mjs";
+import { buildChildIdentity } from "./fork-identity.mjs";
+import { selectForkLedger } from "../station/domain/fork-ledger.mjs";
 import {
 	spawnChildTicket,
 	writeFrozenOutcome,
 } from "../tools/fork-spawn-ticket.mjs";
 
-// One base attach and one host bind per station. The base runs before the host
-// composition root exists; the host bind adds display and spawner later. The
-// WeakMaps are the idempotence guard, so a second call cannot re-run ledger
-// selection or replace a live display holder.
-const baseStates = new WeakMap();
-const hostStates = new WeakMap();
+// One base attach and one host bind per station. The holder record lives on
+// the wiring object the composition root created, not in a module: a second
+// wiring cannot see the first one's stations, and the lifecycle stays where it
+// is owned. The base runs before the host composition root exists; the host
+// bind adds display and spawner later.
+function statesOf(wiring) {
+	const owner = wiring && typeof wiring === "object" ? wiring : null;
+	if (!owner) return null;
+	if (!(owner.states instanceof WeakMap)) {
+		Object.defineProperty(owner, "states", {
+			value: new WeakMap(),
+			enumerable: false,
+			configurable: true,
+		});
+	}
+	return owner.states;
+}
 
 /**
- * Bind the fork ports on a station. `SessionStation` owns the derivation; a
- * plain test double gets the same capabilities assigned directly. This is a
- * capability check, not a business branch: production never takes the second
- * path.
+ * Bind the fork ports on a station. `SessionStation.bindForkPorts` owns the
+ * derivation and the commit; this function only calls it. A station double
+ * must be a real `SessionStation` or bind its prototype to receive ports.
  */
 function bindForkPorts(station, { registry, ledger, identity }) {
-	const childOutcomePort = (forkId) => outcomeOf(registry, forkId);
-	const setChildOutcome = (forkId, outcome) => setOutcome(registry, forkId, outcome);
-	if (typeof station.bindForkPorts === "function") {
-		station.bindForkPorts({
-			registry,
-			ledger,
-			identity,
-			childOutcomePort,
-			setChildOutcome,
-		});
-		return;
-	}
-	if (ledger) {
-		station.brackets = ledger;
-		if (station.state) station.state.brackets = ledger;
-	}
-	station.forkLedgerPort = () => ledger;
-	station.forkWaitPort = () => ({ registry, ledger });
-	station.forkIdentityPort = () => identity;
-	station.forkOwnerId = () =>
-		typeof identity?.forkId === "string" && identity.forkId !== ""
-			? identity.forkId
-			: null;
-	station.forkDepthPort = () =>
-		Number.isInteger(identity?.childDepth)
-			? identity.childDepth
-			: station.forkOwnerId()
-				? 1
-				: 0;
-	station.childOutcomePort = childOutcomePort;
-	station.setChildOutcome = setChildOutcome;
-	if (typeof identity?.persistRoot === "function") {
-		station.persistLedger = identity.persistRoot;
-	} else if (!identity) {
-		station.persistLedger = () => station.persist?.();
-	}
-	station.forkPortsPhase = "base";
+	station.bindForkPorts({
+		registry,
+		ledger,
+		identity,
+		childOutcomePort: (forkId) => outcomeOf(registry, forkId),
+		setChildOutcome: (forkId, outcome) => setOutcome(registry, forkId, outcome),
+	});
 }
 
 /**
@@ -95,7 +76,7 @@ export function attachBaseForkPorts(station, wiring, options = {}) {
 		const registry = wiring?.registry ?? createForkRegistry();
 		return { registry, ledger: null, identity: null };
 	}
-	const existing = baseStates.get(station);
+	const existing = statesOf(wiring)?.get(station);
 	if (existing) return existing;
 
 	const registry = wiring?.registry ?? createForkRegistry();
@@ -112,14 +93,14 @@ export function attachBaseForkPorts(station, wiring, options = {}) {
 	// empty one, and a restored tree wins over a freshly created empty index.
 	const indexed = identity ? null : ledgerFor(registry, conversationKey);
 	const restored = station.state?.brackets ?? null;
-	const ledger = resolveForkLedger({ identity, indexed, restored });
+	const { ledger } = selectForkLedger({ identity, indexed, restored });
 	if (!identity) adoptLedger(registry, conversationKey, ledger);
 	// `SessionStation.bindForkPorts` derives owner/depth/persistence once; a
 	// plain test double receives the same capabilities. Never write the legacy
 	// duplicate owner field: `forkOwnerId()` is the single owner seam.
 	bindForkPorts(station, { registry, ledger, identity });
-	const state = { registry, ledger, identity };
-	baseStates.set(station, state);
+	const state = { registry, ledger, identity, phase: "base" };
+	statesOf(wiring)?.set(station, state);
 	return state;
 }
 
@@ -195,10 +176,12 @@ function spawnPortFor(station, base, binder, options) {
  * - maxResultChars / maxThinkingChars: replay truncation
  */
 export function bindHostForkPorts(station, wiring, options = {}) {
-	let base = baseStates.get(station);
+	const states = statesOf(wiring);
+	let base = states?.get(station);
 	if (!base) base = attachBaseForkPorts(station, wiring, options);
+	base = states?.get(station) ?? base;
 
-	const existing = hostStates.get(station);
+	const existing = base?.binder ? base : null;
 	if (existing) {
 		if (Object.hasOwn(options, "display")) existing.binder.updateDisplay(options.display);
 		if (typeof options.createSession === "function") {
@@ -220,12 +203,14 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 		: null;
 	const spawn = spawnPortFor(station, base, binder, options);
 	if (spawn) station.childSpawnPort = spawn;
-	station.forkPortsPhase = "host";
-	hostStates.set(station, { binder });
-	return { registry: base.registry, ledger: base.ledger };
+	if (base && typeof base === "object") {
+		base.binder = binder;
+		base.phase = "host";
+	}
+	return { registry: base?.registry, ledger: base?.ledger };
 }
 
-/** A fresh wiring: one registry for the whole process. */
+/** A fresh wiring: one registry and one station lifecycle for the process. */
 export function createForkWiring() {
-	return { registry: createForkRegistry() };
+	return { registry: createForkRegistry(), states: new WeakMap() };
 }

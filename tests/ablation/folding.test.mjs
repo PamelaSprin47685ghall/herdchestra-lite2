@@ -7,6 +7,7 @@
 // fails the test.
 
 import { expect, test } from "bun:test";
+import { createTestStation } from "../helpers/station-ports.mjs";
 
 import { buildPorts } from "../../src/activation/ports.mjs";
 import {
@@ -99,7 +100,7 @@ test("the station's transformContext asks the injected folding implementation", 
 		ports: () => ({ folding: "on" }),
 		implementations: () => ({ folding }),
 	};
-	const station = new SessionStation(
+	const station = createTestStation(SessionStation, 
 		{ getSessionId: () => "s1", getBranch: () => [] },
 		{},
 		{},

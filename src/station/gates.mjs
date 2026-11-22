@@ -229,7 +229,9 @@ function receiptMatches(station, message) {
 
 function prepareRequest(station, ctx, previous, history) {
 	if (!managesRequest(station, ctx)) return null;
-	station.ensureTools(ctx);
+	// Commit every transition before dispatching. `ensureTools` and
+	// `restoreScopedModel` detach tickets, and a ticket's synchronous prefix
+	// must observe a fully prepared request, not a half-updated one.
 	observeHostBoundary(station, station.contextMessages());
 	station.observeActualModel(ctx);
 	const demandVisible =
@@ -238,14 +240,18 @@ function prepareRequest(station, ctx, previous, history) {
 			: false;
 	const restore = station.tickets.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
-	if (req) {
-		return restore(station, ctx, req, previous, (message) =>
-			receiptMatches(station, message) ? message :
-				station.skillReceipt(ctx, demandVisible),
-		);
-	}
-	return receiptMatches(station, previous) ? previous :
-		station.skillReceipt(ctx, demandVisible);
+	const receipt = (message) =>
+		receiptMatches(station, message) ? message :
+			station.skillReceipt(ctx, demandVisible);
+	// `skillReceipt` writes the relay verdict, so it commits before dispatch.
+	const next = req
+		? null
+		: receiptMatches(station, previous) ? previous :
+			station.skillReceipt(ctx, demandVisible);
+	// Tail position: the todo grant, then the restore ticket.
+	station.ensureTools(ctx);
+	if (req) return restore(station, ctx, req, previous, receipt);
+	return next;
 }
 
 function onContext(station, messages, ctx) {
@@ -328,9 +334,6 @@ function onBeforeAgentStart(station, event, ctx) {
 		branch: ownerIdOf(station) !== null,
 	});
 	const promptChanged = prompt !== event?.systemPrompt;
-	// Relay and `todo` share one verdict: `ensureTools` owns that rule, so no
-	// second `getActiveTools` check may live here.
-	if (policy === READ_WRITE_SUBAGENT) station.ensureTools(ctx);
 	const result = promptChanged ? { systemPrompt: prompt } : undefined;
 	if (policy === READ_ONLY_SUBAGENT) return result;
 	// The host selects the provider model before it calls the context hook.
@@ -338,6 +341,10 @@ function onBeforeAgentStart(station, event, ctx) {
 	station.observeActualModel(ctx);
 	const restore = station.tickets.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
+	// Relay and `todo` share one verdict: `ensureTools` owns that rule, so no
+	// second `getActiveTools` check may live here. Tail position: every state
+	// commit above lands before the grant (and the restore) dispatch.
+	if (policy === READ_WRITE_SUBAGENT) station.ensureTools(ctx);
 	if (req) return restore(station, ctx, req, result);
 	return result;
 }

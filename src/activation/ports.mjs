@@ -1,9 +1,9 @@
 // Build the implementation objects a station consumes.
 //
 // `resolvePorts` remains the only switch decision; this module turns each
-// resolved name into the object the domain calls. Folding and clock are the
-// first two ports on the object path. A port that has no object yet stays a
-// name in `names`; do not invent a second table here.
+// resolved name into the object the domain calls. Every port that needs state
+// or behaviour is on the object path; `names` keeps the resolved name for
+// reporting and domain checks. Do not invent a second table here.
 
 import { resolvePorts } from "../core/ports/resolve.mjs";
 import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
@@ -55,5 +55,14 @@ export function buildPorts(env = process.env) {
 			},
 		},
 	};
-	return { ok: true, names, implementations };
+	// One table, built once. Freezing the bundle and the binders keeps a
+	// consumer from replacing an implementation behind the resolved switch.
+	for (const port of ["pin", "amend", "herd"]) {
+		Object.freeze(implementations[port]);
+	}
+	return {
+		ok: true,
+		names: Object.freeze(names),
+		implementations: Object.freeze(implementations),
+	};
 }

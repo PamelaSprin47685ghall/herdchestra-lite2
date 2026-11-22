@@ -89,6 +89,7 @@ describe("the natural-stop transition", () => {
 				delivered.push(text);
 				return true;
 			},
+			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 			registry: { ports: () => ({ relay: "handoff" }), markPending() {} },
 		};
 		const before = JSON.stringify(station.state.relay);
@@ -110,6 +111,7 @@ describe("the natural-stop transition", () => {
 				delivered.push(text);
 				return true;
 			},
+			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 			registry: { ports: () => ({ relay: "handoff" }), markPending() {} },
 		};
 
@@ -303,6 +305,7 @@ describe("a child's handoff transitions", () => {
 			forkOwnerId: () => "fork_a",
 			handoffReport: null,
 			persist() {},
+			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 			registry: {
 				ports: () => ({ relay: "handoff" }),
 				markPending() {},
@@ -341,6 +344,7 @@ describe("a child's handoff transitions", () => {
 			state: { autopilot: true, relay },
 			forkOwnerId: () => "fork_a",
 			persist() {},
+			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 			registry: { ports: () => ({ relay: "handoff" }) },
 		};
 		const before = JSON.stringify(relay);
@@ -356,6 +360,7 @@ describe("a child's handoff transitions", () => {
 			state: { autopilot: true, relay },
 			forkOwnerId: () => null,
 			persist() {},
+			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
 			registry: { ports: () => ({ relay: "handoff" }) },
 		};
 

@@ -10,7 +10,6 @@ import {
 	mergeUserPrompts,
 	successorOpeningText,
 } from "../relay/index.mjs";
-import { relayImplementations } from "../relay/policy.mjs";
 import {
 	decideHandoffAdvance,
 	decideHandoffArm,
@@ -29,17 +28,11 @@ function isChild(station) {
 /**
  * The resolved relay policy for this station.
  *
- * Production passes `implementations` through the registry; a unit double may
- * pass only the old name table, so the name is resolved here as a fallback.
- * The name is read once, never compared.
+ * The station holds the one resolved object port; the registry name table is
+ * not consulted. A station double passes the same object through `relayPort`.
  */
 function relayPolicyOf(station) {
-	const direct = station.relayPort?.();
-	if (direct) return direct;
-	const implemented = station.registry?.implementations?.()?.relay;
-	if (implemented) return implemented;
-	const name = station.registry?.ports?.()?.relay ?? "handoff";
-	return relayImplementations[name] ?? relayImplementations.handoff;
+	return station.relayPort();
 }
 
 function armHandoff(station, _ctx) {

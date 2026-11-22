@@ -6,7 +6,11 @@
 // the live display holder's inner state. It may carry the two turn totals onto
 // the chosen ledger when that ledger has no samples yet.
 
-import { normalizeTotals } from "../scope/turn-stats.mjs";
+// The ledger precedence moved to src/station/domain/fork-ledger.mjs so the
+// rule lives on the station side of the boundary and the wiring only executes
+// it.
+
+import { selectForkLedger } from "../station/domain/fork-ledger.mjs";
 
 /**
  * Build the identity a child station reads back from the registry.
@@ -41,36 +45,12 @@ export function buildChildIdentity(spec = {}, deps = {}) {
 }
 
 /**
- * Choose the ledger a station must use.
- *
- * Precedence, highest first:
- * 1. the identity's ledger (a child must use its fork's ledger);
- * 2. a live conversation index that already holds forks;
- * 3. the persisted bracket tree;
- * 4. the empty live index.
- *
- * A live station wins over an empty restored tree, and a restored tree wins
- * over a freshly created empty index. This is the precedence the wiring used
- * inline; it lives here so the rule is testable in one place.
+ * Compatibility wrapper: the precedence rule lives in
+ * `src/station/domain/fork-ledger.mjs`; callers that only need the ledger use
+ * this function.
  */
-export function resolveForkLedger({ identity = null, indexed = null, restored = null } = {}) {
-	if (identity?.ledger && typeof identity.ledger === "object") {
-		return identity.ledger;
-	}
-	const chosen =
-		indexed && (indexed.order?.length ?? 0) > 0
-			? indexed
-			: (restored ?? indexed ?? null);
-	// A fresh index has no samples, but a restored tree with no open forks may
-	// still carry the session's totals. Fill empty from the other candidate;
-	// two sampled ledgers are never summed or overwritten.
-	const other = chosen === indexed ? restored : indexed;
-	if (chosen && other && chosen !== other) {
-		const chosenTotals = normalizeTotals(chosen.totals);
-		const otherTotals = normalizeTotals(other.totals);
-		const chosenHasSamples = chosenTotals.turns > 0 || chosenTotals.turnMs > 0;
-		const otherHasSamples = otherTotals.turns > 0 || otherTotals.turnMs > 0;
-		if (!chosenHasSamples && otherHasSamples) chosen.totals = otherTotals;
-	}
-	return chosen;
+export function resolveForkLedger(args = {}) {
+	return selectForkLedger(args).ledger;
 }
+
+

@@ -192,7 +192,7 @@ function outcomeReason(outcome) {
 export async function restoreScopedModelTicket(station, ctx, req, result, finish) {
 	const outcome = await switchModelTicket(station.pi, ctx, req);
 	station.reconcileActualModel(ctx, req, outcome);
-	if (!outcome.ok) station.lastError = `${req.command}: ${outcome.reason}`;
+	if (!outcome.ok) station.noteScopedModelFailure(req, outcome);
 	return finish ? finish(result) : result;
 }
 
@@ -357,7 +357,7 @@ async function applyPendingModelSwitch(station, ctx, result) {
 	try {
 		station.reconcileActualModel?.(ctx, req, outcome);
 	} catch (error) {
-		station.lastError = String(error?.message ?? error);
+		station.noteError?.("model", error);
 	}
 	return outcome?.ok ? result : appendModelSwitchWarning(result, req, outcome);
 }

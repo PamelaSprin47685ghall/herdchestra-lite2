@@ -6,6 +6,7 @@
 // failed window surviving into the next agent turn.
 
 import { describe, expect, test } from "bun:test";
+import { createTestStation } from "./helpers/station-ports.mjs";
 
 import { wireHooks } from "../src/activation/hooks.mjs";
 import {
@@ -24,7 +25,7 @@ import { createState } from "../src/scope/state.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 
 function station() {
-	const built = new SessionStation({ getSessionId: () => "s" }, {}, {}, null, null);
+	const built = createTestStation(SessionStation, { getSessionId: () => "s" }, {}, {}, null, null);
 	built.brackets = createBracketLedger();
 	built.state.brackets = built.brackets;
 	return built;
@@ -65,7 +66,7 @@ describe("a reload with no open forks keeps the turn totals", () => {
 			],
 		};
 		const registry = createForkRegistry();
-		const built = new SessionStation(
+		const built = createTestStation(SessionStation, 
 			manager,
 			{},
 			{},

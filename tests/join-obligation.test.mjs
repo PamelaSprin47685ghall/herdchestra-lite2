@@ -21,6 +21,7 @@ import {
 } from "../src/scope/forkjoin.mjs";
 import { createToolCallLedger } from "../src/station/domain/tool-call-ledger.mjs";
 import { SessionStation } from "../src/station/station.mjs";
+import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { handleJoinCall } from "../src/station/fork-controls.mjs";
 import { nudgeDecision } from "../src/station/nudge.mjs";
 import { onSessionStop } from "../src/station/gates.mjs";
@@ -44,6 +45,7 @@ function stationFor(registry, ledger) {
   const station = Object.create(SessionStation.prototype);
   station.state = createState();
   station.state.autopilot = true;
+  station.ports = bindStationPorts(station.state);
   station.toolCallLedger = createToolCallLedger();
   station.ownerId = null;
   station.forkLedgerPort = () => ledger;

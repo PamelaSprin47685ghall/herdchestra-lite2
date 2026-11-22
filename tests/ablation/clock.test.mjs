@@ -6,6 +6,7 @@
 // the arithmetic, and `off` means no deadline and no gate.
 
 import { expect, test } from "bun:test";
+import { createTestStation } from "../helpers/station-ports.mjs";
 
 import { buildPorts } from "../../src/activation/ports.mjs";
 import { createBracketLedger, registerFork } from "../../src/scope/index.mjs";
@@ -112,7 +113,7 @@ test("the station's clock methods ask the injected clock implementation", () => 
 		intent: "use the injected clock",
 		depth: 0,
 	});
-	const station = new SessionStation(
+	const station = createTestStation(SessionStation, 
 		{ getSessionId: () => "s1", getBranch: () => [] },
 		{},
 		{},

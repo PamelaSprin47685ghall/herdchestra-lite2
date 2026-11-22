@@ -194,12 +194,28 @@ describe("B3 — missing tickets refuse before a station exists", () => {
 
 	test("a recording double is accepted and wired to the station", () => {
 		const tickets = recordingTickets();
+		const built = buildPorts({});
 		const registry = createStationRegistry({}, tickets, null, {
-			ports: {},
-			implementations: {},
+			ports: built.names,
+			implementations: built.implementations,
 		});
 		const station = registry.stationFor(null);
 		expect(station.tickets).toBe(tickets);
+	});
+
+	test("a station bundle without every port is refused", () => {
+		let error;
+		try {
+			createStationRegistry({}, recordingTickets(), null, {
+				ports: {},
+				implementations: { folding: {} },
+			});
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(Error);
+		expect(error.code).toBe("MISSING_PORTS");
+		expect(error.missing).toContain("pin");
 	});
 
 	test("the silent no-op default is gone", () => {

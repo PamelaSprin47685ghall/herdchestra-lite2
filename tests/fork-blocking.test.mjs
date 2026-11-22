@@ -11,6 +11,8 @@ import { renderJoinResult } from "../src/station/fork-controls.mjs";
 import { createProcessedLedger } from "../src/station/processed-ledger.mjs";
 import { joinTicket, returnTicket } from "../src/tools/tickets.mjs";
 import { createForkWiring } from "../src/host/fork-wiring.mjs";
+import { SessionStation } from "../src/station/station.mjs";
+import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import {
   registerFork,
@@ -40,6 +42,10 @@ function stationOf(registry, ledger, identity = null) {
     messageForToolCall: () => null,
     persist: () => {},
   };
+  // The fixture is not a SessionStation instance, but it honours the same
+  // station contract: the production binder supplies the fork ports once.
+  station.bindForkPorts = SessionStation.prototype.bindForkPorts;
+  station.ports = bindStationPorts(station.state);
   station.executeJoin = (toolCallId, params, ctx) =>
     executeJoin(station, toolCallId, params, ctx);
   station.executeReturn = (toolCallId, params, ctx) =>

@@ -1,16 +1,42 @@
 import { expect, test } from "bun:test";
+import { createTestStation } from "./helpers/station-ports.mjs";
 
 import { wireProviderObservation } from "../src/host/provider-observer.mjs";
 import { installStatus } from "../src/host/status.mjs";
 import { queueModelSwitch, takePendingModelSwitch } from "../src/station/models.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { buildPorts } from "../src/activation/ports.mjs";
+import { resolveWiringPorts } from "../src/activation/index.mjs";
+import { createStationRegistry } from "../src/station/registry.mjs";
 import { wireCommands } from "../src/activation/commands.mjs";
 import { createState, deserializeState, serializeState } from "../src/scope/index.mjs";
 
+const PORT_ENV = {
+	folding: "HERD_FOLDING",
+	clock: "HERD_CLOCK",
+	relay: "HERD_RELAY",
+	pin: "HERD_PIN",
+	amend: "HERD_AMEND",
+	herd: "HERD_HERD",
+};
+
 function stationWith(ports, state = {}) {
-	const station = new SessionStation({ getSessionId: () => "s1" }, {}, {}, { ports: () => ports }, null);
-	Object.assign(station.state, state);
+	const env = {};
+	for (const [port, name] of Object.entries(ports)) {
+		if (PORT_ENV[port]) env[PORT_ENV[port]] = name;
+	}
+	const built = buildPorts(env);
+	const station = createTestStation(SessionStation, { getSessionId: () => "s1" }, {}, {}, { ports: () => ({ ...built.names, ...ports }), implementations: () => built.implementations }, null);
+	// A port binder captures the arrays it was bound to. Keep those arrays and
+	// fill them in place, the way restoreState does for a real session.
+	for (const [key, value] of Object.entries(state)) {
+		const current = station.state[key];
+		if (Array.isArray(value) && Array.isArray(current)) {
+			current.splice(0, current.length, ...value);
+		} else {
+			station.state[key] = value;
+		}
+	}
 	return station;
 }
 
@@ -29,7 +55,7 @@ test("pin on writes through the station's persisted list", () => {
 
 test("the station binds one session port object, not one per call", () => {
 	const built = buildPorts({ HERD_PIN: "on" });
-	const station = new SessionStation(
+	const station = createTestStation(SessionStation, 
 		{ getSessionId: () => "s1" },
 		{},
 		{},
@@ -76,12 +102,26 @@ test("herd on flips the persisted mode and reports it", () => {
 	expect(station.state.autopilot).toBe(false);
 });
 
-test("a missing registry keeps every port on", () => {
-	const station = new SessionStation({ getSessionId: () => "s1" }, {}, {}, null, null);
+test("a station without a complete bundle throws MISSING_PORTS", () => {
+	expect(() =>
+		new SessionStation({ getSessionId: () => "s1" }, {}, {}, null, null),
+	).toThrow(/MISSING_PORTS/);
+});
+
+test("one complete bundle binds one object per station", () => {
+	const station = createTestStation(
+		SessionStation,
+		{ getSessionId: () => "s1" },
+		{},
+		{},
+		null,
+		null,
+	);
 	Object.assign(station.state, { pins: [], amends: [], autopilot: false });
+	expect(station.pinPort()).toBe(station.pinPort());
+	expect(station.amendPort()).toBe(station.amendPort());
+	expect(station.herdPort()).toBe(station.herdPort());
 	expect(station.pinPort().add("note").ok).toBe(true);
-	expect(station.amendPort().record("beat-1").ok).toBe(true);
-	expect(station.herdPort().toggle("").ok).toBe(true);
 });
 
 test("status off binds no host event and builds no runtime", () => {
@@ -183,7 +223,7 @@ test("the command table registers herd-autopilot and no bare herd", async () => 
 
 test("one bare command toggles autopilot and sends optional text once", () => {
 	const prompts = [];
-	const station = new SessionStation(
+	const station = createTestStation(SessionStation, 
 		{ getSessionId: () => "s1" },
 		{},
 		{ canPrompt: true, prompt: (text) => prompts.push(text) },
@@ -201,4 +241,32 @@ test("one bare command toggles autopilot and sends optional text once", () => {
 	expect(off).toEqual({ ok: true, mode: "off", text: "" });
 	expect(station.state.autopilot).toBe(false);
 	expect(prompts).toEqual(["hello"]);
+});
+
+test("a refused port switch throws at the composition root", () => {
+	// An empty table would wire every port to its fallback and hide the typo.
+	expect(() => resolveWiringPorts({ HERD_RELAY: "bogus" })).toThrow(
+		/PORT_UNAVAILABLE port=relay wanted=bogus/,
+	);
+});
+
+test("the registry accepts one wiring shape and refuses a flat name table", () => {
+	const tickets = { activateTools() {}, steer() {}, prompt() {} };
+	expect(() =>
+		createStationRegistry({}, tickets, null, { relay: "handoff" }),
+	).toThrow(/LEGACY_PORTS_SHAPE/);
+});
+
+test("implementations() returns one frozen object, not a copy per read", () => {
+	const tickets = { activateTools() {}, steer() {}, prompt() {} };
+	const built = buildPorts({});
+	const registry = createStationRegistry({}, tickets, null, {
+		ports: built.names,
+		implementations: built.implementations,
+	});
+	const first = registry.implementations();
+	expect(first).toBe(registry.implementations());
+	expect(Object.isFrozen(first)).toBe(true);
+	expect(first.folding).toBe(built.implementations.folding);
+	expect(first.clock).toBe(built.implementations.clock);
 });

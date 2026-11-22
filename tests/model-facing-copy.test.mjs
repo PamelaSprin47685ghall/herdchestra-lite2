@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createTestStation } from "./helpers/station-ports.mjs";
 
 import { injectSystemPrompt, persistentOperatingSkill } from "../src/host/prompts.mjs";
 import { wireTools } from "../src/activation/tools.mjs";
@@ -128,7 +129,7 @@ test("the registered scope_return explains why no elder report is needed", () =>
 });
 
 test("the root receipt reports unreceived work until the root joins it", () => {
-	const station = new SessionStation(null, {}, {}, null, null);
+	const station = createTestStation(SessionStation, null, {}, {}, null, null);
 	const ledger = createBracketLedger();
 	station.forkLedgerPort = () => ledger;
 	station.forkOwnerId = () => null;
@@ -169,7 +170,7 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 		},
 	};
 	const sent = [];
-	const station = new SessionStation(manager, {}, {
+	const station = createTestStation(SessionStation, manager, {}, {
 		canPrompt: true,
 		prompt: (text) => sent.push({ role: "user", content: text }),
 	}, registry, null);

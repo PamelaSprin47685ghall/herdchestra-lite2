@@ -17,8 +17,12 @@ import {
 } from "../scope/forkjoin.mjs";
 import { validScopeId, publicScopeId } from "../scope/scope-id.mjs";
 import { createClockOn } from "../scope/clock.mjs";
-import { estimateJoinTokens, joinAdmission } from "../scope/admission.mjs";
-import { latestReceiptOf } from "../scope/receipts.mjs";
+import {
+  decideForkAdmission,
+  decideJoinAdmission,
+  decideJoinBinding,
+  decidePendingReport,
+} from "./domain/fork-join.mjs";
 import { normalizeBudget, validBudget } from "../scope/budget.mjs";
 import { resolveModelSelector } from "../scope/model-selector.mjs";
 import { joinReceipt, renderChildRecord } from "../transcript/replay.mjs";
@@ -237,14 +241,8 @@ function densityOf(station) {
  * smaller result.
  */
 export function admitJoin(station, record, options = {}) {
-  const base = measuredBase(station);
   const recordChars =
     recordTextOf(station, record).length + JOIN_RECEIPT_OVERHEAD_CHARS;
-  const projected = estimateJoinTokens({
-    baseTokens: base,
-    recordChars,
-    tokensPerChar: densityOf(station),
-  });
   const window = options.window !== undefined ? options.window : windowOf(station);
   const reserve =
     options.reserve !== undefined
@@ -258,7 +256,14 @@ export function admitJoin(station, record, options = {}) {
       : typeof station.forkMarginPort === "function"
         ? station.forkMarginPort()
         : undefined;
-  return joinAdmission({ window, projected, reserve, margin });
+  return decideJoinAdmission({
+    baseTokens: measuredBase(station),
+    recordChars,
+    tokensPerChar: densityOf(station),
+    window,
+    reserve,
+    margin,
+  });
 }
 
 /** The first line of a child receipt, as the child's context carries it. */
@@ -355,17 +360,14 @@ function admitForkStart(station, item, depth) {
       budget: item.budget,
       permission: item.permission,
     }).length + FORK_RECEIPT_PREFIX_CHARS;
-  const projected = estimateJoinTokens({
-    baseTokens: measuredBase(station),
-    recordChars: receiptChars,
-    tokensPerChar: densityOf(station),
-  });
   const override = item.modelOverride?.contextWindow;
   const window =
     Number.isFinite(override) && override > 0 ? override : windowOf(station);
-  return joinAdmission({
+  return decideForkAdmission({
+    baseTokens: measuredBase(station),
+    receiptChars,
+    tokensPerChar: densityOf(station),
     window,
-    projected,
     reserve:
       typeof station.forkReservePort === "function" ? station.forkReservePort() : undefined,
     margin:
@@ -750,29 +752,17 @@ export function handleJoinCall(station, call, options = {}) {
  * receipt chain exactly as they were.
  */
 export function checkJoinBinding(station, expected) {
-  const want = expected && typeof expected === "object" ? expected : null;
   const current = pendingReportOf(station, ownerIdOf(station));
-  if (want === null && current === null) return { ok: true };
-  if (
-    want !== null &&
-    current !== null &&
-    (want.closeToolCallId ?? want.forkId) === (current.closeToolCallId ?? current.forkId)
-  ) {
-    return { ok: true };
-  }
-  if (current === null) {
-    const named = publicScopeId(forkOf(ledgerOf(station), want?.forkId));
-    return {
-      ok: false,
-      code: "STALE_ELDER_REPORT",
-      reason: render(E["stale-elder-reported"], { scopeId: named }),
-    };
-  }
-  const named = publicScopeId(forkOf(ledgerOf(station), current.forkId));
+  const decision = decideJoinBinding({ expected, current });
+  if (decision.ok) return { ok: true };
+  const named = publicScopeId(forkOf(ledgerOf(station), decision.forkId));
   return {
     ok: false,
-    code: "STALE_ELDER_REPORT",
-    reason: render(E["stale-elder-uncommitted"], { scopeId: named }),
+    code: decision.code,
+    reason: render(
+      E[decision.side === "cleared" ? "stale-elder-reported" : "stale-elder-uncommitted"],
+      { scopeId: named },
+    ),
   };
 }
 
@@ -811,48 +801,12 @@ export function commitJoin(station, record, closeToolCallId, elderReport, pendin
 
 /** The receipt the next join must summarize, or null when none is pending. */
 function pendingReportOf(station, ownerId) {
-  const receipts = Array.isArray(station.state?.receipts) ? station.state.receipts : [];
-  // The level key carries the relay generation and epoch, so a handoff or a
-  // promotion changes it. The obligation itself does not disappear with the
-  // key: an unreported receipt still names the elder the next join must
-  // summarize, so fall back to the chain itself.
-  const latest =
-    latestReceiptOf(receipts, levelKeyOf(station)) ?? lastUnreportedReceipt(receipts);
-  if (latest) {
-    // A receipt that already carries a report has discharged its obligation.
-    // Without this check a persisted chain whose youngest receipt was reported
-    // would demand the same summary forever.
-    if (typeof latest.report === "string" && latest.report.trim() !== "") return null;
-    return { forkId: latest.forkToolCallId, closeToolCallId: latest.closeToolCallId };
-  }
-  return pendingOf(reportsOf(station).get(ownerId));
-}
-
-/**
- * The youngest receipt anywhere in the chain that still owes a report.
- *
- * Used when no receipt belongs to the current level key: the previous
- * generation's last join is still the elder the next join has to summarize.
- */
-function lastUnreportedReceipt(receipts) {
-  let best = null;
-  for (const entry of receipts) {
-    if (!entry || typeof entry.closeToolCallId !== "string") continue;
-    if (typeof entry.report === "string" && entry.report.trim() !== "") continue;
-    if (!best || entry.closedOrder >= best.closedOrder) best = entry;
-  }
-  return best;
-}
-
-/** Accept the legacy string form as well as the record written now. */
-function pendingOf(value) {
-  if (typeof value === "string" && value !== "") {
-    return { forkId: value, closeToolCallId: null };
-  }
-  if (value && typeof value === "object" && typeof value.forkId === "string") {
-    return value;
-  }
-  return null;
+  return decidePendingReport({
+    receipts: Array.isArray(station.state?.receipts) ? station.state.receipts : [],
+    levelKey: levelKeyOf(station),
+    reports: reportsOf(station),
+    ownerId,
+  });
 }
 
 /**

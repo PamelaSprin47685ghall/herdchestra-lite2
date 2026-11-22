@@ -89,14 +89,27 @@ ratchet.
 - **Ratchets.** No bare `this.tickets.*(` statement; no `void`/discarded
   `*Ticket(` call in `src/activation` or `src/host`; no ticket writes
   `lastError`; no station imports host except the registry bridge.
-- **Tool-call double entry is intentional.** The host `tool_call` hook and the
-  dispatch admission are two seams for one call; `onToolCall` caches its verdict
-  by tool-call id, so the second seam is a cache read, never a second charge
-  (`station.mjs`, `admitToolDispatch` comment).
+- **Tool-call double entry is intentional and closed.** The host `tool_call`
+  hook and the dispatch admission are two seams for one call; `onToolCall`
+  caches its verdict by tool-call id, so the second seam is a cache read, never
+  a second charge. Independently of that cache, `chargeBranch` refuses an id
+  already present in `state.charges`, so a re-admission cannot double-charge
+  even after the 512-entry gate cache evicts it. The post-execution receipt
+  seam checks the same gate cache and re-admits when the id is absent instead
+  of returning a free result; a missing budget then refuses the result. The
+  regression is `tests/fork-tool-deadline.test.mjs` "a receipt without an
+  admission is refused, not free".
 
 ## Verification (this pass, 2026-11-22)
 
-- `bun test tests`: **1081 pass / 0 fail**, 96 files, 3930 expect calls.
+- `bun test tests`: **1082 pass / 0 fail**, 96 files, 3933 expect calls. This is
+  the worktree with the six user prompt files plus this pass's regression.
+- Clean committed-tree replay: `git archive 29c583e` → **1077 pass / 0 fail**,
+  96 files, 3919 expect calls. The four-test difference from the earlier 1081
+  worktree count is the user's modified `tests/prompts.test.mjs`; no
+  enforcement test depends on uncommitted files.
+- Clean committed-tree replay after the receipt fix: `git archive e61bb71` →
+  **1078 pass / 0 fail**, 96 files, 3922 expect calls.
 - `bunx eslint .`: **0**.
 - `bun run smoke:relay`: **11/11**.
 - Station construction sites: 24, all through the production `buildPorts`
@@ -104,6 +117,15 @@ ratchet.
 
 ## Open items
 
+- `readWiring` still turns a missing `ports` object into `{}`; a station then
+  throws `MISSING_PORTS` in `SessionStation`'s constructor before any event
+  runs. This is error latency at station start, not an end-to-end silent
+  fallback; tightening the registry would only move the same throw earlier.
+- `fork-wiring` keeps a lazy `states` WeakMap for a plain wiring object that
+  never came from `createForkWiring`; it is lifecycle memoization for test
+  doubles, not station state.
+- `noteScopedModelFailure` keeps the message but drops the
+  `expectedKey`/`actualKey` diagnostic fields.
 - `resources/prompts/errors.md`, `resources/prompts/system.md`,
   `resources/prompts/tools/fork-join.md`, `resources/prompts/tools/panhandle.md`,
   `tests/prompts.test.mjs`, and the matching `CHANGELOG.md` hunk are a coherent
@@ -146,6 +168,8 @@ ratchet.
   single composition root, mechanical wiring, relay single truth).
 - `130a5af` Read the station port table once: frozen registry reference,
   constructor fail-fast, gates/models/context consume `station.portTable`.
+- `e61bb71` Re-admit a receipt that has no gate verdict; record the clean-tree
+  receipt.
 
 ## Final state
 
@@ -161,8 +185,13 @@ ratchet.
   matches `registry.ports(`, `registry?.ports(`, and `registry?.ports?.(`, and
   self-tests the detector; the constructor's one legitimate read is asserted
   present in `station.mjs`.
-- Working-tree verification at that state: **1081 pass / 0 fail**, 96 files,
-  3930 expect calls; `bunx eslint .` 0; `bun run smoke:relay` 11/11.
+- The receipt-admission fix is `e61bb71`: a post-execution receipt with no
+  gate verdict re-enters admission instead of returning a free result, and
+  `chargeBranch` keeps re-admission idempotent through `state.charges`.
+- Clean committed-tree replay at `e61bb71`: **1078 pass / 0 fail**, 96 files,
+  3922 expect calls. `bunx eslint .` 0; `bun run smoke:relay` 11/11 on the
+  worktree carrying the fix. The replay excludes the six uncommitted user
+  prompt files, so committed HEAD is green on its own.
 - The working tree carries six uncommitted free-fork prompt files owned by the
   user (`CHANGELOG.md`, `resources/prompts/errors.md`,
   `resources/prompts/system.md`, `resources/prompts/tools/fork-join.md`,

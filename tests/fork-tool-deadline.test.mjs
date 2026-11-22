@@ -224,6 +224,88 @@ function fakeSession(agentId) {
 	return { agent, sessionManager: { getSessionId: () => "session-1" } };
 }
 
+describe("a receipt after a gate-cache miss still admits the executed call", () => {
+	// The post-execution seam re-admits when the bounded gate cache no longer
+	// holds the call. That re-admission must not refuse work that already ran,
+	// and must not charge it twice: `state.charges` is the idempotence record.
+	function fundedStation(budget) {
+		const ledger = createBracketLedger();
+		const registered = registerFork(
+			ledger,
+			{
+				forkId: "child-1",
+				ownerId: "root",
+				levelKey: "root|0|0",
+				intent: "pay for its own tools",
+				depth: 0,
+				time: 60,
+				startedAt: Date.now(),
+				budget,
+			},
+			{ clock: createClockOn() },
+		);
+		if (!registered.ok) throw new Error(registered.reason);
+		return { record: registered.fork, station: stationFor(ledger, "child-1") };
+	}
+
+	function messageWith(id, path) {
+		return {
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id, name: "read", arguments: { path } },
+			],
+		};
+	}
+
+	function evictGate(station) {
+		// GATE_LIMIT is 512; 600 unrelated admissions push out every earlier id.
+		for (let index = 0; index < 600; index += 1) {
+			station.rememberToolGate(`unrelated-${index}`, undefined);
+		}
+	}
+
+	test("an evicted verdict neither blocks the call nor charges it again", () => {
+		const { record, station } = fundedStation({ read: 4 });
+		const message = messageWith("call-1", "src/one.mjs");
+		expect(station.prepareToolDispatch(message, "call-1", "read")).toBe(true);
+		const admitted = station.admitToolDispatch("call-1", "read", {});
+		expect(admitted?.limitMs).toBeGreaterThan(0);
+		expect(record.spent.read).toBe(1);
+		expect(record.remaining.read).toBe(3);
+
+		evictGate(station);
+		expect(station.toolGateVerdict("call-1").hit).toBe(false);
+
+		const verdict = station.admitToolDispatch("call-1", "read", {}, {
+			elapsedMs: 5,
+			limitMs: 1_000,
+		});
+		expect(verdict).toBeUndefined();
+		expect(record.spent.read).toBe(1);
+		expect(record.remaining.read).toBe(3);
+	});
+
+	test("a free skill read survives the re-admission without becoming billable", () => {
+		const { record, station } = fundedStation({ read: 1 });
+		const message = messageWith("call-2", "skill://constitution");
+		expect(station.prepareToolDispatch(message, "call-2", "read")).toBe(true);
+		expect(station.admitToolDispatch("call-2", "read", {})?.limitMs).toBeGreaterThan(0);
+		expect(Object.hasOwn(station.state.charges, "call-2")).toBe(false);
+
+		evictGate(station);
+
+		// The arguments are reconstructed from the carrying message, so the
+		// skill read keeps its free verdict instead of consuming the branch.
+		const verdict = station.admitToolDispatch("call-2", "read", {}, {
+			elapsedMs: 5,
+			limitMs: 1_000,
+		});
+		expect(verdict).toBeUndefined();
+		expect(record.spent.read).toBe(0);
+		expect(record.remaining.read).toBe(1);
+	});
+});
+
 describe("installToolDispatch", () => {
 	test("a gated branch wraps the tool and enforces the limit", async () => {
 		const session = fakeSession("child-agent");

@@ -8,7 +8,7 @@ Budget: {{budget}}.
 
 ## pin.saved
 
-OK. Update the `todo` ledger now with any change this note makes: the next step, a completed item, or a blocker.
+OK. Update the `todo` ledger now with any change this note makes: the next step, a completed item, or a blocker. If this note carries the conclusion of the latest beat, amend that beat: the context keeps the note, not the search.
 
 ## scope.unreceived
 

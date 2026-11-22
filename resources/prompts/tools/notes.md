@@ -1,14 +1,14 @@
 ## amend.tool
 
-Replace the latest completed beat (one assistant message and its tool traffic) in your current scope. The next model request sees your reflection instead. Commands and edits already made stay in effect.
+Replace the most recent completed beat in your current scope that amend can still reach: one assistant message and its tool traffic. Commands and edits already made stay in effect; only the record changes. The next model request reads your reflection instead of the beat.
 
-Amend is Gauss polishing a proof: the theorem stays, the scaffolding goes. The files and commands that ran remain; the record keeps the clean derivation and why it changed.
+Amend a beat once it has delivered, not only when it failed. A dead end — wrong file, dead API, misread requirement — goes before the next step. A finished search, a fixed bug, a settled decision goes too, once its conclusion is written, pinned, or carried forward. Keep the conclusion; drop the search.
 
-Amend is free and runs before ordinary calls in the same message, so you can use refunded budget immediately. Multiple amends replace one beat each. You cannot cross a scope boundary, replace a structural scope call, or amend a beat paid for by an outer scope.
+The full history lives in the host archive; the context is the surface you hand forward, and a win that drags its search behind it taxes the next step. Amend is free and runs before ordinary calls in the same message, so the refund lands at once. Multiple amends replace one beat each. You cannot cross a scope boundary, replace a structural scope call, or amend a beat paid for by an outer scope.
 
 ## amend.reflection
 
-State what you tried, why it did not fit, and what to do instead.
+What the next step needs from this beat: what it established, and why the path is closed. One or two sentences.
 
 ## pin.tool
 

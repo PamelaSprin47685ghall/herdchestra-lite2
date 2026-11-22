@@ -4,8 +4,8 @@
  */
 
 import { createStationRegistry } from "../station/index.mjs";
-import { attachForkPorts } from "../host/fork-wiring.mjs";
-import { conversationKeyOf, identityForAgent } from "../host/fork-registry.mjs";
+import { bindHostForkPorts } from "../host/fork-wiring.mjs";
+import { agentIdOf, conversationKeyOf, identityForAgent } from "../host/fork-registry.mjs";
 import { createBranchSession, registerOwnerUI } from "../host/branch-session.mjs";
 import { childDisplayFor } from "../host/child-display.mjs";
 import { prepareChildContext } from "../host/branch-context.mjs";
@@ -13,13 +13,6 @@ import { rememberSession, sessionFor } from "../host/capture.mjs";
 import { scopeTitle } from "../scope/scope-id.mjs";
 import { buildPorts } from "./ports.mjs";
 
-/** The host's agent id for a context, or null. */
-function agentIdOf(ctx) {
-	const direct = ctx?.agent?.id;
-	if (typeof direct === "string" && direct !== "") return direct;
-	const fallback = ctx?.agentId;
-	return typeof fallback === "string" && fallback !== "" ? fallback : null;
-}
 import { record } from "../host/diagnostics.mjs";
 import { wireCommands } from "./commands.mjs";
 import { wireHostDiagnosis } from "./diagnosis.mjs";
@@ -79,7 +72,9 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 			// The agent id is the only handle the host publishes on a context;
 			// without a match this stays null and scope_return refuses, which
 			// is the honest answer for a branch that was not forked.
-			const childIdentity = identityForAgent(forkWiring.registry, agentIdOf(ctx));
+			const baseIdentity =
+				typeof station.forkIdentityPort === "function" ? station.forkIdentityPort() : null;
+			const childIdentity = baseIdentity ?? identityForAgent(forkWiring.registry, agentIdOf(ctx));
 			// The root interface is the only user-facing surface. Register it
 			// on the owner session so a fork's tool approval can be shown there
 			// with the child's label instead of falling back to a headless
@@ -91,7 +86,7 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 				childIdentity?.displayHolder ??
 				childIdentity?.display ??
 				(!childIdentity && ctx?.hasUI !== false ? childDisplayFor(owner, ctx?.ui) : null);
-			attachForkPorts(station, forkWiring, {
+			bindHostForkPorts(station, forkWiring, {
 				identity: childIdentity,
 				display,
 				// The session id is the conversation key, not the manager object:

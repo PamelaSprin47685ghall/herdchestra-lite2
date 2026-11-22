@@ -11,18 +11,11 @@ import {
 import { beatKey, toolCalls } from "../transcript/index.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../host/policy.mjs";
 import { injectSystemPrompt } from "../host/prompts.mjs";
-import {
-	handoffToolBlockedReason,
-	successorStartNudge,
-} from "../relay/index.mjs";
+import { successorStartNudge } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { record } from "../host/diagnostics.mjs";
-import {
-	CONTROL_TOOLS,
-	controlsIn,
-	hostBoundaryKey,
-	parseArgs,
-} from "./messages.mjs";
+import { controlsIn, hostBoundaryKey } from "./messages.mjs";
+import { decideToolCall } from "./domain/tool-call.mjs";
 import { handoffDemandVisible, insideScopeNudge } from "./texts.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
@@ -118,88 +111,100 @@ function onToolCall(station, event, ctx) {
 	// called itself read-only, and it never audits a tool call against the
 	// claim. Mistake-proofing lives in the required field and in the two `rw`
 	// refusals at begin time; it does not inspect what a tool would do.
-	if (station.policy(ctx) === READ_ONLY_SUBAGENT && toolName !== "ask" && toolName !== "wait") {
-		return undefined;
-	}
+	const cached = station.toolGateVerdict?.(toolCallId);
+	if (cached?.hit) return cached.verdict;
+	const input = event.input ?? event.arguments ?? {};
 	try {
 		const state = station.state;
 		const ownerId = ownerIdOf(station);
-		// The pending-handoff gate belongs to the root. A child may share the
-		// root's relay state, but its tools are its own work.
-		if (ownerId === null && state.autopilot && state.relay?.handoffPending) {
-			return {
-				block: true,
-				reason: handoffToolBlockedReason(),
-			};
+		const found =
+			typeof station.assistantForToolCall === "function"
+				? station.assistantForToolCall(toolCallId)
+				: null;
+		if (found && typeof station.dispatch?.rememberGroups === "function") {
+			station.dispatch.rememberGroups(found.message);
 		}
-		station.processControlsForTool(toolCallId);
-		const input = event.input ?? event.arguments ?? {};
-		if (toolName === "todo") {
-			// todo is free at every level and is never withheld by the receive
-			// obligation. An empty ledger submitted while the root still owns an
-			// unreceived child is held by the relay transition instead of
-			// arming a handoff that would abandon it.
-			station.persist();
-			return undefined;
-		}
-		if (CONTROL_TOOLS.has(toolName)) {
-			const args = parseArgs({
-				arguments: event.input ?? event.arguments ?? {},
-			});
-			if (!station.processed.hasHandled(toolCallId)) {
-				if (toolName === "amend") {
-					station.directAmend(toolCallId, args);
-				}
-			}
-			return undefined;
-		}
-		if (toolName === "ask") {
-			if (!state.autopilot) return undefined;
-			return {
-				block: true,
-				reason: E["ask-blocked"],
-			};
-		}
-		if (toolName === "wait") return undefined;
-		const found = station.assistantForToolCall(toolCallId);
-		if (found) station.dispatch.rememberGroups(found.message);
 		const groupKey =
-			station.dispatch.groupKeyFor(toolCallId) ??
+			station.dispatch?.groupKeyFor?.(toolCallId) ??
 			(found ? beatKey(found.message) : undefined);
-		const beatTools = toolCalls(found?.message ?? station.messageForToolCall(toolCallId))
-			.map((call) => ({
-				name: call.name,
-				free: isFreeCall(call.name, call.arguments),
-			}));
-		const ledger =
-			typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
-		const charged = chargeBranch(state, ledger, {
-			ownerId,
-			toolCallId,
-			toolName,
-			groupKey,
-			beatTools,
-			input,
+		const carrying =
+			found?.message ??
+			(typeof station.messageForToolCall === "function"
+				? station.messageForToolCall(toolCallId)
+				: null);
+		const beatTools = toolCalls(carrying).map((call) => ({
+			name: call.name,
+			free: isFreeCall(call.name, call.arguments),
+		}));
+		const handled =
+			typeof station.processed?.hasHandled === "function"
+				? station.processed.hasHandled(toolCallId)
+				: false;
+		const decision = decideToolCall({
+			state: {
+				autopilot: state.autopilot,
+				relay: { handoffPending: state.relay?.handoffPending === true },
+				charges: state.charges,
+			},
+			processed: {
+				handled,
+				hasCall:
+					typeof station.processed?.hasCall === "function"
+						? station.processed.hasCall(toolCallId)
+						: false,
+			},
+			dispatch: { found: Boolean(found), groupKey, beatTools },
+			call: { toolName, toolCallId, input },
+			policy: station.policy(ctx),
+			relay: {
+				ownerId,
+				handoffPending: state.relay?.handoffPending === true,
+				owesLedger: station.relayPort?.().owesLedger?.() === true,
+				timeLimitMs: null,
+			},
 		});
-		if (!charged.ok) {
-			// A block without a reason reaches the model as the host's generic
-			// "blocked by an extension" sentence. The refusal must always say
-			// what was refused, even if a future accounting path forgets.
-			const reason =
-				typeof charged.reason === "string" && charged.reason !== ""
-					? charged.reason
-					: `Tool "${toolName}" was refused by scope accounting (${charged.code ?? "REFUSED"}).`;
-			return { block: true, reason };
+		if (decision.controls.process) station.processControlsForTool(toolCallId);
+		if (
+			decision.controls.directAmend &&
+			!station.processed?.hasHandled?.(toolCallId)
+		) {
+			station.directAmend(toolCallId, decision.controls.directAmend.args);
 		}
-		station.persist();
-		return undefined;
+		if (decision.charge) {
+			const ledger =
+				typeof station.forkLedgerPort === "function"
+					? station.forkLedgerPort()
+					: null;
+			const charged = chargeBranch(state, ledger, decision.charge.request);
+			if (!charged.ok) {
+				// A block without a reason reaches the model as the host's
+				// generic "blocked by an extension" sentence. The refusal must
+				// always say what was refused.
+				const reason =
+					typeof charged.reason === "string" && charged.reason !== ""
+						? charged.reason
+						: `Tool "${toolName}" was refused by scope accounting (${charged.code ?? "REFUSED"}).`;
+				const verdict = { block: true, reason };
+				station.rememberToolGate?.(toolCallId, verdict);
+				return verdict;
+			}
+		}
+		if (decision.persist) station.persist();
+		const verdict =
+			decision.verdict === "block"
+				? { block: true, reason: decision.block?.reason ?? "Tool blocked." }
+				: undefined;
+		station.rememberToolGate?.(toolCallId, verdict);
+		return verdict;
 	} catch (error) {
-		return {
+		const verdict = {
 			block: true,
 			reason: render(E["accounting-failed-closed"], {
 				error: String(error?.message ?? error),
 			}),
 		};
+		station.rememberToolGate?.(toolCallId, verdict);
+		return verdict;
 	}
 }
 

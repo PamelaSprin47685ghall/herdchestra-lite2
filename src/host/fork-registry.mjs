@@ -103,6 +103,14 @@ export function identityForAgent(registry, agentId) {
   return forkId ? identityOf(registry, forkId) : null;
 }
 
+/** The host's agent id for a context, or null. */
+export function agentIdOf(ctx) {
+  const direct = ctx?.agent?.id;
+  if (typeof direct === "string" && direct !== "") return direct;
+  const fallback = ctx?.agentId;
+  return typeof fallback === "string" && fallback !== "" ? fallback : null;
+}
+
 /**
  * Attach the host's agent id to a fork that was already registered. The id
  * only exists after the child session is built, while the fork itself exists

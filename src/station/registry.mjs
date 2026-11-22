@@ -1,7 +1,12 @@
 // Station registry: one station per session manager, plus the active registry.
 
-import { attachForkPorts, createForkWiring } from "../host/fork-wiring.mjs";
-import { conversationKeyOf, ledgerFor } from "../host/fork-registry.mjs";
+import { attachBaseForkPorts, createForkWiring } from "../host/fork-wiring.mjs";
+import {
+	agentIdOf,
+	conversationKeyOf,
+	identityForAgent,
+	ledgerFor,
+} from "../host/fork-registry.mjs";
 import { SessionStation } from "./station.mjs";
 
 /**
@@ -89,8 +94,10 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 	 * registry sees.
 	 */
 	function attachStationPorts(station, ctx) {
+		const identity = identityForAgent(forkWiring.registry, agentIdOf(ctx));
 		try {
-			attachForkPorts(station, forkWiring, {
+			attachBaseForkPorts(station, forkWiring, {
+				identity,
 				conversationKey: conversationKeyOf(ctx?.sessionManager ?? station.manager ?? null),
 				...(wiring.forkOptions ?? {}),
 			});

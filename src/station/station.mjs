@@ -160,6 +160,10 @@ export class SessionStation {
 			noteError: (domain, error) => this.noteError(domain, error),
 		});
 		this.processed = createProcessedLedger();
+		// The host may deliver the same tool call through the `tool_call` event
+		// and through dispatch admission. Cache the first verdict so the second
+		// entry sees the same answer and the branch is charged once.
+		this.toolGate = new Map();
 		this.dispatch = createDispatchTracker();
 		this.nudged = new WeakSet();
 		this.lastError = null;
@@ -410,6 +414,23 @@ export class SessionStation {
 		return this.toolTimeLimit() !== null;
 	}
 
+	toolGateVerdict(toolCallId) {
+		if (!this.toolGate.has(toolCallId)) return { hit: false };
+		const verdict = this.toolGate.get(toolCallId);
+		this.toolGate.delete(toolCallId);
+		this.toolGate.set(toolCallId, verdict);
+		return { hit: true, verdict };
+	}
+
+	rememberToolGate(toolCallId, verdict) {
+		this.toolGate.delete(toolCallId);
+		this.toolGate.set(toolCallId, verdict);
+		if (this.toolGate.size > 512) {
+			const oldest = this.toolGate.keys().next().value;
+			this.toolGate.delete(oldest);
+		}
+	}
+
 	admitToolDispatch(id, name, ctx, receipt = null) {
 		if (receipt) {
 			if (receipt.limitMs > 0 && receipt.elapsedMs > receipt.limitMs) {
@@ -423,7 +444,24 @@ export class SessionStation {
 			}
 			return undefined;
 		}
-		const verdict = onToolCall(this, { toolCallId: id, toolName: name }, ctx);
+		// Dispatch admission may be the first entry for this call. Reconstruct
+		// the arguments from the carrying message so a free skill read or a
+		// staged-preview resolution is not charged as ordinary work.
+		const carrying = this.messageForToolCall(id);
+		const call = toolCalls(carrying).find((candidate) => candidate.id === id);
+		let input = call?.arguments ?? {};
+		if (typeof input === "string") {
+			try {
+				input = JSON.parse(input);
+			} catch {
+				input = {};
+			}
+		}
+		const verdict = onToolCall(
+			this,
+			{ toolCallId: id, toolName: name, input },
+			ctx,
+		);
 		if (verdict) return verdict;
 		if (name === "scope_join" || name === "scope_return") return undefined;
 		const limitMs = this.toolTimeLimit();

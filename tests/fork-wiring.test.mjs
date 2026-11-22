@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { attachForkPorts, createForkWiring } from "../src/host/fork-wiring.mjs";
+import {
+  attachBaseForkPorts,
+  attachForkPorts,
+  bindHostForkPorts,
+  createForkWiring,
+} from "../src/host/fork-wiring.mjs";
 import { spawnChildTicket } from "../src/tools/fork-spawn-ticket.mjs";
 import {
   conversationKeyOf,
@@ -444,6 +449,46 @@ describe("attachForkPorts", () => {
     const station = stationOf();
     attachForkPorts(station, wiring, { conversationKey: "same" });
     expect(station.forkLedgerPort()).toBe(station.forkLedgerPort());
+  });
+});
+
+describe("two-phase attach", () => {
+  test("base is idempotent and the host bind does not select a second ledger", () => {
+    const wiring = createForkWiring();
+    const station = stationOf();
+    const first = attachBaseForkPorts(station, wiring, { conversationKey: "phase" });
+    expect(station.forkPortsPhase).toBe("base");
+    const second = attachBaseForkPorts(station, wiring, { conversationKey: "other" });
+    expect(second.ledger).toBe(first.ledger);
+    expect(station.forkLedgerPort()).toBe(first.ledger);
+    expect(station.forkPortsPhase).toBe("base");
+
+    bindHostForkPorts(station, wiring, { display: null });
+    expect(station.forkPortsPhase).toBe("host");
+    expect(station.forkLedgerPort()).toBe(first.ledger);
+    const display = { rootWait() {}, request() {}, attach() { return () => {}; }, activeTools: 0 };
+    station.setDisplayPort(display);
+    expect(station.displayPort()).toBe(display);
+
+    // A later base call is a no-op, not a second ledger selection.
+    attachBaseForkPorts(station, wiring, { conversationKey: "third" });
+    expect(station.forkLedgerPort()).toBe(first.ledger);
+  });
+
+  test("a child identity survives the host bind and keeps its fork ledger", () => {
+    const wiring = createForkWiring();
+    const station = stationOf();
+    const parentLedger = ledgerFor(wiring.registry, "session:parent");
+    const identity = { forkId: "child-phase", ledger: parentLedger, childDepth: 1 };
+    attachBaseForkPorts(station, wiring, {
+      conversationKey: "session:other-context",
+      identity,
+    });
+    bindHostForkPorts(station, wiring, { identity, display: null });
+    expect(station.forkIdentityPort()).toBe(identity);
+    expect(station.forkOwnerId()).toBe("child-phase");
+    expect(station.forkDepthPort()).toBe(1);
+    expect(station.forkLedgerPort()).toBe(parentLedger);
   });
 });
 

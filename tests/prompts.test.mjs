@@ -134,7 +134,7 @@ describe("system prompts map to their documents", () => {
 
 	test("stage guidance is shipped as skills, not injected as a prompt block", () => {
 		expect(persistentOperatingSkill).toMatch(/skills ship with this plugin/);
-		expect(persistentOperatingSkill).toContain("the runtime enforces no order");
+		expect(persistentOperatingSkill).toContain("the runtime enforces no stage gate");
 		expect(persistentOperatingSkill).not.toContain("Stage Prompts block");
 	});
 

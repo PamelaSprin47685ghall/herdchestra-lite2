@@ -4,7 +4,7 @@ Provide a non-empty `reflection` to replace the beat.
 
 ## amend-unavailable
 
-Amend is unavailable. The record is unchanged.
+Amend is unavailable. The record is unchanged; continue from the current record.
 
 ## pin-empty
 
@@ -12,11 +12,11 @@ Name at least one field with content: `assumption`, `deduction`, `induction`, `f
 
 ## pin-unavailable
 
-Pin is unavailable. Note not saved.
+Pin is unavailable; the note is absent. Continue without it, or retry when the pin port is available.
 
 ## pin-internal
 
-The note could not be saved, and it was not kept.
+The note is absent; retry or continue without it.
 
 ## pin-internal-error
 
@@ -60,7 +60,7 @@ Give the child a non-empty `intent`.
 
 ## fork-ledger-unavailable
 
-No bracket ledger is attached; fork/join is unavailable in this session.
+No bracket ledger is attached; fork/join is unavailable in this session. Continue in the current scope, or report the configuration.
 
 ## duplicate-scope-id
 
@@ -68,12 +68,12 @@ Scope {{scopeId}} is already declared. Choose another `scopeId`.
 
 ## child-spawner-unavailable
 
-No child spawner is attached; this session cannot start child scopes.
+No child spawner is attached; this session cannot start child scopes. Continue in the current scope, or report the configuration.
 
 ## fork-context-exceeded
 
 forks[{{index}}]: {{reason}}
-The batch did not start.
+The batch did not start. Reduce the parent context or use a model with a larger window, then fork again.
 
 ## elder-report-type
 
@@ -114,11 +114,11 @@ The join took no result; its summary was not committed. Retry with an `elder_rep
 
 ## unknown-fork
 
-This scope is not registered.
+This scope is not registered. Use the `scopeId` from the fork receipt, or fork a new child scope.
 
 ## fork-not-running
 
-Fork {{scopeId}} is {{status}}.
+Fork {{scopeId}} is {{status}}. Use `scope_join` for a ready record; otherwise continue the work or fork a new scope.
 
 ## orphans-without-receiver
 
@@ -134,4 +134,4 @@ Scope `{{ownerId}}` has no fork record, so it has no tool budget. Return with `s
 
 ## accounting-failed-closed
 
-Scope accounting failed closed: {{error}}. No tool ran.
+Scope accounting failed closed: {{error}}. No tool ran. Retry the call; if it fails again, report the accounting error.

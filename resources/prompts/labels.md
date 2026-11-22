@@ -17,4 +17,4 @@ unknown error
 simple (this task runs without a ledger)
 
 ## flow-full
-full flow (stage skills plus relay)
+full flow (skills plus relay)

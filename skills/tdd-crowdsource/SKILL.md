@@ -17,7 +17,7 @@ Write the goal from the user's side: who acts, what becomes true, what they see,
 
 Pin it only when it changes the bet. If the work has no user-visible acceptance, skip the pin; do not manufacture ceremony.
 
-When part of the goal cannot be automated, keep the manual procedure in the project's .agent/skills/manual-acceptance/SKILL.md entry, with surface-specific siblings such as cli.md, tui.md, and relay.md. One entry plus siblings is the single source of truth; do not copy the procedure into every task. Pin only the run-specific difference: environment, values, owner, what to observe, and what would make you adjust. The skill is a control loop, not a diary.
+When a manual step cannot be automated, create or extend the project's `.agent/skills/manual-acceptance/SKILL.md` entry, with surface-specific siblings such as `cli.md`, `tui.md`, and `relay.md`. One entry plus siblings is the single source of truth; do not copy the procedure into every task. Pin only the run-specific difference: environment, values, owner, what to observe, and what would make you adjust. The skill is a control loop, not a diary.
 
 The acceptance goal is the source; tests derive from it. If a test cannot be derived, question the goal before writing the test.
 
@@ -45,7 +45,7 @@ A child may return completed work without running tests. Pin "not tested yet" wi
 
 Verification belongs to the level with context and authority, not to every child by default. The parent, grandparent, or next holder may own it. Report only observed results; a verification handoff is useful, not a failure, and it does not turn an unrun check into a pass.
 
-Manual acceptance is for the part automation cannot carry. Use the project's manual-acceptance entry and its surface sibling; pin the run-specific difference. No rubric, no score. A rubric with a hundred points and no user in the room is a spreadsheet, not acceptance. The goal is a user-side experience, not a parent's review of a child. If the goal is met, say so and move. If not, name the residual and its owner. Do not turn acceptance into a second implementation review.
+Manual acceptance is for the part automation cannot carry. Use that entry and its surface sibling; pin the run-specific difference. No rubric, no score. A rubric with a hundred points and no user in the room is a spreadsheet, not acceptance. The goal is a user-side experience, not a parent's review of a child. If the goal is met, say so and move. If not, name the residual and its owner. Do not turn acceptance into a second implementation review.
 
 Keep the design record under .agent/skills/<name>/SKILL.md: boundaries, consumer contracts, test paths, dependency and ownership decisions, dispatch pins, open verification, and the acceptance skill path. Pin the record's path so the next lead can find it. Run-specific results belong in pins and the ledger, not in the skill.
 

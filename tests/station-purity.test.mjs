@@ -226,12 +226,34 @@ test("a station without a complete port table refuses to start", () => {
 	expect(error?.missing).toContain("folding");
 });
 
-test("station code reads the one port table, never registry.ports() per event", () => {
-	for (const file of ["gates.mjs", "models.mjs", "station.mjs"]) {
+// Match every call spelling, including the optional call `?.()` where a dot
+// sits between the optional chain and the parenthesis. A detector that misses
+// `registry?.ports?.(` cannot guard the per-event read it claims to forbid.
+const PORT_TABLE_READ = /registry\s*\??\.\s*ports\s*(?:\?\.)?\s*\(/;
+
+test("station event code consumes station.portTable, never registry.ports()", () => {
+	for (const sample of [
+		"registry.ports(",
+		"registry?.ports(",
+		"registry?.ports?.(",
+	]) {
+		expect(sample).toMatch(PORT_TABLE_READ);
+	}
+	expect("const table = station.portTable;").not.toMatch(PORT_TABLE_READ);
+
+	for (const file of ["gates.mjs", "models.mjs"]) {
 		const source = readFileSync(
 			new URL(`../src/station/${file}`, import.meta.url),
 			"utf8",
 		);
-		expect(source).not.toMatch(/registry\?*\.ports\?*\(/);
+		expect(source).not.toMatch(PORT_TABLE_READ);
 	}
+
+	// The constructor is the one legitimate read: it validates and captures the
+	// table once at startup. Keep it in station.mjs and out of the event scan.
+	const stationSource = readFileSync(
+		new URL("../src/station/station.mjs", import.meta.url),
+		"utf8",
+	);
+	expect(stationSource).toMatch(PORT_TABLE_READ);
 });

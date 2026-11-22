@@ -67,9 +67,13 @@ ratchet.
   switching, and context projection read it, so no event re-reads the table or
   falls back to `{}`. A station without a complete table throws
   `MISSING_PORTS`. The registry still accepts a partial table for name-only
-  doubles; a station cannot start on one. `fork-wiring` keeps a lazy `states`
-  WeakMap for a plain wiring object that never came from `createForkWiring` —
-  a documented compatibility path for test doubles, not station state.
+  doubles; a station cannot start on one. The ratchet scans only the event
+  modules (`gates`, `models`) and matches `registry.ports(`,
+  `registry?.ports(`, and `registry?.ports?.(`; it self-tests the detector and
+  asserts the constructor's one legitimate read stays in `station.mjs`.
+  `fork-wiring` keeps a lazy `states` WeakMap for a plain wiring object that
+  never came from `createForkWiring` — a documented compatibility path for test
+  doubles, not station state.
 - **Mechanical wiring.** Ledger precedence is the pure
   `src/station/domain/fork-ledger.mjs`; the owner/display choice is the pure
   `src/host/domain/binding.mjs`. `createForkWiring()` owns the per-station
@@ -92,7 +96,7 @@ ratchet.
 
 ## Verification (this pass, 2026-11-22)
 
-- `bun test tests`: **1081 pass / 0 fail**, 96 files, 3926 expect calls.
+- `bun test tests`: **1081 pass / 0 fail**, 96 files, 3930 expect calls.
 - `bunx eslint .`: **0**.
 - `bun run smoke:relay`: **11/11**.
 - Station construction sites: 24, all through the production `buildPorts`
@@ -107,7 +111,7 @@ ratchet.
   uncommitted and unowned until their author claims them; the code above does
   not depend on them.
 
-## Historical verification (2026-11-22, committed HEAD `35bfc39`)
+## Historical verification (2026-11-22, Phases 1–7 landing)
 
 - `bun test tests`: **988 pass / 0 fail**, 87 files, 3628 expect calls.
 - `bunx eslint .`: **0**.
@@ -150,9 +154,17 @@ ratchet.
 - The combined `attachForkPorts` exists only in `tests/helpers/fork-attach.mjs`.
 - Ablation tests cover folding, clock, and relay; the dead `scope` port and the
   test-only feature modules are gone.
-- The verified code state is `130a5af` (this status file is a docs-only
-  follow-up commit). The working tree carries six uncommitted free-fork prompt
-  files owned by the user (`CHANGELOG.md`,
-  `resources/prompts/errors.md`, `resources/prompts/system.md`,
-  `resources/prompts/tools/fork-join.md`, `resources/prompts/tools/panhandle.md`,
-  `tests/prompts.test.mjs`); no enforcement code depends on them.
+- The port-table fix is `130a5af`: the registry returns one frozen name table,
+  `SessionStation` validates and captures `this.portTable`, and gates/model
+  switching consume it; a missing table throws `MISSING_PORTS`. The guard-test
+  correction lands with this status file: the ratchet scans only event modules,
+  matches `registry.ports(`, `registry?.ports(`, and `registry?.ports?.(`, and
+  self-tests the detector; the constructor's one legitimate read is asserted
+  present in `station.mjs`.
+- Working-tree verification at that state: **1081 pass / 0 fail**, 96 files,
+  3930 expect calls; `bunx eslint .` 0; `bun run smoke:relay` 11/11.
+- The working tree carries six uncommitted free-fork prompt files owned by the
+  user (`CHANGELOG.md`, `resources/prompts/errors.md`,
+  `resources/prompts/system.md`, `resources/prompts/tools/fork-join.md`,
+  `resources/prompts/tools/panhandle.md`, `tests/prompts.test.mjs`); no
+  enforcement code depends on them.

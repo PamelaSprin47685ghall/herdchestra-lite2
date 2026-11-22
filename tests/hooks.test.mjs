@@ -111,6 +111,25 @@ describe("hook wiring", () => {
 		expect(pi.handlers.has("message_end")).toBe(true);
 		expect(hooksRecords()).toHaveLength(0);
 	});
+
+	test("forwards the shared first turn to the context gatekeeper", () => {
+		const seen = [];
+		const station = {
+			...STATION,
+			onContext(messages, _ctx, firstTurn) {
+				seen.push({ messages, firstTurn });
+				return { messages };
+			},
+		};
+		const pi = fakePi();
+		wireHooks(pi, { stationFor: () => station }, "shared snapshot");
+		const messages = [{ role: "user", content: "hello", timestamp: 2 }];
+
+		const result = pi.handlers.get("context")({ messages }, {});
+
+		expect(seen).toEqual([{ messages, firstTurn: "shared snapshot" }]);
+		expect(result).toEqual({ messages });
+	});
 });
 
 describe("host diagnosis announcement", () => {

@@ -35,7 +35,7 @@ function dispatchSession(ctx) {
  * decision stops arriving, yet the extension still loads and the status line
  * looks healthy. That silence is the bug this return value closes.
  */
-export function wireHooks(pi, engine) {
+export function wireHooks(pi, engine, sharedFirstTurn = null) {
 	// A wiring may hand a full engine or a station-shaped double.
 	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
 	const stationForStop = (ctx) => (engine.stationForStop ?? engine.stationFor)(ctx);
@@ -112,7 +112,8 @@ export function wireHooks(pi, engine) {
 	);
 	pi.on(
 		"context",
-		(event, ctx) => bindDispatch(ctx).onContext(event?.messages, ctx),
+		(event, ctx) =>
+			bindDispatch(ctx).onContext(event?.messages, ctx, sharedFirstTurn),
 	);
 	pi.on("before_agent_start", (event, ctx) =>
 		bindDispatch(ctx).onBeforeAgentStart(event, ctx),

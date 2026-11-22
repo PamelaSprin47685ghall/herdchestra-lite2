@@ -121,6 +121,56 @@ describe("projectContext", () => {
 		expect(result.rebase).toBe(false);
 		expect(result.usage).toBeNull();
 	});
+
+	test("prepends the shared first turn before the outbound list", () => {
+		const user = { role: "user", content: "hello", timestamp: 2 };
+		const result = projectContext(
+			{ amends: [] },
+			{ original: [user], modelKey: "m1", firstTurn: "shared snapshot" },
+		);
+
+		expect(result.messages).toEqual([
+			{
+				role: "user",
+				content: [{ type: "text", text: "shared snapshot" }],
+				timestamp: 1,
+				attribution: "user",
+			},
+			user,
+		]);
+		expect(result.usage.messages).toBe(result.messages);
+		expect(result.usage.frontier).toBe(1);
+	});
+
+	test("an empty first turn leaves the list unchanged", () => {
+		const user = { role: "user", content: "hello", timestamp: 2 };
+		const result = projectContext({}, { original: [user], firstTurn: "" });
+		expect(result.messages).toEqual([user]);
+	});
+
+	test("the first turn does not count as a branch position", () => {
+		const result = projectContext(
+			{},
+			{ original: [], modelKey: "m1", firstTurn: "shared snapshot" },
+		);
+		expect(result.messages).toHaveLength(1);
+		expect(result.usage.frontier).toBe(0);
+	});
+
+	test("keeps a leading developer message ahead of the shared turn", () => {
+		const developer = { role: "developer", content: "rules", timestamp: 1 };
+		const user = { role: "user", content: "hello", timestamp: 2 };
+		const result = projectContext(
+			{},
+			{ original: [developer, user], firstTurn: "shared snapshot" },
+		);
+		expect(result.messages.map((message) => message.role)).toEqual([
+			"developer",
+			"user",
+			"user",
+		]);
+		expect(result.messages[1].content[0].text).toBe("shared snapshot");
+	});
 });
 
 describe("pure helpers", () => {

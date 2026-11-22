@@ -6,6 +6,16 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added — every outbound request shares one first turn
+
+- The `context` hook prepends a fixed user message built from
+  `/tmp/omp-llm-request-15d7e7f698200d35.json`. The snapshot is read once at
+  activation; the message timestamp is constant, so every request sends a
+  byte-identical prefix and the provider prompt cache survives.
+- Read-only sessions, which bypass the station projection, get the same first
+  turn. A missing snapshot is recorded as an activation diagnostic and the
+  request proceeds without it.
+
 ### Changed — skills are inlined, not fetched
 
 - The six skills moved from `host-omp/skills/` to the core's

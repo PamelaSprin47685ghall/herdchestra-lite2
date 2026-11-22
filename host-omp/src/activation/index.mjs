@@ -117,7 +117,13 @@ export function createHostBag(pi) {
 	});
 }
 
-export function wireExtension(pi, pricingCatalog, diagnosis = null, env = process.env) {
+export function wireExtension(
+	pi,
+	pricingCatalog,
+	diagnosis = null,
+	env = process.env,
+	sharedFirstTurn = null,
+) {
 	// The engine owns port resolution, fork wiring, the tool catalog, and the
 	// scope read model. This function only supplies host facts and binds the
 	// host's own surfaces.
@@ -158,7 +164,7 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 		pricingCatalog,
 	});
 	bindScopeView(engine.scopes);
-	const hooks = wireHooks(pi, engine);
+	const hooks = wireHooks(pi, engine, sharedFirstTurn);
 	for (const tool of engine.tools) pi.registerTool(tool);
 	wireCommands(pi, engine);
 	wireHostDiagnosis(pi, diagnosis, hooks);

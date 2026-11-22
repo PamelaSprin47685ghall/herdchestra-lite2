@@ -14,6 +14,7 @@ import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
 import { successorStartNudge } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { controlsIn, hostBoundaryKey } from "./messages.mjs";
+import { prependFirstTurn } from "./domain/context.mjs";
 import { decideToolCall } from "./domain/tool-call.mjs";
 import { PANHANDLE_TOOL } from "./domain/panhandle.mjs";
 import { dispatchOf, processedOf } from "./domain/tool-call-ledger.mjs";
@@ -254,12 +255,14 @@ function prepareRequest(station, ctx, previous, history) {
 	return next;
 }
 
-function onContext(station, messages, ctx) {
+function onContext(station, messages, ctx, firstTurn = null) {
 	const original = Array.isArray(messages) ? messages : [];
-	if (!managesRequest(station, ctx)) return { messages: original };
+	if (!managesRequest(station, ctx)) {
+		return { messages: prependFirstTurn(original, firstTurn) };
+	}
 	// Context handlers receive a clone. Adding a Skill here would make it
 	// temporary and leave the running tool loop without it on the next call.
-	return station.transformContext(original, ctx);
+	return station.transformContext(original, ctx, firstTurn);
 }
 
 function onSessionStop(station, ctx, evidence = null) {

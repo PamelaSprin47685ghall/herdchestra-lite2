@@ -9,7 +9,11 @@
 
 import { expect, test } from "bun:test";
 
-import { onBeforeAgentStart, prepareRequest } from "../src/station/gates.mjs";
+import {
+	onBeforeAgentStart,
+	onContext,
+	prepareRequest,
+} from "../src/station/gates.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 
 const CTX = { sessionManager: { getSessionId: () => "s1", getBranch: () => [] } };
@@ -135,4 +139,25 @@ test("a read-only session never reaches the granting ticket", () => {
 	expect(started?.systemPrompt).toContain("herdchestra-lite2:system-prompt");
 	expect(ensureToolsCalls()).toBe(0);
 	expect(events).toEqual([]);
+});
+
+test("a read-only session still carries the shared first turn", () => {
+	const messages = [{ role: "user", content: "hello", timestamp: 2 }];
+	const station = {
+		policy: () => READ_ONLY_SUBAGENT,
+		transformContext() {
+			throw new Error("read-only requests bypass the projection");
+		},
+	};
+
+	const result = onContext(station, messages, CTX, "shared snapshot");
+
+	expect(result.messages[0]).toEqual({
+		role: "user",
+		content: [{ type: "text", text: "shared snapshot" }],
+		timestamp: 1,
+		attribution: "user",
+	});
+	expect(result.messages[1]).toBe(messages[0]);
+	expect(onContext(station, messages, CTX).messages).toBe(messages);
 });

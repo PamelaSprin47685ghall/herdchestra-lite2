@@ -938,7 +938,7 @@ export class SessionStation {
 
 	// -- Context transform (sync) -----------------------------------------------
 
-	transformContext(original, ctx) {
+	transformContext(original, ctx, firstTurn = null) {
 		try {
 			const model = actualModel(ctx, this.host);
 			const key = modelKey(model);
@@ -953,6 +953,7 @@ export class SessionStation {
 					ports: this.portTable,
 					modelKey: key,
 					header: key ? (this.host?.session?.header?.(ctx) ?? null) : null,
+					firstTurn,
 				},
 			);
 			// Commit: the projection is complete. Write the host rebase and the
@@ -1076,8 +1077,8 @@ export class SessionStation {
 		return prepareRequest(this, ctx, previous, history);
 	}
 
-	onContext(messages, ctx) {
-		return onContext(this, messages, ctx);
+	onContext(messages, ctx, firstTurn = null) {
+		return onContext(this, messages, ctx, firstTurn);
 	}
 
 	onSessionStop(ctx, evidence = null) {

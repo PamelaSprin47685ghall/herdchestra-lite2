@@ -67,10 +67,11 @@ ratchet.
   switching, and context projection read it, so no event re-reads the table or
   falls back to `{}`. A station without a complete table throws
   `MISSING_PORTS`. The registry still accepts a partial table for name-only
-  doubles; a station cannot start on one. The ratchet scans only the event
-  modules (`gates`, `models`) and matches `registry.ports(`,
-  `registry?.ports(`, and `registry?.ports?.(`; it self-tests the detector and
-  asserts the constructor's one legitimate read stays in `station.mjs`.
+  doubles; a station cannot start on one. The ratchet now walks every `.mjs`
+  under `src/station` and asserts exactly one port-table read: the
+  constructor's anchored `const portTable = registry?.ports?.();` in
+  `station.mjs`. Its detector self-test pins the pre-ratchet regex as blind to
+  `registry?.ports?.(`, so the guard cannot return to fake-green.
   `fork-wiring` keeps a lazy `states` WeakMap for a plain wiring object that
   never came from `createForkWiring` — a documented compatibility path for test
   doubles, not station state.
@@ -102,14 +103,19 @@ ratchet.
 
 ## Verification (this pass, 2026-11-22)
 
-- `bun test tests`: **1082 pass / 0 fail**, 96 files, 3933 expect calls. This is
-  the worktree with the six user prompt files plus this pass's regression.
+- `bun test tests`: **1083 pass / 0 fail**, 96 files, 3934 expect calls. This is
+  the worktree with the six user prompt files plus the guard rewrite above.
 - Clean committed-tree replay: `git archive 29c583e` → **1077 pass / 0 fail**,
   96 files, 3919 expect calls. The four-test difference from the earlier 1081
   worktree count is the user's modified `tests/prompts.test.mjs`; no
   enforcement test depends on uncommitted files.
 - Clean committed-tree replay after the receipt fix: `git archive e61bb71` →
   **1078 pass / 0 fail**, 96 files, 3922 expect calls.
+- Clean committed-tree replay after the ratchet repair: `git archive 4f7b1af`
+  → **1079 pass / 0 fail**, 96 files, 3923 expect calls.
+- This status record is committed one commit after the code it describes, so
+  the STATUS commit itself becomes a newer HEAD; `4f7b1af` is the verified
+  code SHA.
 - `bunx eslint .`: **0**.
 - `bun run smoke:relay`: **11/11**.
 - Station construction sites: 24, all through the production `buildPorts`
@@ -170,6 +176,8 @@ ratchet.
   constructor fail-fast, gates/models/context consume `station.portTable`.
 - `e61bb71` Re-admit a receipt that has no gate verdict; record the clean-tree
   receipt.
+- `4f7b1af` Scan all of `src/station` for port-table reads; pin the pre-ratchet
+  regex's blind spot so the guard cannot silently regress.
 
 ## Final state
 
@@ -181,10 +189,11 @@ ratchet.
 - The port-table fix is `130a5af`: the registry returns one frozen name table,
   `SessionStation` validates and captures `this.portTable`, and gates/model
   switching consume it; a missing table throws `MISSING_PORTS`. The guard-test
-  correction lands with this status file: the ratchet scans only event modules,
-  matches `registry.ports(`, `registry?.ports(`, and `registry?.ports?.(`, and
-  self-tests the detector; the constructor's one legitimate read is asserted
-  present in `station.mjs`.
+  correction is `4f7b1af`: the ratchet scans every `.mjs` under
+  `src/station`, matches `registry.ports(`, `registry?.ports(`, and
+  `registry?.ports?.(`, and asserts exactly one read — the constructor's
+  anchored capture in `station.mjs`. Its self-test pins the old regex as blind
+  to `registry?.ports?.(`.
 - The receipt-admission fix is `e61bb71`: a post-execution receipt with no
   gate verdict re-enters admission instead of returning a free result, and
   `chargeBranch` keeps re-admission idempotent through `state.charges`.

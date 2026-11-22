@@ -48,7 +48,7 @@ Give the child a non-empty `intent`.
 
 ## invalid-time
 
-`time` is a positive number of seconds.
+Do not pass `time`. The system derives the wall-clock budget from the session's mean LLM-request duration and the sum of the item's tool-budget points.
 
 ## invalid-argument
 
@@ -154,7 +154,31 @@ This scope owns no unreceived work. This call created no receipt and any `elder_
 
 ## tool-budget-exhausted
 
-Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}, budget {{budget}}). Continue with another tool, or return with `scope_return`.
+Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}, budget {{budget}}). Continue with another tool, return with `scope_return`, or hold out your hand with `scope_panhandle` when the work must finish.
+
+## panhandle-no-budget
+
+Only a running scope has an account to beg from, and this one has no fork record. Call `scope_fork` instead of asking a passer-by for an allowance.
+
+## panhandle-blocked
+
+This plan is blocked and has not started, so there is nothing to top up. Resubmit the fork with the budget it needs.
+
+## panhandle-not-running
+
+This scope is no longer running. Return its record; a handout now would buy nothing.
+
+## panhandle-no-reason
+
+State in `because` what the handout buys. An unexplained request is refused, and the record keeps the words you used.
+
+## panhandle-unavailable
+
+The handout did not land. The record is unchanged; retry once, then continue within the current budget.
+
+## panhandle-internal-error
+
+The panhandle failed before it could change the record. Treat the budget as unchanged.
 
 ## model-unknown
 

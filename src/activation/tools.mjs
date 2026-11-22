@@ -12,10 +12,13 @@ import {
 	joinParameters,
 	RETURN_DESCRIPTION,
 	returnParameters,
+	PANHANDLE_DESCRIPTION,
+	panhandleParameters,
 } from "../tools/descriptions.mjs";
 import {
 	amendTicket,
 	forkTicket,
+	panhandleTicket,
 	joinTicket,
 	pinTicket,
 	returnTicket,
@@ -81,6 +84,18 @@ export function wireTools(pi, registry) {
 		loadMode: "essential",
 		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 			pinTicket(registry.stationFor(ctx), toolCallId, params),
+	});
+	pi.registerTool({
+		name: "scope_panhandle",
+		label: "Panhandle for Budget",
+		description: PANHANDLE_DESCRIPTION,
+		parameters: panhandleParameters,
+		loadMode: "essential",
+		// The grant is synchronous and must survive a dead clock: this is the
+		// call that buys the next second. It is free by station decision, so a
+		// branch with an empty account can still ask.
+		execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
+			panhandleTicket(registry.stationFor(ctx), toolCallId, params),
 	});
 	// The extension writes this name after the host registered its own todo,
 	// so the host map keeps this override. `execute` delegates to the native

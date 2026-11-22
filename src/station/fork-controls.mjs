@@ -17,6 +17,7 @@ import {
 } from "../scope/forkjoin.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { createClockOn } from "../scope/clock.mjs";
+import { deriveTimeBudgetSeconds } from "../scope/turn-stats.mjs";
 import {
   decideJoinAdmission,
   decideJoinBinding,
@@ -85,7 +86,6 @@ const REFUSAL_KEY = {
   INVALID_SCOPE_ID: "invalid-scope-id",
   INVALID_INTENT: "invalid-intent",
   INVALID_BUDGET: "invalid-budget",
-  INVALID_TIME: "invalid-time",
   INVALID_ARGUMENT: "invalid-argument",
   INVALID_TARGETS: "invalid-targets",
 };
@@ -370,6 +370,8 @@ export function handleForkCall(station, call, options = {}) {
 
   const parentOwnerId = ownerIdOf(station);
   const clock = typeof station.clockPort === "function" ? station.clockPort() : createClockOn();
+  const totals = ledger.totals;
+  const timeOf = (budget) => deriveTimeBudgetSeconds({ totals, budget });
   const baseId = typeof call.id === "string" && call.id !== "" ? call.id : `fork-${Date.now()}`;
   const started = [];
   const deferred = [];
@@ -386,7 +388,7 @@ export function handleForkCall(station, call, options = {}) {
       depth,
       blocked: item.blocked === true,
       budget: item.budget,
-      time: item.time,
+      time: timeOf(item.budget),
       startedAt: Date.now(),
     }, { clock });
     if (!registered.ok) {
@@ -417,7 +419,7 @@ export function handleForkCall(station, call, options = {}) {
       childDepth: fork.childDepth,
       intent: item.intent,
       budget: item.budget,
-      time: item.time,
+      time: fork.timeBudgetMs == null ? null : fork.timeBudgetMs / 1000,
       targets: item.targets,
       model: item.model,
       modelOverride: item.modelOverride,

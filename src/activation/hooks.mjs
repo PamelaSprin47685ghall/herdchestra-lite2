@@ -48,7 +48,11 @@ export function wireHooks(pi, registry) {
 		return station;
 	};
 	wireProviderObservation(pi, registry);
-	pi.on("before_provider_request", (_event, ctx) => registry.stationFor(ctx).noteScopeRequest?.());
+	pi.on("before_provider_request", (_event, ctx) => {
+		const station = registry.stationFor(ctx);
+		station.noteScopeRequest?.();
+		station.beginRequestSample?.(Date.now());
+	});
 	pi.on("session_start", (_event, ctx) => {
 		bindDispatch(ctx);
 	});
@@ -75,9 +79,11 @@ export function wireHooks(pi, registry) {
 		// dedicated, safe listener even when assistant_message already drives
 		// the scope transitions.
 		try {
-			pi.on("message_end", (event, ctx) =>
-				registry.stationFor(ctx).onUsageMessage(event?.message, ctx),
-			);
+			pi.on("message_end", (event, ctx) => {
+				const message = event?.message;
+				if (message?.role !== "assistant") return;
+				registry.stationFor(ctx).onUsageMessage(message, ctx);
+			});
 		} catch (error) {
 			// Usage at message_end is optional only for providers that attach
 			// usage earlier. When this binding is refused, that late usage is

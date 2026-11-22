@@ -170,9 +170,6 @@ export function validateFork(args) {
 	}
 	const budget = normalizeBudget(args.budget);
 	if (!validBudget(budget)) return { ok: false, code: "INVALID_BUDGET" };
-	if (typeof args?.time !== "number" || !Number.isFinite(args.time) || args.time <= 0) {
-		return { ok: false, code: "INVALID_TIME" };
-	}
 	if (!validTargets(args?.targets)) {
 		return { ok: false, code: "INVALID_TARGETS" };
 	}
@@ -190,7 +187,6 @@ export function validateFork(args) {
 		scopeId: args.scopeId,
 		intent,
 		budget,
-		time: args.time,
 		targets: normalizeTargets(args.targets),
 		model: typeof args.model === "string" ? args.model.trim() : null,
 		blocked: args.blocked === true,

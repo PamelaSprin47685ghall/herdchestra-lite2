@@ -15,6 +15,7 @@ import { successorStartNudge } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { controlsIn, hostBoundaryKey } from "./messages.mjs";
 import { decideToolCall } from "./domain/tool-call.mjs";
+import { PANHANDLE_TOOL } from "./domain/panhandle.mjs";
 import { dispatchOf, processedOf } from "./domain/tool-call-ledger.mjs";
 import { handoffDemandVisible, insideScopeNudge } from "./texts.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
@@ -129,7 +130,9 @@ function onToolCall(station, event, ctx) {
 				: null);
 		const beatTools = toolCalls(carrying).map((call) => ({
 			name: call.name,
-			free: isFreeCall(call.name, call.arguments),
+			// A panhandle funds the beat, so it takes no share of the beat. Leaving
+			// it budgeted would shrink the share of the work it just paid for.
+			free: call.name === PANHANDLE_TOOL || isFreeCall(call.name, call.arguments),
 		}));
 		const handled =
 			typeof processedOf(station)?.hasHandled === "function"

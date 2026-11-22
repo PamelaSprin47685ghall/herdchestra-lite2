@@ -2,8 +2,11 @@
 //
 // The registry still owns the child-identity table: it is session state, not a
 // request ledger. This module owns only the data shape and the ledger
-// precedence. It never imports the Station or a host module, never mutates its
-// inputs, and never reads the live display holder's inner state.
+// precedence. It never imports the Station or a host module, and never reads
+// the live display holder's inner state. It may carry the two turn totals onto
+// the chosen ledger when that ledger has no samples yet.
+
+import { normalizeTotals } from "../scope/turn-stats.mjs";
 
 /**
  * Build the identity a child station reads back from the registry.
@@ -54,6 +57,20 @@ export function resolveForkLedger({ identity = null, indexed = null, restored = 
 	if (identity?.ledger && typeof identity.ledger === "object") {
 		return identity.ledger;
 	}
-	if (indexed && (indexed.order?.length ?? 0) > 0) return indexed;
-	return restored ?? indexed ?? null;
+	const chosen =
+		indexed && (indexed.order?.length ?? 0) > 0
+			? indexed
+			: (restored ?? indexed ?? null);
+	// A fresh index has no samples, but a restored tree with no open forks may
+	// still carry the session's totals. Fill empty from the other candidate;
+	// two sampled ledgers are never summed or overwritten.
+	const other = chosen === indexed ? restored : indexed;
+	if (chosen && other && chosen !== other) {
+		const chosenTotals = normalizeTotals(chosen.totals);
+		const otherTotals = normalizeTotals(other.totals);
+		const chosenHasSamples = chosenTotals.turns > 0 || chosenTotals.turnMs > 0;
+		const otherHasSamples = otherTotals.turns > 0 || otherTotals.turnMs > 0;
+		if (!chosenHasSamples && otherHasSamples) chosen.totals = otherTotals;
+	}
+	return chosen;
 }

@@ -12,11 +12,11 @@ Name the goal the child will make true, the surface it owns, and what a successo
 
 ## fork.budget
 
-Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. Free tools need no entry; an empty budget is valid when only free tools are used. Sibling fork items each have their own budget; a scope nested inside a flow draws from that flow's remaining balance.
+Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. Free tools need no entry; an empty budget is valid when only free tools are used. A branch that runs out may hold out its hand with `scope_panhandle`, at most 8 per tool in one call. Sibling fork items each have their own budget; a scope nested inside a flow draws from that flow's remaining balance.
 
 ## fork.time
 
-Wall-clock budget in seconds from launch: a positive number. Ordinary tools get at most the remaining time plus one second; waiting in `scope_join` or `scope_return` pauses that scope's clock. When the deadline passes, each later tool gets one second, and a tool that overruns is killed and its result is gone. Estimate from measured throughput, count the verification you will still run, and spend near the estimate rather than padding it.
+The system derives the wall-clock budget. Do not pass `time`. One turn is one LLM request. The budget is the session's mean request duration times the sum of this item's tool-budget points, at least one second. With no measured requests yet, the mean is one minute. Ordinary tools get at most the remaining time plus one second; waiting in `scope_join` or `scope_return` pauses that scope's clock. When the deadline passes, each later tool gets one second, and a tool that overruns is killed and its result is gone. `scope_panhandle` buys more seconds, at most 300 per call.
 
 ## fork.targets
 

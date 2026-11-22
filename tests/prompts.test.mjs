@@ -56,7 +56,7 @@ describe("tool contracts map to their documents", () => {
 		expect(scopeTools.FORK_DESCRIPTION).toBe(doc["fork.tool"]);
 		expect(scopeTools.FORK_INTENT_DESCRIPTION).toBe(doc["fork.intent"]);
 		expect(scopeTools.FORK_BUDGET_DESCRIPTION).toBe(doc["fork.budget"]);
-		expect(scopeTools.FORK_TIME_DESCRIPTION).toBe(doc["fork.time"]);
+		expect(scopeTools.FORK_TIME_DESCRIPTION).toBeUndefined();
 		expect(scopeTools.JOIN_DESCRIPTION).toBe(doc["join.tool"]);
 		expect(scopeTools.RETURN_DESCRIPTION).toBe(doc["return.tool"]);
 		// The retired working-level container has no description and no
@@ -101,12 +101,11 @@ describe("tool contracts map to their documents", () => {
 			"intent",
 			"blocked",
 			"budget",
-			"time",
 			"targets",
 		]);
 		expect(item.properties.intent.description).toBe(doc["fork.intent"]);
 		expect(item.properties.budget.description).toBe(doc["fork.budget"]);
-		expect(item.properties.time.description).toBe(doc["fork.time"]);
+		expect(item.properties.time).toBeUndefined();
 		expect(item.properties.targets.description).toBe(doc["fork.targets"]);
 		expect(item.properties).not.toHaveProperty("stage");
 		expect(item.properties).not.toHaveProperty("fission");
@@ -252,10 +251,10 @@ describe("injectSystemPrompt", () => {
 });
 
 describe("fork item schema", () => {
-	test("declares time as required and takes its text from the prompt document", () => {
-		const time = scopeTools.forkParameters.properties.forks.items.properties.time;
-		expect(scopeTools.forkParameters.properties.forks.items.required).toContain("time");
-		expect(time.type).toBe("number");
-		expect(time.description).toContain("Wall-clock budget");
+	test("does not ask the model for a time budget", () => {
+		const item = scopeTools.forkParameters.properties.forks.items;
+		expect(item.required).not.toContain("time");
+		expect(item.properties.time).toBeUndefined();
+		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
 	});
 });

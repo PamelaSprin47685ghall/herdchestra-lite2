@@ -55,7 +55,10 @@ function bindForkPorts(station, { registry, ledger, identity }) {
 		});
 		return;
 	}
-	if (station.state && ledger) station.state.brackets = ledger;
+	if (ledger) {
+		station.brackets = ledger;
+		if (station.state) station.state.brackets = ledger;
+	}
 	station.forkLedgerPort = () => ledger;
 	station.forkWaitPort = () => ({ registry, ledger });
 	station.forkIdentityPort = () => identity;

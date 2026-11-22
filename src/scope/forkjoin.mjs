@@ -7,6 +7,7 @@
 
 import { decideAbandon } from "./abandon.mjs";
 import { deadlineInfo } from "./clock.mjs";
+import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
 
 const RUNNING = "running";
 const READY = "ready";
@@ -53,6 +54,9 @@ export function createBracketLedger() {
     order: [],
     queues: {},
     levels: {},
+    // Session-wide request timing. Shared by reference across scopes, so k
+    // concurrent requests add k durations and k turns. Missing on old snapshots.
+    totals: emptyTotals(),
   };
 }
 
@@ -548,6 +552,13 @@ export function validLedger(value) {
     if (!seen.has(key)) return false;
   }
   if (value.levels !== undefined && !isPlainObject(value.levels)) return false;
+  if (value.totals !== undefined && value.totals !== null) {
+    if (!isPlainObject(value.totals)) return false;
+    const turnMs = value.totals.turnMs;
+    const turns = value.totals.turns;
+    if (turnMs !== undefined && (!Number.isFinite(turnMs) || turnMs < 0)) return false;
+    if (turns !== undefined && (!Number.isFinite(turns) || turns < 0)) return false;
+  }
   return true;
 }
 
@@ -570,6 +581,7 @@ export function restoreLedgerChecked(value) {
   out.seq = value.seq;
   out.closedSeq = value.closedSeq;
   out.receiveSeq = value.receiveSeq;
+  out.totals = normalizeTotals(value.totals);
   for (const forkId of value.order) {
     put(out.forks, forkId, copyData(value.forks[forkId]));
     out.order.push(forkId);
@@ -765,13 +777,18 @@ export function forkBudgetText(record, now = Date.now(), clock = null) {
     if (budget === undefined) continue;
     entries.push(`${tool} ${format2(record.remaining[tool])}/${format2(budget)}`);
   }
-  const tools = entries.join(", ");
   const info = clock && typeof clock.info === "function"
     ? clock.info(record, now)
     : deadlineInfo(record, now);
-  if (!info.bounded) return tools;
-  const timed = info.overtime
-    ? "time OVERTIME (1s per tool)"
-    : `time ${formatClock(info.leftMs)}/${formatClock(record.timeBudgetMs)}`;
-  return tools === "" ? timed : `${tools}, ${timed}`;
+  const parts = [entries.join(", ")];
+  if (info.bounded) {
+    parts.push(
+      info.overtime
+        ? "time OVERTIME (1s per tool)"
+        : `time ${formatClock(info.leftMs)}/${formatClock(record.timeBudgetMs)}`,
+    );
+  }
+  const panhandled = Array.isArray(record.panhandles) ? record.panhandles.length : 0;
+  if (panhandled > 0) parts.push(`panhandled ${panhandled}x`);
+  return parts.filter((part) => part !== "").join(", ");
 }

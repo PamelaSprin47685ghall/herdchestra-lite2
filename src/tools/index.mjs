@@ -16,8 +16,13 @@ export {
 	FORK_DESCRIPTION,
 	JOIN_DESCRIPTION,
 	RETURN_DESCRIPTION,
+	PANHANDLE_DESCRIPTION,
+	PANHANDLE_TOOLS_DESCRIPTION,
+	PANHANDLE_SECONDS_DESCRIPTION,
+	PANHANDLE_BECAUSE_DESCRIPTION,
 	amendParameters,
 	pinParameters,
+	panhandleParameters,
 } from "./descriptions.mjs";
 export {
 	sendSteerTicket,
@@ -27,6 +32,7 @@ export {
 	returnTicket,
 	amendTicket,
 	pinTicket,
+	panhandleTicket,
 } from "./tickets.mjs";
 export {
 	TODO_DESCRIPTION,

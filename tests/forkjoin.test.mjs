@@ -397,7 +397,8 @@ describe("owner queries", () => {
     expect(validateFork(base).ok).toBe(true);
     expect(validateFork({ ...base, intent: "  " }).code).toBe("INVALID_INTENT");
     expect(validateFork({ ...base, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
-    expect(validateFork({ ...base, time: 0 }).code).toBe("INVALID_TIME");
+    expect(validateFork({ ...base, time: 0 }).ok).toBe(true);
+    expect(validateFork({ ...base, time: 0 }).time).toBeUndefined();
     for (const targets of [undefined, null, [], ["  "], "src/parser.mjs", [42]]) {
       expect(validateFork({ ...base, targets }).code).toBe("INVALID_TARGETS");
     }

@@ -3,11 +3,15 @@
  * this module only wires it into JSON schemas.
  */
 
-import { loadDoc } from "../prompts/index.mjs";
+import { loadDoc, render } from "../prompts/index.mjs";
 import {
 	ELDER_REPORT_PATTERN,
 	MIN_ELDER_REPORT_CHARS,
 } from "../scope/elder-report.mjs";
+import {
+	PANHANDLE_MAX_PER_TOOL,
+	PANHANDLE_MAX_SECONDS,
+} from "../scope/panhandle.mjs";
 
 const notes = loadDoc("tools/notes");
 
@@ -28,7 +32,6 @@ const forkJoin = loadDoc("tools/fork-join");
 export const FORK_DESCRIPTION = forkJoin["fork.tool"];
 export const FORK_INTENT_DESCRIPTION = forkJoin["fork.intent"];
 export const FORK_BUDGET_DESCRIPTION = forkJoin["fork.budget"];
-export const FORK_TIME_DESCRIPTION = forkJoin["fork.time"];
 export const FORK_TARGETS_DESCRIPTION = forkJoin["fork.targets"];
 export const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
 export const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
@@ -39,10 +42,20 @@ export const RETURN_DESCRIPTION = forkJoin["return.tool"];
 
 import { SCOPE_ID_PATTERN, MAX_SCOPE_ID_LENGTH } from "../scope/scope-id.mjs";
 
+const panhandle = loadDoc("tools/panhandle");
+
+export const PANHANDLE_DESCRIPTION = render(panhandle["panhandle.tool"], {
+	maxPoints: PANHANDLE_MAX_PER_TOOL,
+	maxSeconds: PANHANDLE_MAX_SECONDS,
+});
+export const PANHANDLE_TOOLS_DESCRIPTION = panhandle["panhandle.tools"];
+export const PANHANDLE_SECONDS_DESCRIPTION = panhandle["panhandle.seconds"];
+export const PANHANDLE_BECAUSE_DESCRIPTION = panhandle["panhandle.because"];
+
 const forkItem = {
 	type: "object",
 	additionalProperties: false,
-	required: ["scopeId", "intent", "blocked", "budget", "time", "targets"],
+	required: ["scopeId", "intent", "blocked", "budget", "targets"],
 	properties: {
 		scopeId: { type: "string", pattern: SCOPE_ID_PATTERN, maxLength: MAX_SCOPE_ID_LENGTH, description: forkJoin["fork.scope-id"] },
 		intent: { type: "string", minLength: 1, description: FORK_INTENT_DESCRIPTION },
@@ -52,7 +65,6 @@ const forkItem = {
 			additionalProperties: { type: "integer", minimum: 0 },
 			description: FORK_BUDGET_DESCRIPTION,
 		},
-		time: { type: "number", exclusiveMinimum: 0, description: FORK_TIME_DESCRIPTION },
 		targets: {
 			type: "array",
 			minItems: 1,
@@ -148,5 +160,32 @@ export const pinParameters = {
 		induction: pinField(PIN_INDUCTION_DESCRIPTION),
 		finding: pinField(PIN_FINDING_DESCRIPTION),
 		conclusion: pinField(PIN_CONCLUSION_DESCRIPTION),
+	},
+};
+
+// The reasons and caps mirror the runtime: the schema refuses an empty or
+// oversized request before the call runs, and the domain refuses it again.
+export const panhandleParameters = {
+	type: "object",
+	additionalProperties: false,
+	required: ["because"],
+	anyOf: [{ required: ["tools"] }, { required: ["seconds"] }],
+	properties: {
+		tools: {
+			type: "object",
+			additionalProperties: {
+				type: "integer",
+				minimum: 1,
+				maximum: PANHANDLE_MAX_PER_TOOL,
+			},
+			description: PANHANDLE_TOOLS_DESCRIPTION,
+		},
+		seconds: {
+			type: "integer",
+			minimum: 1,
+			maximum: PANHANDLE_MAX_SECONDS,
+			description: PANHANDLE_SECONDS_DESCRIPTION,
+		},
+		because: pinField(PANHANDLE_BECAUSE_DESCRIPTION),
 	},
 };

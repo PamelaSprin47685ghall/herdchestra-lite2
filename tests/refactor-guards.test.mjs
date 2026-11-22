@@ -96,9 +96,10 @@ describe("retired mechanisms stay retired", () => {
 		}
 	});
 
-	test("a fork registers the wall clock its item declares", () => {
+	test("a fork derives its wall clock instead of reading the item", () => {
 		const controls = source("../src/station/fork-controls.mjs");
-		expect(controls).toContain("time: item.time");
+		expect(controls).toContain("deriveTimeBudgetSeconds");
+		expect(controls).not.toContain("time: item.time");
 		expect(controls).toContain("startedAt: Date.now()");
 	});
 

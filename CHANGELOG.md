@@ -6,6 +6,37 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added — `scope_panhandle` buys a branch more budget at once
+
+- A running branch that runs out can call `scope_panhandle` to add tool points
+  and wall-clock seconds to its own fork record. The grant is synchronous and
+  needs no approval; it is free, so it still runs when every paid tool is
+  refused and the clock is in overtime. Besides `scope_join` and
+  `scope_return`, it is the only call exempt from the one-second overtime limit.
+- One call grants at most 8 points per tool and 300 seconds. There is no
+  lifetime cap: every grant is appended to `record.panhandles` with its
+  timestamp, points, seconds and the caller's `because`, and the branch budget
+  line shows `panhandled Nx`. The parent sees the tally when the child returns.
+- A blocked scope is refused (`PANHANDLE_BLOCKED`): its record is rebuilt on
+  resubmit, so a grant would be lost. A scope without a clock can buy tools but
+  not seconds (`PANHANDLE_CLOCK_OFF`). The root has no record to top up.
+- `src/scope/panhandle.mjs` owns the arithmetic;
+  `src/station/domain/panhandle.mjs` owns the decision;
+  `src/station/panhandle-controls.mjs` lands it.
+  `tests/fork-panhandle-arithmetic.test.mjs`, `tests/fork-panhandle.test.mjs`.
+
+### Changed — fork wall clock is derived, not declared
+
+- `scope_fork` no longer accepts `time`. One turn is one LLM request. The
+  session stores two sufficient statistics on the shared bracket ledger,
+  `totals.turnMs` and `totals.turns`. A fork's wall clock is that mean times
+  the sum of the item's tool-budget points, at least one second. With no
+  measured requests the mean is one minute. Concurrent scopes add into the
+  same totals, so k concurrent requests count as k durations and k turns.
+- An in-flight request clock is not persisted. A double delivery of the same
+  assistant message cannot count twice. `registerFork` still accepts an
+  explicit `time` for internal callers and tests.
+
 ### Changed — a saved pin points at the todo ledger
 
 - The successful `pin` receipt is no longer a bare `OK`: it tells the caller to

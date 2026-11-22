@@ -39,6 +39,7 @@ const FINGERPRINTS = [
   { file: "src/activation/tools.mjs", needle: 'name: "scope_fork"', min: 1 },
   { file: "src/activation/tools.mjs", needle: 'name: "scope_join"', min: 1 },
   { file: "src/activation/tools.mjs", needle: 'name: "scope_return"', min: 1 },
+  { file: "src/activation/tools.mjs", needle: 'name: "scope_panhandle"', min: 1 },
   { file: "src/scope/receipts.mjs", needle: "foldableReceipts", min: 1 },
 ];
 const checkOnly = process.argv.includes("--check");

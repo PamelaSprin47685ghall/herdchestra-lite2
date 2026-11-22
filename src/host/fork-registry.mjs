@@ -5,7 +5,7 @@
 // module is the holder the wiring injects as the four ports. It holds no host
 // objects: a ledger is plain data, and every wait is a plain Promise.
 
-import { forkOf, markReady, takeReady } from "../scope/index.mjs";
+import { emptyTotals, forkOf, markReady, takeReady } from "../scope/index.mjs";
 import { normalizeTargets, validTargets } from "../scope/targets.mjs";
 
 function failure(code, reason) {
@@ -222,6 +222,7 @@ function createLedger() {
     order: [],
     queues: {},
     levels: {},
+    totals: emptyTotals(),
   };
 }
 

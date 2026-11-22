@@ -19,6 +19,11 @@ export {
   isResolutionWrite,
 } from "./budget.mjs";
 export {
+  applyPanhandle,
+  PANHANDLE_MAX_PER_TOOL,
+  PANHANDLE_MAX_SECONDS,
+} from "./panhandle.mjs";
+export {
   createBracketLedger,
   registerFork,
   forkOf,
@@ -70,3 +75,15 @@ export {
   MAX_DELTA_BYTES,
 } from "./persistence.mjs";
 export { createUsageLedger } from "./usage-ledger.mjs";
+export {
+  beginRequest,
+  finishRequest,
+  abandonRequest,
+  createTurnClock,
+  deriveTimeBudgetSeconds,
+  sumBudgetPoints,
+  averageTurnMs,
+  normalizeTotals,
+  emptyTotals,
+  DEFAULT_TURN_MS,
+} from "./turn-stats.mjs";

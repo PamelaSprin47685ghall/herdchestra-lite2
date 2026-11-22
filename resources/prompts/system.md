@@ -21,6 +21,7 @@ Root is outside all scopes. It plans, forks, joins, and answers; ordinary tools 
 ### Run scopes
 
 - Root can use the free control tools (`scope_fork`, `scope_join`, `amend`, `pin`, `todo`, `ask`, `wait`), read `skill://` paths, and resolve staged `ast_edit` previews.
+- A running branch may hold out its hand with `scope_panhandle` for more tool points and wall-clock seconds. It is free, it lands at once, and it is the only call that survives a budget refusal.
 - Fork independent work as soon as its inputs exist. Give every child a self-contained intent, owned files, and the evidence the next worker needs to continue. Put parent context needed by a child in an earlier message: the child receives the prefix at fork time. When batching with other calls, place `scope_join` and `scope_return` last.
 
 ### Language

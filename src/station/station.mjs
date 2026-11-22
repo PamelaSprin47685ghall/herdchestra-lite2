@@ -27,7 +27,12 @@
 import {
 	createBracketLedger,
 	createClockOn,
+	abandonRequest,
+	beginRequest,
+	createTurnClock,
 	createUsageLedger,
+	finishRequest,
+	normalizeTotals,
 	planStateEntry,
 	serializeState,
 	unreceivedChildren,
@@ -55,9 +60,11 @@ import {
 	executePin,
 	executeAmend,
 	executeFork,
+	executePanhandle,
 	executeJoin,
 	executeReturn,
 } from "./execute.mjs";
+import { PANHANDLE_TOOL } from "./domain/panhandle.mjs";
 import {
 	checkJoinBinding,
 	commitJoin,
@@ -184,11 +191,23 @@ export class SessionStation {
 		const restored = this.state.brackets ?? null;
 		const indexedLive = (indexed?.order?.length ?? 0) > 0;
 		const restoredLive = (restored?.order?.length ?? 0) > 0;
-		this.brackets = indexedLive
+		const chosen = indexedLive
 			? indexed
 			: restoredLive
 				? restored
 				: (indexed ?? restored ?? createBracketLedger());
+		// The tree choice stays order-based, but the turn samples must survive a
+		// reload even when the restored tree has no open forks. Fill an empty
+		// chosen ledger from the other candidate; never sum two live samples.
+		const other = chosen === indexed ? restored : indexed;
+		if (chosen && other && chosen !== other) {
+			const chosenTotals = normalizeTotals(chosen.totals);
+			const otherTotals = normalizeTotals(other.totals);
+			const chosenHasSamples = chosenTotals.turns > 0 || chosenTotals.turnMs > 0;
+			const otherHasSamples = otherTotals.turns > 0 || otherTotals.turnMs > 0;
+			if (!chosenHasSamples && otherHasSamples) chosen.totals = otherTotals;
+		}
+		this.brackets = chosen;
 		if (forkWiring && key !== null && !indexedLive) {
 			this.host?.adoptLedger?.(forkWiring.registry, key, this.brackets);
 		}
@@ -198,6 +217,13 @@ export class SessionStation {
 		this.forkReports = new Map();
 		this.selfForkId = null;
 		this.parentOwnerId = null;
+		// Request windows are process-local. A reload keeps the two totals on the
+		// ledger and starts the next request from an empty clock.
+		this.turnClock = createTurnClock();
+		// assistant_message and message_end can both deliver the same object.
+		// Identity, not startedAt, is what stops a late copy from closing the
+		// next request.
+		this.countedRequests = new WeakSet();
 		this.usage = createUsageLedger({
 			state: this.state,
 			contextMessages: () => this.contextMessages(),
@@ -229,7 +255,10 @@ export class SessionStation {
 		childOutcomePort = null,
 		setChildOutcome = null,
 	} = {}) {
-		if (this.state && ledger) this.state.brackets = ledger;
+		if (ledger) {
+			this.brackets = ledger;
+			if (this.state) this.state.brackets = ledger;
+		}
 		this.forkLedgerPort = () => ledger;
 		this.forkWaitPort = () => ({ registry, ledger });
 		this.forkIdentityPort = () => identity;
@@ -261,7 +290,32 @@ export class SessionStation {
 	// property layer, because a getter per field hides nothing.
 
 	onUsageMessage(message, ctx) {
+		this.finishRequestSample(Date.now(), message);
 		this.usage.onMessage(message, ctx);
+	}
+
+	/**
+	 * One LLM request completed. An open window is the request; usage is not
+	 * required. A non-assistant message, or a second delivery of an assistant
+	 * message already counted, leaves the window alone.
+	 */
+	finishRequestSample(now = Date.now(), message = null) {
+		if (message?.role !== "assistant") return null;
+		if (this.countedRequests?.has(message)) return null;
+		const totals = this.brackets?.totals;
+		if (!totals) return null;
+		const delta = finishRequest(this.turnClock, totals, now);
+		if (delta == null) return null;
+		this.countedRequests?.add(message);
+		return delta;
+	}
+
+	beginRequestSample(now = Date.now()) {
+		return beginRequest(this.turnClock, now);
+	}
+
+	abandonRequestSample() {
+		return abandonRequest(this.turnClock);
 	}
 
 	// -- Persistence ---------------------------------------------------------
@@ -446,6 +500,10 @@ export class SessionStation {
 		// return may block for as long as the counterpart needs, so it never
 		// carries the branch clock's limit.
 		if (name === "scope_join" || name === "scope_return") return false;
+		// A panhandle is the call that buys the next second. Cutting it to one
+		// second because the clock is already dead would make the rescue fail
+		// in exactly the state it exists for.
+		if (name === PANHANDLE_TOOL) return false;
 		return this.toolTimeLimit() !== null;
 	}
 
@@ -490,6 +548,7 @@ export class SessionStation {
 		);
 		if (verdict) return verdict;
 		if (name === "scope_join" || name === "scope_return") return undefined;
+		if (name === PANHANDLE_TOOL) return undefined;
 		const limitMs = this.toolTimeLimit();
 		return limitMs === null ? undefined : { limitMs };
 	}
@@ -680,6 +739,11 @@ export class SessionStation {
 
 	executePin(toolCallId, params) {
 		return executePin(this, toolCallId, params);
+	}
+
+	/** Land one panhandle grant; persisted here, not in the ticket. */
+	executePanhandle(toolCallId, params) {
+		return executePanhandle(this, toolCallId, params);
 	}
 
 	// The three session ports are built once by the composition root and
@@ -932,6 +996,7 @@ export class SessionStation {
 	}
 
 	onSessionStop(ctx, evidence = null) {
+		this.abandonRequestSample();
 		return onSessionStop(this, ctx, evidence);
 	}
 
@@ -944,6 +1009,10 @@ export class SessionStation {
 	}
 
 	onBeforeAgentStart(event, ctx) {
+		// A failed request leaves its window open. The next agent turn starts
+		// here, before before_provider_request, so dropping it cannot erase a
+		// request that already finished (startedAt is already null).
+		this.abandonRequestSample();
 		return onBeforeAgentStart(this, event, ctx);
 	}
 }

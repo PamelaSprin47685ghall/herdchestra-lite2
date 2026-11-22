@@ -14,7 +14,13 @@ import {
 const CHARGE_SCALE = 100;
 
 export function isFreeTool(name) {
-  return CONTROL_TOOLS.has(name) || name === "todo" || name === "ask" || name === "wait";
+  return (
+    CONTROL_TOOLS.has(name) ||
+    name === "scope_panhandle" ||
+    name === "todo" ||
+    name === "ask" ||
+    name === "wait"
+  );
 }
 
 // Reading a skill is instruction reading, not project work, so it is free at

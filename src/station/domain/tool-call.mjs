@@ -13,6 +13,7 @@
 import { handoffToolBlockedReason } from "../../relay/index.mjs";
 import { loadDoc } from "../../prompts/index.mjs";
 import { CONTROL_TOOLS, parseArgs } from "../messages.mjs";
+import { PANHANDLE_TOOL } from "./panhandle.mjs";
 
 const E = loadDoc("errors");
 // `host/policy.mjs` owns the classifier; this module must not import host.
@@ -119,6 +120,13 @@ export function decideToolCall({
 			controls: { process: true, directAmend },
 			persist: false,
 		});
+	}
+
+	// The branch's own rescue never enters the charge path: it must run when
+	// the balance is zero, and it must not take a share of the beat it shares
+	// with the work it just funded. The execute core persists the grant.
+	if (toolName === PANHANDLE_TOOL) {
+		return allow({ persist: false });
 	}
 
 	if (toolName === "ask") {

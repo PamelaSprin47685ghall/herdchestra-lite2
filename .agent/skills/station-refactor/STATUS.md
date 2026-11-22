@@ -61,6 +61,15 @@ ratchet.
   `SessionStation` stores `this.ports` once; it imports no feature factory,
   reads no implementation name, and has no per-call fallback. All test
   construction goes through `tests/helpers/station-ports.mjs`.
+- **One port table.** `createStationRegistry` freezes the resolved name table
+  once and `ports()` returns that reference. `SessionStation` validates every
+  port name in its constructor and captures `this.portTable`; gates, model
+  switching, and context projection read it, so no event re-reads the table or
+  falls back to `{}`. A station without a complete table throws
+  `MISSING_PORTS`. The registry still accepts a partial table for name-only
+  doubles; a station cannot start on one. `fork-wiring` keeps a lazy `states`
+  WeakMap for a plain wiring object that never came from `createForkWiring` —
+  a documented compatibility path for test doubles, not station state.
 - **Mechanical wiring.** Ledger precedence is the pure
   `src/station/domain/fork-ledger.mjs`; the owner/display choice is the pure
   `src/host/domain/binding.mjs`. `createForkWiring()` owns the per-station
@@ -83,7 +92,7 @@ ratchet.
 
 ## Verification (this pass, 2026-11-22)
 
-- `bun test tests`: **1078 pass / 0 fail**, 96 files, 3917 expect calls.
+- `bun test tests`: **1081 pass / 0 fail**, 96 files, 3926 expect calls.
 - `bunx eslint .`: **0**.
 - `bun run smoke:relay`: **11/11**.
 - Station construction sites: 24, all through the production `buildPorts`
@@ -91,13 +100,14 @@ ratchet.
 
 ## Open items
 
-- `resources/prompts/{system,errors,tools/fork-join,tools/panhandle}.md` plus
-  `tests/model-facing-copy.test.mjs`, `tests/prompts.test.mjs`, and the matching
-  `CHANGELOG.md` hunk are a coherent prompt-copy change that no enforcement
-  slice authored. They stay uncommitted and unowned until their author claims
-  them; the code above does not depend on them.
+- `resources/prompts/errors.md`, `resources/prompts/system.md`,
+  `resources/prompts/tools/fork-join.md`, `resources/prompts/tools/panhandle.md`,
+  `tests/prompts.test.mjs`, and the matching `CHANGELOG.md` hunk are a coherent
+  free-fork prompt-copy change that no enforcement slice authored. They stay
+  uncommitted and unowned until their author claims them; the code above does
+  not depend on them.
 
-## Verification (2026-11-22, committed HEAD `35bfc39`)
+## Historical verification (2026-11-22, committed HEAD `35bfc39`)
 
 - `bun test tests`: **988 pass / 0 fail**, 87 files, 3628 expect calls.
 - `bunx eslint .`: **0**.
@@ -128,6 +138,10 @@ ratchet.
   `fork-registry`, and transcript replay), so they land together; committing
   only the refactor lines produced a syntax-broken `fork-controls.mjs` and a red
   HEAD.
+- `6b19821` Enforce the ticket station method end to end (dispatch tails,
+  single composition root, mechanical wiring, relay single truth).
+- `130a5af` Read the station port table once: frozen registry reference,
+  constructor fail-fast, gates/models/context consume `station.portTable`.
 
 ## Final state
 
@@ -136,4 +150,9 @@ ratchet.
 - The combined `attachForkPorts` exists only in `tests/helpers/fork-attach.mjs`.
 - Ablation tests cover folding, clock, and relay; the dead `scope` port and the
   test-only feature modules are gone.
-- The working tree is clean and HEAD `35bfc39` is the verified full refactor.
+- The verified code state is `130a5af` (this status file is a docs-only
+  follow-up commit). The working tree carries six uncommitted free-fork prompt
+  files owned by the user (`CHANGELOG.md`,
+  `resources/prompts/errors.md`, `resources/prompts/system.md`,
+  `resources/prompts/tools/fork-join.md`, `resources/prompts/tools/panhandle.md`,
+  `tests/prompts.test.mjs`); no enforcement code depends on them.

@@ -7,7 +7,7 @@
 // fire-and-forget ticket: a rejection or a synchronous throw must reach the
 // diagnostics ring instead of becoming an unhandled promise rejection.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { beforeEach, expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
@@ -230,30 +230,52 @@ test("a station without a complete port table refuses to start", () => {
 // sits between the optional chain and the parenthesis. A detector that misses
 // `registry?.ports?.(` cannot guard the per-event read it claims to forbid.
 const PORT_TABLE_READ = /registry\s*\??\.\s*ports\s*(?:\?\.)?\s*\(/;
+// The ratchet's previous spelling. It accepts `registry.ports(` and
+// `registry?.ports(` but not `registry?.ports?.(`, so it was fake-green.
+const PRE_RATCHET_READ = /registry\?*\.ports\?*\(/;
 
-test("station event code consumes station.portTable, never registry.ports()", () => {
+function portTableReads(source) {
+	return [...source.matchAll(new RegExp(PORT_TABLE_READ.source, "g"))];
+}
+
+test("the port-table detector catches the optional call the old one missed", () => {
 	for (const sample of [
 		"registry.ports(",
 		"registry?.ports(",
 		"registry?.ports?.(",
 	]) {
-		expect(sample).toMatch(PORT_TABLE_READ);
+		expect(portTableReads(sample)).toHaveLength(1);
 	}
-	expect("const table = station.portTable;").not.toMatch(PORT_TABLE_READ);
+	expect(portTableReads("const table = station.portTable;")).toHaveLength(0);
 
-	for (const file of ["gates.mjs", "models.mjs"]) {
-		const source = readFileSync(
-			new URL(`../src/station/${file}`, import.meta.url),
-			"utf8",
-		);
-		expect(source).not.toMatch(PORT_TABLE_READ);
+	const perEventRead = "const ports = registry?.ports?.();";
+	expect(portTableReads(perEventRead)).toHaveLength(1);
+	// The regression this test exists to catch: the pre-ratchet detector was
+	// blind to exactly the spelling a per-event read uses.
+	expect(perEventRead).not.toMatch(PRE_RATCHET_READ);
+});
+
+test("src/station reads the port table exactly once, in the constructor", () => {
+	const root = new URL("../src/station/", import.meta.url);
+	const files = readdirSync(root, { recursive: true })
+		.map(String)
+		.filter((file) => file.endsWith(".mjs"))
+		.sort();
+	const reads = [];
+	for (const file of files) {
+		const source = readFileSync(new URL(file, root), "utf8");
+		for (const match of portTableReads(source)) {
+			reads.push({ file, match: match[0] });
+		}
 	}
+	// One read, one file, one spelling. A second read anywhere in src/station
+	// would be an event re-reading the table or a new composition fallback.
+	expect(reads).toEqual([
+		{ file: "station.mjs", match: "registry?.ports?.(" },
+	]);
 
-	// The constructor is the one legitimate read: it validates and captures the
-	// table once at startup. Keep it in station.mjs and out of the event scan.
-	const stationSource = readFileSync(
-		new URL("../src/station/station.mjs", import.meta.url),
-		"utf8",
-	);
-	expect(stationSource).toMatch(PORT_TABLE_READ);
+	// Anchor the allowed read to the constructor that validates and freezes it,
+	// so it cannot be displaced by a same-count read elsewhere in the file.
+	const stationSource = readFileSync(new URL("station.mjs", root), "utf8");
+	expect(stationSource).toContain("const portTable = registry?.ports?.();");
 });

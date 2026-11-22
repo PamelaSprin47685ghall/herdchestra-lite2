@@ -1,6 +1,6 @@
 # Herdchestra Lite 2
 
-Herdchestra Lite 2 gives omp parallel work that returns to the branch that asked for it. A parent calls `scope_fork` with one item per child; each child works in its own scope with its own budget, time and model, then `scope_return` submits its record. The parent calls `scope_join` to receive one finished child as a tool receipt. The parent keeps its own model, context and message line; it never becomes the child and the child never becomes the parent.
+Herdchestra Lite 2 gives omp parallel work that returns to the scope that asked for it. A parent calls `scope_fork` with one item per child; each child works in its own scope with its own budget, time and model, then `scope_return` submits its record. The parent calls `scope_join` to receive one finished child as a tool receipt. The parent keeps its own model, context and message line; it never becomes the child and the child never becomes the parent.
 
 ## Fork, join and return
 
@@ -10,7 +10,7 @@ Herdchestra Lite 2 gives omp parallel work that returns to the branch that asked
 
 `scope_return({})` submits the child's own record. In a message with other calls, place it last: the record is a whole working result and reads best after the other results. No tool is exclusive. A child may return while it still has unreceived children: those children move to the child's current parent, keep their identities and budgets, and are received there by `scope_join`.
 
-A branch's tool budget and wall clock come from the `scope_fork` item that created it. The parent's balance never funds a child and never shrinks when a child starts. The root branch has no tool budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `amend`, `pin`, `todo`, `ask`, `wait`), a `read` of a `skill://` path, and the write that resolves a staged ast_edit preview stay available at the root. `scope_return` is child-only: it submits a branch's own record, so the root has no use for it. `amend` may not retract a beat at or before the branch's most recent structural call.
+A scope's tool budget and wall clock come from the `scope_fork` item that created it. The parent's balance never funds a child and never shrinks when a child starts. The root has no tool budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `amend`, `pin`, `todo`, `ask`, `wait`), a `read` of a `skill://` path, and the write that resolves a staged ast_edit preview stay available at the root. `scope_return` is child-only: it submits a scope's own record, so the root has no use for it. `amend` may not retract a beat at or before the scope's most recent structural call.
 
 The root (`Root`) keeps its native transcript and input stream. Descendants at every depth appear in the main transcript as labelled message and tool components; full records arrive through `scope_join`. Root and descendants compete equally for one streaming slot: the first stream holds it through completion, and an overlapping stream appears as a single block after it ends. The native working row displays `[Busy: X, Idle: Y]` and the path to the latest requesting scope, omitting `Root`. Each fork item supplies a short `scopeId` such as `oh-my-pie`, displayed as `Oh My Pie`. Only explicit tool prompts and approvals can use the root UI. An accepted `scope_return` ends the child loop at the tool-result boundary, without an extra model request or an interruption message.
 
@@ -45,11 +45,11 @@ Guidance ships as ordinary omp skills under `skills/`. Direct execution needs no
 
 Read `skill://constitution` before work. Read `skill://prompt-craft` before changing model-facing text, `skill://skill-authoring` before creating or splitting a skill, and `skill://polish` before polishing an existing text. Read `skill://decision-framing` when the goal or limits are unclear. Read `skill://tdd-crowdsource` before writing code or tests.
 
-Red contracts may be written by the lead or delegated. As contracts become ready, pin the current dispatch plan instead of running Red, then start the corresponding Green slices without waiting for the rest. A child may pin unrun checks for its parent; only checks that ran count as verification. Keep stage artifacts as skills under `.agent/skills/<name>/SKILL.md`.
+Red contracts may be written by the lead or delegated. As contracts become ready, pin the current dispatch plan instead of running Red, then start the corresponding Green slices without waiting for the rest. A child may pin unrun checks for its parent; only checks that ran count as verification. Keep design artifacts as skills under `.agent/skills/<name>/SKILL.md`.
 
 ### Full flow and simple mode
 
-A session starts simple: a clear task finishes and answers. The first submitted `todo` ledger, empty or not, turns the full flow on: the stage skills and the relay apply from then on. The flow stays on across handoffs; only the promoted second empty evaluation ends it. After that a new task is simple again, until another ledger is submitted, empty or not; that submission turns the full flow back on without re-arming a handoff. A `todo` view never turns the flow on.
+A session starts simple: a clear task finishes and answers. The first submitted `todo` ledger, empty or not, turns the full flow on: the skills and the relay apply from then on. The flow stays on across handoffs; only the promoted second empty evaluation ends it. After that a new task is simple again, until another ledger is submitted, empty or not; that submission turns the full flow back on without re-arming a handoff. A `todo` view never turns the flow on.
 
 Model-facing text lives in `resources/prompts/` as Markdown documents with `## section` blocks. Code loads them through `src/prompts/index.mjs`; no prompt, tool description, parameter description, receipt, or model-facing error is duplicated in source.
 
@@ -76,7 +76,7 @@ A bare `/herd-autopilot` flips the mode and sends nothing to the model: the next
 
 ## Pinned context
 
-`pin` records durable notes: assumptions, deductions, inductions, findings, and conclusions. Each call appends one record to the session state and costs no budget. Pins survive receipt shortening because they belong to the session, not to a branch.
+`pin` records durable notes: assumptions, deductions, inductions, findings, and conclusions. Each call appends one record to the session state and costs no budget. Pins survive receipt shortening because they belong to the session, not to a scope.
 
 At a relay handoff, every historical pin is written into the successor's opening text under `## Pinned Context`. The successor is told to read each important document named there with `read`, in full, rather than substituting grep excerpts.
 
@@ -88,7 +88,7 @@ When `todo` empties the ledger, the relay arms a handoff transaction and the nex
 
 The ticket waits for `session.waitForRunEnd()`, then calls `session.compact(focus, { mode: "handoff" })`. That is exactly what the builtin `/handoff` and the RPC `handoff` command call; `focus` is the command's only argument, so no prompt, user message, or developer message is sent. The call resolves only after its background compaction commits. The ticket then advances the relay generation and calls `agent.continue()`; the successor's first request is a fresh request on the compacted transcript.
 
-The transaction records the session id, the branch handoff count, and the source generation before compaction. After the commit, the count must grow before the generation advances. If the process stops between the commit and the advance, the next gate recognizes the new handoff entry and advances idempotently instead of compacting twice. A pending station belongs to its session manager: a `/new` or session switch never routes the next stop to the old session.
+The transaction records the session id, the handoff count, and the source generation before compaction. After the commit, the count must grow before the generation advances. If the process stops between the commit and the advance, the next gate recognizes the new handoff entry and advances idempotently instead of compacting twice. A pending station belongs to its session manager: a `/new` or session switch never routes the next stop to the old session.
 
 ## Diagnostics
 

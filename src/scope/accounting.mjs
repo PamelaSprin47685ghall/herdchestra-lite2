@@ -56,7 +56,19 @@ export function chargeBranch(state, ledger, params = {}) {
     amount: share,
     groupKey,
   });
-  if (!charged.ok) return charged;
+  if (!charged.ok) {
+    if (charged.code === "BUDGET_EXHAUSTED") {
+      return {
+        ...charged,
+        reason: render(E["tool-budget-exhausted"], {
+          tool: charged.tool,
+          remaining: charged.remaining,
+          budget: charged.budget,
+        }),
+      };
+    }
+    return charged;
+  }
   if (charged.amount > 0 && typeof toolCallId === "string") {
     const entry = { ownerId, tool, amount: charged.amount };
     if (typeof groupKey === "string" && groupKey !== "") entry.groupKey = groupKey;

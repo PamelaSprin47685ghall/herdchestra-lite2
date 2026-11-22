@@ -419,7 +419,16 @@ export function handleForkCall(station, call, options = {}) {
     if (item.model == null || item.blocked === true) continue;
     const resolved = resolveModelSelector(options.ctx?.models, item.model);
     if (!resolved.ok) {
-      return errorResult(resolved.code, `forks[${index}]: ${resolved.message}`, {
+      const named = Array.isArray(resolved.available) ? resolved.available : [];
+      const total = Number.isInteger(resolved.availableTotal) ? resolved.availableTotal : named.length;
+      const available = named.length === 0
+        ? "none"
+        : `${named.join(", ")}${total > named.length ? `, and ${total - named.length} more` : ""}`;
+      return errorResult(resolved.code, render(E["model-unknown"], {
+        index,
+        selector: item.model,
+        available,
+      }), {
         index,
         selector: item.model,
         available: resolved.available,
@@ -476,7 +485,12 @@ export function handleForkCall(station, call, options = {}) {
       startedAt: Date.now(),
     });
     if (!registered.ok) {
-      failed.push({ forkId, scopeId: item.scopeId, intent: item.intent, reason: registered.reason });
+      failed.push({
+        forkId,
+        scopeId: item.scopeId,
+        intent: item.intent,
+        reason: render(E["fork-register-failed"], { code: registered.code }),
+      });
       continue;
     }
     const fork = registered.fork;
@@ -661,7 +675,12 @@ export function handleJoinCall(station, call, options = {}) {
     // length. The schema's pattern measures the same span on the raw string.
     const problem = elderReportProblem(elderReportRaw);
     if (problem !== null) {
-      return errorResult(problem.code, problem.message, {
+      const message = problem.details?.minimum
+        ? render(E["elder-report-too-short"], problem.details)
+        : problem.details?.maximum
+          ? render(E["elder-report-too-long"], problem.details)
+          : problem.message;
+      return errorResult(problem.code, message, {
         pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId,
         ...problem.details,
       });

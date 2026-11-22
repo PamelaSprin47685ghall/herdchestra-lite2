@@ -394,7 +394,7 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 		if (first?.details?.active === 0) {
 			return errorResult(
 				"NO_UNRECEIVED_WORK",
-				"This branch owns no unreceived work. This call created no receipt and any elder_report it carried was not committed. Fork a child, or continue your own scope.",
+				errors["no-unreceived-work"],
 				{ ownerId: ownerIdOf(station) },
 			);
 		}

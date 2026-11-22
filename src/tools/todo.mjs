@@ -13,6 +13,9 @@ import {
 	isTodoView,
 	relayStatusText,
 } from "../relay/index.mjs";
+import { loadDoc, render } from "../prompts/index.mjs";
+
+const errors = loadDoc("errors");
 
 function nativeContent(native) {
 	if (Array.isArray(native?.content) && native.content.length > 0) {
@@ -88,13 +91,13 @@ export async function todoTicket(station, params, ctx) {
 	if (!ownerId && station.state.autopilot && station.state.relay?.viewRequired && !isTodoView(params)) {
 		return errorResult(
 			"INHERITED_LEDGER_UNVIEWED",
-			"The previous generation retired with open work, so its ledger is yours to read first. Call todo({ op: \"view\" }) once. It is free and does not submit a ledger; then write your own.",
+			errors["inherited-ledger-unviewed"],
 		);
 	}
 	if (typeof ctx?.invokeTool !== "function") {
 		return errorResult(
 			"TODO_NATIVE_UNAVAILABLE",
-			"This host does not expose ctx.invokeTool, so the native todo implementation cannot run. Do not implement todo state locally.",
+			errors["todo-native-unavailable"],
 		);
 	}
 
@@ -104,13 +107,13 @@ export async function todoTicket(station, params, ctx) {
 	} catch (error) {
 		return errorResult(
 			"TODO_NATIVE_FAILED",
-			`The native todo call threw: ${String(error?.message ?? error)}`,
+			render(errors["todo-native-failed"], { detail: String(error?.message ?? error) }),
 		);
 	}
 	if (!native || typeof native !== "object") {
 		return errorResult(
 			"TODO_NATIVE_INVALID",
-			"The native todo call returned no result object.",
+			errors["todo-native-invalid"],
 		);
 	}
 	// Keep the native ledger available, but do not evaluate it for relay while

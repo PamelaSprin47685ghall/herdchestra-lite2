@@ -135,3 +135,43 @@ Scope `{{ownerId}}` has no fork record, so it has no tool budget. Return with `s
 ## accounting-failed-closed
 
 Scope accounting failed closed: {{error}}. No tool ran. Retry the call; if it fails again, report the accounting error.
+
+## inherited-ledger-unviewed
+
+The previous generation retired with open work, so its ledger is yours to read first. Call `todo({ op: "view" })` once. It is free and does not submit a ledger; then write your own.
+
+## todo-native-unavailable
+
+This host does not expose `ctx.invokeTool`, so the native todo implementation cannot run. Do not implement todo state locally.
+
+## todo-native-failed
+
+The native todo call failed: {{detail}}. The ledger is unchanged; use the native error as evidence.
+
+## todo-native-invalid
+
+The native todo call returned no result object. The ledger is unchanged.
+
+## no-unreceived-work
+
+This scope owns no unreceived work. This call created no receipt and any `elder_report` it carried was not committed. Fork a child, or continue your own scope.
+
+## tool-budget-exhausted
+
+Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}, budget {{budget}}). Continue with another tool, or return with `scope_return`.
+
+## model-unknown
+
+forks[{{index}}]: model `{{selector}}` is not available. Available: {{available}}. Omit `model` to inherit the parent's model.
+
+## fork-register-failed
+
+The fork could not be registered ({{code}}). Retry the fork; if it fails again, report the code.
+
+## elder-report-too-short
+
+`elder_report` needs at least {{minimum}} characters. Say what the successor still needs from that record; the content decides its format.
+
+## elder-report-too-long
+
+`elder_report` exceeds {{maximum}} characters. Shorten it to what a successor cannot recover elsewhere.

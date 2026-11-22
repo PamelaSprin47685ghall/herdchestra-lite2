@@ -1,6 +1,6 @@
 ---
 name: station-refactor-status
-description: Final status of the HerdchestraLite2 station refactor: every feature port is the only production path, the station method is enforced, and the whole worktree landed as one verified commit.
+description: Status of the HerdchestraLite2 station refactor: every feature port is the only production path and the station method is enforced; code through ffaf49a is committed, while the worktree also carries user-owned prompt and free-URI changes.
 ---
 
 # Station Refactor — Status
@@ -22,7 +22,8 @@ synchronous aggregate, Tickets own the awaits, and Wiring only composes.
   Folding, clock, and relay have ablation tests; scope and the test-only feature
   modules are deleted.
 - **Station.** The duplicate `directAmend` is gone; fire-and-forget dispatches
-  go through a catch-all; `policy()` is a pure query. Context projection,
+  go through a catch-all; `policy()` is a memoized query (it caches `this.agentPolicy`) that never
+  dispatches a ticket. Context projection,
   tool-call routing, fork/join admission, fork register/return/ready/abandon,
   and handoff/retirement decisions live in pure `src/station/domain/*` modules
   with ratchets. The processed/dispatch/tool-gate tables moved into
@@ -61,19 +62,26 @@ ratchet.
   implementation bundle; `createStationRegistry` requires it and throws
   `MISSING_PORTS` (missing keys named) and still refuses the legacy flat table.
   `SessionStation` stores `this.ports` once; it imports no feature factory,
-  reads no implementation name, and has no per-call fallback. All test
-  construction goes through `tests/helpers/station-ports.mjs`.
+  reads no implementation name, and has no per-call fallback. Twenty-five
+  test call sites go through `tests/helpers/station-ports.mjs`; two tests
+  construct `SessionStation` directly for refusal paths
+  (`tests/port-wiring.test.mjs:107`, `tests/station-purity.test.mjs:212`).
 - **One port table.** `createStationRegistry` freezes the resolved name table
   once and `ports()` returns that reference. `SessionStation` validates every
   port name in its constructor and captures `this.portTable`; gates, model
   switching, and context projection read it, so no event re-reads the table or
   falls back to `{}`. A station without a complete table throws
   `MISSING_PORTS`. The registry still accepts a partial table for name-only
-  doubles; a station cannot start on one. The ratchet now walks every `.mjs`
-  under `src/station` and asserts exactly one port-table read: the
-  constructor's anchored `const portTable = registry?.ports?.();` in
-  `station.mjs`. Its detector self-test pins the pre-ratchet regex as blind to
-  `registry?.ports?.(`, so the guard cannot return to fake-green.
+  doubles; a station cannot start on one. The ratchet walks every `.mjs`
+  under `src/station`, `src/host`, and `src/activation` with a
+  receiver-agnostic detector (`\.\s*ports\s*(?:\?\.)?\s*\(`), so
+  `registry.ports(`, `registry?.ports?.(`, `station["registry"].ports()`, and
+  `wired.ports()` all match. Exactly two composition-time reads are allowed:
+  the constructor's anchored `const portTable = registry?.ports?.();` in
+  `station.mjs` and the wire-time `registry?.ports?.().observer` check in
+  `provider-observer.mjs`. Its detector self-test pins the pre-ratchet regex
+  as blind to `registry?.ports?.(` and the identifier-anchored regex as blind
+  to the bracket spelling, so the guard cannot return to fake-green.
   `fork-wiring` keeps a lazy `states` WeakMap for a plain wiring object that
   never came from `createForkWiring` — a documented compatibility path for test
   doubles, not station state.
@@ -87,8 +95,10 @@ ratchet.
   activation ticket calls detach with a catch-all; `implementations()` returns
   one frozen reference. `registry.setPorts` (no caller, stale-port footgun) is
   deleted.
-- **Relay single truth.** `handoff-state` reads `station.relayPort()` only; the
-  registry name table is no longer a second source.
+- **Relay single truth.** `handoff-state` reads `station.relayPort()` only and
+  never `station.registry`; relay pending bookkeeping goes through
+  `SessionStation.markPending()`/`clearPending()`. The registry name table is
+  no longer a second source.
 - **Ratchets.** No bare `this.tickets.*(` statement; no `void`/discarded
   `*Ticket(` call in `src/activation` or `src/host`; no ticket writes
   `lastError`; no station imports host except the registry bridge.
@@ -116,31 +126,52 @@ ratchet.
   skill read after eviction (no block, no charge) — and runs 14 cases.
   Pin commit: `6cb59213`.
 
-## Verification (this pass, 2026-11-22)
+## Compliance pass (generation 5, 2026-11-22)
 
-- `bun test tests`: **1083 pass / 0 fail**, 96 files, 3934 expect calls. This is
-  the worktree with the six user prompt files plus the guard rewrite above.
-- Clean committed-tree replay: `git archive 29c583e` → **1077 pass / 0 fail**,
-  96 files, 3919 expect calls. The four-test difference from the earlier 1081
-  worktree count is the user's modified `tests/prompts.test.mjs`; no
-  enforcement test depends on uncommitted files.
-- Clean committed-tree replay after the receipt fix: `git archive e61bb71` →
-  **1078 pass / 0 fail**, 96 files, 3922 expect calls.
-- Clean committed-tree replay after the ratchet repair: `git archive 4f7b1af`
-  → **1079 pass / 0 fail**, 96 files, 3923 expect calls.
-- Receipt-idempotence pin: `bun test tests/fork-tool-deadline.test.mjs` →
-  **14 pass / 0 fail**, 56 expect calls; the full worktree carrying the
-  concurrent scope edits → **1092 pass / 0 fail**, 97 files, 4031 expect
-  calls; `bunx eslint .` exit **0** with no output; clean committed-tree replay
-  of `git archive 6cb59213` → **1081 pass / 0 fail**, 96 files, 3937 expect
-  calls. The two-test difference from `4f7b1af` is the receipt pin itself.
-- This status record is committed one commit after the code it describes, so
-  the STATUS commit itself becomes a newer HEAD; `6cb59213` is the verified
-  code SHA.
-- `bunx eslint .`: **0**.
+- **Port-table reads are guarded across the extension.** The ratchet scans
+  `src/station`, `src/host`, and `src/activation` with the receiver-agnostic
+  detector `\.\s*ports\s*(?:\?\.)?\s*\(`; exactly two composition-time reads
+  are allowed: the constructor in `src/station/station.mjs` and the wire-time
+  observer in `src/host/provider-observer.mjs`. The extension entry no longer
+  substitutes `{}` for a missing table (`wired.ports` is passed through);
+  `wireExtension` already throws when a port set is missing.
+- **Relay bookkeeping stays behind the station.** `handoff-state` no longer
+  reads `station.registry`; `armHandoff`/`commitSelfHandoff` call
+  `station.markPending()`/`clearPending()`. Those synchronous methods own the
+  registry bridge; the production registry implements both
+  (`src/station/registry.mjs:213-218`), and station doubles may omit them.
+- **One policy gate for `todo`.** `onBeforeAgentStart` no longer repeats the
+  `READ_WRITE_SUBAGENT` check before `station.ensureTools(ctx)`;
+  `ensureTools`/`syncTodo` owns that rule.
+- **Doubles carry the contract.** `tests/child-relay-isolation.test.mjs`,
+  `tests/ablation/relay-strategy.test.mjs`, `tests/relay-prompts.test.mjs`, and
+  `tests/silent-sites.test.mjs` gained `markPending`/`clearPending` so the
+  handoff paths exercise the new station methods.
+- Code commit: `ffaf49a`.
+
+## Verification (2026-11-22, generation 5)
+
+- `bun test tests` on the worktree: **1094 pass / 0 fail**, 97 files, 4044
+  expect calls. The worktree also carries 12 user/concurrent uncommitted files
+  (listed under Open items), so this is not a clean-tree number.
+- The previous committed HEAD `ec4951b` measured **1093 pass / 0 fail**, 97
+  files, 4036 expect calls.
+- Clean committed-tree replay at `6cb59213` (`git archive`): **1081 pass / 0
+  fail**, 96 files, 3937 expect calls. It excludes the user's uncommitted
+  prompt files.
+- `bunx eslint .`: **0** with no output.
 - `bun run smoke:relay`: **11/11**.
-- Station construction sites: 24, all through the production `buildPorts`
-  helper. No `forkPortsPhase`, `baseStates`, or `hostStates` remains.
+- `git diff --check` on the generation-5 files: clean.
+- Station construction: 25 `createTestStation(` call sites; `new
+  SessionStation` has 4 sites — production `src/station/registry.mjs:180,190`,
+  test `tests/port-wiring.test.mjs:107`, and test
+  `tests/station-purity.test.mjs:212`. The two test sites construct directly;
+  the other test call sites use the helper.
+- Earlier verification, kept for history: 1083 worktree and 1077 replay at
+  `29c583e`; 1078 at `e61bb71`; 1079 at `4f7b1af`; 1081 at `6cb59213`. The
+  differences are the guard and receipt pins, plus the user's
+  `tests/prompts.test.mjs`.
+- No `forkPortsPhase`, `baseStates`, or `hostStates` remains.
 
 ## Open items
 
@@ -153,12 +184,23 @@ ratchet.
   doubles, not station state.
 - `noteScopedModelFailure` keeps the message but drops the
   `expectedKey`/`actualKey` diagnostic fields.
-- `resources/prompts/errors.md`, `resources/prompts/system.md`,
-  `resources/prompts/tools/fork-join.md`, `resources/prompts/tools/panhandle.md`,
-  `tests/prompts.test.mjs`, and the matching `CHANGELOG.md` hunk are a coherent
-  free-fork prompt-copy change that no enforcement slice authored. They stay
-  uncommitted and unowned until their author claims them; the code above does
-  not depend on them.
+- The port-table ratchet is a raw-source scan: it matches call syntax, not a
+  method extracted and called later (`const read = registry.ports; read()`),
+  and a comment or string containing `.ports(` would trip it. A new
+  composition-time read must be added to the exact whitelist with a reason.
+- `SessionStation.markPending`/`clearPending` keep an optional chain for
+  station doubles whose registry omits the methods; the production registry
+  implements both (`src/station/registry.mjs:213-218`).
+- Stale-comment cleanup (W11) has not been swept across every file; the
+  ratchet's scan boundary is `src/station`, `src/host`, and `src/activation`.
+- User-owned uncommitted prompt copy: `CHANGELOG.md`, `README.md`,
+  `resources/prompts/errors.md`, `resources/prompts/system.md`,
+  `resources/prompts/tools/fork-join.md`,
+  `resources/prompts/tools/panhandle.md`, `tests/prompts.test.mjs`.
+- Concurrent uncommitted free-URI behavior work, not authored by this line:
+  `src/scope/accounting.mjs`, `src/scope/budget.mjs`, `src/scope/index.mjs`,
+  `tests/branch-charge.test.mjs`, and untracked `tests/free-uri.test.mjs`.
+  This is behavior, not copy; the full-suite number above includes it.
 
 ## Historical verification (2026-11-22, Phases 1–7 landing)
 
@@ -201,6 +243,14 @@ ratchet.
   regex's blind spot so the guard cannot silently regress.
 - `6cb59213` Pin receipt idempotence across a gate-cache miss: an executed call
   is re-admitted, charged once, and never refused by the fallback admission.
+- `5997b64` docs: record the station-wide port-table ratchet
+- `ec4951b` docs: record the receipt re-admission invariant
+- `ffaf49a` Close the last port-table and registry escapes: drop the
+  unreachable `wired.ports ?? {}` fallback, route relay pending bookkeeping
+  through `SessionStation.markPending`/`clearPending`, let `ensureTools` own
+  the read-write gate, and widen the port-table ratchet to host and
+  activation.
+- This STATUS commit (HEAD): record generation-5 station compliance.
 
 ## Final state
 
@@ -211,21 +261,29 @@ ratchet.
   test-only feature modules are gone.
 - The port-table fix is `130a5af`: the registry returns one frozen name table,
   `SessionStation` validates and captures `this.portTable`, and gates/model
-  switching consume it; a missing table throws `MISSING_PORTS`. The guard-test
-  correction is `4f7b1af`: the ratchet scans every `.mjs` under
-  `src/station`, matches `registry.ports(`, `registry?.ports(`, and
-  `registry?.ports?.(`, and asserts exactly one read — the constructor's
-  anchored capture in `station.mjs`. Its self-test pins the old regex as blind
-  to `registry?.ports?.(`.
+  switching consume it; a missing table throws `MISSING_PORTS`. The guard is
+  generation-5 `ffaf49a`: the ratchet scans `src/station`, `src/host`, and
+  `src/activation` with a receiver-agnostic call detector and allows exactly
+  two composition-time reads — the constructor capture in `station.mjs` and
+  the wire-time observer check in `provider-observer.mjs`. Its self-test pins
+  both the old regex's optional-call blind spot and the identifier-anchored
+  regex's bracket blind spot.
 - The receipt-admission fix is `e61bb71`: a post-execution receipt with no
   gate verdict re-enters admission instead of returning a free result, and
   `chargeBranch` keeps re-admission idempotent through `state.charges`.
 - Clean committed-tree replay at `e61bb71`: **1078 pass / 0 fail**, 96 files,
   3922 expect calls. `bunx eslint .` 0; `bun run smoke:relay` 11/11 on the
-  worktree carrying the fix. The replay excludes the six uncommitted user
-  prompt files, so committed HEAD is green on its own.
-- The working tree carries six uncommitted free-fork prompt files owned by the
-  user (`CHANGELOG.md`, `resources/prompts/errors.md`,
-  `resources/prompts/system.md`, `resources/prompts/tools/fork-join.md`,
-  `resources/prompts/tools/panhandle.md`, `tests/prompts.test.mjs`); no
-  enforcement code depends on them.
+  worktree carrying the fix. The replay excludes the uncommitted user files,
+  so committed HEAD is green on its own.
+- The generation-5 compliance commit is `ffaf49a`: no `wired.ports ?? {}`
+  fallback, `handoff-state` never reads `station.registry` (relay bookkeeping
+  goes through `SessionStation.markPending`/`clearPending`), and
+  `onBeforeAgentStart` has no second read-write gate.
+- The working tree carries 12 uncommitted user/concurrent items: seven
+  prompt-copy files (`CHANGELOG.md`, `README.md`,
+  `resources/prompts/errors.md`, `resources/prompts/system.md`,
+  `resources/prompts/tools/fork-join.md`,
+  `resources/prompts/tools/panhandle.md`, `tests/prompts.test.mjs`) and five
+  free-URI behavior files (`src/scope/accounting.mjs`, `src/scope/budget.mjs`,
+  `src/scope/index.mjs`, `tests/branch-charge.test.mjs`, and untracked
+  `tests/free-uri.test.mjs`). No enforcement code depends on them.

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { createForkWiring } from "../src/host/fork-wiring.mjs";
-import { ledgerFor, outcomeOf } from "../src/host/fork-registry.mjs";
-import { spawnChildTicket } from "../src/tools/fork-spawn-ticket.mjs";
+import { createForkWiring } from "../host-omp/src/host/fork-wiring.mjs";
+import { ledgerFor, outcomeOf } from "../host-omp/src/host/fork-registry.mjs";
+import { spawnChildTicket } from "../host-omp/src/host/fork-spawn-ticket.mjs";
 import { markReady, registerFork } from "../src/scope/forkjoin.mjs";
 
 // A child that stops without scope_return must still hand the parent a record

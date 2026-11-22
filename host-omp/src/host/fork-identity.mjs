@@ -10,7 +10,7 @@
 // rule lives on the station side of the boundary and the wiring only executes
 // it.
 
-import { selectForkLedger } from "../station/domain/fork-ledger.mjs";
+import { selectForkLedger } from "herdchestra-lite2";
 
 /**
  * Build the identity a child station reads back from the registry.

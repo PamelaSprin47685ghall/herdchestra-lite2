@@ -3,9 +3,45 @@
 // bundle built by the same `buildPorts` the extension uses, so there is no
 // second factory in src/.
 
-import { buildPorts } from "../../src/activation/ports.mjs";
+import { buildPorts } from "../../host-omp/src/activation/ports.mjs";
+import { createForkWiring } from "../../host-omp/src/host/fork-wiring.mjs";
 import { PORT_NAMES } from "../../src/core/ports/registry.mjs";
 import { IMPLEMENTATION_KEYS } from "../../src/station/ports-contract.mjs";
+
+/**
+ * A station double still meets the two host facts the registry keys on: the
+ * session manager behind a context, and the one fork tree per process. The
+ * production composition root supplies both through its own bag.
+ */
+const testWiringKey = Symbol.for("herdchestra-lite2.test-fork-wiring.v1");
+
+function testForkWiring() {
+	let wiring = globalThis[testWiringKey];
+	if (!wiring) {
+		wiring = createForkWiring();
+		Object.defineProperty(globalThis, testWiringKey, {
+			value: wiring,
+			enumerable: false,
+			configurable: true,
+		});
+	}
+	return wiring;
+}
+
+export const testHostBag = {
+	managerOf: (ctx) => ctx?.sessionManager ?? null,
+	forkWiring: () => testForkWiring(),
+	branchOf: (ctx) => {
+		try {
+			const branch = ctx?.sessionManager?.getBranch?.();
+			return Array.isArray(branch) ? branch : [];
+		} catch {
+			return [];
+		}
+	},
+	agentOf: (ctx) => ctx?.agent ?? null,
+	activeTools: () => [],
+};
 
 const ENV_NAME = {
 	pin: "HERD_PIN",
@@ -81,6 +117,7 @@ export function createTestStation(Station, manager, pi, tickets, wiring, pricing
 	});
 	const registry = {
 		...(wiring ?? {}),
+		host: () => ({ ...testHostBag, ...(wiring?.host?.() ?? {}) }),
 		ports: () => names,
 		implementations: () => implementations,
 	};

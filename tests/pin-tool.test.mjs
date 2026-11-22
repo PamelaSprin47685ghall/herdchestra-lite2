@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { createPinOff, createPinOn } from "../src/features/pin/index.mjs";
 import { handlePinCall } from "../src/station/controls.mjs";
 import { scopeContextParameters } from "../src/tools/descriptions.mjs";
-import { scopeContextTicket } from "../src/tools/tickets.mjs";
+import { scopeContextTicket } from "../host-omp/src/host/host-tickets.mjs";
 
 function stationWith({ persist = () => true, port = null, description } = {}) {
   const state = { pins: [] };

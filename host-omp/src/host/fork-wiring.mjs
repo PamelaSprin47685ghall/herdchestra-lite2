@@ -24,11 +24,11 @@ import {
 import { record } from "./diagnostics.mjs";
 import { createDisplayBinder } from "./child-display-holder.mjs";
 import { buildChildIdentity } from "./fork-identity.mjs";
-import { selectForkLedger } from "../station/domain/fork-ledger.mjs";
+import { selectForkLedger } from "herdchestra-lite2";
 import {
 	spawnChildTicket,
 	writeFrozenOutcome,
-} from "../tools/fork-spawn-ticket.mjs";
+} from "./fork-spawn-ticket.mjs";
 
 // One base attach and one host bind per station. The holder record lives on
 // the wiring object the composition root created, not in a module: a second

@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { activate } from "../src/main.mjs";
+import { activate } from "../host-omp/src/main.mjs";
 import {
 	createBracketLedger,
 	markReady,

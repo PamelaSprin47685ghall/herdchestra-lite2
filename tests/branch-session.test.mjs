@@ -8,9 +8,9 @@ import {
 	deriveBranchConfig,
 	labelledUIContext,
 	registerOwnerUI,
-} from "../src/host/branch-session.mjs";
+} from "../host-omp/src/host/branch-session.mjs";
 
-import { createBranchManager } from "../src/host/branch-manager.mjs";
+import { createBranchManager } from "../host-omp/src/host/branch-manager.mjs";
 
 const ASYNC_JOBS = { kind: "asyncJobManager" };
 const COST_GATE = { kind: "costGate" };

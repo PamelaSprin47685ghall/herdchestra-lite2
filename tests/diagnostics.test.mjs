@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDiagnostics } from "../src/host/diagnostics.mjs";
+import { createDiagnostics } from "../host-omp/src/host/diagnostics.mjs";
 
 describe("diagnostics ring", () => {
 	test("keeps the newest records when it overflows", () => {

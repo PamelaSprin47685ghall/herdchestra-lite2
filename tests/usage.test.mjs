@@ -13,7 +13,7 @@ import {
 	usageLine,
 	usageSnapshot,
 	zeroUsage,
-} from "../src/host/index.mjs";
+} from "../host-omp/src/host/index.mjs";
 
 describe("usageSnapshot", () => {
 	test("accepts every provider alias", () => {

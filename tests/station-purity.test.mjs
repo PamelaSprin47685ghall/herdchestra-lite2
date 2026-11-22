@@ -12,15 +12,15 @@ import { readdirSync, readFileSync } from "node:fs";
 import { beforeEach, expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
 
-import { buildPorts } from "../src/activation/ports.mjs";
+import { buildPorts } from "../host-omp/src/activation/ports.mjs";
 
 import {
 	record,
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
-} from "../src/host/diagnostics.mjs";
-import { READ_WRITE_SUBAGENT } from "../src/host/policy.mjs";
-import { activate } from "../src/main.mjs";
+} from "../host-omp/src/host/diagnostics.mjs";
+import { READ_WRITE_SUBAGENT } from "../host-omp/src/host/policy.mjs";
+import { activate } from "../host-omp/src/main.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 
 function rwContext() {
@@ -40,10 +40,10 @@ function rwContext() {
 	};
 }
 
-function stationWith(tickets, pi = { getActiveTools: () => ["read"] }) {
+function stationWith(tickets, host = { activeTools: () => ["read"] }) {
 	return createTestStation(SessionStation, 
 		{ getSessionId: () => "s1", getBranch: () => [] },
-		pi,
+		host,
 		tickets,
 		{ ports: () => ({}), host: () => ({ record }) },
 		null,
@@ -207,7 +207,7 @@ test("a station without a complete port table refuses to start", () => {
 	try {
 		new SessionStation(
 			{ getSessionId: () => "s1", getBranch: () => [] },
-			{ getActiveTools: () => [] },
+			{ activeTools: () => [] },
 			{},
 			{
 				ports: () => ({ relay: "handoff" }),
@@ -280,10 +280,10 @@ test("the extension reads the port table only at composition time", () => {
 	expect(readsUnder("../src/station/")).toEqual([
 		{ file: "station.mjs", match: ".ports?.(" },
 	]);
-	expect(readsUnder("../src/host/")).toEqual([
+	expect(readsUnder("../host-omp/src/host/")).toEqual([
 		{ file: "provider-observer.mjs", match: ".ports?.(" },
 	]);
-	expect(readsUnder("../src/activation/")).toEqual([]);
+	expect(readsUnder("../host-omp/src/activation/")).toEqual([]);
 
 	// Anchor each allowed read to its composition function, so it cannot be
 	// displaced by a same-count read elsewhere in the file.
@@ -293,7 +293,7 @@ test("the extension reads the port table only at composition time", () => {
 	);
 	expect(stationSource).toContain("const portTable = registry?.ports?.();");
 	const observerSource = readFileSync(
-		new URL("../src/host/provider-observer.mjs", import.meta.url),
+		new URL("../host-omp/src/host/provider-observer.mjs", import.meta.url),
 		"utf8",
 	);
 	expect(observerSource).toContain(
@@ -303,7 +303,7 @@ test("the extension reads the port table only at composition time", () => {
 
 test("the composition root never substitutes an empty port table", () => {
 	const source = readFileSync(
-		new URL("../src/main.mjs", import.meta.url),
+		new URL("../host-omp/src/main.mjs", import.meta.url),
 		"utf8",
 	);
 	expect(source).not.toMatch(/\bwired\.ports\s*\?\?/);

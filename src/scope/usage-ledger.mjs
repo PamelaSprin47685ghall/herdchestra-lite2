@@ -12,8 +12,6 @@
 // without inverting a dependency.
 
 import { modelCacheFor, touchModelCache } from "./state.mjs";
-import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
-import { charsToTokens } from "../host/pricing.mjs";
 import { sliceChars, toolCalls } from "../transcript/index.mjs";
 import { createHash } from "node:crypto";
 
@@ -80,7 +78,29 @@ export function createUsageLedger(options) {
 		noteError,
 		modelKeyOf,
 		actualModelOf,
+		usage,
+		pricing,
 	} = options;
+
+	// Host facts arrive as capabilities. Without them the ledger still counts
+	// characters and reports no measured watermark, which is what a hostless
+	// station did before this module took them as parameters.
+	const entryUsage = usage?.entryUsage ?? (() => null);
+	const totalInput =
+		usage?.totalInput ??
+		((snap) =>
+			(snap?.input ?? 0) + (snap?.cacheRead ?? 0) + (snap?.cacheWrite ?? 0));
+	const usageSnapshot =
+		usage?.usageSnapshot ??
+		((raw) => ({
+			input: raw?.input ?? 0,
+			cacheRead: raw?.cacheRead ?? 0,
+			cacheWrite: raw?.cacheWrite ?? 0,
+			output: raw?.output ?? 0,
+			cost: raw?.cost ?? 0,
+		}));
+	const charsToTokens =
+		pricing?.charsToTokens ?? ((chars, ratio) => Math.ceil(chars * ratio));
 
 	const ledger = {
 		// Measured usage baseline. Populated from live messages and restored

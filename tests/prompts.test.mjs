@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 
-import { wireTools } from "../src/activation/tools.mjs";
+import { wireTools } from "../host-omp/src/activation/tools.mjs";
 import { loadDoc, placeholderNames, render } from "../src/prompts/index.mjs";
 import * as scopeTools from "../src/tools/descriptions.mjs";
 import * as todoTools from "../src/tools/todo-description.mjs";
 import {
 	injectSystemPrompt,
 	persistentOperatingSkill,
-} from "../src/host/prompts.mjs";
+} from "../host-omp/src/host/prompts.mjs";
 
 const DOCS = [
 	"tools/fork-join",

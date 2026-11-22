@@ -7,7 +7,7 @@ import {
 	createEmptyCatalog,
 	loadPricingCatalog,
 	resolveModelPolicy,
-} from "../src/host/index.mjs";
+} from "../host-omp/src/host/index.mjs";
 
 const savedEnv = {
 	OMP_CODING_AGENT_DIR: process.env.OMP_CODING_AGENT_DIR,
@@ -211,7 +211,7 @@ describe("loadPricingCatalog", () => {
 	);
 });
 test("scope preparse keeps exact colon IDs and resolves role thinking suffixes", async () => {
-	const { createEmptyCatalog, preparseModelSpec } = await import("../src/host/pricing.mjs");
+	const { createEmptyCatalog, preparseModelSpec } = await import("../host-omp/src/host/pricing.mjs");
 	const first = { provider: "fixture", id: "qwen:high", contextWindow: 12_000, cost: { input: 2, cacheRead: 0.2 } };
 	const second = { provider: "fixture", id: "qwen", contextWindow: 50_000, cost: { input: 3, cacheRead: 0.3 } };
 	const ctx = { settings: { modelRoles: { fast: "fixture/qwen" } }, modelRegistry: {
@@ -229,7 +229,7 @@ test("scope preparse keeps exact colon IDs and resolves role thinking suffixes",
 });
 
 test("scope preparse prefers roles over fuzzy model matches", async () => {
-	const { createEmptyCatalog, preparseModelSpec } = await import("../src/host/pricing.mjs");
+	const { createEmptyCatalog, preparseModelSpec } = await import("../host-omp/src/host/pricing.mjs");
 	const target = { provider: "fixture", id: "qwen", contextWindow: 50_000, cost: { input: 3 } };
 	const competitor = { provider: "gateway", id: "lazy/task", contextWindow: 1_000_000 };
 	const models = [target, competitor];

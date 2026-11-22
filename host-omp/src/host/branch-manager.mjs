@@ -57,7 +57,7 @@
 //    appends through the same proxy during that callback still sees the old
 //    tail, so its entry becomes a sibling. Observers must queue such writes.
 
-import { appendAt } from "../transcript/branch-writes.mjs";
+import { appendAt } from "herdchestra-lite2";
 
 /** A routing failure that the caller must resolve instead of retrying. */
 export class BranchManagerError extends Error {

@@ -20,17 +20,21 @@ The three tools exist in every supported configuration. There is no `scope` tool
 
 ## Running from source
 
-omp loads the installed copy at `~/.omp/plugins/node_modules/herdchestra-lite2`, not this working tree, so an edit here does not reach a running session by itself. After changing `src/` or `resources/`:
+The repository holds two packages. `herdchestra-host-omp` in `host-omp/` is the plugin: it declares `omp.extensions` and carries the omp wiring. Its only dependency, `herdchestra-lite2` at the repository root, is the host-agnostic core — ledgers, stations, tickets, prompts — and imports nothing from omp. Install once with `cd host-omp && bun install`; the core then resolves through `host-omp/node_modules/herdchestra-lite2`.
+
+omp loads the installed copy at `~/.omp/plugins/node_modules/herdchestra-host-omp`, not this working tree, so an edit here does not reach a running session by itself. After changing `src/`, `host-omp/src/`, or `resources/`:
 
 ```sh
-bun run sync:plugin                    # copy src/, resources/, and skills/ into the installed plugin
+bun run sync:plugin                    # install both packages; the core lands under the plugin's node_modules
 bun scripts/sync-plugin.mjs --check    # report drift without copying
 bun run smoke:relay                    # check relay behavior in this working tree
 ```
 
+`sync:plugin` also mirrors the core `skills/` into the plugin root, because omp discovers skills from the package it loads, and removes the retired `herdchestra-lite2` plugin directory so the host cannot load two entries.
+
 Restart the session afterwards; modules load at process start. A `todo` result that shows a `Flow:` line comes from the current build, so a missing `Flow:` line means the session is still running an older copy.
 
-`bun run smoke:relay` tests the working tree against a fake host. It checks fork/join registration and refusals, the `todo` status, and the relay transitions into and out of full flow. It does not test the installed copy.
+Tests stay in the repository root and cover both packages: `bun test tests` runs the core domain, the host wiring, and the architecture ratchets that hold the boundary. `bun run smoke:relay` tests the working tree against a fake host. It checks fork/join registration and refusals, the `todo` status, and the relay transitions into and out of full flow. It does not test the installed copy.
 
 ## Skills
 

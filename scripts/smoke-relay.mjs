@@ -20,7 +20,7 @@
  * `bun run sync:plugin` and restart before trusting that session.
  */
 
-import { activate } from "../src/main.mjs";
+import { activate } from "../host-omp/src/main.mjs";
 import { beginGenerationAfterHandoff } from "../src/relay/ledger.mjs";
 
 // The smoke must test the shipped default, not whatever the developer's shell

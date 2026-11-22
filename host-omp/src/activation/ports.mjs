@@ -5,12 +5,12 @@
 // or behaviour is on the object path; `names` keeps the resolved name for
 // reporting and domain checks. Do not invent a second table here.
 
-import { resolvePorts } from "../core/ports/resolve.mjs";
-import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
-import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
-import { createPinOff, createPinOn } from "../features/pin/index.mjs";
-import { relayImplementations } from "../relay/policy.mjs";
-import { createClockOff, createClockOn } from "../scope/clock.mjs";
+import { resolvePorts } from "herdchestra-lite2";
+import { createAmendOff, createAmendOn } from "herdchestra-lite2";
+import { createHerdOff, createHerdOn } from "herdchestra-lite2";
+import { createPinOff, createPinOn } from "herdchestra-lite2";
+import { relayImplementations } from "herdchestra-lite2";
+import { createClockOff, createClockOn } from "herdchestra-lite2";
 
 function detailOf(refusal) {
 	const available = Array.isArray(refusal.available) ? refusal.available.join(", ") : "";

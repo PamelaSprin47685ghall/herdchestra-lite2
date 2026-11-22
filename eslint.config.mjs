@@ -57,21 +57,49 @@ export default [
 		},
 	},
 	{
-		// The Station class and its domain modules receive host capabilities
-		// through `registry.host()`. The registry is the composition bridge and
-		// the only station file allowed to import the host layer; every other
-		// station file is host-free. The ratchet test enforces the same rule.
-		files: ["src/station/**/*.mjs"],
-		ignores: ["src/station/registry.mjs"],
+		// The core package is host-agnostic by construction: it receives host
+		// capabilities through an injected bag, and the host package supplies
+		// them. A direct host import in core is a layering error, not a style
+		// preference. The ratchet test enforces the same rule on the file tree.
+		files: ["src/**/*.mjs"],
 		rules: {
 			"no-restricted-imports": [
 				"error",
 				{
 					patterns: [
 						{
-							group: ["../host/*", "../../host/*"],
+							group: [
+								"../host/*",
+								"../../host/*",
+								"**/host/*",
+								"../activation/*",
+								"../../activation/*",
+								"@oh-my-pi/*",
+								"herdchestra-host-omp",
+								"herdchestra-host-omp/*",
+							],
 							message:
-								"Station code receives host capabilities through the registry's host() bag; a direct host import is a layering error.",
+								"Core code receives host capabilities through an injected bag; a direct host import is a layering error.",
+						},
+					],
+				},
+			],
+		},
+	},
+	{
+		// The host package may speak to omp, but it reaches the core by package
+		// name. A relative escape into `../src/` would make the dependency
+		// decorative and let the two packages drift back into one tree.
+		files: ["host-omp/src/**/*.mjs"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: ["../src/*", "../../src/*", "../../../src/*"],
+							message:
+								"Import the core by package name (`herdchestra-lite2`), never by a relative path.",
 						},
 					],
 				},

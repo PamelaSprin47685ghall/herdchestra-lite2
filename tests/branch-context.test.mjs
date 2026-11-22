@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { prepareChildContext } from "../src/host/branch-context.mjs";
+import { prepareChildContext } from "../host-omp/src/host/branch-context.mjs";
 
 function childSession({ withRunner = true, withHook = true } = {}) {
 	const calls = [];

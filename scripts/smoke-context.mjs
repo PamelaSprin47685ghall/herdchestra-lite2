@@ -13,9 +13,9 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { installContextPreparation, splitRequestHistory } from "../src/host/context-preparation.mjs";
-import { contextHeaderOf } from "../src/host/adapter.mjs";
-import { stopAfterScopeReturn } from "../src/host/branch-context.mjs";
+import { installContextPreparation, splitRequestHistory } from "../host-omp/src/host/context-preparation.mjs";
+import { contextHeaderOf } from "../host-omp/src/host/adapter.mjs";
+import { stopAfterScopeReturn } from "../host-omp/src/host/branch-context.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const TOOL_ROUNDS = 4;

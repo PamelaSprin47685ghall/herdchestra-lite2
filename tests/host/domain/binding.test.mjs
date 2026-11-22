@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { planStationBinding } from "../../../src/host/domain/binding.mjs";
+import { planStationBinding } from "../../../host-omp/src/host/domain/binding.mjs";
 
 describe("planStationBinding", () => {
 	test("a headless root registers no UI and shows nothing", () => {

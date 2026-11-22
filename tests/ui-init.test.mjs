@@ -5,13 +5,13 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { activate } from "../src/main.mjs";
-import { createForkWiring } from "../src/host/fork-wiring.mjs";
+import { activate } from "../host-omp/src/main.mjs";
+import { createForkWiring } from "../host-omp/src/host/fork-wiring.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { registerFork } from "../src/scope/forkjoin.mjs";
-import { rememberSession } from "../src/host/capture.mjs";
-import { identityOf } from "../src/host/fork-registry.mjs";
+import { rememberSession } from "../host-omp/src/host/capture.mjs";
+import { identityOf } from "../host-omp/src/host/fork-registry.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
 
 function managerOf(id = "ui-init") {

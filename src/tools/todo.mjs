@@ -33,7 +33,7 @@ function appended(native, text) {
 
 function replayPhases(ctx) {
 	try {
-		const branch = ctx?.sessionManager?.getBranch?.() ?? [];
+		const branch = ctx?.branch?.() ?? [];
 		for (let index = branch.length - 1; index >= 0; index -= 1) {
 			const entry = branch[index];
 			const message = entry?.type === "message" ? entry.message : entry?.message;
@@ -137,7 +137,7 @@ export async function todoTicket(station, params, ctx) {
 	let phases = Array.isArray(details?.phases) ? details.phases : null;
 	let op = details?.op;
 	if (!phases && !isError) {
-		const replayed = replayPhases(ctx);
+		const replayed = replayPhases(station.sessionView?.(ctx) ?? null);
 		if (replayed) {
 			phases = replayed.phases;
 			op = op ?? replayed.op;

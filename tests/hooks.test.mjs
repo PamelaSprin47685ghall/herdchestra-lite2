@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
-} from "../src/host/diagnostics.mjs";
-import { wireHostDiagnosis } from "../src/activation/diagnosis.mjs";
-import { wireHooks } from "../src/activation/hooks.mjs";
+} from "../host-omp/src/host/diagnostics.mjs";
+import { wireHostDiagnosis } from "../host-omp/src/activation/diagnosis.mjs";
+import { wireHooks } from "../host-omp/src/activation/hooks.mjs";
 
 const STATION = {
 	onAssistantMessage() {},

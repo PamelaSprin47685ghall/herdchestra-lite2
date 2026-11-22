@@ -12,8 +12,8 @@ import {
 	settingsOf,
 	thinkingFrom,
 	thinkingOf,
-} from "../src/host/adapter.mjs";
-import { rememberSession } from "../src/host/capture.mjs";
+} from "../host-omp/src/host/adapter.mjs";
+import { rememberSession } from "../host-omp/src/host/capture.mjs";
 
 function session(extra = {}) {
 	return {

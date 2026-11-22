@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { rememberSession } from "../src/host/capture.mjs";
-import { installContextPreparation, splitRequestHistory } from "../src/host/context-preparation.mjs";
-import { commitSkillReceipt } from "../src/host/hack-context.mjs";
-import { reset, snapshot } from "../src/host/diagnostics.mjs";
+import { rememberSession } from "../host-omp/src/host/capture.mjs";
+import { installContextPreparation, splitRequestHistory } from "../host-omp/src/host/context-preparation.mjs";
+import { commitSkillReceipt } from "../host-omp/src/host/hack-context.mjs";
+import { reset, snapshot } from "../host-omp/src/host/diagnostics.mjs";
 
 function fixture(id = "Main") {
 	const first = { role: "user", content: "Keep the request history stable." };

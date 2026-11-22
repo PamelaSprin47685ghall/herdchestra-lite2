@@ -12,9 +12,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..", "src");
+const HOST_ROOT = join(import.meta.dir, "..", "..", "host-omp", "src");
 const STATION_DIR = join(ROOT, "station");
-const TICKET_DIRS = [join(ROOT, "tools"), join(ROOT, "activation")];
-const WIRING_DIRS = [join(ROOT, "activation"), join(ROOT, "host")];
+// Tickets span both packages after the split: pure tickets in core, host
+// tickets in the host package.
+const TICKET_DIRS = [join(ROOT, "tools"), join(HOST_ROOT, "activation")];
+const WIRING_DIRS = [join(HOST_ROOT, "activation"), join(HOST_ROOT, "host")];
 
 function sourceFiles(dir) {
 	const out = [];

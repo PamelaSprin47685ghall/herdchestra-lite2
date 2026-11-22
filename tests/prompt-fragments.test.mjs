@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { resolvePorts } from "../src/core/ports/resolve.mjs";
-import { injectSystemPrompt, persistentOperatingSkill } from "../src/host/prompts.mjs";
+import { injectSystemPrompt, persistentOperatingSkill } from "../host-omp/src/host/prompts.mjs";
 import { rewriteVibeMessage } from "../src/transcript/tail.mjs";
 
 test("each prompt-fragment switch resolves from its environment name", () => {

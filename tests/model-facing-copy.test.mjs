@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
 
-import { injectSystemPrompt, persistentOperatingSkill } from "../src/host/prompts.mjs";
-import { wireTools } from "../src/activation/tools.mjs";
+import { injectSystemPrompt, persistentOperatingSkill } from "../host-omp/src/host/prompts.mjs";
+import { wireTools } from "../host-omp/src/activation/tools.mjs";
 import { handoffDemand, applyLedgerEvaluation, beginGenerationAfterHandoff, createRelay } from "../src/relay/index.mjs";
-import { installContextPreparation } from "../src/host/context-preparation.mjs";
+import { installContextPreparation } from "../host-omp/src/host/context-preparation.mjs";
 import { todoTicket } from "../src/tools/todo.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
 import { SessionStation } from "../src/station/station.mjs";

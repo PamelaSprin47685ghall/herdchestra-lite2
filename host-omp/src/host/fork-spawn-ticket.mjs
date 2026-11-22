@@ -13,13 +13,13 @@ import {
 	outcomeOf,
 	pulse,
 	setOutcome,
-} from "../host/fork-registry.mjs";
-import { renderChildRecord } from "../transcript/replay.mjs";
-import { record } from "../host/diagnostics.mjs";
-import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
-import { forkOf } from "../scope/forkjoin.mjs";
-import { childReturnNudge } from "../scope/return-nudge.mjs";
-import { stopAfterScopeReturn } from "../host/branch-context.mjs";
+} from "./fork-registry.mjs";
+import { renderChildRecord } from "herdchestra-lite2";
+import { record } from "./diagnostics.mjs";
+import { publicScopeId, scopeTitle } from "herdchestra-lite2";
+import { forkOf } from "herdchestra-lite2";
+import { childReturnNudge } from "herdchestra-lite2";
+import { stopAfterScopeReturn } from "./branch-context.mjs";
 
 // A child that stops without scope_return submits nothing. The ticket asks it
 // to return; after this many refusals the child is recorded as failed, so a

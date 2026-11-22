@@ -1,42 +1,8 @@
 // Station registry: one station per session manager, plus the active registry.
 
-import { attachBaseForkPorts, createForkWiring } from "../host/fork-wiring.mjs";
-import {
-	adoptLedger,
-	agentIdOf,
-	conversationKeyOf,
-	identityForAgent,
-	ledgerFor,
-	selectStopStation,
-} from "../host/fork-registry.mjs";
-import { capabilities, contextHeaderOf, modelOf, thinkingOf } from "../host/adapter.mjs";
-import { appendHistoryMessage } from "../host/hack-context.mjs";
-import { sessionFor, setAgentMessages } from "../host/capture.mjs";
-import { record } from "../host/diagnostics.mjs";
-import { createEmptyCatalog, preparseModelSpec } from "../host/pricing.mjs";
 import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { SessionStation } from "./station.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
-
-/**
- * One fork registry per process. A fork tree spans agents, and every agent
- * loads the extension again, so the wiring must outlive one extension
- * instance.
- */
-const FORK_WIRING_KEY = Symbol.for("herdchestra-lite2.fork-wiring.v1");
-
-function globalForkWiring() {
-	let wiring = globalThis[FORK_WIRING_KEY];
-	if (!wiring) {
-		wiring = createForkWiring();
-		Object.defineProperty(globalThis, FORK_WIRING_KEY, {
-			value: wiring,
-			enumerable: false,
-			configurable: true,
-		});
-	}
-	return wiring;
-}
 
 /**
  * Read the one wiring shape the composition root sends:
@@ -80,7 +46,16 @@ function readWiring(input) {
 	};
 }
 
-export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
+/**
+ * Build the one registry for an extension instance.
+ *
+ * `host` is a plain capability bag supplied by the composition root. It is the
+ * only place where this module meets a concrete host: the registry imports no
+ * host module, and every capability is optional so a hostless station still
+ * reports the missing capability instead of failing the hook.
+ */
+export function createStationRegistry(options = {}) {
+	const { host = {}, tickets, pricingCatalog = null } = options;
 	if (
 		!tickets ||
 		typeof tickets.activateTools !== "function" ||
@@ -93,7 +68,7 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 		error.code = "MISSING_TICKETS";
 		throw error;
 	}
-	const wiring = readWiring(ports);
+	const wiring = readWiring(options);
 	// The resolved port table, decided once by the composition root. Domain code
 	// reads this instead of asking a switch, so there is exactly one place where
 	// "which implementation" is answered. Implementations are the object form of
@@ -106,7 +81,9 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 	// One fork tree per process; the ledger is chosen by conversation, so a
 	// parent and its children share brackets even though they are different
 	// stations in different agents.
-	const forkWiring = globalForkWiring();
+	// The fork tree outlives one extension instance. The host owns the process
+	// singleton because it is a host-lifecycle fact, not a station fact.
+	const forkWiring = host.forkWiring?.() ?? null;
 
 	/**
 	 * Give a freshly built station its fork ports, then let the composition
@@ -115,11 +92,13 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 	 * registry sees.
 	 */
 	function attachStationPorts(station, ctx) {
-		const identity = identityForAgent(forkWiring.registry, agentIdOf(ctx));
+		const identity = host.identityForAgent?.(forkWiring?.registry, host.agentIdOf?.(ctx));
 		try {
-			attachBaseForkPorts(station, forkWiring, {
+			host.attachBaseForkPorts?.(station, forkWiring, {
 				identity,
-				conversationKey: conversationKeyOf(ctx?.sessionManager ?? station.manager ?? null),
+				conversationKey: host.conversationKeyOf?.(
+					host.managerOf?.(ctx) ?? station.manager ?? null,
+				),
 				...(wiring.forkOptions ?? {}),
 			});
 		} catch (error) {
@@ -150,34 +129,20 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 		 * the registry is the one composition bridge that can see them.
 		 */
 		host() {
-			return {
-				conversationKeyOf,
-				ledgerFor,
-				adoptLedger,
-				sessionFor,
-				setAgentMessages,
-				contextHeaderOf,
-				record,
-				createEmptyCatalog,
-				appendHistoryMessage,
-				preparseModelSpec,
-				capabilities,
-				modelOf,
-				thinkingOf,
-			};
+			return host;
 		},
 		/**
 		 * The process-wide fork wiring. A station takes its ledger from here so
 		 * every agent of one conversation pairs brackets against the same tree.
 		 */
 		forkWiring() {
-			return globalForkWiring();
+			return host.forkWiring?.() ?? null;
 		},
 		stationFor(ctx) {
-			const key = ctx?.sessionManager ?? ctx;
+			const key = host.managerOf?.(ctx) ?? ctx ?? null;
 			if (!key || (typeof key !== "object" && typeof key !== "function")) {
 				if (!orphanStation) {
-					orphanStation = new SessionStation(null, pi, tickets, registry, pricingCatalog);
+					orphanStation = new SessionStation(null, host, tickets, registry, pricingCatalog);
 					// The composition root may attach ports the moment a station
 					// exists. The hook carries no policy: it only hands the
 					// station over once.
@@ -187,7 +152,13 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 			}
 			let station = stations.get(key);
 			if (!station) {
-				station = new SessionStation(ctx?.sessionManager ?? null, pi, tickets, registry, pricingCatalog);
+				station = new SessionStation(
+					host.managerOf?.(ctx) ?? null,
+					host,
+					tickets,
+					registry,
+					pricingCatalog,
+				);
 				stations.set(key, station);
 				attachStationPorts(station, ctx ?? null);
 				return station;
@@ -206,7 +177,10 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 		},
 		stationForStop(ctx) {
 			const station = registry.stationFor(ctx);
-			const selected = selectStopStation({ station, pendingStation, ctx });
+			const selected = host.selectStopStation?.({ station, pendingStation, ctx }) ?? {
+				station,
+				clearPending: false,
+			};
 			if (selected.clearPending) pendingStation = null;
 			return selected.station;
 		},

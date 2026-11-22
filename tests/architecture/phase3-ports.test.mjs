@@ -14,7 +14,7 @@ import {
 	PORTS,
 } from "../../src/core/ports/registry.mjs";
 import { readSwitch, resolvePorts } from "../../src/core/ports/resolve.mjs";
-import { buildPorts } from "../../src/activation/ports.mjs";
+import { buildPorts } from "../../host-omp/src/activation/ports.mjs";
 import { createStationRegistry } from "../../src/station/registry.mjs";
 
 const repo = new URL("../../", import.meta.url);
@@ -172,7 +172,7 @@ describe("B3 — missing tickets refuse before a station exists", () => {
 		for (const tickets of [undefined, null]) {
 			let error;
 			try {
-				createStationRegistry({}, tickets, null, {});
+				createStationRegistry({ tickets });
 			} catch (caught) {
 				error = caught;
 			}
@@ -184,7 +184,7 @@ describe("B3 — missing tickets refuse before a station exists", () => {
 	test("a partial capability set is refused", () => {
 		let error;
 		try {
-			createStationRegistry({}, { activateTools() {} }, null, {});
+			createStationRegistry({ tickets: { activateTools() {} } });
 		} catch (caught) {
 			error = caught;
 		}
@@ -195,7 +195,7 @@ describe("B3 — missing tickets refuse before a station exists", () => {
 	test("a recording double is accepted and wired to the station", () => {
 		const tickets = recordingTickets();
 		const built = buildPorts({});
-		const registry = createStationRegistry({}, tickets, null, {
+		const registry = createStationRegistry({ tickets,
 			ports: built.names,
 			implementations: built.implementations,
 		});
@@ -206,7 +206,7 @@ describe("B3 — missing tickets refuse before a station exists", () => {
 	test("a station bundle without every port is refused", () => {
 		let error;
 		try {
-			createStationRegistry({}, recordingTickets(), null, {
+			createStationRegistry({ tickets: recordingTickets(),
 				ports: {},
 				implementations: { folding: {} },
 			});

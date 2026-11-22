@@ -4,8 +4,8 @@ import {
 	record,
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
-} from "../src/host/diagnostics.mjs";
-import { createStatusRuntime } from "../src/host/status.mjs";
+} from "../host-omp/src/host/diagnostics.mjs";
+import { createStatusRuntime } from "../host-omp/src/host/status.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 
 function domains() {

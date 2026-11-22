@@ -5,7 +5,7 @@ import {
 	restoreScopedModelTicket,
 	sendSteerTicket,
 	sendUserMessageTicket,
-} from "../tools/tickets.mjs";
+} from "../host/host-tickets.mjs";
 import { record } from "../host/diagnostics.mjs";
 
 /**

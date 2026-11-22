@@ -10,14 +10,14 @@ import {
 	record,
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
-} from "../src/host/diagnostics.mjs";
+} from "../host-omp/src/host/diagnostics.mjs";
 import {
 	sendSteerTicket,
 	sendUserMessageTicket,
-} from "../src/tools/tickets.mjs";
-import { createStatusRuntime } from "../src/host/status.mjs";
-import { wireHooks } from "../src/activation/hooks.mjs";
-import { wireCommands } from "../src/activation/commands.mjs";
+} from "../host-omp/src/host/host-tickets.mjs";
+import { createStatusRuntime } from "../host-omp/src/host/status.mjs";
+import { wireHooks } from "../host-omp/src/activation/hooks.mjs";
+import { wireCommands } from "../host-omp/src/activation/commands.mjs";
 import { commitSelfHandoff } from "../src/station/handoff-state.mjs";
 import { createState } from "../src/scope/index.mjs";
 import { createRelay } from "../src/relay/state.mjs";

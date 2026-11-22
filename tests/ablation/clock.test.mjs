@@ -8,7 +8,7 @@
 import { expect, test } from "bun:test";
 import { createTestStation } from "../helpers/station-ports.mjs";
 
-import { buildPorts } from "../../src/activation/ports.mjs";
+import { buildPorts } from "../../host-omp/src/activation/ports.mjs";
 import { createBracketLedger, registerFork } from "../../src/scope/index.mjs";
 import { SessionStation } from "../../src/station/station.mjs";
 

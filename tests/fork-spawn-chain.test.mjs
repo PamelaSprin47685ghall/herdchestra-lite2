@@ -10,8 +10,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { createBranchSession } from "../src/host/branch-session.mjs";
-import { createForkWiring } from "../src/host/fork-wiring.mjs";
+import { createBranchSession } from "../host-omp/src/host/branch-session.mjs";
+import { createForkWiring } from "../host-omp/src/host/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
@@ -25,7 +25,7 @@ import {
   outcomeOf,
   setOutcome,
   waitForReady,
-} from "../src/host/fork-registry.mjs";
+} from "../host-omp/src/host/fork-registry.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 
 const AGENT_REGISTRY = { kind: "agentRegistry" };

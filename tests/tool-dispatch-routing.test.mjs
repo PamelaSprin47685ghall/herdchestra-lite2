@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { installToolDispatch } from "../src/host/tool-dispatch.mjs";
+import { installToolDispatch } from "../host-omp/src/host/tool-dispatch.mjs";
 
 function makeTool() {
 	const ran = [];

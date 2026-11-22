@@ -16,7 +16,7 @@ import {
 	recordNaturalStop,
 } from "../src/station/handoff-state.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
-import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/host/policy.mjs";
+import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../host-omp/src/host/policy.mjs";
 
 function relayState(overrides = {}) {
 	return { autopilot: true, relay: { ...createRelay(), ...overrides } };

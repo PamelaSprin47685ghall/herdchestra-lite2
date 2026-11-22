@@ -6,7 +6,7 @@ import {
 	childDisplayFor,
 	registerToolCardComponent,
 	renderChildActivity,
-} from "../src/host/child-display.mjs";
+} from "../host-omp/src/host/child-display.mjs";
 import { createBracketLedger, markReady, registerFork } from "../src/scope/forkjoin.mjs";
 
 class Session {

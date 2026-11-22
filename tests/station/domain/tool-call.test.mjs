@@ -12,7 +12,7 @@ import {
 	MAIN_AGENT,
 	READ_ONLY_SUBAGENT,
 	READ_WRITE_SUBAGENT,
-} from "../../../src/host/policy.mjs";
+} from "../../../host-omp/src/host/policy.mjs";
 import { decideToolCall } from "../../../src/station/domain/tool-call.mjs";
 
 const NORMAL_CALL = {

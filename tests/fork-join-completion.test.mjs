@@ -15,7 +15,7 @@ import {
 	takeReady,
 } from "../src/scope/forkjoin.mjs";
 import { createState } from "../src/scope/state.mjs";
-import { createEmptyCatalog } from "../src/host/pricing.mjs";
+import { createEmptyCatalog } from "../host-omp/src/host/pricing.mjs";
 import { createToolCallLedger } from "../src/station/domain/tool-call-ledger.mjs";
 
 /** A root station with only the ports the control handlers read. */

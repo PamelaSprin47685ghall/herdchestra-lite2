@@ -3,8 +3,31 @@
  * tools. Mechanical only. No business logic lives here.
  */
 
-import { createStationRegistry } from "../station/index.mjs";
-import { bindHostForkPorts } from "../host/fork-wiring.mjs";
+import { createStationRegistry } from "herdchestra-lite2";
+import {
+	attachBaseForkPorts,
+	bindHostForkPorts,
+	createForkWiring,
+} from "../host/fork-wiring.mjs";
+import {
+	adoptLedger,
+	agentIdOf,
+	conversationKeyOf,
+	identityForAgent,
+	ledgerFor,
+	selectStopStation,
+} from "../host/fork-registry.mjs";
+import {
+	capabilities,
+	contextHeaderOf,
+	managerOf,
+	modelOf,
+	thinkingOf,
+} from "../host/adapter.mjs";
+import { appendHistoryMessage } from "../host/hack-context.mjs";
+import { sessionFor, setAgentMessages } from "../host/capture.mjs";
+import { charsToTokens, createEmptyCatalog, preparseModelSpec } from "../host/pricing.mjs";
+import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
 import {
 	refreshStationDisplay,
 	resolveStationBinding,
@@ -20,6 +43,74 @@ import { wireHooks } from "./hooks.mjs";
 import { wireTools } from "./tools.mjs";
 
 export { installCapture };
+
+/**
+ * One fork wiring per process. A fork tree spans agents, and every agent loads
+ * the extension again, so the wiring outlives one extension instance.
+ */
+const FORK_WIRING_KEY = Symbol.for("herdchestra-lite2.fork-wiring.v1");
+
+function globalForkWiring() {
+	let wiring = globalThis[FORK_WIRING_KEY];
+	if (!wiring) {
+		wiring = createForkWiring();
+		Object.defineProperty(globalThis, FORK_WIRING_KEY, {
+			value: wiring,
+			enumerable: false,
+			configurable: true,
+		});
+	}
+	return wiring;
+}
+
+/**
+ * The capability bag the core package sees. Every entry reads a host shape and
+ * returns a plain value; the core never receives `pi` or a host context.
+ */
+export function createHostBag(pi) {
+	const branchOf = (ctx) => {
+		try {
+			const branch = managerOf(ctx)?.getBranch?.();
+			return Array.isArray(branch) ? branch : [];
+		} catch {
+			return [];
+		}
+	};
+	const activeTools = () => {
+		try {
+			const active = pi?.getActiveTools?.();
+			return Array.isArray(active) ? active : [];
+		} catch {
+			return [];
+		}
+	};
+	return Object.freeze({
+		forkWiring: () => globalForkWiring(),
+		attachBaseForkPorts,
+		identityForAgent,
+		agentIdOf,
+		conversationKeyOf,
+		managerOf,
+		branchOf,
+		agentOf: (ctx) => ctx?.agent ?? null,
+		selectStopStation,
+		ledgerFor,
+		adoptLedger,
+		sessionFor,
+		setAgentMessages,
+		contextHeaderOf,
+		activeTools,
+		record,
+		createEmptyCatalog,
+		appendHistoryMessage,
+		preparseModelSpec,
+		capabilities,
+		modelOf,
+		thinkingOf,
+		usage: { entryUsage, totalInput, usageSnapshot },
+		pricing: { charsToTokens },
+	});
+}
 
 /** Assemble the extension: registry, hooks, tools, and commands. */
 /**
@@ -62,7 +153,10 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 		});
 		bindHostForkPorts(station, forkWiring, binding);
 	};
-	registry = createStationRegistry(pi, buildTickets(pi), pricingCatalog, {
+	registry = createStationRegistry({
+		host: createHostBag(pi),
+		tickets: buildTickets(pi),
+		pricingCatalog,
 		ports: table,
 		implementations: ports.implementations,
 		onStation: attachStation,

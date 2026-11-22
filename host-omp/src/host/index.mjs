@@ -48,3 +48,17 @@ export {
 	loadPricingCatalog,
 	resolveModelPolicy,
 } from "./pricing.mjs";
+export {
+	sendSteerTicket,
+	sendUserMessageTicket,
+	activateToolsTicket,
+	switchModelTicket,
+	restoreScopedModelTicket,
+	forkTicket,
+	joinTicket,
+	returnTicket,
+	scopeContextTicket,
+	panhandleTicket,
+	ticketHost,
+} from "./host-tickets.mjs";
+export { spawnChildTicket, writeFrozenOutcome } from "./fork-spawn-ticket.mjs";

@@ -6,9 +6,9 @@ import {
   attachBaseForkPorts,
   bindHostForkPorts,
   createForkWiring,
-} from "../src/host/fork-wiring.mjs";
+} from "../host-omp/src/host/fork-wiring.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
-import { spawnChildTicket } from "../src/tools/fork-spawn-ticket.mjs";
+import { spawnChildTicket } from "../host-omp/src/host/fork-spawn-ticket.mjs";
 import {
   adoptLedger,
   conversationKeyOf,
@@ -16,7 +16,7 @@ import {
   outcomeOf,
   setOutcome,
   waitForReady,
-} from "../src/host/fork-registry.mjs";
+} from "../host-omp/src/host/fork-registry.mjs";
 import { markReady, openChildren, registerFork, RUNNING } from "../src/scope/forkjoin.mjs";
 import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 
@@ -375,7 +375,7 @@ describe("attachForkPorts", () => {
       levelKey: "L",
     });
     expect(taken.fork.forkId).toBe("f9");
-    const { identityForAgent } = await import("../src/host/fork-registry.mjs");
+    const { identityForAgent } = await import("../host-omp/src/host/fork-registry.mjs");
     const identity = identityForAgent(wiring.registry, "agent-child-9");
     expect(identity?.forkId).toBe("f9");
     expect(identity?.parentOwnerId).toBe("root");
@@ -502,7 +502,7 @@ describe("child identity table", () => {
       identityForAgent,
       identityOf,
       setIdentity,
-    } = await import("../src/host/fork-registry.mjs");
+    } = await import("../host-omp/src/host/fork-registry.mjs");
     const registry = createForkRegistry();
     expect(setIdentity(registry, "f1", {
       parentOwnerId: "root",
@@ -520,7 +520,7 @@ describe("child identity table", () => {
 
   test("two forks never overwrite each other's identity", async () => {
     const { createForkRegistry, identityOf, setIdentity } = await import(
-      "../src/host/fork-registry.mjs"
+      "../host-omp/src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
     setIdentity(registry, "a", { parentOwnerId: "root", agentId: "agent-a" });
@@ -536,7 +536,7 @@ describe("child identity table", () => {
       createForkRegistry,
       identityForAgent,
       setIdentity,
-    } = await import("../src/host/fork-registry.mjs");
+    } = await import("../host-omp/src/host/fork-registry.mjs");
     const registry = createForkRegistry();
     setIdentity(registry, "a", { parentOwnerId: "root", agentId: "agent-a" });
     setIdentity(registry, "b", { parentOwnerId: "root", agentId: "agent-b" });
@@ -552,7 +552,7 @@ describe("child identity table", () => {
     const seen = [];
     // The recorder runs inside createSession, so it needs the reader here
     // rather than in an enclosing scope.
-    const { identityOf } = await import("../src/host/fork-registry.mjs");
+    const { identityOf } = await import("../host-omp/src/host/fork-registry.mjs");
     const attached = attachForkPorts(station, wiring, {
       conversationKey: "c",
       createSession: async (spec) => {
@@ -584,7 +584,7 @@ describe("child identity table", () => {
     const wiring = createForkWiring();
     const station = stationOf();
     let seenAtAssembly = null;
-    const { identityForAgent } = await import("../src/host/fork-registry.mjs");
+    const { identityForAgent } = await import("../host-omp/src/host/fork-registry.mjs");
     attachForkPorts(station, wiring, {
       conversationKey: "c",
       createSession: async (spec) => {
@@ -618,7 +618,7 @@ describe("ledger sharing across stations", () => {
 
   test("two stations of one conversation share one ledger", async () => {
     const { SessionStation } = await import("../src/station/station.mjs");
-    const { createForkWiring } = await import("../src/host/fork-wiring.mjs");
+    const { createForkWiring } = await import("../host-omp/src/host/fork-wiring.mjs");
     const wiring = createForkWiring();
     const registry = {
       forkWiring: () => wiring,
@@ -638,7 +638,7 @@ describe("ledger sharing across stations", () => {
 
   test("two conversations never share a ledger", async () => {
     const { SessionStation } = await import("../src/station/station.mjs");
-    const { createForkWiring } = await import("../src/host/fork-wiring.mjs");
+    const { createForkWiring } = await import("../host-omp/src/host/fork-wiring.mjs");
     const wiring = createForkWiring();
     const registry = { forkWiring: () => wiring, ports: () => ({}) };
     const one = { getSessionId: () => "conversation-1" };
@@ -658,7 +658,7 @@ describe("ledger sharing across stations", () => {
 
   test("a shared ledger carries a fork registered by one station to the other", async () => {
     const { SessionStation } = await import("../src/station/station.mjs");
-    const { createForkWiring } = await import("../src/host/fork-wiring.mjs");
+    const { createForkWiring } = await import("../host-omp/src/host/fork-wiring.mjs");
     const wiring = createForkWiring();
     const registry = {
       forkWiring: () => wiring,
@@ -684,7 +684,7 @@ describe("ledger sharing across stations", () => {
 describe("child identities", () => {
   test("an identity is visible before the spawn and keyed by fork", async () => {
     const { createForkRegistry, identityOf, identityForAgent, setIdentity } = await import(
-      "../src/host/fork-registry.mjs"
+      "../host-omp/src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
     setIdentity(registry, "f1", {
@@ -704,7 +704,7 @@ describe("child identities", () => {
 
   test("two children keep separate identities", async () => {
     const { createForkRegistry, identityForAgent, identityOf, setIdentity } = await import(
-      "../src/host/fork-registry.mjs"
+      "../host-omp/src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
     setIdentity(registry, "a", { parentOwnerId: "root", ownScopeId: "s-a", agentId: "ag-a" });
@@ -717,7 +717,7 @@ describe("child identities", () => {
 
   test("clearing an identity also clears its agent handle", async () => {
     const { clearIdentity, createForkRegistry, identityForAgent, setIdentity } = await import(
-      "../src/host/fork-registry.mjs"
+      "../host-omp/src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
     setIdentity(registry, "f9", { parentOwnerId: "root", ownScopeId: "s", agentId: "ag-9" });
@@ -730,7 +730,7 @@ describe("child identities", () => {
     const wiring = createForkWiring();
     const station = stationOf();
     let seenAtAssembly = null;
-    const { identityOf } = await import("../src/host/fork-registry.mjs");
+    const { identityOf } = await import("../host-omp/src/host/fork-registry.mjs");
     attachForkPorts(station, wiring, {
       conversationKey: "c",
       createSession: async (spec) => {
@@ -971,7 +971,7 @@ describe("spawnChildTicket directly", () => {
     const ledger = ledgerFor(wiring.registry, "direct3");
     registerFork(ledger, { forkId: "d3", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
     // The child returned first and wrote its own record.
-    const { setOutcome } = await import("../src/host/fork-registry.mjs");
+    const { setOutcome } = await import("../host-omp/src/host/fork-registry.mjs");
     setOutcome(wiring.registry, "d3", {
       record: "the child's own record",
       failed: false,

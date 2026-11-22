@@ -50,7 +50,7 @@ export const READ_WRITE_SUBAGENT = "read-write-subagent";
 
 function branchOf(ctx) {
 	try {
-		const branch = ctx?.sessionManager?.getBranch?.();
+		const branch = ctx?.branch?.();
 		return Array.isArray(branch) ? branch : [];
 	} catch {
 		return [];

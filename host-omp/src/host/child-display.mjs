@@ -3,8 +3,8 @@
 // unsettled call (scope_join, scope_return, or any slow tool) never pins the
 // transcript retirement frontier; finished tools append at full size.
 import { record } from "./diagnostics.mjs";
-import { forkOf, RUNNING, READY } from "../scope/forkjoin.mjs";
-import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
+import { forkOf, RUNNING, READY } from "herdchestra-lite2";
+import { publicScopeId, scopeTitle } from "herdchestra-lite2";
 
 export const CHILD_ACTIVITY_TYPE = "herd.fork-activity";
 export const ACTIVE_TOOLS_WIDGET_KEY = "herd-tools";

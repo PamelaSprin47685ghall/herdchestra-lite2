@@ -16,14 +16,8 @@
 		"workflow",
 		"scope"
 	],
-	"omp": {
-		"extensions": ["./src/main.mjs"]
-	},
-	"pi": {
-		"extensions": ["./src/main.mjs"]
-	},
 	"exports": {
-		".": "./src/main.mjs",
+		".": "./src/index.mjs",
 		"./package.json": "./package.json"
 	},
 	"files": [

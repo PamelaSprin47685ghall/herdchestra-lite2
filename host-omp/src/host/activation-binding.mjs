@@ -14,7 +14,7 @@ import {
 	conversationKeyOf,
 	identityForAgent,
 } from "./fork-registry.mjs";
-import { scopeTitle } from "../scope/scope-id.mjs";
+import { scopeTitle } from "herdchestra-lite2";
 import { planStationBinding } from "./domain/binding.mjs";
 
 function agentIdOfSession(session) {

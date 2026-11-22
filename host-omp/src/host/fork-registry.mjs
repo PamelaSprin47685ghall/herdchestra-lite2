@@ -5,8 +5,8 @@
 // module is the holder the wiring injects as the four ports. It holds no host
 // objects: a ledger is plain data, and every wait is a plain Promise.
 
-import { emptyTotals, forkOf, markReady, takeReady } from "../scope/index.mjs";
-import { normalizeTargets, validTargets } from "../scope/targets.mjs";
+import { emptyTotals, forkOf, markReady, takeReady } from "herdchestra-lite2";
+import { normalizeTargets, validTargets } from "herdchestra-lite2";
 
 function failure(code, reason) {
   return { ok: false, code, reason };

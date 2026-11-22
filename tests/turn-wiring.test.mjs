@@ -8,13 +8,13 @@
 import { describe, expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
 
-import { wireHooks } from "../src/activation/hooks.mjs";
+import { wireHooks } from "../host-omp/src/activation/hooks.mjs";
 import {
 	adoptLedger,
 	createForkRegistry,
 	ledgerFor,
-} from "../src/host/fork-registry.mjs";
-import { resolveForkLedger } from "../src/host/fork-identity.mjs";
+} from "../host-omp/src/host/fork-registry.mjs";
+import { resolveForkLedger } from "../host-omp/src/host/fork-identity.mjs";
 import {
 	createBracketLedger,
 	restoreLedger,

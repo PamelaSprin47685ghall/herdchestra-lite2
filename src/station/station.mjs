@@ -146,13 +146,24 @@ function amendArgumentsOf(call) {
 	return args?.amend ?? null;
 }
 
+/**
+ * A station can receive capabilities from two places: the composition root's
+ * bag (through the registry) and the constructor argument. They are the same
+ * object in production; a test double may supply only one side, so the two are
+ * merged with the registry winning on a shared key.
+ */
+function mergeHost(fromRegistry, fromConstructor) {
+	if (!fromRegistry) return fromConstructor ?? null;
+	if (!fromConstructor) return fromRegistry;
+	return { ...fromConstructor, ...fromRegistry };
+}
+
 export class SessionStation {
-	constructor(manager, pi, tickets, registry, pricingCatalog) {
+	constructor(manager, host, tickets, registry, pricingCatalog) {
 		this.manager = manager;
-		this.pi = pi;
+		this.host = mergeHost(registry?.host?.(), host);
 		this.tickets = tickets;
 		this.registry = registry;
-		this.host = registry?.host?.() ?? null;
 		this.pricingCatalog =
 			pricingCatalog ?? this.host?.createEmptyCatalog?.() ?? null;
 		this.state = restoreState(manager, this.host?.record);
@@ -239,6 +250,8 @@ export class SessionStation {
 			noteError: (domain, error) => this.noteError(domain, error),
 			modelKeyOf: (message) => modelKey(message),
 			actualModelOf: (ctx) => actualModel(ctx, this.host),
+			usage: this.host?.usage ?? null,
+			pricing: this.host?.pricing ?? null,
 		});
 		this.usage.restoreFromBranch(this.manager);
 		// The composition root builds one complete bundle; bind each
@@ -390,17 +403,30 @@ export class SessionStation {
 
 	// -- Policy --------------------------------------------------------------
 
+	/**
+	 * The only host-shaped value a station reads. `ctx` stays opaque: every
+	 * field comes from the injected host bag, so a hostless station reads an
+	 * empty branch and no agent instead of reaching into a host object.
+	 */
+	sessionView(ctx) {
+		return {
+			branch: () => this.host?.branchOf?.(ctx) ?? [],
+			agent: this.host?.agentOf?.(ctx) ?? null,
+		};
+	}
+
 	policy(ctx) {
 		if (this.agentPolicy !== null) return this.agentPolicy;
-		const policy = agentPolicy(ctx);
+		const view = this.sessionView(ctx);
+		const policy = agentPolicy(view);
 		// Freeze only a verdict backed by the host's persisted contract. The
 		// runtime identity fallback carries no tool grant, so it must be
 		// recomputed until `session_init` lands.
 		if (policy === MAIN_AGENT) {
-			if (ctx?.agent?.kind === "main") this.agentPolicy = policy;
+			if (view.agent?.kind === "main") this.agentPolicy = policy;
 			return policy;
 		}
-		if (hasSessionInit(ctx)) {
+		if (hasSessionInit(view)) {
 			this.agentPolicy = policy;
 		}
 		return policy;
@@ -415,7 +441,7 @@ export class SessionStation {
 		if (policy !== READ_WRITE_SUBAGENT) return;
 		let active = [];
 		try {
-			active = this.pi?.getActiveTools?.() ?? [];
+			active = this.host?.activeTools?.() ?? [];
 		} catch {
 			active = [];
 		}
@@ -447,7 +473,7 @@ export class SessionStation {
 	 */
 	todoReady() {
 		try {
-			const active = this.pi?.getActiveTools?.();
+			const active = this.host?.activeTools?.();
 			return Array.isArray(active) && active.includes("todo");
 		} catch {
 			return false;

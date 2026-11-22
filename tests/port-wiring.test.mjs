@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
 
-import { wireProviderObservation } from "../src/host/provider-observer.mjs";
-import { installStatus } from "../src/host/status.mjs";
+import { wireProviderObservation } from "../host-omp/src/host/provider-observer.mjs";
+import { installStatus } from "../host-omp/src/host/status.mjs";
 import { queueModelSwitch, takePendingModelSwitch } from "../src/station/models.mjs";
 import { SessionStation } from "../src/station/station.mjs";
-import { buildPorts } from "../src/activation/ports.mjs";
-import { resolveWiringPorts } from "../src/activation/index.mjs";
+import { buildPorts } from "../host-omp/src/activation/ports.mjs";
+import { resolveWiringPorts } from "../host-omp/src/activation/index.mjs";
 import { createStationRegistry } from "../src/station/registry.mjs";
-import { wireCommands } from "../src/activation/commands.mjs";
+import { wireCommands } from "../host-omp/src/activation/commands.mjs";
 import { createState, deserializeState, serializeState } from "../src/scope/index.mjs";
 
 const PORT_ENV = {
@@ -253,14 +253,14 @@ test("a refused port switch throws at the composition root", () => {
 test("the registry accepts one wiring shape and refuses a flat name table", () => {
 	const tickets = { activateTools() {}, steer() {}, prompt() {} };
 	expect(() =>
-		createStationRegistry({}, tickets, null, { relay: "handoff" }),
+		createStationRegistry({ tickets, relay: "handoff" }),
 	).toThrow(/LEGACY_PORTS_SHAPE/);
 });
 
 test("implementations() returns one frozen object, not a copy per read", () => {
 	const tickets = { activateTools() {}, steer() {}, prompt() {} };
 	const built = buildPorts({});
-	const registry = createStationRegistry({}, tickets, null, {
+	const registry = createStationRegistry({ tickets,
 		ports: built.names,
 		implementations: built.implementations,
 	});

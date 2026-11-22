@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { appendHistoryMessage, commitSkillReceipt } from "../src/host/hack-context.mjs";
-import { rememberSession } from "../src/host/capture.mjs";
+import { appendHistoryMessage, commitSkillReceipt } from "../host-omp/src/host/hack-context.mjs";
+import { rememberSession } from "../host-omp/src/host/capture.mjs";
 
 let nextAgent = 0;
 

@@ -523,7 +523,7 @@ describe("owner queries", () => {
 
   test("parks a join until a child returns, then takes it", async () => {
     const { createForkRegistry, ledgerFor, notifyWaiters, waitForReady } = await import(
-      "../src/host/fork-registry.mjs"
+      "../host-omp/src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
     const ledger = ledgerFor(registry, "conversation");
@@ -544,7 +544,7 @@ describe("owner queries", () => {
 
   test("a join wakes on abort without cancelling the child", async () => {
     const { createForkRegistry, ledgerFor, waitForReady } = await import(
-      "../src/host/fork-registry.mjs"
+      "../host-omp/src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
     const ledger = ledgerFor(registry, "conversation");
@@ -568,7 +568,7 @@ describe("owner queries", () => {
 
   test("a return marks ready first, then parks until the parent takes it", async () => {
     const { createForkRegistry, ledgerFor, waitForJoin } = await import(
-      "../src/host/fork-registry.mjs"
+      "../host-omp/src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
     const ledger = ledgerFor(registry, "conversation");
@@ -579,7 +579,7 @@ describe("owner queries", () => {
     expect(forkOf(ledger, "c1").outcome).toBe(FAILED);
     markReady(ledger, "c1")?.ok;
     takeReady(ledger, { ownerId: "root", levelKey: "L0" });
-    const { notifyWaiters } = await import("../src/host/fork-registry.mjs");
+    const { notifyWaiters } = await import("../host-omp/src/host/fork-registry.mjs");
     notifyWaiters(registry);
     const out = await pending;
     expect(out.ok).toBe(true);
@@ -588,7 +588,7 @@ describe("owner queries", () => {
 
   test("stores and reads a child record by fork id", async () => {
     const { createForkRegistry, clearOutcome, outcomeOf, setOutcome, statsOf } = await import(
-      "../src/host/fork-registry.mjs"
+      "../host-omp/src/host/fork-registry.mjs"
     );
     const registry = createForkRegistry();
     setOutcome(registry, "c1", { record: "[read]", failed: false });

@@ -5,7 +5,7 @@ import {
 	installVibeTools,
 	rememberSession,
 	setAgentMessages,
-} from "../src/host/capture.mjs";
+} from "../host-omp/src/host/capture.mjs";
 
 // capture.mjs keeps its install state on globalThis so a second extension copy
 // cannot double-patch. Each test starts from a clean capture record.

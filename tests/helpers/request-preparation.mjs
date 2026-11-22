@@ -1,7 +1,7 @@
 // Model the host's separate Agent and running-loop arrays. Production hooks
 // prepare requests; this fixture only delivers events and runs those hooks.
 
-import { rememberSession } from "../../src/host/capture.mjs";
+import { rememberSession } from "../../host-omp/src/host/capture.mjs";
 
 export function attachRequestPreparation(session, ctx) {
 	const agent = session.agent;

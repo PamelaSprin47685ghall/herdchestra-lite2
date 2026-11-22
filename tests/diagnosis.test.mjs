@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { wireHostDiagnosis } from "../src/activation/diagnosis.mjs";
+import { wireHostDiagnosis } from "../host-omp/src/activation/diagnosis.mjs";
 
 function makeHost() {
 	const handlers = new Map();

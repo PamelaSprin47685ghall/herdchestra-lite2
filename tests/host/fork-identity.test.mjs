@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildChildIdentity,
 	resolveForkLedger,
-} from "../../src/host/fork-identity.mjs";
+} from "../../host-omp/src/host/fork-identity.mjs";
 
 describe("resolveForkLedger", () => {
 	const identityLedger = { id: "identity", order: [] };

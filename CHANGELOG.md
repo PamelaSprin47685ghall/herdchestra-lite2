@@ -6,6 +6,27 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — the omp host layer is a package of its own
+
+- The host wiring and every omp-facing file move to `host-omp/`
+  (`herdchestra-host-omp`), now the only plugin entry: it declares
+  `omp.extensions` and depends on the core through
+  `"herdchestra-lite2": "file:.."`. The root package no longer declares an
+  extension and exports its API through `src/index.mjs`.
+- The core takes an injected `HostBridge` bag instead of the host namespace:
+  `pi`, `ctx.sessionManager`, and every `../host/*` import leave `src/`. A host
+  context is an opaque token inside the core; only the bridge dereferences it.
+  `eslint.config.mjs` drops the `station/registry.mjs` exemption, and
+  `tests/architecture/core-host-free.test.mjs` pins the boundary.
+- Pure tickets return to `src/tools/tickets.mjs`; the host-bound tickets
+  (steer, prompt, active tools, scoped model) live in
+  `host-omp/src/host/host-tickets.mjs`, and `fork-spawn-ticket.mjs` moves to
+  `host-omp/src/host/`.
+- `scripts/sync-plugin.mjs` installs two roots: the core under
+  `TARGET/node_modules/herdchestra-lite2`, the host package at `TARGET`, with
+  the core `skills/` mirrored to `TARGET/skills/`. It removes the retired
+  `herdchestra-lite2` plugin directory so the host cannot load two entries.
+
 ### Added — a repeated `scopeId` amends the existing scope
 
 - `scope_fork` now treats an existing `scopeId` (case-insensitive, finished

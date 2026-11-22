@@ -4,9 +4,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { activate } from "../src/main.mjs";
+import { activate } from "../host-omp/src/main.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
-import { installVibeTools } from "../src/host/index.mjs";
+import { installVibeTools } from "../host-omp/src/host/index.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
 
 function makeManager() {

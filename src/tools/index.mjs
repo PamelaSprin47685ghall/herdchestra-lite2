@@ -25,15 +25,6 @@ export {
 	panhandleParameters,
 } from "./descriptions.mjs";
 export {
-	sendSteerTicket,
-	activateToolsTicket,
-	forkTicket,
-	joinTicket,
-	returnTicket,
-	scopeContextTicket,
-	panhandleTicket,
-} from "./tickets.mjs";
-export {
 	TODO_DESCRIPTION,
 	TODO_OP_DESCRIPTION,
 	TODO_LIST_DESCRIPTION,

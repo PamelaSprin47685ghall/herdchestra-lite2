@@ -67,9 +67,9 @@ describe("retired mechanisms stay retired", () => {
 
 	test("the retired branch plumbing files are gone", () => {
 		for (const path of [
-			"../src/host/event-mux.mjs",
-			"../src/host/queue-retraction.mjs",
-			"../src/host/scope-dispatch.mjs",
+			"../host-omp/src/host/event-mux.mjs",
+			"../host-omp/src/host/queue-retraction.mjs",
+			"../host-omp/src/host/scope-dispatch.mjs",
 			"../src/features/scope/index.mjs",
 			"../src/features/scope/bare.mjs",
 			"../tests/event-mux.test.mjs",
@@ -77,7 +77,7 @@ describe("retired mechanisms stay retired", () => {
 		]) {
 			expect(exists(path)).toBe(false);
 		}
-		expect(exists("../src/host/tool-dispatch.mjs")).toBe(true);
+		expect(exists("../host-omp/src/host/tool-dispatch.mjs")).toBe(true);
 	});
 
 	test("the retired prompt sections stay out of the error document", () => {
@@ -109,7 +109,7 @@ describe("retired mechanisms stay retired", () => {
 		expect(controls).not.toContain("FORK_MESSAGE_MIXED");
 		expect(controls).not.toContain("exclusiveCallRefusal");
 		expect(controls).not.toContain("mixedForkCalls");
-		const tools = source("../src/activation/tools.mjs");
+		const tools = source("../host-omp/src/activation/tools.mjs");
 		// No tool serializes itself. A multi-call message is ordered by the
 		// model: place the two blocking right brackets last.
 		expect(tools).not.toContain('concurrency: "exclusive"');
@@ -139,20 +139,20 @@ describe("retired mechanisms stay retired", () => {
 		const tickets = source("../src/tools/tickets.mjs");
 		expect(tickets.match(/pauseBranchClock\?\.\(\)/g)?.length).toBe(2);
 		expect(tickets.match(/resumeBranchClock\?\.\(\)/g)?.length).toBe(2);
-		const tools = source("../src/activation/tools.mjs");
+		const tools = source("../host-omp/src/activation/tools.mjs");
 		expect(tools).not.toContain("executionMode");
 	});
 
 	test("a child installs its own request preparation before the first prompt", () => {
-		const context = source("../src/host/branch-context.mjs");
+		const context = source("../host-omp/src/host/branch-context.mjs");
 		expect(context).toContain("installContextPreparation");
 		expect(context).toContain("createContext");
-		const activation = source("../src/activation/index.mjs");
+		const activation = source("../host-omp/src/activation/index.mjs");
 		expect(activation).toContain("resolveStationBinding");
-		const binding = source("../src/host/activation-binding.mjs");
+		const binding = source("../host-omp/src/host/activation-binding.mjs");
 		expect(binding).toContain("prepareChildContext");
-		const wiring = source("../src/host/fork-wiring.mjs");
-		const spawn = source("../src/tools/fork-spawn-ticket.mjs");
+		const wiring = source("../host-omp/src/host/fork-wiring.mjs");
+		const spawn = source("../host-omp/src/host/fork-spawn-ticket.mjs");
 		expect(wiring).toContain("spawnChildTicket");
 		expect(spawn).toContain("ports.prepareChild");
 		expect(spawn.indexOf("ports.prepareChild")).toBeLessThan(

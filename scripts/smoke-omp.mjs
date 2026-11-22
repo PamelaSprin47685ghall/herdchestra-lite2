@@ -22,8 +22,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { SessionStation } from "../src/station/station.mjs";
+import { createTestStation } from "../tests/helpers/station-ports.mjs";
 import { restoreState } from "../src/station/restore.mjs";
-import { captureDiagnosis, installRunnerCapture } from "../src/host/capture.mjs";
+import { captureDiagnosis, installRunnerCapture } from "../host-omp/src/host/capture.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const AGENT_SESSION = join(HOST, "packages/coding-agent/src/session/agent-session.ts");
@@ -293,7 +294,7 @@ function fakePi() {
 	return { pi, tools, handlers, commands, notices };
 }
 
-const { activate } = await import("../src/main.mjs");
+const { activate } = await import("../host-omp/src/main.mjs");
 const harness = fakePi();
 
 await check("activate() completes", async () => {
@@ -333,7 +334,7 @@ await check("a created flow session takes the requested model", async () => {
 	const { createAgentSession } = await import(sdkPath);
 	const { SessionManager } = await import(managerPath);
 	const { CostGate } = await import(costGatePath);
-	const { createBranchSession } = await import("../src/host/branch-session.mjs");
+	const { createBranchSession } = await import("../host-omp/src/host/branch-session.mjs");
 	assert(typeof createAgentSession === "function", "sdk exports no createAgentSession");
 	assert(typeof SessionManager?.inMemory === "function", "no in-memory SessionManager");
 
@@ -426,7 +427,7 @@ await check("a created flow session takes the requested model", async () => {
  */
 await check("flow construction inputs match the owner fixture", async () => {
 	const { deriveBranchConfig, compareBranchFrames } = await import(
-		"../src/host/branch-session.mjs"
+		"../host-omp/src/host/branch-session.mjs"
 	);
 	const prompt = ["You are the owner.", "Managed block."];
 	const owner = {
@@ -501,7 +502,7 @@ function memoryManager() {
 
 await check("a fresh session writes a checkpoint first", () => {
 	const manager = memoryManager();
-	const station = new SessionStation(manager, {}, {}, null, null);
+	const station = createTestStation(SessionStation, manager, {}, {}, null, null);
 	station.state.pins = ["smoke"];
 	station.persist();
 	assert(manager.entries.length === 1, `wrote ${manager.entries.length} entries`);
@@ -514,7 +515,7 @@ await check("a fresh session writes a checkpoint first", () => {
 
 await check("a later write appends a delta and restores", () => {
 	const manager = memoryManager();
-	const station = new SessionStation(manager, {}, {}, null, null);
+	const station = createTestStation(SessionStation, manager, {}, {}, null, null);
 	station.state.pins = ["smoke"];
 	station.persist();
 	station.state.pins.push("second");
@@ -532,10 +533,10 @@ await check("a later write appends a delta and restores", () => {
 
 await check("a reopened session continues with deltas", () => {
 	const manager = memoryManager();
-	const first = new SessionStation(manager, {}, {}, null, null);
+	const first = createTestStation(SessionStation, manager, {}, {}, null, null);
 	first.state.pins = ["kept"];
 	first.persist();
-	const reopened = new SessionStation(manager, {}, {}, null, null);
+	const reopened = createTestStation(SessionStation, manager, {}, {}, null, null);
 	reopened.state.pins.push("added");
 	reopened.persist();
 	const kinds = manager.entries.map((entry) => entry.data.kind ?? "legacy");

@@ -12,19 +12,19 @@ import {
 	returnParameters,
 	PANHANDLE_DESCRIPTION,
 	panhandleParameters,
-} from "../tools/descriptions.mjs";
+} from "herdchestra-lite2";
 import {
 	forkTicket,
 	panhandleTicket,
 	joinTicket,
 	scopeContextTicket,
 	returnTicket,
-} from "../tools/tickets.mjs";
+} from "../host/host-tickets.mjs";
 import {
 	TODO_DESCRIPTION,
 	TODO_PARAMETERS,
 	todoTicket,
-} from "../tools/index.mjs";
+} from "herdchestra-lite2";
 
 export function wireTools(pi, registry) {
 	// The fork/join face: one left bracket and the two right brackets that close

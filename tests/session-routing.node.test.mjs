@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 // Set this directory to run the same checks against a previous source tree.
 const source = process.env.SESSION_ROUTING_SOURCE
 	? pathToFileURL(`${resolve(process.env.SESSION_ROUTING_SOURCE)}/`)
-	: new URL("../src/host/", import.meta.url);
+	: new URL("../host-omp/src/host/", import.meta.url);
 const { rememberSession, sessionFor, setAgentMessages } = await import(
 	new URL("capture.mjs", source)
 );

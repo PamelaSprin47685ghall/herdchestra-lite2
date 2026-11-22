@@ -192,7 +192,7 @@ function commitSelfHandoff(station, ctx, report) {
 		station.state.pins,
 		userPrompts,
 	);
-	const manager = station.manager ?? ctx?.sessionManager ?? null;
+	const manager = station.manager ?? null;
 	const compacted = appendHandoffCompaction(
 		manager,
 		opening,

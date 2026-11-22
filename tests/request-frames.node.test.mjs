@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captureRequestFrame, compareRequestFrames } from "../src/host/request-frames.mjs";
+import { captureRequestFrame, compareRequestFrames } from "../host-omp/src/host/request-frames.mjs";
 
 function request(overrides = {}) {
 	return {

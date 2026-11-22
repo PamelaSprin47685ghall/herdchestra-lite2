@@ -16,7 +16,7 @@ Unreceived child results: {{count}}. Receive them with `scope_join`.
 
 ## receipt.branch
 
-Budget: {{budget}}.
+Scope budget: {{budget}}.
 
 ## receipt.branch-duty
 
@@ -66,7 +66,7 @@ Report your findings. Only scope_return submits your full record.
 
 ## fork.child-return-nudge
 
-You stopped without calling scope_return. That breaks the branch contract: a natural stop submits nothing. Your record stays unpublished until scope_return carries your conclusions and evidence. Continue the work now; do not stop again without returning.
+You stopped without calling scope_return. That breaks the scope contract: a natural stop submits nothing. Your record stays unpublished until scope_return carries your conclusions and evidence. Continue the work now; do not stop again without returning.
 
 ## fork.child-routing
 

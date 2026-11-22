@@ -2,7 +2,7 @@
 
 Replace the latest completed beat (one assistant message and its tool traffic) in your current scope. The next model request sees your reflection instead. Commands and edits already made stay in effect.
 
-Amend is free and runs before ordinary calls in the same message, so you can use refunded budget immediately. Multiple amends replace one beat each. You cannot cross a scope boundary, replace a structural scope call, or amend a beat paid for by an outer scope. Pending defers from the replaced beat are withdrawn, but their text still reaches the scope's receiver.
+Amend is free and runs before ordinary calls in the same message, so you can use refunded budget immediately. Multiple amends replace one beat each. You cannot cross a scope boundary, replace a structural scope call, or amend a beat paid for by an outer scope.
 
 ## amend.reflection
 

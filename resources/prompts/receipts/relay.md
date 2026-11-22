@@ -12,7 +12,7 @@ This write turns the full flow back on. You may still write the final answer.
 
 ## handoff-demand
 
-Write the handoff report in your message body now; do not call tools. Let the content decide its format: there is no template and no required list of sections. The user's prompts are preserved verbatim for your successor, so do not restate them. Write what the successor cannot recover from the code, the files, the prompts preserved above, and the pins.
+Write the handoff report in your message body now; do not call tools. Let the content decide its format: there is no template and no required list of sections. The user's prompts are preserved verbatim for your successor, so do not restate them. Write what the successor cannot recover from the code, the files, the prompts preserved above, and the pins: completed work, verification evidence, unresolved risks, and where fact ends and judgment begins.
 
 ## successor-opening.user-prompts
 
@@ -40,7 +40,7 @@ No relay evaluation. Only a successful todo write counts.
 
 ## next.inside-scope
 
-Branch {{level}} ledger updated; this call did not advance the root relay.
+Scope level {{level}} ledger updated; this call did not advance the root relay.
 
 ## next.held-children
 
@@ -116,7 +116,7 @@ Inherited open ledger: read it with todo({ op: "view" }) before writing your own
 
 ## successor-mandate
 
-Check the work and verification against the user prompts preserved above. Rerun relevant checks; look for missing or narrowed work. Treat the inherited report and ledger as claims, not proof.
+You serve the user, not the previous holder. Read the handoff as context. Own the ledger as your own judgment of what the user still needs. Make your own contribution if appropriate. A pending check may travel to you; name what settles it and who owns it next.
 
 ## pinned-reading
 
@@ -138,7 +138,7 @@ Relay Handoff — Generation {{next}} (from {{prev}})
 
 ## successor-start
 
-Generation {{generation}}: audit the handoff above.
+Generation {{generation}}: continue from the handoff above.
 
 ## handoff-failure
 

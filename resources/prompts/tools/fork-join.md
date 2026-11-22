@@ -8,19 +8,19 @@ Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter
 
 ## fork.intent
 
-Name the goal the child will make true, the surface it owns, and what a successor can accept. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size it to finish and to be accepted.
+Name the goal the child will make true, the surface it owns, and what a successor can accept. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A read-only scope closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size it to finish and to be accepted; when the request needs about n tool calls, roughly sqrt(n) is a guide, not a mandate. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed.
 
 ## fork.budget
 
-Use tool names as keys. Each assistant message spends one unit at most, split among its budgeted calls. The child's balance is separate from yours.
+Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. Free tools need no entry; an empty budget is valid when only free tools are used. A nested scope draws from the flow that opened it.
 
 ## fork.time
 
-Wall-clock budget in seconds from launch. Ordinary tools get at most the remaining time plus one second. Waiting in `scope_join` or `scope_return` pauses that branch's clock.
+Wall-clock budget in seconds from launch: a positive number. Ordinary tools get at most the remaining time plus one second; waiting in `scope_join` or `scope_return` pauses that scope's clock. When the deadline passes, each later tool gets one second, and a tool that overruns is killed and its result is gone. Estimate from measured throughput, count the verification you will still run, and spend near the estimate rather than padding it.
 
 ## fork.permission
 
-`ro` declares read-only intent; it is not a sandbox. In full flow, `rw` needs this generation's first todo submission.
+Declare `ro` or `rw`; the field is required, and a missing, null, or other value rejects the whole batch. `ro` declares read intent; the tools remain available, and the system trusts the declaration. `rw` needs this generation's first todo submission in full flow.
 
 ## fork.forks
 
@@ -79,11 +79,11 @@ Pass `null` if no prior receipt at this level awaits a summary. Otherwise, in 24
 
 ## return.tool
 
-Submit your working record and wait for the receiving parent to accept it. Any unreceived child work transfers to that parent. Put your conclusions in the record; do not send a user-facing answer. The last receipt at your level is sealed in full, with no elder report.
+Hand the record to the parent; the parent receives it with `scope_join`. Any unreceived child work transfers to that parent. Put your conclusions in the record; the final answer lives outside all scopes. The last receipt at your level is sealed in full, with no elder report.
 
 ## return.pending
 
-Fork {{forkId}} queued for {{receiver}}; awaiting acceptance.
+Fork {{forkId}} queued for {{receiver}}; awaiting the parent's join.
 
 ## return.receipt
 

@@ -124,7 +124,7 @@ Read the relevant Pinned Context documents in full before changing the work.
 
 ## successor-rule
 
-Investigate before your first root todo write if needed. Until then, forks must declare permission: "ro". A todo view does not count. If your first evaluation finds open work, finish it and hand off again.
+Investigate before your first root todo write if needed. A todo view does not count. If your first evaluation finds open work, finish it and hand off again.
 
 ## successor-opening.head
 

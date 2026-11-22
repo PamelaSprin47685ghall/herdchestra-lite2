@@ -94,7 +94,7 @@ describe("child record rendering", () => {
               intent: "measure the cache",
               budget: { read: 2, bash: 1 },
               time: 120,
-              permission: "ro",
+              targets: ["cache.mjs"],
             },
           ],
         }),
@@ -105,10 +105,23 @@ describe("child record rendering", () => {
     ];
     const rendered = renderChildRecord(messages);
     expect(rendered).toContain(
-      '[fork f9] intent: "measure the cache" | budget: read 2, bash 1 | time: 120s | permission: ro',
+      '[fork f9] intent: "measure the cache" | budget: read 2, bash 1 | time: 120s | targets: cache.mjs',
     );
     expect(rendered).not.toContain("You are the parent of fork f9");
     expect(rendered).toContain("[result scope_join] OK. Fork f9 joined.");
+  });
+
+  test("an old fork line without targets omits the segment", () => {
+    const messages = [
+      assistant([
+        call("f9", "scope_fork", {
+          forks: [{ intent: "old work", budget: {}, time: 60 }],
+        }),
+      ]),
+    ];
+    const rendered = renderChildRecord(messages);
+    expect(rendered).toContain('[fork f9] intent: "old work" | budget: none | time: 60s');
+    expect(rendered).not.toContain("targets:");
   });
 
   test("numbers the items of one fork call the way the ledger does", () => {
@@ -116,8 +129,8 @@ describe("child record rendering", () => {
       assistant([
         call("f9", "scope_fork", {
           forks: [
-            { intent: "one", budget: {}, time: 60, permission: "ro" },
-            { intent: "two", budget: {}, time: 60, permission: "rw", blocked: true },
+            { intent: "one", budget: {}, time: 60, targets: ["one.mjs"] },
+            { intent: "two", budget: {}, time: 60, targets: ["two.mjs"], blocked: true },
           ],
         }),
       ]),
@@ -125,7 +138,7 @@ describe("child record rendering", () => {
     const [first, second] = renderChildRecord(messages).split("\n");
     expect(first).toStartWith('[fork f9:0] intent: "one"');
     expect(second).toStartWith('[fork f9:1] blocked | intent: "two"');
-    expect(second).toContain("permission: rw");
+    expect(second).toContain("targets: two.mjs");
   });
 
   test("replaces an already folded scope with its summary", () => {
@@ -214,7 +227,7 @@ describe("receipt projection", () => {
   test("shortens only the elder and keeps every left bracket", () => {
     const left = assistant([
       call("f1", "scope_fork", {
-        forks: [{ intent: "outer", budget: {}, time: 60, permission: "ro" }],
+        forks: [{ intent: "outer", budget: {}, time: 60, targets: ["outer.mjs"] }],
       }),
     ]);
     const leftResult = result("f1", "scope_fork", "parent receipt");
@@ -224,7 +237,7 @@ describe("receipt projection", () => {
       [
         "OK. Fork f1 joined.",
         "",
-        '[fork f9] intent: "measure the cache" | budget: read 2 | time: 120s | permission: ro',
+        '[fork f9] intent: "measure the cache" | budget: read 2 | time: 120s | targets: cache.mjs',
         "",
         "long child prose. ".repeat(20),
       ].join("\n"),

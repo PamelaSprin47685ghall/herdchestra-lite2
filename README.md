@@ -4,7 +4,7 @@ Herdchestra Lite 2 gives omp parallel work that returns to the scope that asked 
 
 ## Fork, join and return
 
-`scope_fork({ forks: [...] })` declares what remains and starts every item marked `blocked: false`. Each item carries `scopeId`, `intent`, `blocked`, `budget`, `time`, `permission`, and an optional `model`. `blocked: true` records a checkpoint only: it starts nothing, spends nothing, and is never woken later — the next `scope_fork` declares it again. One invalid item rejects the whole call before any child starts; an array may hold several items, and one assistant message may hold several `scope_fork` calls.
+`scope_fork({ forks: [...] })` declares what remains and starts every item marked `blocked: false`. Each item carries `scopeId`, `intent`, `blocked`, `budget`, `time`, `targets`, and an optional `model`. `blocked: true` records a checkpoint only: it starts nothing, spends nothing, and is never woken later — the next `scope_fork` declares it again. One invalid item rejects the whole call before any child starts; an array may hold several items, and one assistant message may hold several `scope_fork` calls.
 
 `scope_join({ elder_report })` receives one eligible child result. In a message with other calls, place it last: its result is a whole working record and reads best after the other results. No tool is exclusive; the runtime does not reject a mixed message. Pass `null` when no earlier receipt is pending. The receipt keeps every fork line, pin and adoption note; only a later join's `elder_report` may shorten an older receipt's work text, and the newest receipt always stays complete. `scope_join` has no time limit: while it waits, the parent's wall clock stops and the wait is added back to its deadline. `scope_return` gets the same treatment while the parent has not yet taken the record. A manager's time budget does not include the people it hired; tool budget and time budget stay independent.
 
@@ -53,15 +53,11 @@ A session starts simple: a clear task finishes and answers. The first submitted 
 
 Model-facing text lives in `resources/prompts/` as Markdown documents with `## section` blocks. Code loads them through `src/prompts/index.mjs`; no prompt, tool description, parameter description, receipt, or model-facing error is duplicated in source.
 
-## Scope permission
+## Scope targets
 
-Every fork item declares its own `permission: "ro" | "rw"`, and the field is required: a missing, `null`, or other value rejects the whole batch.
+Every fork item declares `targets`, a non-empty array of natural-language descriptions of what it expects to create, read, update, or delete. An item may name a file path, a part of the source, a behavior, or a goal; any human language is valid, and a path is only one kind of target. For example, `["fix any defect you find", "the parts of the source that involve caching"]` is valid. The field is required: a missing, empty, blank, or non-string entry rejects the whole batch. Blocked checkpoints declare their targets too.
 
-`"ro"` is a declaration, not an enforcement boundary. A flow that says `"ro"` is trusted: the system never blocks a tool because the scope called itself read-only, and it never audits a tool call against the claim. Mistake-proofing lives in the required field and in the `"rw"` refusal below; what a flow *does* with the tools it already holds stays a matter of the flow's own discipline.
-
-`"rw"` is refused while the full flow is on and the relay has not recorded its first submitted `todo` ledger for the current generation. A `todo` view is a read-only inspection and does not count.
-
-A refused batch changes no state, and no flow starts. Submit a ledger first, or open the flows with `"ro"`.
+`targets` is a declaration, not an enforcement boundary. The system never audits a tool call against the list; a scope that turns out to need another target may still touch it. The required list is the mistake-proofing: a scope that can name no output is not a separate scope, so think again before forking one. A refused batch changes no state, and no flow starts.
 
 ## Autopilot
 
@@ -76,7 +72,7 @@ A bare `/herd-autopilot` flips the mode and sends nothing to the model: the next
 
 ## Pinned context
 
-`pin` records durable notes: assumptions, deductions, inductions, findings, and conclusions. Each call appends one record to the session state and costs no budget. Pins survive receipt shortening because they belong to the session, not to a scope.
+`pin` records durable notes: assumptions, deductions, inductions, findings, and conclusions. Each call appends one record to the session state and costs no budget. Its receipt sends the caller to the `todo` ledger: a note that changes the plan should enter the work list now, not after the next receipt. Pins survive receipt shortening because they belong to the session, not to a scope.
 
 At a relay handoff, every historical pin is written into the successor's opening text under `## Pinned Context`. The successor is told to read each important document named there with `read`, in full, rather than substituting grep excerpts.
 
@@ -166,7 +162,7 @@ scope_fork({ forks: [{
   blocked: false,
   budget: { read: 3 },
   time: 120,
-  permission: "ro",
+  targets: ["src/transcript/replay.mjs"],
   model: "@smol",
 }] })
 ```

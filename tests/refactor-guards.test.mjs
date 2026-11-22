@@ -147,7 +147,9 @@ describe("retired mechanisms stay retired", () => {
 		expect(context).toContain("installContextPreparation");
 		expect(context).toContain("createContext");
 		const activation = source("../src/activation/index.mjs");
-		expect(activation).toContain("prepareChildContext");
+		expect(activation).toContain("resolveStationBinding");
+		const binding = source("../src/host/activation-binding.mjs");
+		expect(binding).toContain("prepareChildContext");
 		const wiring = source("../src/host/fork-wiring.mjs");
 		const spawn = source("../src/tools/fork-spawn-ticket.mjs");
 		expect(wiring).toContain("spawnChildTicket");

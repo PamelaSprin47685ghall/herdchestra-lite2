@@ -6,6 +6,7 @@
 // objects: a ledger is plain data, and every wait is a plain Promise.
 
 import { forkOf, markReady, takeReady } from "../scope/index.mjs";
+import { normalizeTargets, validTargets } from "../scope/targets.mjs";
 
 function failure(code, reason) {
   return { ok: false, code, reason };
@@ -59,10 +60,9 @@ export function setIdentity(registry, forkId, identity) {
     budget:
       identity.budget && typeof identity.budget === "object" ? { ...identity.budget } : null,
     time: Number.isFinite(identity.time) && identity.time > 0 ? identity.time : null,
-    permission:
-      identity.permission === "ro" || identity.permission === "rw"
-        ? identity.permission
-        : null,
+    targets: validTargets(identity.targets)
+      ? normalizeTargets(identity.targets)
+      : null,
     childDepth: Number.isInteger(identity.childDepth) ? identity.childDepth : null,
     // The bracket ledger is per conversation, not per agent. A child's tool
     // context may expose a different manager object, so the ledger must travel
@@ -153,6 +153,39 @@ export function conversationKeyOf(manager) {
   return typeof value === "string" && value !== ""
     ? `session:${value}`
     : (manager ?? null);
+}
+
+/**
+ * Whether a station belongs to the current context's session. A session switch
+ * must never route the next stop to the old station; the session id survives a
+ * branch manager proxy, so compare it when the manager object differs.
+ */
+export function sameManager(station, ctx) {
+  const key = ctx?.sessionManager ?? ctx;
+  if (!key || !station?.manager) return false;
+  if (station.manager === key) return true;
+  try {
+    const live = key.getSessionId?.();
+    const armed = station.manager.getSessionId?.();
+    return Boolean(live && armed && live === armed);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pick the station that owns a session stop. The pending handoff belongs to
+ * one session; a different manager clears it. Return `clearPending` so the
+ * registry keeps the only mutable field.
+ */
+export function selectStopStation({ station, pendingStation, ctx }) {
+  if (station.state.relay?.handoffPending) return { station, clearPending: false };
+  if (!pendingStation) return { station, clearPending: false };
+  if (!sameManager(pendingStation, ctx)) return { station, clearPending: true };
+  if (pendingStation.state.relay?.handoffPending) {
+    return { station: pendingStation, clearPending: false };
+  }
+  return { station, clearPending: false };
 }
 
 /**

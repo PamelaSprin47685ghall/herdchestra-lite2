@@ -56,4 +56,26 @@ export default [
 			],
 		},
 	},
+	{
+		// The Station class and its domain modules receive host capabilities
+		// through `registry.host()`. The registry is the composition bridge and
+		// the only station file allowed to import the host layer; every other
+		// station file is host-free. The ratchet test enforces the same rule.
+		files: ["src/station/**/*.mjs"],
+		ignores: ["src/station/registry.mjs"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: ["../host/*", "../../host/*"],
+							message:
+								"Station code receives host capabilities through the registry's host() bag; a direct host import is a layering error.",
+						},
+					],
+				},
+			],
+		},
+	},
 ];

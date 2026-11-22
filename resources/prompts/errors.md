@@ -52,11 +52,11 @@ Give the child a non-empty `intent`.
 
 ## invalid-argument
 
-`permission` is `ro` or `rw`; `model` is a string or null.
+`model` is a string or null; `blocked` is a boolean.
 
-## rw-before-ledger
+## invalid-targets
 
-`rw` needs the first submitted ledger for this generation. Submit the ledger, or fork with `ro`.
+`targets` must be a non-empty array of strings, each a natural-language description of what this scope expects to create, read, update, or delete. A file path is only one kind; `["fix any defect you find", "the parts of the source that involve caching"]` is valid. If it is empty, how could a scope with no output be a separate scope?
 
 ## fork-ledger-unavailable
 
@@ -90,10 +90,6 @@ No child has returned yet. Keep working, or wait for one with `scope_join`.
 ## elder-report-missing
 
 Receipt {{scopeId}} is still unreported. Summarize it in `elder_report`, then join again.
-
-## elder-report-unexpected
-
-No receipt needs a summary. Pass `elder_report: null`.
 
 ## join-context-exceeded
 

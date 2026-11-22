@@ -164,6 +164,7 @@ describe("self handoff", () => {
 			persist() {},
 			resetUsageWatermark() {},
 			registry: { clearPending() {} },
+			host: { record },
 		};
 
 		const result = commitSelfHandoff(station, {}, "carry on");

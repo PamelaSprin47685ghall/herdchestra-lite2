@@ -320,7 +320,7 @@ describe("owner queries", () => {
             blocked: false,
             budget: { read: 2 },
             time: 60,
-            permission: "ro",
+            targets: ["src/cache.mjs"],
           },
         ],
       },
@@ -376,7 +376,7 @@ describe("owner queries", () => {
             blocked: false,
             budget: { read: 1 },
             time: 30,
-            permission: "ro",
+            targets: ["src/parser.mjs"],
           },
         ],
       },
@@ -386,19 +386,62 @@ describe("owner queries", () => {
   });
 
   test("rejects a malformed fork before any state change", async () => {
-    const { validateFork } = await import("../src/station/fork-controls.mjs");
+    const { validateFork } = await import("../src/station/domain/fork-join.mjs");
     const state = { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
     const base = {
       scopeId: "probe", intent: "x",
       budget: { read: 1 },
       time: 30,
-      permission: "ro",
+      targets: ["src/parser.mjs"],
     };
-    expect(validateFork(state, base).ok).toBe(true);
-    expect(validateFork(state, { ...base, intent: "  " }).code).toBe("INVALID_INTENT");
-    expect(validateFork(state, { ...base, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
-    expect(validateFork(state, { ...base, time: 0 }).code).toBe("INVALID_TIME");
-    expect(validateFork(state, { ...base, permission: "maybe" }).code).toBe("INVALID_ARGUMENT");
+    expect(validateFork(base).ok).toBe(true);
+    expect(validateFork({ ...base, intent: "  " }).code).toBe("INVALID_INTENT");
+    expect(validateFork({ ...base, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
+    expect(validateFork({ ...base, time: 0 }).code).toBe("INVALID_TIME");
+    for (const targets of [undefined, null, [], ["  "], "src/parser.mjs", [42]]) {
+      expect(validateFork({ ...base, targets }).code).toBe("INVALID_TARGETS");
+    }
+    expect(
+      validateFork({ ...base, targets: [" src/parser.mjs ", "src/cache.mjs"] }).targets,
+    ).toEqual(["src/parser.mjs", "src/cache.mjs"]);
+  });
+
+  test("accepts natural-language targets and keeps them", async () => {
+    const { handleForkCall } = await import("../src/station/fork-controls.mjs");
+    const { validateFork } = await import("../src/station/domain/fork-join.mjs");
+    const targets = ["fix any defect you find", "the parts of the source that involve caching"];
+    const item = {
+      scopeId: "natural",
+      intent: "fix defects",
+      blocked: false,
+      budget: { read: 1 },
+      time: 30,
+      targets,
+    };
+    const valid = validateFork(item);
+    expect(valid.ok).toBe(true);
+    expect(valid.targets).toEqual(targets);
+    expect(validateFork({ ...item, targets: [`  ${targets[0]}  `] }).targets).toEqual([
+      targets[0],
+    ]);
+    expect(validateFork({ ...item, targets: [...targets, "  "] }).code).toBe("INVALID_TARGETS");
+
+    const ledger = createBracketLedger();
+    const spawned = [];
+    const station = {
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
+      forkLedgerPort: () => ledger,
+      childSpawnPort: () => (spec) => {
+        spawned.push(spec);
+      },
+    };
+    const out = handleForkCall(station, {
+      id: "call-natural",
+      arguments: { forks: [item] },
+    });
+    expect(out.isError).toBeUndefined();
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0].receipt).toContain(`Targets: ${targets.join(", ")}`);
   });
 
   test("hands a returning child's own children to the parent first", async () => {

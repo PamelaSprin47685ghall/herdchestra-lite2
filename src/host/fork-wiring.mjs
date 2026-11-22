@@ -23,6 +23,7 @@ import {
 } from "./fork-registry.mjs";
 import { record } from "./diagnostics.mjs";
 import { createDisplayBinder } from "./child-display-holder.mjs";
+import { buildChildIdentity, resolveForkLedger } from "./fork-identity.mjs";
 import {
 	spawnChildTicket,
 	writeFrozenOutcome,
@@ -34,6 +35,49 @@ import {
 // selection or replace a live display holder.
 const baseStates = new WeakMap();
 const hostStates = new WeakMap();
+
+/**
+ * Bind the fork ports on a station. `SessionStation` owns the derivation; a
+ * plain test double gets the same capabilities assigned directly. This is a
+ * capability check, not a business branch: production never takes the second
+ * path.
+ */
+function bindForkPorts(station, { registry, ledger, identity }) {
+	const childOutcomePort = (forkId) => outcomeOf(registry, forkId);
+	const setChildOutcome = (forkId, outcome) => setOutcome(registry, forkId, outcome);
+	if (typeof station.bindForkPorts === "function") {
+		station.bindForkPorts({
+			registry,
+			ledger,
+			identity,
+			childOutcomePort,
+			setChildOutcome,
+		});
+		return;
+	}
+	if (station.state && ledger) station.state.brackets = ledger;
+	station.forkLedgerPort = () => ledger;
+	station.forkWaitPort = () => ({ registry, ledger });
+	station.forkIdentityPort = () => identity;
+	station.forkOwnerId = () =>
+		typeof identity?.forkId === "string" && identity.forkId !== ""
+			? identity.forkId
+			: null;
+	station.forkDepthPort = () =>
+		Number.isInteger(identity?.childDepth)
+			? identity.childDepth
+			: station.forkOwnerId()
+				? 1
+				: 0;
+	station.childOutcomePort = childOutcomePort;
+	station.setChildOutcome = setChildOutcome;
+	if (typeof identity?.persistRoot === "function") {
+		station.persistLedger = identity.persistRoot;
+	} else if (!identity) {
+		station.persistLedger = () => station.persist?.();
+	}
+	station.forkPortsPhase = "base";
+}
 
 /**
  * Attach the station-owned fork ports: ledger, wait, identity, ownership and
@@ -65,47 +109,12 @@ export function attachBaseForkPorts(station, wiring, options = {}) {
 	// empty one, and a restored tree wins over a freshly created empty index.
 	const indexed = identity ? null : ledgerFor(registry, conversationKey);
 	const restored = station.state?.brackets ?? null;
-	const ledger =
-		identity?.ledger && typeof identity.ledger === "object"
-			? identity.ledger
-			: indexed && (indexed.order?.length ?? 0) > 0
-				? indexed
-				: restored ?? indexed;
-	if (station.state && ledger) station.state.brackets = ledger;
+	const ledger = resolveForkLedger({ identity, indexed, restored });
 	if (!identity) adoptLedger(registry, conversationKey, ledger);
-	station.forkLedgerPort = () => ledger;
-	// The ticket layer is the only place allowed to await. It needs the
-	// registry that owns the waiters and the ledger both sides share.
-	station.forkWaitPort = () => ({ registry, ledger });
-	station.forkIdentityPort = () => identity;
-	// The branch's own id, or null at the root. Every budget charge and every
-	// relay decision asks this one question: a child spends its fork record
-	// and never touches the relay; the root has no record, so ordinary tools
-	// are refused there and only it evaluates the ledger. `ownerId` stays the
-	// property the fork controls already read.
-	station.forkOwnerId = () =>
-		identity && typeof identity.forkId === "string" && identity.forkId !== ""
-			? identity.forkId
-			: null;
-	station.ownerId = station.forkOwnerId();
-	station.forkDepthPort = () =>
-		identity && Number.isInteger(identity.childDepth)
-			? identity.childDepth
-			: (station.forkOwnerId() ? 1 : 0);
-	station.childOutcomePort = (forkId) => outcomeOf(registry, forkId);
-	// A child freezes its own record at scope_return, before the parent can
-	// take the bracket. The station writes through this port; the spawner's
-	// later copy never replaces a frozen record.
-	station.setChildOutcome = (forkId, outcome) => setOutcome(registry, forkId, outcome);
-	// The root's state owns the tree. A child writes a return into that same
-	// tree, so the parent's branch must persist it: the child's own branch is
-	// not what a reload restores.
-	if (typeof identity?.persistRoot === "function") {
-		station.persistLedger = identity.persistRoot;
-	} else if (!identity) {
-		station.persistLedger = () => station.persist?.();
-	}
-	station.forkPortsPhase = "base";
+	// `SessionStation.bindForkPorts` derives owner/depth/persistence once; a
+	// plain test double receives the same capabilities. Never write the legacy
+	// duplicate owner field: `forkOwnerId()` is the single owner seam.
+	bindForkPorts(station, { registry, ledger, identity });
 	const state = { registry, ledger, identity };
 	baseStates.set(station, state);
 	return state;
@@ -122,11 +131,9 @@ function spawnPortFor(station, base, binder, options) {
 		// The holder must outlive this spawn: a child created before the UI
 		// exists reads the same live slot when the display arrives.
 		const displayHolder = binder.holder;
-		setIdentity(base.registry, spec.forkId, {
-			parentOwnerId: spec.parentOwnerId ?? null,
-			ownScopeId: spec.ownScopeId ?? null,
-			// Provider IDs are opaque (including slashes and long suffixes).
-			// Prebind the generated host ID without changing the fork identity.
+		// Provider IDs are opaque (including slashes and long suffixes).
+		// Prebind the generated host ID without changing the fork identity.
+		const identity = buildChildIdentity(spec, {
 			agentId,
 			display: binder.currentDisplay(),
 			displayHolder,
@@ -135,12 +142,8 @@ function spawnPortFor(station, base, binder, options) {
 			// ability to persist that branch when it returns, so a ready record
 			// survives a crash before the parent joins.
 			persistRoot: () => station.persist?.(),
-			intent: spec.intent ?? null,
-			budget: spec.budget ?? null,
-			time: spec.time ?? null,
-			permission: spec.permission ?? null,
-			childDepth: spec.childDepth ?? null,
 		});
+		setIdentity(base.registry, spec.forkId, identity);
 		const ports = {
 			registry: base.registry,
 			ledger: base.ledger,
@@ -210,23 +213,12 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 		? (delta) => binder.currentDisplay()?.rootWait?.(delta)
 		: null;
 	station.noteScopeRequest = base.ledger
-		? () => binder.currentDisplay()?.request(base.ledger, station.ownerId)
+		? () => binder.currentDisplay()?.request(base.ledger, station.forkOwnerId?.() ?? null)
 		: null;
 	const spawn = spawnPortFor(station, base, binder, options);
 	if (spawn) station.childSpawnPort = spawn;
 	station.forkPortsPhase = "host";
 	hostStates.set(station, { binder });
-	return { registry: base.registry, ledger: base.ledger };
-}
-
-/**
- * Attach both phases in one call. Direct callers and tests use this; the
- * production registry calls `attachBaseForkPorts` and the composition root
- * calls `bindHostForkPorts` so the ledger selection happens exactly once.
- */
-export function attachForkPorts(station, wiring, options = {}) {
-	const base = attachBaseForkPorts(station, wiring, options);
-	bindHostForkPorts(station, wiring, options);
 	return { registry: base.registry, ledger: base.ledger };
 }
 

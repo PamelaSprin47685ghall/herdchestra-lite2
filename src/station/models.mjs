@@ -1,7 +1,3 @@
-import { preparseModelSpec } from "../host/pricing.mjs";
-import { capabilities, modelOf, thinkingOf } from "../host/adapter.mjs";
-import { record } from "../host/diagnostics.mjs";
-
 export function modelKey(model) {
 	const id = model?.id ?? model?.model;
 	return typeof id === "string" && id
@@ -9,21 +5,21 @@ export function modelKey(model) {
 		: null;
 }
 
-export function actualModel(ctx) {
-	return modelOf(ctx);
+export function actualModel(ctx, host = null) {
+	return host?.modelOf?.(ctx) ?? null;
 }
 
-function liveSelector(ctx, key) {
-	const level = thinkingOf(ctx);
+function liveSelector(ctx, key, host = null) {
+	const level = host?.thinkingOf?.(ctx);
 	return level ? `${key}:${level}` : key;
 }
 
 export function modelChoice(station, ctx, spec, key) {
 	const parsed = typeof spec === "string"
-		? preparseModelSpec(station.pricingCatalog, ctx, spec)
+		? station.host?.preparseModelSpec?.(station.pricingCatalog, ctx, spec) ?? null
 		: null;
 	// The ledger is absent only on a station double that never measured usage.
-	const live = actualModel(ctx) ?? station.usage?.lastCtxModel;
+	const live = actualModel(ctx, station.host) ?? station.usage?.lastCtxModel;
 	// Only an exact resolution may name the model a later check expects. A
 	// fuzzy match only estimates size and price. The host resolves roles and
 	// aliases that the extension never sees.
@@ -49,17 +45,21 @@ function setChoice(state, scope, spec, key) {
 }
 
 export function observeActualModel(station, ctx) {
+	const host = station.host;
 	if (!station.hostCapabilities) {
-		station.hostCapabilities = capabilities(ctx);
-		record("host", "capabilities", station.hostCapabilities);
+		const caps = host?.capabilities?.(ctx);
+		if (caps) {
+			station.hostCapabilities = caps;
+			host.record?.("host", "capabilities", caps);
+		}
 	}
-	const live = actualModel(ctx);
+	const live = actualModel(ctx, host);
 	const key = modelKey(live);
 	if (!key) return;
 	station.usage.lastCtxModel = live;
 	const { state } = station;
 	if (state.modelRecovery || station.modelSwitchInFlight || station.pendingModelSwitch) return;
-	const spec = liveSelector(ctx, key);
+	const spec = liveSelector(ctx, key, host);
 	if (state.baseModelKey === key && (spec === key || state.baseModelSpec === spec)) return;
 	setChoice(state, null, spec, key);
 	station.persist();
@@ -86,9 +86,9 @@ export function takePendingModelSwitch(station, ctx) {
 	if (station.modelSwitchInFlight) return null;
 	const recovery = station.state.modelRecovery;
 	if (!station.pendingModelSwitch && recovery) {
-		const key = modelKey(actualModel(ctx));
+		const key = modelKey(actualModel(ctx, station.host));
 		if (key) {
-			const spec = liveSelector(ctx, key);
+			const spec = liveSelector(ctx, key, station.host);
 			if (key === recovery.expectedKey && (recovery.targetSpec === key || recovery.targetSpec === spec)) {
 				station.state.modelRecovery = null;
 				station.persist();
@@ -106,12 +106,12 @@ export function takePendingModelSwitch(station, ctx) {
 }
 
 export function reconcileActualModel(station, ctx, req, outcome) {
-	const live = outcome?.actualModel ?? outcome?.model ?? actualModel(ctx);
+	const live = outcome?.actualModel ?? outcome?.model ?? actualModel(ctx, station.host);
 	const key = modelKey(live) ?? req.fallbackKey;
 	if (station.modelSwitchInFlight === req) station.modelSwitchInFlight = null;
 	if (station.state.epoch !== req.epoch) return key;
 	if (live) station.usage.lastCtxModel = live;
-	const observedSpec = key ? liveSelector(ctx, key) : null;
+	const observedSpec = key ? liveSelector(ctx, key, station.host) : null;
 	const spec = observedSpec && observedSpec !== key ? observedSpec :
 		outcome?.ok ? req.targetSpec : key === req.fallbackKey ? req.fallbackSpec : key;
 	if (key) setChoice(station.state, null, spec ?? key, key);

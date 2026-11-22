@@ -10,6 +10,7 @@
 import { beforeEach, expect, test } from "bun:test";
 
 import {
+	record,
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
 } from "../src/host/diagnostics.mjs";
@@ -39,7 +40,7 @@ function stationWith(tickets, pi = { getActiveTools: () => ["read"] }) {
 		{ getSessionId: () => "s1", getBranch: () => [] },
 		pi,
 		tickets,
-		{ ports: () => ({}) },
+		{ ports: () => ({}), host: () => ({ record }) },
 		null,
 	);
 }

@@ -47,6 +47,11 @@ export function wireTools(pi, registry) {
 		description: JOIN_DESCRIPTION,
 		parameters: joinParameters,
 		loadMode: "essential",
+		// The join is a pure wait: a queued user message ends it cleanly, and
+		// an interrupt already queued when the call starts must not be skipped
+		// (the settlement still has to run).
+		interruptible: true,
+		handlesToolInterrupt: true,
 		execute: (toolCallId, params, signal, _onUpdate, ctx) =>
 			joinTicket(registry.stationFor(ctx), toolCallId, params, ctx, signal),
 	});

@@ -29,7 +29,7 @@ function item(intent, blocked = false) {
     blocked,
     budget: { read: 1 },
     time: 30,
-    permission: "ro",
+    targets: ["src/blocked.mjs"],
   };
 }
 

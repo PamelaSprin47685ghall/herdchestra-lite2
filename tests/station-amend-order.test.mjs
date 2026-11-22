@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { createProcessedLedger } from "../src/station/processed-ledger.mjs";
+import { createToolCallLedger } from "../src/station/domain/tool-call-ledger.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 
 const KEY = "amend-1";
@@ -24,11 +24,11 @@ function amendMessage() {
 }
 
 function fakeStation(targets) {
-	const processed = createProcessedLedger();
+	const toolCallLedger = createToolCallLedger();
 	let persisted = 0;
 	return {
 		state: {},
-		processed,
+		toolCallLedger,
 		persist: () => {
 			persisted += 1;
 		},
@@ -57,8 +57,8 @@ describe("amend marking order", () => {
 			SessionStation.prototype.processAssistantMessage.call(station, message),
 		).toThrow("transient amend failure");
 
-		expect(station.processed.hasMessage(KEY)).toBe(false);
-		expect(station.processed.hasCall("amend-1")).toBe(false);
+		expect(station.toolCallLedger.processed.hasMessage(KEY)).toBe(false);
+		expect(station.toolCallLedger.processed.hasCall("amend-1")).toBe(false);
 		expect(station.persistedCount()).toBe(0);
 	});
 
@@ -80,11 +80,11 @@ describe("amend marking order", () => {
 		expect(() =>
 			SessionStation.prototype.processAssistantMessage.call(station, message),
 		).toThrow("one-shot failure");
-		expect(station.processed.hasMessage(KEY)).toBe(false);
+		expect(station.toolCallLedger.processed.hasMessage(KEY)).toBe(false);
 
 		SessionStation.prototype.processAssistantMessage.call(station, message);
-		expect(station.processed.hasCall("amend-1")).toBe(true);
-		expect(station.processed.hasMessage(KEY)).toBe(true);
+		expect(station.toolCallLedger.processed.hasCall("amend-1")).toBe(true);
+		expect(station.toolCallLedger.processed.hasMessage(KEY)).toBe(true);
 		expect(station.persistedCount()).toBe(1);
 
 		// A third delivery of the same message is a no-op.

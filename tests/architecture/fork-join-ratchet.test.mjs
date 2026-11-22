@@ -21,7 +21,7 @@ function count(text, pattern) {
 
 // The handlers still own take/commit/persist; this is the post-slice baseline.
 // A new station-taking free function must remove one, not add one.
-const STATION_FUNCTIONS_BASELINE = 21;
+const STATION_FUNCTIONS_BASELINE = 20;
 
 describe("fork/join ratchet", () => {
 	test("the domain has no Station or host dependency", () => {
@@ -36,10 +36,17 @@ describe("fork/join ratchet", () => {
 		expect(domain).toContain("export function decideForkAdmission");
 		expect(domain).toContain("export function decidePendingReport");
 		expect(domain).toContain("export function decideJoinBinding");
+		expect(domain).toContain("export function decideRegister");
+		expect(domain).toContain("export function decideReturn");
+		expect(domain).toContain("export function decideReady");
+		expect(domain).toContain("decideAbandon");
 		expect(controls).toContain("decideJoinAdmission");
-		expect(controls).toContain("decideForkAdmission");
 		expect(controls).toContain("decidePendingReport");
 		expect(controls).toContain("decideJoinBinding");
+		expect(controls).toContain("decideRegister");
+		expect(controls).toContain("decideReady");
+		expect(controls).toContain("decideReturn");
+		expect(controls).toContain("validateForkBatch");
 		expect(controls).not.toContain("function lastUnreportedReceipt");
 		expect(controls).not.toContain("function pendingOf");
 	});

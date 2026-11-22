@@ -1,9 +1,6 @@
 // Station handoff state transitions. Pure synchronous functions.
 
 import { appendHandoffCompaction } from "../handoff/session.mjs";
-import { setAgentMessages } from "../host/capture.mjs";
-import { appendHistoryMessage } from "../host/hack-context.mjs";
-import { record } from "../host/diagnostics.mjs";
 import { truncateForHostBoundary, openChildren, readyChildren } from "../scope/index.mjs";
 import { childReturnNudge } from "../scope/return-nudge.mjs";
 import {
@@ -152,7 +149,7 @@ function recordNaturalStop(station, ctx) {
 	// The demand rides the prompt. If the next request cannot see it, the
 	// context receipt supplies it instead.
 	if (!station.deliverUserMessage(handoffDemand())) {
-		record("handoff", new Error("the handoff demand could not be sent as a prompt"), {
+		station.host?.record?.("handoff", new Error("the handoff demand could not be sent as a prompt"), {
 			stage: "natural-stop-prompt",
 		});
 	}
@@ -209,7 +206,7 @@ function commitSelfHandoff(station, ctx, report) {
 		station.usage.lastTotalInput ?? 0,
 	);
 	if (!compacted && manager) {
-		appendHistoryMessage(
+		station.host?.appendHistoryMessage?.(
 			manager,
 			{
 				role: "custom",
@@ -231,12 +228,12 @@ function commitSelfHandoff(station, ctx, report) {
 	if (manager && typeof manager.buildSessionContext === "function") {
 		try {
 			const rebuilt = manager.buildSessionContext()?.messages;
-			if (Array.isArray(rebuilt)) setAgentMessages(ctx, rebuilt);
+			if (Array.isArray(rebuilt)) station.host?.setAgentMessages?.(ctx, rebuilt);
 		} catch (error) {
 			// Keep existing agent messages if the rebuild fails, but record it:
 			// a silent miss leaves the successor reading the pre-handoff
 			// transcript while the branch already holds the compacted one.
-			record("handoff", error, { stage: "rebuild-context" });
+			station.host?.record?.("handoff", error, { stage: "rebuild-context" });
 		}
 	}
 	return {

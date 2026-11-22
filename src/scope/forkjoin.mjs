@@ -5,6 +5,7 @@
 // This module is pure data and arithmetic. It holds no host objects, reads no
 // clock, and performs no I/O.
 
+import { decideAbandon } from "./abandon.mjs";
 import { deadlineInfo } from "./clock.mjs";
 
 const RUNNING = "running";
@@ -283,9 +284,11 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
 /** Drop one fork without a result. Used when a parent is cancelled. */
 export function abandon(ledger, forkId, reason = null) {
   const record = forkOf(ledger, forkId);
-  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (record.status === JOINED) {
-    return failure("FORK_ALREADY_JOINED", `Fork "${forkId}" is already joined.`);
+  const decision = decideAbandon({ record });
+  if (!decision.ok) {
+    return decision.code === "FORK_ALREADY_JOINED"
+      ? failure("FORK_ALREADY_JOINED", `Fork "${forkId}" is already joined.`)
+      : failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
   }
   ledger.seq += 1;
   record.status = FAILED;

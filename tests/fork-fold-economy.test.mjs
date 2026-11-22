@@ -73,7 +73,7 @@ describe("the short projection keeps what the parent still needs", () => {
 
   test("nested fork lines and pins survive together", () => {
     const body = [
-      "[fork f9] intent: \"nested work\" | budget: read 2 | time: 30s | permission: ro",
+      "[fork f9] intent: \"nested work\" | budget: read 2 | time: 30s | targets: nested.mjs",
       "[pin] conclusion: nested result is trustworthy",
       "x".repeat(400),
     ].join("\n");

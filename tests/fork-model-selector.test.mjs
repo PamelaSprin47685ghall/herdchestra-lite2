@@ -61,7 +61,7 @@ function forkOne(station, ctx, overrides = {}) {
             blocked: false,
             budget: { read: 1 },
             time: 60,
-            permission: "ro",
+            targets: ["src/parser.mjs"],
             ...overrides,
           },
         ],
@@ -196,8 +196,8 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
         id: "fork-batch",
         arguments: {
           forks: [
-            { scopeId: "one", intent: "first", blocked: false, budget: { read: 1 }, time: 60, permission: "ro", model: "acme/deep" },
-            { scopeId: "two", intent: "second", blocked: false, budget: { read: 1 }, time: 60, permission: "ro", model: "gamma/absent" },
+            { scopeId: "one", intent: "first", blocked: false, budget: { read: 1 }, time: 60, targets: ["one.mjs"], model: "acme/deep" },
+            { scopeId: "two", intent: "second", blocked: false, budget: { read: 1 }, time: 60, targets: ["two.mjs"], model: "gamma/absent" },
           ],
         },
       },

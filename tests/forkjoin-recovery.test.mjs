@@ -24,7 +24,8 @@ import {
 import { createFlowState, createState } from "../src/scope/state.mjs";
 import { deserializeState, serializeState } from "../src/scope/persistence.mjs";
 import { addReceipt, createReceiptRecord } from "../src/scope/receipts.mjs";
-import { attachForkPorts, createForkWiring } from "../src/host/fork-wiring.mjs";
+import { createForkWiring } from "../src/host/fork-wiring.mjs";
+import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { ledgerFor } from "../src/host/fork-registry.mjs";
 import { handleReturnCall } from "../src/station/fork-controls.mjs";
 

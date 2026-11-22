@@ -6,6 +6,10 @@ Previous beat replaced. Refunded calls: {{refunded}}.
 
 Budget: {{budget}}.
 
+## pin.saved
+
+OK. Update the `todo` ledger now with any change this note makes: the next step, a completed item, or a blocker.
+
 ## scope.unreceived
 
 Unreceived child results: {{count}}. Receive them with `scope_join`.
@@ -20,7 +24,7 @@ Scope budget: {{budget}}.
 
 ## receipt.no-ledger
 
-Until the first `todo` write, fork with `permission: "ro"`.
+Evaluate the ledger before forking.
 
 ## receipt.autopilot
 
@@ -54,7 +58,7 @@ Run `todo({ op: "view" })` before writing the inherited ledger.
 
 {{marker}} depth {{depth}}.
 Intent: {{intent}}
-Budget: {{budget}}. Permission: {{permission}}.
+Budget: {{budget}}. Targets: {{targets}}.
 
 ## fork.child-return
 

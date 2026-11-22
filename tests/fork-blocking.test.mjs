@@ -10,7 +10,8 @@ import { executeJoin, executeReturn } from "../src/station/execute.mjs";
 import { renderJoinResult } from "../src/station/fork-controls.mjs";
 import { createProcessedLedger } from "../src/station/processed-ledger.mjs";
 import { joinTicket, returnTicket } from "../src/tools/tickets.mjs";
-import { attachForkPorts, createForkWiring } from "../src/host/fork-wiring.mjs";
+import { createForkWiring } from "../src/host/fork-wiring.mjs";
+import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import {
   registerFork,
   takeReady,

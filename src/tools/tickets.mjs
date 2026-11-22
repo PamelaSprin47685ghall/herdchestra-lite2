@@ -19,6 +19,15 @@ import { loadDoc, render } from "../prompts/index.mjs";
 
 const errors = loadDoc("errors");
 
+// The agent loop aborts an interruptible tool's signal with this registered
+// symbol when a queued user message wants the model. `Symbol.for` resolves to
+// the host's symbol without importing its package.
+const TOOL_INTERRUPT_ABORT_REASON = Symbol.for("pi-agent-core.tool-interrupt");
+
+function isUserInputInterrupt(signal) {
+	return signal?.aborted === true && signal.reason === TOOL_INTERRUPT_ABORT_REASON;
+}
+
 function safeSession(ctx) {
 	try {
 		return sessionFor(ctx);
@@ -426,6 +435,18 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 			}
 		})();
 		if (!waited.ok) {
+			// A queued user message ends the wait like the host's `wait` tool.
+			// The join received nothing, but the elder report belongs to the
+			// receipt the model read before calling: file it and tell the model
+			// the next join may pass null. Any other abort is a cancellation,
+			// which leaves the previous receipt untouched.
+			if (
+				waited.code === "JOIN_INTERRUPTED" &&
+				isUserInputInterrupt(signal) &&
+				typeof station.settleInterruptedJoin === "function"
+			) {
+				return station.settleInterruptedJoin(toolCallId, params, pending);
+			}
 			return errorResult(waited.code, waited.reason, {
 				blocked: waited.blocked ?? [],
 			});

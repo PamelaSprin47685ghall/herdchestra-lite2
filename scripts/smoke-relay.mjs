@@ -175,7 +175,7 @@ await check("scope_fork refuses without a child spawner", async () => {
 				blocked: false,
 				budget: { read: 1 },
 				time: 30,
-				permission: "ro",
+				targets: ["src/probe.mjs"],
 			},
 		],
 	});

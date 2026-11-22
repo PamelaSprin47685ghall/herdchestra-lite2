@@ -28,7 +28,7 @@ function forkArgs(overrides = {}) {
     intent: "audit one seam",
     budget: {},
     time: 60,
-    permission: "ro",
+    targets: ["src/parser.mjs"],
     ...overrides,
   };
 }

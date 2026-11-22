@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import {
   attachBaseForkPorts,
-  attachForkPorts,
   bindHostForkPorts,
   createForkWiring,
 } from "../src/host/fork-wiring.mjs";
+import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { spawnChildTicket } from "../src/tools/fork-spawn-ticket.mjs";
 import {
+  adoptLedger,
   conversationKeyOf,
   ledgerFor,
   outcomeOf,
@@ -287,7 +288,7 @@ describe("attachForkPorts", () => {
       intent: "read the parser",
       budget: { read: 2 },
       time: 90,
-      permission: "ro",
+      targets: ["src/parser.mjs"],
     };
     attachForkPorts(station, wiring, { conversationKey: "c", identity });
     const readBack = station.forkIdentityPort();
@@ -617,7 +618,11 @@ describe("ledger sharing across stations", () => {
     const { SessionStation } = await import("../src/station/station.mjs");
     const { createForkWiring } = await import("../src/host/fork-wiring.mjs");
     const wiring = createForkWiring();
-    const registry = { forkWiring: () => wiring, ports: () => ({}) };
+    const registry = {
+      forkWiring: () => wiring,
+      ports: () => ({}),
+      host: () => ({ conversationKeyOf, ledgerFor, adoptLedger }),
+    };
     const manager = { getSessionId: () => "conversation-1" };
     const first = new SessionStation(manager, pi, tickets, registry, null);
     const second = new SessionStation(manager, pi, tickets, registry, null);
@@ -653,7 +658,11 @@ describe("ledger sharing across stations", () => {
     const { SessionStation } = await import("../src/station/station.mjs");
     const { createForkWiring } = await import("../src/host/fork-wiring.mjs");
     const wiring = createForkWiring();
-    const registry = { forkWiring: () => wiring, ports: () => ({}) };
+    const registry = {
+      forkWiring: () => wiring,
+      ports: () => ({}),
+      host: () => ({ conversationKeyOf, ledgerFor, adoptLedger }),
+    };
     const manager = { getSessionId: () => "conversation-3" };
     const parent = new SessionStation(manager, pi, tickets, registry, null);
     const child = new SessionStation(manager, pi, tickets, registry, null);
@@ -1107,6 +1116,7 @@ describe("bracket ledger sharing", () => {
     return {
       forkWiring: () => wiring,
       ports: () => ({}),
+      host: () => ({ conversationKeyOf, ledgerFor, adoptLedger }),
     };
   }
 

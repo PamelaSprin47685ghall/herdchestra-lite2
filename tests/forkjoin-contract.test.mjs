@@ -115,8 +115,8 @@ describe("a batch projects one item into each child", () => {
       id: "fb",
       arguments: {
         forks: [
-          { scopeId: "one", intent: "one", budget: { read: 1 }, time: 60, permission: "ro", blocked: false },
-          { scopeId: "two", intent: "two", budget: { read: 1 }, time: 60, permission: "ro", blocked: false },
+          { scopeId: "one", intent: "one", budget: { read: 1 }, time: 60, targets: ["one.mjs"], blocked: false },
+          { scopeId: "two", intent: "two", budget: { read: 1 }, time: 60, targets: ["two.mjs"], blocked: false },
         ],
       },
     });

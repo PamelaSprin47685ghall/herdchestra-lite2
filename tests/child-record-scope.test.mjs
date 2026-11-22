@@ -24,7 +24,7 @@ const receipt = (forkId = FORK_ID, timestamp = 300) => ({
 		forkId,
 		intent: "read the version",
 		budget: { read: 2 },
-		permission: "ro",
+		targets: ["src/parser.mjs"],
 		childDepth: 1,
 	}),
 	timestamp,

@@ -33,11 +33,6 @@ import {
 	unreceivedChildren,
 } from "../scope/index.mjs";
 import {
-	adoptLedger,
-	conversationKeyOf,
-	ledgerFor,
-} from "../host/fork-registry.mjs";
-import {
 	findAmendTarget,
 	findToolCallIndex,
 	lastStructuralCallId,
@@ -48,11 +43,7 @@ import {
 	hasSessionInit,
 	MAIN_AGENT,
 	READ_WRITE_SUBAGENT,
-} from "../host/policy.mjs";
-import { sessionFor, setAgentMessages } from "../host/capture.mjs";
-import { contextHeaderOf } from "../host/adapter.mjs";
-import { record } from "../host/diagnostics.mjs";
-import { createEmptyCatalog } from "../host/pricing.mjs";
+} from "../core/policy.mjs";
 import { createAmendOff, createAmendOn } from "../features/amend/index.mjs";
 import { createHerdOff, createHerdOn } from "../features/herd/index.mjs";
 import { createPinOff, createPinOn } from "../features/pin/index.mjs";
@@ -72,6 +63,7 @@ import {
 	commitJoin,
 	confirmJoinPersistence,
 	renderJoinResult,
+	settleInterruptedJoin,
 } from "./fork-controls.mjs";
 import {
 	addReceipt,
@@ -106,6 +98,10 @@ import {
 	shouldRebase,
 } from "./domain/context.mjs";
 import {
+	createToolCallLedger,
+	processedOf,
+} from "./domain/tool-call-ledger.mjs";
+import {
 	modelKey,
 	actualModel,
 	observeActualModel,
@@ -119,9 +115,7 @@ import {
 	SESSION_STATE_TYPE,
 } from "./restore.mjs";
 import { skillReceiptText } from "./texts.mjs";
-import { createDispatchTracker } from "./dispatch-tracker.mjs";
 import { createPersistenceAnchor } from "./persistence-anchor.mjs";
-import { createProcessedLedger } from "./processed-ledger.mjs";
 import { nudgeDecision } from "./nudge.mjs";
 
 export function receiptTextOf(message) {
@@ -143,8 +137,10 @@ export class SessionStation {
 		this.pi = pi;
 		this.tickets = tickets;
 		this.registry = registry;
-		this.pricingCatalog = pricingCatalog ?? createEmptyCatalog();
-		this.state = restoreState(manager);
+		this.host = registry?.host?.() ?? null;
+		this.pricingCatalog =
+			pricingCatalog ?? this.host?.createEmptyCatalog?.() ?? null;
+		this.state = restoreState(manager, this.host?.record);
 		// A replayable base on disk anchors a delta; a fresh session, or a
 		// chain whose anchor fell outside the replay window, starts with a
 		// checkpoint instead.
@@ -159,12 +155,10 @@ export class SessionStation {
 			type: SESSION_STATE_TYPE,
 			noteError: (domain, error) => this.noteError(domain, error),
 		});
-		this.processed = createProcessedLedger();
 		// The host may deliver the same tool call through the `tool_call` event
-		// and through dispatch admission. Cache the first verdict so the second
-		// entry sees the same answer and the branch is charged once.
-		this.toolGate = new Map();
-		this.dispatch = createDispatchTracker();
+		// and through dispatch admission. The ledger caches the first verdict so
+		// the second entry sees the same answer and the branch is charged once.
+		this.toolCallLedger = createToolCallLedger();
 		this.nudged = new WeakSet();
 		this.lastError = null;
 		this.hostBoundaryKey = null;
@@ -182,8 +176,11 @@ export class SessionStation {
 		// empty ledger instead of growing two.
 		const forkWiring = registry?.forkWiring?.() ?? null;
 		this.forkWiring = forkWiring;
-		const key = conversationKeyOf(manager ?? null);
-		const indexed = forkWiring ? ledgerFor(forkWiring.registry, key) : null;
+		const key = this.host?.conversationKeyOf?.(manager ?? null) ?? null;
+		const indexed =
+			forkWiring && key !== null
+				? (this.host?.ledgerFor?.(forkWiring.registry, key) ?? null)
+				: null;
 		const restored = this.state.brackets ?? null;
 		const indexedLive = (indexed?.order?.length ?? 0) > 0;
 		const restoredLive = (restored?.order?.length ?? 0) > 0;
@@ -192,12 +189,13 @@ export class SessionStation {
 			: restoredLive
 				? restored
 				: (indexed ?? restored ?? createBracketLedger());
-		if (forkWiring && !indexedLive) adoptLedger(forkWiring.registry, key, this.brackets);
+		if (forkWiring && key !== null && !indexedLive) {
+			this.host?.adoptLedger?.(forkWiring.registry, key, this.brackets);
+		}
 		this.state.brackets = this.brackets;
 		// Attached by the host wiring; null means this station cannot wait.
 		this.forkWaitPort = null;
 		this.forkReports = new Map();
-		this.ownerId = null;
 		this.selfForkId = null;
 		this.parentOwnerId = null;
 		this.usage = createUsageLedger({
@@ -206,7 +204,7 @@ export class SessionStation {
 			persist: () => this.persist(),
 			noteError: (domain, error) => this.noteError(domain, error),
 			modelKeyOf: (message) => modelKey(message),
-			actualModelOf: (ctx) => actualModel(ctx),
+			actualModelOf: (ctx) => actualModel(ctx, this.host),
 		});
 		this.usage.restoreFromBranch(this.manager);
 		// The session ports are built once by the composition root; bind each
@@ -217,6 +215,43 @@ export class SessionStation {
 		this.pinPortImpl = implementations.pin?.bindState?.(this.state) ?? null;
 		this.amendPortImpl = implementations.amend?.bindState?.(this.state) ?? null;
 		this.herdPortImpl = implementations.herd?.bindState?.(this.state) ?? null;
+	}
+
+	/**
+	 * Bind the fork ports once. Wiring supplies the registry, ledger and
+	 * identity; the station derives ownership, depth and persistence from those
+	 * plain inputs. A second attach cannot leave a duplicate owner field.
+	 */
+	bindForkPorts({
+		registry = null,
+		ledger = null,
+		identity = null,
+		childOutcomePort = null,
+		setChildOutcome = null,
+	} = {}) {
+		if (this.state && ledger) this.state.brackets = ledger;
+		this.forkLedgerPort = () => ledger;
+		this.forkWaitPort = () => ({ registry, ledger });
+		this.forkIdentityPort = () => identity;
+		this.forkOwnerId = () =>
+			typeof identity?.forkId === "string" && identity.forkId !== ""
+				? identity.forkId
+				: null;
+		this.forkDepthPort = () =>
+			Number.isInteger(identity?.childDepth)
+				? identity.childDepth
+				: this.forkOwnerId()
+					? 1
+					: 0;
+		this.childOutcomePort = childOutcomePort;
+		this.setChildOutcome = setChildOutcome;
+		if (typeof identity?.persistRoot === "function") {
+			this.persistLedger = identity.persistRoot;
+		} else if (!identity) {
+			this.persistLedger = () => this.persist?.();
+		}
+		this.forkPortsPhase = "base";
+		return { registry, ledger, identity };
 	}
 
 	// -- Usage ledger ---------------------------------------------------------
@@ -244,7 +279,7 @@ export class SessionStation {
 	 */
 	noteError(domain, error, detail = undefined) {
 		this.lastError = String(error?.message ?? error);
-		record(domain, error, detail);
+		this.host?.record?.(domain, error, detail);
 	}
 
 	/**
@@ -401,12 +436,12 @@ export class SessionStation {
 	}
 
 	messageForToolCall(toolCallId) {
-		return this.dispatch.messageForToolCall(toolCallId) ??
+		return this.toolCallLedger.messageForToolCall(toolCallId) ??
 			this.assistantForToolCall(toolCallId)?.message;
 	}
 
 	prepareToolDispatch(message, id, name) {
-		this.dispatch.prepare(message, id, name);
+		this.toolCallLedger.prepare(message, id, name);
 		// Waiting on the other bracket is not this branch's work. A join or a
 		// return may block for as long as the counterpart needs, so it never
 		// carries the branch clock's limit.
@@ -415,20 +450,11 @@ export class SessionStation {
 	}
 
 	toolGateVerdict(toolCallId) {
-		if (!this.toolGate.has(toolCallId)) return { hit: false };
-		const verdict = this.toolGate.get(toolCallId);
-		this.toolGate.delete(toolCallId);
-		this.toolGate.set(toolCallId, verdict);
-		return { hit: true, verdict };
+		return this.toolCallLedger.toolGateVerdict(toolCallId);
 	}
 
 	rememberToolGate(toolCallId, verdict) {
-		this.toolGate.delete(toolCallId);
-		this.toolGate.set(toolCallId, verdict);
-		if (this.toolGate.size > 512) {
-			const oldest = this.toolGate.keys().next().value;
-			this.toolGate.delete(oldest);
-		}
+		this.toolCallLedger.rememberToolGate(toolCallId, verdict);
 	}
 
 	admitToolDispatch(id, name, ctx, receipt = null) {
@@ -555,7 +581,7 @@ export class SessionStation {
 		const controls = controlsIn(message);
 		if (controls.length === 0) return;
 		const key = processedKey(controls);
-		if (this.processed.hasMessage(key)) return;
+		if (this.toolCallLedger.hasMessage(key)) return;
 
 		const existing = this.contextMessages();
 		const firstIndex = findToolCallIndex(existing, controls[0].id);
@@ -565,18 +591,18 @@ export class SessionStation {
 		let changed = false;
 		for (const call of controls) {
 			if (call.name !== "amend") continue;
-			if (this.processed.hasCall(call.id)) continue;
+			if (this.toolCallLedger.hasCall(call.id)) continue;
 			const boundary = this.amendBoundary(currentIndex, message);
 			const result = handleAmendCall(this, call, base, currentIndex, boundary);
-			this.processed.setHandled(call.id, result);
+			this.toolCallLedger.setHandled(call.id, result);
 			// Mark after the work succeeded. A throw must leave both the call
 			// and the message unmarked, so the scan path can retry it; the
 			// tool path stays idempotent because a completed call is marked.
-			this.processed.markCall(call.id);
+			this.toolCallLedger.markCall(call.id);
 			changed = true;
 		}
 
-		this.processed.markMessage(key);
+		this.toolCallLedger.markMessage(key);
 		if (changed) this.persist();
 	}
 
@@ -604,6 +630,9 @@ export class SessionStation {
 	finalizeJoin(toolCallId, record, ctx, params = {}, pending = undefined) {
 		const elderReport =
 			typeof params?.elder_report === "string" ? params.elder_report.trim() : null;
+		// A report the caller brought when no receipt was pending was ignored;
+		// the receipt says so instead of failing the join.
+		const elderUnneeded = pending === null && elderReport !== null;
 		// The binding travels with the waiting ticket, not from a second read of
 		// the chain: a join that waited must file its summary against the
 		// receipt the model saw, or refuse.
@@ -618,11 +647,22 @@ export class SessionStation {
 		const result = renderJoinResult(this, record, {
 			closeToolCallId: toolCallId,
 			persisted,
+			elderUnneeded,
 		});
-		this.processed.setHandled(toolCallId, result);
-		this.processed.markCall(toolCallId);
+		const processed = processedOf(this);
+		processed?.setHandled?.(toolCallId, result);
+		processed?.markCall?.(toolCallId);
 		this.persist();
 		return result;
+	}
+
+	/**
+	 * Settle a join whose wait a queued user message interrupted. The station
+	 * files the elder report the caller brought and answers in one sync beat;
+	 * the ticket only waited.
+	 */
+	settleInterruptedJoin(toolCallId, params, pending = null) {
+		return settleInterruptedJoin(this, toolCallId, params, pending);
 	}
 
 	/** The guard a waiting join runs before every take. */
@@ -704,7 +744,7 @@ export class SessionStation {
 		if (!this.anchor.needsRebase()) return;
 		const tree = this.contextMessages();
 		if (!shouldRebase({ needsRebase: true, tree, outbound })) return;
-		if (setAgentMessages(ctx, tree)) this.anchor.clearRebase();
+		if (this.host?.setAgentMessages?.(ctx, tree)) this.anchor.clearRebase();
 	}
 
 	// -- Fork/join receipts (sync) ----------------------------------------------
@@ -734,6 +774,22 @@ export class SessionStation {
 		return record;
 	}
 
+	/**
+	 * File a summary onto an existing receipt without taking a child. Used
+	 * when a join wait was interrupted: the model already read the receipt it
+	 * summarized, so the obligation is discharged even though no new record
+	 * arrived.
+	 */
+	recordElderReport(entry) {
+		const spec = entry && typeof entry === "object" ? entry : {};
+		let receipts = Array.isArray(this.state.receipts) ? this.state.receipts : [];
+		if (typeof spec.closeToolCallId === "string") {
+			receipts = attachReport(receipts, spec.closeToolCallId, spec.report);
+		}
+		this.state.receipts = receipts;
+		return receipts;
+	}
+
 	/** Mark the receipts whose text the projection has shortened. */
 	settleReceiptFolds(closeToolCallIds) {
 		this.state.receipts = settleReceipts(
@@ -746,7 +802,7 @@ export class SessionStation {
 
 	transformContext(original, ctx) {
 		try {
-			const model = actualModel(ctx);
+			const model = actualModel(ctx, this.host);
 			const key = modelKey(model);
 			const folding = this.registry?.implementations?.()?.folding ?? foldingOn();
 			const needsRebase = this.anchor.needsRebase();
@@ -759,7 +815,7 @@ export class SessionStation {
 					needsRebase,
 					ports: this.registry?.ports?.() ?? {},
 					modelKey: key,
-					header: key ? contextHeaderOf(ctx) : null,
+					header: key ? (this.host?.contextHeaderOf?.(ctx) ?? null) : null,
 				},
 				{ folding },
 			);
@@ -769,7 +825,7 @@ export class SessionStation {
 			if (projection.collapsed.length > 0) {
 				this.state.receipts = projection.nextState.receipts;
 			}
-			if (projection.rebase && tree && setAgentMessages(ctx, tree)) {
+			if (projection.rebase && tree && this.host?.setAgentMessages?.(ctx, tree)) {
 				this.anchor.clearRebase();
 			}
 			if (projection.usage) this.usage.noteSentContext(projection.usage);
@@ -779,7 +835,7 @@ export class SessionStation {
 			if (error?.code === "FOLD_ROLLBACK_FAILED") {
 				// The host catches context-handler errors. Cancel the live Agent
 				// too, so a broken journal cannot reach the provider unchanged.
-				sessionFor(ctx)?.agent?.abort?.(error);
+				this.host?.sessionFor?.(ctx)?.agent?.abort?.(error);
 				throw error;
 			}
 			return { messages: original };

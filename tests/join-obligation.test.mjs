@@ -19,7 +19,7 @@ import {
   registerFork,
   unreceivedChildren,
 } from "../src/scope/forkjoin.mjs";
-import { createProcessedLedger } from "../src/station/processed-ledger.mjs";
+import { createToolCallLedger } from "../src/station/domain/tool-call-ledger.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { handleJoinCall } from "../src/station/fork-controls.mjs";
 import { nudgeDecision } from "../src/station/nudge.mjs";
@@ -44,7 +44,7 @@ function stationFor(registry, ledger) {
   const station = Object.create(SessionStation.prototype);
   station.state = createState();
   station.state.autopilot = true;
-  station.processed = createProcessedLedger();
+  station.toolCallLedger = createToolCallLedger();
   station.ownerId = null;
   station.forkLedgerPort = () => ledger;
   station.forkWaitPort = () => ({ registry, ledger });
@@ -265,5 +265,73 @@ describe("the elder binding is exact", () => {
     const out = handleJoinCall(station, { id: "j1", arguments: { elder_report: null } });
     expect(out.details.code).toBe("NO_READY_CHILD");
     expect(out.details.active).toBe(0);
+  });
+
+  test("a user-input interrupt files the elder and the next join passes null", async () => {
+    const ledger = createBracketLedger();
+    const registry = registryOf();
+    const station = stationFor(registry, ledger);
+    forkChild(ledger, "c1");
+    markReady(ledger, "c1");
+
+    const first = await joinTicket(station, "j1", { elder_report: null }, {});
+    expect(first.details.joined).toBe(true);
+    expect(station.state.receipts[0].report).toBeNull();
+
+    // The next join carries the summary of j1 and parks on c2.
+    forkChild(ledger, "c2");
+    const controller = new AbortController();
+    const pending = joinTicket(
+      station,
+      "j2",
+      { elder_report: "c1 found the parser path" },
+      {},
+      controller.signal,
+    );
+    await tick();
+    controller.abort(Symbol.for("pi-agent-core.tool-interrupt"));
+
+    const interrupted = await pending;
+    expect(interrupted.isError).toBeUndefined();
+    expect(interrupted.details.interrupted).toBe(true);
+    expect(interrupted.details.joined).toBe(false);
+    expect(interrupted.details.elderConsumed).toBe(true);
+    expect(interrupted.content[0].text).toContain("can pass `elder_report: null`");
+    // The report landed on the receipt the model read, not on a child.
+    expect(station.state.receipts[0].report).toBe("c1 found the parser path");
+    expect(forkOf(ledger, "c2").status).toBe("running");
+
+    markReady(ledger, "c2");
+    const next = await joinTicket(station, "j3", { elder_report: null }, {});
+    expect(next.isError).toBeUndefined();
+    expect(next.details.joined).toBe(true);
+    expect(forkOf(ledger, "c2").status).toBe("joined");
+  });
+
+  test("an external cancel leaves the elder pending", async () => {
+    const ledger = createBracketLedger();
+    const registry = registryOf();
+    const station = stationFor(registry, ledger);
+    forkChild(ledger, "c1");
+    markReady(ledger, "c1");
+    await joinTicket(station, "j1", { elder_report: null }, {});
+
+    forkChild(ledger, "c2");
+    const controller = new AbortController();
+    const pending = joinTicket(
+      station,
+      "j2",
+      { elder_report: "c1 found the parser path" },
+      {},
+      controller.signal,
+    );
+    await tick();
+    controller.abort();
+
+    const cancelled = await pending;
+    expect(cancelled.isError).toBe(true);
+    expect(cancelled.details.code).toBe("JOIN_INTERRUPTED");
+    expect(station.state.receipts[0].report).toBeNull();
+    expect(forkOf(ledger, "c2").status).toBe("running");
   });
 });

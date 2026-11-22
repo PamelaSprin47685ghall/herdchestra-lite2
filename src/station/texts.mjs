@@ -41,6 +41,9 @@ function branchBudget(record, clock = null) {
 	return forkBudgetText(record, Date.now(), clock) || "none";
 }
 
+/** The pin receipt: the note is saved, and the ledger may now be stale. */
+export const PIN_SAVED_TEXT = T["pin.saved"];
+
 function amendText(applied, record = null, clock = null) {
 	const refunded = Number.isInteger(applied.refunded) ? applied.refunded : 0;
 	const text = render(T["amend.undone"], { refunded });

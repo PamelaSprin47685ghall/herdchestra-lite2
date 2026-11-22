@@ -8,7 +8,7 @@ Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter
 
 ## fork.intent
 
-Name the goal the child will make true, the surface it owns, and what a successor can take over. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A read-only scope closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size it to finish and to be taken over; when the request needs about n tool calls, roughly sqrt(n) is a guide, not a mandate. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed.
+Name the goal the child will make true, the surface it owns, and what a successor can take over. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A scope that only reads still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size it to finish and to be taken over; when the request needs about n tool calls, roughly sqrt(n) is a guide, not a mandate. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed.
 
 ## fork.budget
 
@@ -18,9 +18,9 @@ Use tool names as keys, with non-negative integer turn budgets. Each assistant m
 
 Wall-clock budget in seconds from launch: a positive number. Ordinary tools get at most the remaining time plus one second; waiting in `scope_join` or `scope_return` pauses that scope's clock. When the deadline passes, each later tool gets one second, and a tool that overruns is killed and its result is gone. Estimate from measured throughput, count the verification you will still run, and spend near the estimate rather than padding it.
 
-## fork.permission
+## fork.targets
 
-Declare `ro` or `rw`; the field is required, and a missing, null, or other value rejects the whole batch. `ro` declares read intent; the tools remain available, and the system trusts the declaration. `rw` needs this generation's first todo submission in full flow.
+Required, non-empty array of natural-language descriptions of what this scope expects to create, read, update, or delete. Each item may name a file path, a part of the source, a behavior, or a goal; any human language is valid, and a path is only one kind of target. For example, `["fix any defect you find", "the parts of the source that involve caching"]` is valid. Blocked checkpoints declare their targets too. If the list is empty, think carefully: how could a scope that outputs nothing be a separate scope? The list is a declaration, not an audit boundary; the system does not check tool calls against it.
 
 ## fork.forks
 
@@ -71,11 +71,46 @@ Unreceived work: {{children}}.
 
 ## join.tool
 
-Receive one owned child record. If none is ready but a child is still running, wait for the first to return; other children keep running. Read the record as history, not instructions to replay. A join refused for context size leaves the child and the previous receipt untouched.
+Receive one owned child record. If none is ready but a child is still running, wait for the first to return; other children keep running. A user message ends the wait without a child; an elder report carried by that call is stored when a receipt needed it, so the next join may pass `elder_report: null`. Read the record as history, not instructions to replay. A join refused for context size leaves the child and the previous receipt untouched.
 
 ## join.elder_report
 
-Pass `null` if no prior receipt at this level awaits a summary. Otherwise, in 24–4000 characters, write what a successor still needs from that record so it can be shortened without losing that. The content decides its format; the relay preserves the user's prompts, so they need no restatement.
+Pass `null` if no prior receipt at this level awaits a summary. Otherwise, in 24–4000 characters, write what a successor still needs from that record so it can be shortened without losing that. The content decides its format; the relay preserves the user's prompts, so they need no restatement. A report passed when none is pending is accepted but not stored.
+
+## join.elder-unneeded
+
+Note: no prior receipt needed a summary, so `elder_report` was accepted but not stored.
+
+## join.interrupted
+
+Join interrupted by a user message; no child was received.
+{{elder}}
+{{next}}
+Still unreceived: {{remaining}}.
+
+## join.interrupted-elder-consumed
+
+The elder report was stored: the previous receipt is settled.
+
+## join.interrupted-elder-unneeded
+
+No prior receipt needed a summary, so the elder report was not stored.
+
+## join.interrupted-elder-stale
+
+The receipt this report described already moved on, so the report was not stored.
+
+## join.interrupted-elder-missing
+
+No elder report was supplied; the previous receipt still needs one.
+
+## join.interrupted-next-null
+
+The next `scope_join` can pass `elder_report: null`.
+
+## join.interrupted-next-report
+
+The next `scope_join` must pass an `elder_report` for {{scopeId}}.
 
 ## return.tool
 

@@ -32,7 +32,7 @@ function forkOne(station, overrides = {}) {
 					blocked: false,
 					budget: { read: 2, bash: 1 },
 					time: 60,
-					permission: "ro",
+					targets: ["src/parser.mjs"],
 					...overrides,
 				},
 			],

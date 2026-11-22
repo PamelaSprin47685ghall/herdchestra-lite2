@@ -8,7 +8,7 @@ import { invalidatePromotion } from "../relay/index.mjs";
 import { PIN_INTERNAL_ERROR, PIN_UNAVAILABLE } from "../features/pin/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
-import { amendText } from "./texts.mjs";
+import { amendText, PIN_SAVED_TEXT } from "./texts.mjs";
 
 import { loadDoc, render } from "../prompts/index.mjs";
 
@@ -73,7 +73,7 @@ function handlePinCall(station, call) {
     rollback();
     return errorResult(PIN_UNAVAILABLE, E["pin-unavailable"]);
   }
-  return textResult("OK");
+  return textResult(PIN_SAVED_TEXT);
 }
 
 export { handleAmendCall, handlePinCall };

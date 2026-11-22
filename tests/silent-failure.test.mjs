@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
+	record,
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
 } from "../src/host/diagnostics.mjs";
@@ -44,7 +45,13 @@ describe("failures that used to vanish", () => {
 				return "entry-1";
 			},
 		};
-		const station = new SessionStation(manager, {}, {}, {}, null);
+		const station = new SessionStation(
+		manager,
+		{},
+		{},
+		{ host: () => ({ record }) },
+		null,
+	);
 		expect(station.state).toBeDefined();
 		// The restore path reports its own failure too.
 		expect(domains()).toContain("restore");

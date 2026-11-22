@@ -20,8 +20,7 @@ import {
 } from "../src/scope/receipts.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { createEmptyCatalog } from "../src/host/pricing.mjs";
-import { createDispatchTracker } from "../src/station/dispatch-tracker.mjs";
-import { createProcessedLedger } from "../src/station/processed-ledger.mjs";
+import { createToolCallLedger } from "../src/station/domain/tool-call-ledger.mjs";
 
 function receipt(forkId, closeId, closedOrder, levelKey = "root|0|0", report = null) {
 	return createReceiptRecord({
@@ -40,8 +39,7 @@ function rootStation(ledger, state = createState()) {
 	station.manager = null;
 	station.pricingCatalog = createEmptyCatalog();
 	station.registry = { ports: () => ({ folding: "on" }) };
-	station.processed = createProcessedLedger();
-	station.dispatch = createDispatchTracker();
+	station.toolCallLedger = createToolCallLedger();
 	station.hostBoundaryKey = null;
 	station.lastError = null;
 	station.anchor = { persist() {}, rebase() {}, needsRebase: () => false };
@@ -215,7 +213,7 @@ describe("a child record is frozen before the parent can take it", () => {
 });
 
 describe("elder_report is exact", () => {
-	test("a summary with no pending receipt is refused before any take", () => {
+	test("a summary with no pending receipt is accepted and noted", () => {
 		const ledger = createBracketLedger();
 		registerFork(ledger, {
 			forkId: "c1",
@@ -231,10 +229,12 @@ describe("elder_report is exact", () => {
 			id: "j1",
 			arguments: { elder_report: "nothing is pending" },
 		});
-		expect(out.isError).toBe(true);
-		expect(out.details.code).toBe("ELDER_REPORT_UNEXPECTED");
-		// A refusal consumes nothing.
-		expect(forkOf(ledger, "c1").status).toBe("ready");
+		expect(out.isError).toBeUndefined();
+		expect(out.details.joined).toBe(true);
+		expect(out.details.elderUnneeded).toBe(true);
+		expect(out.content[0].text).toContain("was accepted but not stored");
+		// The stray report changes nothing; the child is still received.
+		expect(forkOf(ledger, "c1").status).toBe("joined");
 	});
 
 	test("a pending receipt demands a non-empty summary", () => {

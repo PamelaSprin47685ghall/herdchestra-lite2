@@ -29,7 +29,7 @@ export const FORK_DESCRIPTION = forkJoin["fork.tool"];
 export const FORK_INTENT_DESCRIPTION = forkJoin["fork.intent"];
 export const FORK_BUDGET_DESCRIPTION = forkJoin["fork.budget"];
 export const FORK_TIME_DESCRIPTION = forkJoin["fork.time"];
-export const FORK_PERMISSION_DESCRIPTION = forkJoin["fork.permission"];
+export const FORK_TARGETS_DESCRIPTION = forkJoin["fork.targets"];
 export const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
 export const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
 export const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
@@ -42,7 +42,7 @@ import { SCOPE_ID_PATTERN, MAX_SCOPE_ID_LENGTH } from "../scope/scope-id.mjs";
 const forkItem = {
 	type: "object",
 	additionalProperties: false,
-	required: ["scopeId", "intent", "blocked", "budget", "time", "permission"],
+	required: ["scopeId", "intent", "blocked", "budget", "time", "targets"],
 	properties: {
 		scopeId: { type: "string", pattern: SCOPE_ID_PATTERN, maxLength: MAX_SCOPE_ID_LENGTH, description: forkJoin["fork.scope-id"] },
 		intent: { type: "string", minLength: 1, description: FORK_INTENT_DESCRIPTION },
@@ -53,10 +53,11 @@ const forkItem = {
 			description: FORK_BUDGET_DESCRIPTION,
 		},
 		time: { type: "number", exclusiveMinimum: 0, description: FORK_TIME_DESCRIPTION },
-		permission: {
-			type: "string",
-			enum: ["ro", "rw"],
-			description: FORK_PERMISSION_DESCRIPTION,
+		targets: {
+			type: "array",
+			minItems: 1,
+			items: { type: "string", minLength: 1, pattern: "\\S" },
+			description: FORK_TARGETS_DESCRIPTION,
 		},
 		model: {
 			anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],

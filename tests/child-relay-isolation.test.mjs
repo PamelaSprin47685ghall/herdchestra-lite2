@@ -280,7 +280,7 @@ describe("a child's skill receipt", () => {
 		);
 
 		expect(text).toContain("Autopilot on");
-		expect(text).toContain("Until the first `todo` write");
+		expect(text).toContain("Evaluate the ledger before forking.");
 		expect(text).not.toContain("Fork child duty");
 	});
 });

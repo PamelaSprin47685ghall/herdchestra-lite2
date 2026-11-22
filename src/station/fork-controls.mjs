@@ -15,21 +15,24 @@ import {
   takeReady,
   unreceivedChildren,
 } from "../scope/forkjoin.mjs";
-import { validScopeId, publicScopeId } from "../scope/scope-id.mjs";
+import { publicScopeId } from "../scope/scope-id.mjs";
 import { createClockOn } from "../scope/clock.mjs";
 import {
-  decideForkAdmission,
   decideJoinAdmission,
   decideJoinBinding,
   decidePendingReport,
+  decideRegister,
+  decideReady,
+  decideReturn,
+  validateForkBatch,
 } from "./domain/fork-join.mjs";
-import { normalizeBudget, validBudget } from "../scope/budget.mjs";
-import { resolveModelSelector } from "../scope/model-selector.mjs";
+import { processedOf } from "./domain/tool-call-ledger.mjs";
+import { targetsText } from "../scope/targets.mjs";
 import { joinReceipt, renderChildRecord } from "../transcript/replay.mjs";
 import { filterAmends } from "../transcript/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
-import { parseArgs, trimText } from "./messages.mjs";
+import { parseArgs } from "./messages.mjs";
 import { elderReportProblem } from "../scope/elder-report.mjs";
 
 const F = loadDoc("tools/fork-join");
@@ -78,83 +81,13 @@ function depthOf(station) {
   return typeof station.ownerId === "string" && station.ownerId !== "" ? 1 : 0;
 }
 
-/**
- * Check every fork argument without changing state. Returns the normalized
- * budget on success so the caller never normalizes twice.
- */
-export function validateFork(state, args, options = {}) {
-  const intent = trimText(args?.intent);
-  if (intent === "") return { ok: false, code: "INVALID_INTENT" };
-  // The write gate is the only admission rule left on permission: a full-flow
-  // generation that has not submitted a ledger may not declare `rw`.
-  if (
-    args?.permission === "rw" &&
-    options.relayOn === true &&
-    state?.relay?.fullFlow === true &&
-    state?.relay?.firstEvaluation === null
-  ) {
-    return { ok: false, code: "RW_BEFORE_LEDGER" };
-  }
-  if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
-    return { ok: false, code: "INVALID_BUDGET" };
-  }
-  const budget = normalizeBudget(args.budget);
-  if (!validBudget(budget)) return { ok: false, code: "INVALID_BUDGET" };
-  if (typeof args?.time !== "number" || !Number.isFinite(args.time) || args.time <= 0) {
-    return { ok: false, code: "INVALID_TIME" };
-  }
-  if (args?.permission !== "ro" && args?.permission !== "rw") {
-    return { ok: false, code: "INVALID_ARGUMENT" };
-  }
-  // A non-string is a shape error; a blank string is an unresolvable selector.
-  // The blank case stays for the resolver, so the refusal names the models the
-  // caller can pick instead of blaming the argument list.
-  if (args.model !== undefined && args.model !== null && typeof args.model !== "string") {
-    return { ok: false, code: "INVALID_ARGUMENT" };
-  }
-  if (args.blocked !== undefined && typeof args.blocked !== "boolean") {
-    return { ok: false, code: "INVALID_ARGUMENT" };
-  }
-  if (!validScopeId(args?.scopeId) || args.scopeId.toLowerCase() === "root") {
-    return { ok: false, code: "INVALID_SCOPE_ID" };
-  }
-  return {
-    ok: true,
-    scopeId: args.scopeId,
-    intent,
-    budget,
-    time: args.time,
-    permission: args.permission,
-    model: typeof args.model === "string" ? args.model.trim() : null,
-    blocked: args.blocked === true,
-  };
-}
-
-/**
- * Validate a whole fork batch before any state changes. One bad item rejects
- * the batch: a half-open batch would leave the model unsure which brackets it
- * owns.
- */
-export function validateForkBatch(state, args, options = {}) {
-  if (!Array.isArray(args?.forks) || args.forks.length === 0) {
-    return { ok: false, code: "INVALID_FORKS", index: -1 };
-  }
-  const items = [];
-  for (let index = 0; index < args.forks.length; index += 1) {
-    const item = validateFork(state, args.forks[index], options);
-    if (!item.ok) return { ok: false, code: item.code, index };
-    items.push(item);
-  }
-  return { ok: true, items };
-}
-
 const REFUSAL_KEY = {
   INVALID_SCOPE_ID: "invalid-scope-id",
   INVALID_INTENT: "invalid-intent",
   INVALID_BUDGET: "invalid-budget",
   INVALID_TIME: "invalid-time",
   INVALID_ARGUMENT: "invalid-argument",
-  RW_BEFORE_LEDGER: "rw-before-ledger",
+  INVALID_TARGETS: "invalid-targets",
 };
 
 function budgetText(budget) {
@@ -331,7 +264,7 @@ export function childReceiptText(spec) {
       depth: spec.childDepth,
       intent: spec.intent,
       budget: budgetText(spec.budget),
-      permission: spec.permission,
+      targets: targetsText(spec.targets),
     }),
     S["fork.child-return"],
     S["fork.child-routing"],
@@ -344,44 +277,12 @@ export function childReceiptText(spec) {
 const FORK_RECEIPT_PREFIX_CHARS = 600;
 
 /**
- * Admission for one fork's start projection.
- *
- * A child session seeds from the parent's context and then reads its receipt,
- * so its first request is the parent's watermark plus that receipt. A known
- * window may refuse before any bracket is registered; an unknown window or an
- * unmeasured watermark passes, exactly as join admission does.
- */
-function admitForkStart(station, item, depth) {
-  const receiptChars =
-    childReceiptText({
-      scopeId: item.scopeId,
-      childDepth: depth + 1,
-      intent: item.intent,
-      budget: item.budget,
-      permission: item.permission,
-    }).length + FORK_RECEIPT_PREFIX_CHARS;
-  const override = item.modelOverride?.contextWindow;
-  const window =
-    Number.isFinite(override) && override > 0 ? override : windowOf(station);
-  return decideForkAdmission({
-    baseTokens: measuredBase(station),
-    receiptChars,
-    tokensPerChar: densityOf(station),
-    window,
-    reserve:
-      typeof station.forkReservePort === "function" ? station.forkReservePort() : undefined,
-    margin:
-      typeof station.forkMarginPort === "function" ? station.forkMarginPort() : undefined,
-  });
-}
-
-/**
  * Open one child scope. Never blocks: the parent keeps its depth, its model,
  * and its own work. Several forks may share one assistant message.
  */
 export function handleForkCall(station, call, options = {}) {
   const args = parseArgs(call);
-  const batch = validateForkBatch(station.state, args, options);
+  const batch = validateForkBatch(args);
   if (!batch.ok) {
     const where = batch.index >= 0 ? ` (forks[${batch.index}])` : "";
     return errorResult(
@@ -393,77 +294,77 @@ export function handleForkCall(station, call, options = {}) {
   if (!ledger) {
     return errorResult("FORK_LEDGER_UNAVAILABLE", E["fork-ledger-unavailable"]);
   }
-  const names = new Set(ledger.order.map((id) => forkOf(ledger, id))
-    .filter((entry) => entry?.status !== "blocked").map((entry) => publicScopeId(entry).toLowerCase()));
-  for (const item of batch.items) {
-    const key = item.scopeId.toLowerCase();
-    if (names.has(key)) {
-      return errorResult("DUPLICATE_SCOPE_ID", render(E["duplicate-scope-id"], {
-        scopeId: item.scopeId,
-      }));
-    }
-    names.add(key);
-  }
-  // A pure checkpoint starts nothing, so it needs no spawner. Only a batch
-  // that actually promises running children requires one.
-  const needsSpawn = batch.items.some((item) => item.blocked !== true);
+  const depth = depthOf(station);
   const spawner =
     typeof station.childSpawnPort === "function" ? station.childSpawnPort() : null;
-  if (needsSpawn && typeof spawner !== "function") {
-    return errorResult("CHILD_SPAWNER_UNAVAILABLE", E["child-spawner-unavailable"]);
-  }
-
-  // Resolve every requested model before the first bracket is registered.
-  // The host owns selection; a refusal must leave the ledger untouched, so a
-  // batch with one unknown selector starts nothing. A blocked item spawns
-  // nothing now and is resolved again when it is resubmitted as ready.
-  for (let index = 0; index < batch.items.length; index += 1) {
-    const item = batch.items[index];
-    if (item.model == null || item.blocked === true) continue;
-    const resolved = resolveModelSelector(options.ctx?.models, item.model);
-    if (!resolved.ok) {
-      const named = Array.isArray(resolved.available) ? resolved.available : [];
-      const total = Number.isInteger(resolved.availableTotal) ? resolved.availableTotal : named.length;
-      const available = named.length === 0
-        ? "none"
-        : `${named.join(", ")}${total > named.length ? `, and ${total - named.length} more` : ""}`;
-      return errorResult(resolved.code, render(E["model-unknown"], {
-        index,
-        selector: item.model,
-        available,
+  const receiptChars = batch.items.map((item) => {
+    if (item.blocked === true) return 0;
+    return childReceiptText({
+      scopeId: item.scopeId,
+      childDepth: depth + 1,
+      intent: item.intent,
+      budget: item.budget,
+      targets: item.targets,
+    }).length + FORK_RECEIPT_PREFIX_CHARS;
+  });
+  const decision = decideRegister({
+    items: batch.items,
+    forks: ledger.order.map((id) => forkOf(ledger, id)),
+    models: options.ctx?.models ?? null,
+    hasSpawner: typeof spawner === "function",
+    receiptChars,
+    baseTokens: measuredBase(station),
+    tokensPerChar: densityOf(station),
+    window: windowOf(station),
+    reserve:
+      typeof station.forkReservePort === "function"
+        ? station.forkReservePort()
+        : undefined,
+    margin:
+      typeof station.forkMarginPort === "function"
+        ? station.forkMarginPort()
+        : undefined,
+  });
+  if (!decision.ok) {
+    if (decision.code === "DUPLICATE_SCOPE_ID") {
+      return errorResult(decision.code, render(E["duplicate-scope-id"], {
+        scopeId: decision.scopeId,
+      }));
+    }
+    if (decision.code === "CHILD_SPAWNER_UNAVAILABLE") {
+      return errorResult(decision.code, E["child-spawner-unavailable"]);
+    }
+    if (decision.code === "FORK_CONTEXT_EXCEEDED") {
+      return errorResult(decision.code, render(E["fork-context-exceeded"], {
+        index: decision.index,
+        reason: decision.reason,
       }), {
-        index,
-        selector: item.model,
-        available: resolved.available,
-        availableTotal: resolved.availableTotal,
+        index: decision.index,
+        admission: decision.admission,
+        source: "measured",
+        limit: decision.limit,
+        projected: decision.projected,
+        reserve: decision.reserve,
+        margin: decision.margin,
+        overBy: decision.overBy,
       });
     }
-    item.modelOverride = resolved.model;
-    item.thinkingLevel = resolved.thinkingLevel;
-  }
-
-  const depth = depthOf(station);
-  // A fork's first request is the parent's context plus the child receipt.
-  // Refuse the whole batch when any ready item cannot fit a known window:
-  // nothing is registered, nothing spawns, and the parent learns the numbers
-  // instead of letting the provider reject the child's first turn.
-  for (let index = 0; index < batch.items.length; index += 1) {
-    const item = batch.items[index];
-    if (item.blocked === true) continue;
-    const verdict = admitForkStart(station, item, depth);
-    if (verdict.ok) continue;
-    return errorResult("FORK_CONTEXT_EXCEEDED", render(E["fork-context-exceeded"], {
-      index,
-      reason: verdict.reason,
+    const named = Array.isArray(decision.available) ? decision.available : [];
+    const total = Number.isInteger(decision.availableTotal)
+      ? decision.availableTotal
+      : named.length;
+    const available = named.length === 0
+      ? "none"
+      : `${named.join(", ")}${total > named.length ? `, and ${total - named.length} more` : ""}`;
+    return errorResult(decision.code, render(E["model-unknown"], {
+      index: decision.index,
+      selector: decision.selector,
+      available,
     }), {
-      index,
-      admission: verdict.code,
-      source: "measured",
-      limit: verdict.limit,
-      projected: verdict.projected,
-      reserve: verdict.reserve,
-      margin: verdict.margin,
-      overBy: verdict.overBy,
+      index: decision.index,
+      selector: decision.selector,
+      available: decision.available,
+      availableTotal: decision.availableTotal,
     });
   }
 
@@ -473,9 +374,9 @@ export function handleForkCall(station, call, options = {}) {
   const started = [];
   const deferred = [];
   const failed = [];
-  for (let index = 0; index < batch.items.length; index += 1) {
-    const item = batch.items[index];
-    const forkId = batch.items.length === 1 ? baseId : `${baseId}:${index}`;
+  for (let index = 0; index < decision.items.length; index += 1) {
+    const item = decision.items[index];
+    const forkId = decision.items.length === 1 ? baseId : `${baseId}:${index}`;
     const registered = registerFork(ledger, {
       forkId,
       scopeId: item.scopeId,
@@ -503,7 +404,7 @@ export function handleForkCall(station, call, options = {}) {
     // after the fact would leave `remaining` at the empty object the ledger
     // started with, and the child's first normal tool call would be refused
     // as exhausted.
-    fork.permission = item.permission;
+    fork.targets = item.targets;
     fork.model = item.model;
     if (item.blocked === true) {
       deferred.push({ forkId, scopeId: item.scopeId, intent: item.intent });
@@ -517,7 +418,7 @@ export function handleForkCall(station, call, options = {}) {
       intent: item.intent,
       budget: item.budget,
       time: item.time,
-      permission: item.permission,
+      targets: item.targets,
       model: item.model,
       modelOverride: item.modelOverride,
       thinkingLevel: item.thinkingLevel,
@@ -671,9 +572,10 @@ export function handleJoinCall(station, call, options = {}) {
       { pendingReceipt: pendingReport.closeToolCallId ?? pendingReport.forkId },
     );
   }
-  if (pendingReport === null && elderReport !== null) {
-    return errorResult("ELDER_REPORT_UNEXPECTED", E["elder-report-unexpected"]);
-  }
+  // A report with nothing to archive is harmless. Refusing it would cost the
+  // model a whole turn for an argument the join can ignore, so the result says
+  // it was not needed instead.
+  const elderUnneeded = pendingReport === null && elderReport !== null;
   if (pendingReport !== null && elderReport !== null) {
     // The stored report is trimmed, so the bound applies to its trimmed
     // length. The schema's pattern measures the same span on the raw string.
@@ -738,6 +640,7 @@ export function handleJoinCall(station, call, options = {}) {
     ownerId,
     closeToolCallId: call.id,
     persisted,
+    elderUnneeded,
   });
 }
 
@@ -867,17 +770,94 @@ export function renderJoinResult(station, record, options = {}) {
     pendingReceipt: publicScopeId(record),
 	});
   const persisted = options.persisted;
-  const warning =
-    persisted === false
-      ? "Persistence warning: this join receipt exists in memory, but the shared tree was not written."
-      : "";
-  const body = warning === "" ? text : `${text}${text.endsWith("\n") ? "" : "\n"}${warning}`;
+  const notes = [];
+  if (options.elderUnneeded === true) notes.push(F["join.elder-unneeded"]);
+  if (persisted === false) {
+    notes.push(
+      "Persistence warning: this join receipt exists in memory, but the shared tree was not written.",
+    );
+  }
+  const body = notes.length === 0 ? text : `${text}${text.endsWith("\n") ? "" : "\n"}${notes.join("\n")}`;
   return textResult(body, {
     forkId: record.forkId,
     joined: true,
     remaining,
+    ...(options.elderUnneeded === true ? { elderUnneeded: true } : {}),
     ...(persisted === undefined ? {} : { persisted }),
   });
+}
+
+/**
+ * Settle a join that a queued user message interrupted while it waited.
+ *
+ * The wait took no child, but the summary the model supplied belongs to the
+ * receipt it read before calling. Filing it here discharges that obligation,
+ * so the next join may pass `elder_report: null`. The binding is re-checked
+ * first: a concurrent join may have moved the chain, and a report the model
+ * never read must not be attached to the receipt that replaced it.
+ */
+export function settleInterruptedJoin(station, toolCallId, params, pending = null) {
+  const ledger = ledgerOf(station);
+  const ownerId = ownerIdOf(station);
+  const raw = typeof params?.elder_report === "string" ? params.elder_report : null;
+  const elderReport = raw === null ? null : raw.trim();
+  const binding = checkJoinBinding(station, pending);
+  let consumed = false;
+  if (binding.ok && pending !== null && elderReport !== null) {
+    if (typeof station.recordElderReport === "function") {
+      station.recordElderReport({
+        closeToolCallId: pending.closeToolCallId,
+        report: elderReport,
+      });
+    }
+    reportsOf(station).delete(ownerId);
+    consumed = true;
+  }
+  const persisted = consumed ? confirmJoinPersistence(station) : undefined;
+  if (persisted === false) {
+    station.noteError?.("fork", new Error("interrupted join report was not persisted"), {
+      forkId: pending?.forkId ?? null,
+      phase: "join",
+    });
+  }
+  const next = pendingReportOf(station, ownerId);
+  const elderLine = consumed
+    ? F["join.interrupted-elder-consumed"]
+    : pending !== null && elderReport === null
+      ? F["join.interrupted-elder-missing"]
+      : binding.ok
+        ? F["join.interrupted-elder-unneeded"]
+        : F["join.interrupted-elder-stale"];
+  const nextLine =
+    next === null
+      ? F["join.interrupted-next-null"]
+      : render(F["join.interrupted-next-report"], {
+          scopeId: publicScopeId(forkOf(ledger, next.forkId)),
+        });
+  const remaining = unreceivedChildren(ledger, ownerId).map((id) =>
+    publicScopeId(forkOf(ledger, id)),
+  );
+  const result = textResult(
+    render(F["join.interrupted"], {
+      elder: elderLine,
+      next: nextLine,
+      remaining: remaining.length === 0 ? "none" : remaining.join(", "),
+    }),
+    {
+      interrupted: true,
+      joined: false,
+      elderConsumed: consumed,
+      nextElderReport: next === null ? null : next.forkId,
+      remaining,
+      ...(persisted === undefined ? {} : { persisted }),
+    },
+  );
+  // The interruption is this tool call's final answer. Caching it keeps a
+  // replay from filing the same report twice.
+  processedOf(station)?.setHandled?.(toolCallId, result);
+  processedOf(station)?.markCall?.(toolCallId);
+  station.persist?.();
+  return result;
 }
 
 /**
@@ -893,30 +873,35 @@ export function handleReturnCall(station, call) {
   const identity = identityOf(station);
   const selfForkId =
     identity && typeof identity.forkId === "string" ? identity.forkId : "";
-  if (selfForkId === "") {
-    return errorResult("NOT_A_CHILD", E["not-a-child"]);
-  }
-  const record = forkOf(ledger, selfForkId);
-  if (!record) {
-    return errorResult("UNKNOWN_FORK", E["unknown-fork"]);
-  }
-  if (record.status !== "running") {
-    return errorResult("FORK_NOT_RUNNING", render(E["fork-not-running"], {
-      scopeId: publicScopeId(record),
-      status: record.status,
-    }));
-  }
+  const record = selfForkId === "" ? null : forkOf(ledger, selfForkId);
   // Adoption follows the current receiver, never the birth parent: a branch
   // that was itself adopted must hand its unreceived children to the branch
   // that now answers for it.
-  const receiverId = record.ownerId;
-  if (typeof receiverId !== "string" || receiverId === "") {
+  const orphans = record
+    ? [...openChildren(ledger, selfForkId), ...readyChildren(ledger, selfForkId)]
+    : [];
+  const decision = decideReturn({
+    identityForkId: selfForkId,
+    record,
+    receiverId: record?.ownerId ?? "",
+    orphans,
+  });
+  if (!decision.ok) {
+    if (decision.code === "NOT_A_CHILD") {
+      return errorResult("NOT_A_CHILD", E["not-a-child"]);
+    }
+    if (decision.code === "UNKNOWN_FORK") {
+      return errorResult("UNKNOWN_FORK", E["unknown-fork"]);
+    }
+    if (decision.code === "FORK_NOT_RUNNING") {
+      return errorResult("FORK_NOT_RUNNING", render(E["fork-not-running"], {
+        scopeId: publicScopeId(record),
+        status: decision.status,
+      }));
+    }
     return errorResult("ORPHANS_WITHOUT_RECEIVER", E["orphans-without-receiver"]);
   }
-  const orphans = [
-    ...openChildren(ledger, selfForkId),
-    ...readyChildren(ledger, selfForkId),
-  ];
+  const receiverId = decision.receiverId;
   // Freeze this branch's own record before the bracket becomes ready. The
   // parent may take it in the same tick, and a parent that reads an empty
   // record cannot tell a silent child from a broken one. Amends are filtered
@@ -941,11 +926,23 @@ export function handleReturnCall(station, call) {
   // Mark the parent's own bracket first: its result must be queued ahead of
   // the children it hands over, so a grandparent reads the introduction
   // before their records. A failed mark changes no relationship.
-  const ready = markReady(
-    ledger,
-    selfForkId,
-    renderedRecord === null ? { ok: true } : { ok: true, record: renderedRecord },
-  );
+  const readyDecision = decideReady({
+    record,
+    outcome:
+      renderedRecord === null ? { ok: true } : { ok: true, record: renderedRecord },
+  });
+  if (!readyDecision.ok) {
+    return errorResult(
+      readyDecision.code,
+      readyDecision.code === "FORK_NOT_RUNNING"
+        ? render(E["fork-not-running"], {
+            scopeId: publicScopeId(record),
+            status: readyDecision.status,
+          })
+        : E["unknown-fork"],
+    );
+  }
+  const ready = markReady(ledger, selfForkId, readyDecision.outcome);
   if (!ready.ok) return errorResult(ready.code, ready.reason);
   if (orphans.length > 0) reparentOrphans(ledger, selfForkId, receiverId);
   // The root branch owns the persisted tree. A child's own snapshot is not

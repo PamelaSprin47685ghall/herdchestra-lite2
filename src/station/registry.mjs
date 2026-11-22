@@ -7,6 +7,7 @@ import {
 	conversationKeyOf,
 	identityForAgent,
 	ledgerFor,
+	selectStopStation,
 } from "../host/fork-registry.mjs";
 import { capabilities, contextHeaderOf, modelOf, thinkingOf } from "../host/adapter.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
@@ -115,21 +116,6 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 		wiring.onStation?.(station, ctx ?? null);
 	}
 
-	// The pending handoff belongs to one session. A `/new` or a session switch
-	// must never route the next stop to the old station.
-	function sameManager(station, ctx) {
-		const key = ctx?.sessionManager ?? ctx;
-		if (!key || !station?.manager) return false;
-		if (station.manager === key) return true;
-		try {
-			const live = key.getSessionId?.();
-			const armed = station.manager.getSessionId?.();
-			return Boolean(live && armed && live === armed);
-		} catch {
-			return false;
-		}
-	}
-
 	const registry = {
 		/** The port table chosen at startup; null until the wiring resolves it. */
 		setPorts(table, implementations = null) {
@@ -210,14 +196,9 @@ export function createStationRegistry(pi, tickets, pricingCatalog, ports = {}) {
 		},
 		stationForStop(ctx) {
 			const station = registry.stationFor(ctx);
-			if (station.state.relay?.handoffPending) return station;
-			if (!pendingStation) return station;
-			if (!sameManager(pendingStation, ctx)) {
-				pendingStation = null;
-				return station;
-			}
-			if (pendingStation.state.relay?.handoffPending) return pendingStation;
-			return station;
+			const selected = selectStopStation({ station, pendingStation, ctx });
+			if (selected.clearPending) pendingStation = null;
+			return selected.station;
 		},
 		markPending(station) {
 			pendingStation = station;

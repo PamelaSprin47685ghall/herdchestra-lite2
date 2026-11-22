@@ -259,7 +259,7 @@ describe("relay text", () => {
 		expect(text.startsWith(report)).toBe(true);
 		expect(text).toContain("Generation 3 (from 2)");
 		expect(text).toContain("first root todo write");
-		expect(text).toContain('permission: "ro"');
+		expect(text).toContain("A todo view does not count");
 		expect(text).toContain("Pinned Context");
 		expect(text).toContain(pin);
 		expect(text).not.toContain('todo({ op: "view" })');

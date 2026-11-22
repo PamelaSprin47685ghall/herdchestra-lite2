@@ -235,13 +235,16 @@ describe("a summary that cannot guide the next decision", () => {
     expect(station.state.receipts[0].report).toBeNull();
   });
 
-  test("a null report with no pending elder stays unexpected", () => {
-    const { station } = stationWith(null);
+  test("a report with no pending elder is accepted and noted", () => {
+    const { ledger, station } = stationWith(null);
     const out = handleJoinCall(station, {
       id: "j1",
       arguments: { elder_report: "this receipt does not exist" },
     });
-    expect(out.isError).toBe(true);
-    expect(out.details.code).toBe("ELDER_REPORT_UNEXPECTED");
+    expect(out.isError).toBeUndefined();
+    expect(out.details.joined).toBe(true);
+    expect(out.details.elderUnneeded).toBe(true);
+    expect(out.content[0].text).toContain("was accepted but not stored");
+    expect(forkOf(ledger, "f2").status).toBe("joined");
   });
 });

@@ -102,14 +102,15 @@ describe("tool contracts map to their documents", () => {
 			"blocked",
 			"budget",
 			"time",
-			"permission",
+			"targets",
 		]);
 		expect(item.properties.intent.description).toBe(doc["fork.intent"]);
 		expect(item.properties.budget.description).toBe(doc["fork.budget"]);
 		expect(item.properties.time.description).toBe(doc["fork.time"]);
-		expect(item.properties.permission.description).toBe(doc["fork.permission"]);
+		expect(item.properties.targets.description).toBe(doc["fork.targets"]);
 		expect(item.properties).not.toHaveProperty("stage");
 		expect(item.properties).not.toHaveProperty("fission");
+		expect(item.properties).not.toHaveProperty("permission");
 		expect(scopeTools.amendParameters.properties.reflection.description).toBe(
 			loadDoc("tools/notes")["amend.reflection"],
 		);

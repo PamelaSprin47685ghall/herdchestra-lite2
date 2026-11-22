@@ -3,9 +3,9 @@
 import { errorResult } from "../tools/results.mjs";
 import { lastStructuralCallId } from "../transcript/index.mjs";
 import { handoffToolBlockedReason } from "../relay/index.mjs";
-import { MAIN_AGENT } from "../host/policy.mjs";
 import { handlePinCall, handleAmendCall } from "./controls.mjs";
 import { handleForkCall, handleJoinCall, handleReturnCall } from "./fork-controls.mjs";
+import { processedOf } from "./domain/tool-call-ledger.mjs";
 
 /**
  * Run one control tool through the processed-id cache.
@@ -15,10 +15,10 @@ import { handleForkCall, handleJoinCall, handleReturnCall } from "./fork-control
  * scan, so every control tool shares this order instead of repeating it.
  */
 function withProcessedCache(station, toolCallId, direct) {
-	const cached = station.processed.handledFor(toolCallId);
+	const cached = processedOf(station).handledFor(toolCallId);
 	if (cached) return cached;
 	station.processControlsForTool(toolCallId);
-	const processed = station.processed.handledFor(toolCallId);
+	const processed = processedOf(station).handledFor(toolCallId);
 	if (processed) return processed;
 	return direct();
 }
@@ -29,7 +29,7 @@ function executeAmend(station, toolCallId, params) {
 }
 
 function executePin(station, toolCallId, params) {
-	const cached = station.processed.handledFor(toolCallId);
+	const cached = processedOf(station).handledFor(toolCallId);
 	if (cached) return cached;
 	const ownerId =
 		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
@@ -37,7 +37,7 @@ function executePin(station, toolCallId, params) {
 		return errorResult("RELAY_HANDOFF_PENDING", handoffToolBlockedReason());
 	}
 	const result = handlePinCall(station, { id: toolCallId, arguments: params });
-	station.processed.setHandled(toolCallId, result);
+	processedOf(station).setHandled(toolCallId, result);
 	return result;
 }
 
@@ -67,7 +67,7 @@ function directAmend(station, toolCallId, params) {
 	const found = station.assistantForToolCall(toolCallId);
 	if (found) {
 		station.processAssistantMessage(found.message);
-		const cached = station.processed.handledFor(toolCallId);
+		const cached = processedOf(station).handledFor(toolCallId);
 		if (cached) return cached;
 	}
 	const base = found?.messages ?? station.contextMessages();
@@ -85,8 +85,8 @@ function directAmend(station, toolCallId, params) {
 		index,
 		boundary,
 	);
-	station.processed.setHandled(toolCallId, result);
-	station.processed.markCall(toolCallId);
+	processedOf(station).setHandled(toolCallId, result);
+	processedOf(station).markCall(toolCallId);
 	station.persist();
 	return result;
 }
@@ -105,15 +105,15 @@ function controlContext(station, toolCallId) {
 }
 
 function executeControl(station, toolCallId, direct, options = {}) {
-	const cached = station.processed.handledFor(toolCallId);
+	const cached = processedOf(station).handledFor(toolCallId);
 	if (cached) return cached;
 	const result = direct();
 	// A retryable answer is not a final one: the ticket waits and calls again.
 	// Caching it here would make the wait loop read its own stale refusal.
 	const retry = typeof options.retryWhen === "function" && options.retryWhen(result);
 	if (!retry) {
-		station.processed.setHandled(toolCallId, result);
-		station.processed.markCall(toolCallId);
+		processedOf(station).setHandled(toolCallId, result);
+		processedOf(station).markCall(toolCallId);
 		if (station.persist() === false) {
 			station.noteError?.("persist", new Error("control state write failed"), {
 				toolCallId,
@@ -125,18 +125,12 @@ function executeControl(station, toolCallId, direct, options = {}) {
 
 function executeFork(station, toolCallId, params, ctx) {
 	return executeControl(station, toolCallId, () => {
-		const { currentMessage } = controlContext(station, toolCallId);
+		// Refresh the carrying assistant message before admission.
+		controlContext(station, toolCallId);
 		return handleForkCall(
 			station,
 			{ id: toolCallId, name: "scope_fork", arguments: params },
-			{
-				ctx,
-				currentMessage,
-				mainAgent: station.policy(ctx) === MAIN_AGENT,
-				// Manual duty runs no relay. A relay left behind by an earlier
-				// autopilot handoff must not keep gatekeeping fork admission.
-				relayOn: station.state.autopilot === true && station.relayOn(ctx),
-			},
+			{ ctx },
 		);
 	});
 }

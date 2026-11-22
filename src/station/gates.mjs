@@ -9,13 +9,13 @@ import {
 	unreceivedChildren,
 } from "../scope/index.mjs";
 import { beatKey, toolCalls } from "../transcript/index.mjs";
-import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../host/policy.mjs";
-import { injectSystemPrompt } from "../host/prompts.mjs";
+import { injectSystemPrompt } from "../prompts/inject.mjs";
+import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../core/policy.mjs";
 import { successorStartNudge } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
-import { record } from "../host/diagnostics.mjs";
 import { controlsIn, hostBoundaryKey } from "./messages.mjs";
 import { decideToolCall } from "./domain/tool-call.mjs";
+import { dispatchOf, processedOf } from "./domain/tool-call-ledger.mjs";
 import { handoffDemandVisible, insideScopeNudge } from "./texts.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
@@ -67,15 +67,15 @@ function noteFailure(station, error) {
 		return;
 	}
 	if (station) station.lastError = String(error?.message ?? error);
-	record("gates", error);
+	station?.host?.record?.("gates", error);
 }
 
 function onAssistantMessage(station, message, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
 		station.onUsageMessage(message, ctx);
-		station.dispatch.setPreparing(message);
-		station.dispatch.rememberGroups(message);
+		dispatchOf(station).setPreparing(message);
+		dispatchOf(station).rememberGroups(message);
 		station.processAssistantMessage(message);
 		capturePendingReport(station, message);
 		station.maybeNudge(message, ctx);
@@ -91,7 +91,7 @@ function onMessageEnd(station, event, ctx) {
 	const message = event.message;
 	try {
 		station.onUsageMessage(message, ctx);
-		station.dispatch.rememberGroups(message);
+		dispatchOf(station).rememberGroups(message);
 		const controls = controlsIn(message);
 		if (controls.length > 0) {
 			station.processAssistantMessage(message);
@@ -106,11 +106,6 @@ function onMessageEnd(station, event, ctx) {
 
 function onToolCall(station, event, ctx) {
 	const { toolName, toolCallId } = event;
-	// `permission` is a declaration, not an enforcement boundary. A scope that
-	// says `"ro"` is trusted: the system never blocks a write because the scope
-	// called itself read-only, and it never audits a tool call against the
-	// claim. Mistake-proofing lives in the required field and in the two `rw`
-	// refusals at begin time; it does not inspect what a tool would do.
 	const cached = station.toolGateVerdict?.(toolCallId);
 	if (cached?.hit) return cached.verdict;
 	const input = event.input ?? event.arguments ?? {};
@@ -121,11 +116,11 @@ function onToolCall(station, event, ctx) {
 			typeof station.assistantForToolCall === "function"
 				? station.assistantForToolCall(toolCallId)
 				: null;
-		if (found && typeof station.dispatch?.rememberGroups === "function") {
-			station.dispatch.rememberGroups(found.message);
+		if (found && typeof dispatchOf(station)?.rememberGroups === "function") {
+			dispatchOf(station).rememberGroups(found.message);
 		}
 		const groupKey =
-			station.dispatch?.groupKeyFor?.(toolCallId) ??
+			dispatchOf(station)?.groupKeyFor?.(toolCallId) ??
 			(found ? beatKey(found.message) : undefined);
 		const carrying =
 			found?.message ??
@@ -137,8 +132,8 @@ function onToolCall(station, event, ctx) {
 			free: isFreeCall(call.name, call.arguments),
 		}));
 		const handled =
-			typeof station.processed?.hasHandled === "function"
-				? station.processed.hasHandled(toolCallId)
+			typeof processedOf(station)?.hasHandled === "function"
+				? processedOf(station).hasHandled(toolCallId)
 				: false;
 		const decision = decideToolCall({
 			state: {
@@ -149,8 +144,8 @@ function onToolCall(station, event, ctx) {
 			processed: {
 				handled,
 				hasCall:
-					typeof station.processed?.hasCall === "function"
-						? station.processed.hasCall(toolCallId)
+					typeof processedOf(station)?.hasCall === "function"
+						? processedOf(station).hasCall(toolCallId)
 						: false,
 			},
 			dispatch: { found: Boolean(found), groupKey, beatTools },
@@ -166,7 +161,7 @@ function onToolCall(station, event, ctx) {
 		if (decision.controls.process) station.processControlsForTool(toolCallId);
 		if (
 			decision.controls.directAmend &&
-			!station.processed?.hasHandled?.(toolCallId)
+			!processedOf(station)?.hasHandled?.(toolCallId)
 		) {
 			station.directAmend(toolCallId, decision.controls.directAmend.args);
 		}

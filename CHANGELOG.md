@@ -6,6 +6,49 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — a saved pin points at the todo ledger
+
+- The successful `pin` receipt is no longer a bare `OK`: it tells the caller to
+  update the `todo` ledger now with the next step, completed item, or blocker
+  the note changes. The prose lives in `pin.saved` under
+  `resources/prompts/receipts/scope.md`; `src/station/texts.mjs` owns it and
+  `src/station/controls.mjs` returns it. `tests/pin-tool.test.mjs`.
+
+### Changed — `scope_fork` requires targets, not a read/write permission
+
+- Every fork item now requires `targets`: a non-empty array of natural-language
+  descriptions of what the scope expects to create, read, update, or delete.
+  Each item may be a file path, a source region, a behavior, or a goal; any
+  human language is valid, and a path is only one kind. For example,
+  `["fix any defect you find", "the parts of the source that involve caching"]`
+  is valid. A missing,
+  empty, blank, or non-string entry rejects the whole batch with
+  `INVALID_TARGETS`. Blocked checkpoints declare their targets too, because an
+  empty output cannot be a separate scope.
+- `permission: "ro" | "rw"` is gone. So is the `rw`-before-ledger refusal and
+  its `rw-before-ledger` error: with no read/write split there is no field for
+  that gate to key on, and targets is a declaration, not an audit boundary.
+- Child receipts and replayed fork lines show `Targets: ...`; old persisted
+  snapshots without targets replay without that segment. No compatibility
+  alias is accepted: `additionalProperties: false` refuses `permission`.
+  `tests/forkjoin.test.mjs`, `tests/forkjoin-transcript.test.mjs`,
+  `tests/prompts.test.mjs`, `tests/child-record-scope.test.mjs`.
+
+### Changed — `scope_join` tolerates an unneeded report and yields to user input
+
+- A join that runs while no receipt awaits a summary no longer fails when
+  `elder_report` is present: the report is accepted and ignored, and the
+  receipt says it was not needed. `ELDER_REPORT_UNEXPECTED` is gone.
+- `scope_join` now declares `interruptible` and `handlesToolInterrupt`. A
+  queued user message ends the wait the way the host's `wait` tool does. The
+  join takes no child, files the supplied `elder_report` against the receipt
+  the model read, and says the next join may pass `elder_report: null`. An
+  ordinary cancellation still leaves the pending report untouched.
+- The previous receipt has two legal states: it needs a summary, or it does
+  not. A user-input interruption moves the first to the second.
+  `tests/scope-join-interruptible.test.mjs`, `tests/join-obligation.test.mjs`,
+  `tests/fork-join-completion.test.mjs`, `tests/fork-report-quality.test.mjs`.
+
 ### Changed — common rules moved into the required `constitution` skill
 
 - The always-on `common-rules` block moved out of the managed system prompt into

@@ -7,7 +7,6 @@ import {
 	isStateCheckpoint,
 } from "../scope/index.mjs";
 import { toolCalls } from "../transcript/index.mjs";
-import { record as recordDiagnostic } from "../host/diagnostics.mjs";
 
 const SESSION_STATE_TYPE = "scope.state";
 const MAX_REPLAY_ENTRIES = 512;
@@ -72,7 +71,7 @@ export function persistedBaseId(manager) {
 	return null;
 }
 
-function restoreState(manager) {
+function restoreState(manager, recordDiagnostic = () => {}) {
 	try {
 		const { chain, anchored } = collectChain(manager);
 		if (chain.length > 0) {

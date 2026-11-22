@@ -4,10 +4,15 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	decideAbandon,
 	decideForkAdmission,
 	decideJoinAdmission,
 	decideJoinBinding,
 	decidePendingReport,
+	decideReady,
+	decideRegister,
+	decideReturn,
+	validateFork,
 } from "../../../src/station/domain/fork-join.mjs";
 
 const WINDOW = 100_000;
@@ -244,5 +249,122 @@ describe("join binding", () => {
 				current: Object.freeze(same),
 			}),
 		).not.toThrow();
+	});
+});
+
+describe("fork validation and register", () => {
+	const item = {
+		scopeId: "probe",
+		intent: "x",
+		budget: { read: 1 },
+		time: 30,
+		targets: ["src/parser.mjs"],
+	};
+
+	test("validateFork normalizes targets and refuses malformed input", () => {
+		expect(validateFork(item).ok).toBe(true);
+		expect(validateFork({ ...item, intent: "  " }).code).toBe("INVALID_INTENT");
+		expect(validateFork({ ...item, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
+		expect(validateFork({ ...item, targets: [] }).code).toBe("INVALID_TARGETS");
+		expect(
+			validateFork({ ...item, targets: [" src/parser.mjs ", "src/cache.mjs"] }).targets,
+		).toEqual(["src/parser.mjs", "src/cache.mjs"]);
+	});
+
+	test("decideRegister refuses a duplicate scope id", () => {
+		const out = decideRegister({
+			items: [validateFork(item)],
+			forks: [{ forkId: "f1", scopeId: "probe", status: "running" }],
+			hasSpawner: true,
+		});
+		expect(out.ok).toBe(false);
+		expect(out.code).toBe("DUPLICATE_SCOPE_ID");
+		expect(out.scopeId).toBe("probe");
+	});
+
+	test("decideRegister requires a spawner only for a runnable batch", () => {
+		const blocked = validateFork({ ...item, blocked: true });
+		expect(
+			decideRegister({ items: [blocked], forks: [], hasSpawner: false }).ok,
+		).toBe(true);
+		const runnable = validateFork(item);
+		expect(
+			decideRegister({ items: [runnable], forks: [], hasSpawner: false }).code,
+		).toBe("CHILD_SPAWNER_UNAVAILABLE");
+	});
+
+	test("decideRegister refuses an over-window fork without mutating input", () => {
+		const runnable = Object.freeze(validateFork(item));
+		const out = decideRegister({
+			items: [runnable],
+			forks: [],
+			hasSpawner: true,
+			receiptChars: 10_000,
+			baseTokens: 100_000,
+			tokensPerChar: 0.3,
+			window: 100_000,
+			reserve: 100,
+			margin: 100,
+		});
+		expect(out.ok).toBe(false);
+		expect(out.code).toBe("FORK_CONTEXT_EXCEEDED");
+		expect(out.index).toBe(0);
+	});
+});
+
+describe("return, ready and abandon gates", () => {
+	test("decideReturn names each refusal", () => {
+		const record = { forkId: "f1", status: "running", ownerId: "root" };
+		expect(decideReturn({ identityForkId: "" }).code).toBe("NOT_A_CHILD");
+		expect(
+			decideReturn({ identityForkId: "f1", record: null }).code,
+		).toBe("UNKNOWN_FORK");
+		expect(
+			decideReturn({
+				identityForkId: "f1",
+				record: { ...record, status: "ready" },
+				receiverId: "root",
+			}).code,
+		).toBe("FORK_NOT_RUNNING");
+		expect(
+			decideReturn({
+				identityForkId: "f1",
+				record,
+				receiverId: "",
+			}).code,
+		).toBe("ORPHANS_WITHOUT_RECEIVER");
+		expect(
+			decideReturn({
+				identityForkId: "f1",
+				record,
+				receiverId: "root",
+				orphans: ["c1"],
+			}),
+		).toMatchObject({ ok: true, receiverId: "root", orphans: ["c1"] });
+	});
+
+	test("decideReady normalizes the outcome and keeps failures", () => {
+		const record = { forkId: "f1", status: "running" };
+		expect(decideReady({ record })).toEqual({ ok: true, outcome: { ok: true } });
+		expect(
+			decideReady({ record, outcome: { ok: false, reason: "boom" } }),
+		).toEqual({ ok: true, outcome: { ok: false, reason: "boom" } });
+		expect(
+			decideReady({ record, outcome: { ok: true, record: "text" } }),
+		).toEqual({ ok: true, outcome: { ok: true, record: "text" } });
+		expect(
+			decideReady({ record: { ...record, status: "joined" } }).code,
+		).toBe("FORK_NOT_RUNNING");
+	});
+
+	test("decideAbandon refuses unknown and joined records", () => {
+		expect(decideAbandon({ record: null }).code).toBe("UNKNOWN_FORK");
+		expect(
+			decideAbandon({ record: { forkId: "f1", status: "joined" } }).code,
+		).toBe("FORK_ALREADY_JOINED");
+		expect(decideAbandon({ record: { forkId: "f1", status: "running" } })).toEqual({
+			ok: true,
+			status: "failed",
+		});
 	});
 });

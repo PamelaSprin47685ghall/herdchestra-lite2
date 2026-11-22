@@ -11,7 +11,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { createBranchSession } from "../src/host/branch-session.mjs";
-import { attachForkPorts, createForkWiring } from "../src/host/fork-wiring.mjs";
+import { createForkWiring } from "../src/host/fork-wiring.mjs";
+import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import {
   forkOf,
   markReady,
@@ -91,7 +92,7 @@ function forkCall(id = "fork-call") {
           blocked: false,
           budget: { read: 1 },
           time: 60,
-          permission: "ro",
+          targets: ["src/parser.mjs"],
         },
       ],
     },
@@ -213,7 +214,7 @@ describe("scope_fork through a real branch session", () => {
     expect(prompted[0].startsWith("You are the child of fork parser,")).toBe(true);
     expect(prompted[0]).toContain("read the parser");
     expect(prompted[0]).toContain("read 1");
-    expect(prompted[0]).toContain("ro");
+    expect(prompted[0]).toContain("Targets: src/parser.mjs");
 
     // The host id is bound to the fork, which is how the child's own station
     // resolves scope_return. Without this the child is nobody's child.

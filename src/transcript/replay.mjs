@@ -5,6 +5,8 @@
 // cross-model thinking signature, no reasoning item id. This module is pure.
 // It reads no clock and performs no I/O.
 
+import { targetsText, validTargets } from "../scope/targets.mjs";
+
 const CHILD_SCOPE_TOOLS = new Set(["scope_join", "scope_return"]);
 const PIN_TOOL = "pin";
 const FORK_TOOL = "scope_fork";
@@ -118,8 +120,8 @@ function forkLines(args, callId) {
 		if (typeof item.time === "number" && Number.isFinite(item.time)) {
 			fields.push(`time: ${item.time}s`);
 		}
-		if (typeof item.permission === "string" && item.permission !== "") {
-			fields.push(`permission: ${item.permission}`);
+		if (validTargets(item.targets)) {
+			fields.push(`targets: ${targetsText(item.targets)}`);
 		}
 		if (typeof item.model === "string" && item.model.trim() !== "") {
 			fields.push(`model: ${item.model.trim()}`);

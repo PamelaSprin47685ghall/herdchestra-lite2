@@ -131,6 +131,16 @@ function launchCommand({ ompPath, launchId, contextPath, args = "" }) {
 	return `export OMP_UI_LAUNCH_ID=${shellQuote(launchId)}; ${contextExport(contextPath)}exec ${shellQuote(ompPath)}${args}`;
 }
 
+/** A fresh argv per call: both launch kinds share one tmux invocation shape. */
+function tmuxArgs({ tmuxSession, cwd, shell, commandLine }) {
+	return [
+		"new-session", "-d", "-s", tmuxSession, "-c", cwd, shell, "-lc", commandLine,
+		// Keep the session alive after the user attaches and detaches again:
+		// a host-level `destroy-unattached on` would otherwise kill this omp.
+		";", "set-option", "-t", tmuxSession, "destroy-unattached", "off",
+	];
+}
+
 export function buildNewLaunch({ cwd, ompPath = "omp", shell = process.env.SHELL || "/bin/sh", contextPath, launchId = randomUUID() }) {
 	if (!cwd) throw Object.assign(new Error("working directory is required"), { code: "missing_cwd" });
 	if (typeof cwd !== "string" || !isAbsolute(cwd) || cwd.split(/[\\/]/).includes("..")) throw Object.assign(new Error("invalid working directory"), { code: "invalid_cwd" });
@@ -142,12 +152,7 @@ export function buildNewLaunch({ cwd, ompPath = "omp", shell = process.env.SHELL
 		tmuxSession,
 		cwd,
 		command: "tmux",
-		args: [
-			"new-session", "-d", "-s", tmuxSession, "-c", cwd, shell, "-lc", commandLine,
-			// Keep the session alive after the user attaches and detaches again:
-			// a host-level `destroy-unattached on` would otherwise kill this omp.
-			";", "set-option", "-t", tmuxSession, "destroy-unattached", "off",
-		],
+		args: tmuxArgs({ tmuxSession, cwd, shell, commandLine }),
 	};
 }
 
@@ -169,11 +174,6 @@ export function buildResumeLaunch({ session, ompPath = "omp", shell = process.en
 		tmuxSession,
 		cwd,
 		command: "tmux",
-		args: [
-			"new-session", "-d", "-s", tmuxSession, "-c", cwd, shell, "-lc", commandLine,
-			// Same keep-alive contract as a new session: the user's tmux may be
-			// configured to destroy sessions on detach.
-			";", "set-option", "-t", tmuxSession, "destroy-unattached", "off",
-		],
+		args: tmuxArgs({ tmuxSession, cwd, shell, commandLine }),
 	};
 }

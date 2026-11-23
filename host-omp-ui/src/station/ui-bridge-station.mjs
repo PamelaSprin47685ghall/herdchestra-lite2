@@ -19,6 +19,7 @@ import { extractArtifacts, stripAnsi } from "./domain/tool-artistry.mjs";
 import { capArtifact, capMessage, capTool, fitSnapshot } from "./domain/snapshot-fit.mjs";
 import { alignToTurnStart, planHistoryPage } from "./domain/history-page.mjs";
 import { arbitrateDraft } from "./domain/draft-arbiter.mjs";
+import { normalizeMetaPatch } from "./domain/meta-normalize.mjs";
 import { applyTspOpsToDocument, createEmptyDocument } from "./domain/surface-fence.mjs";
 import { parseClientCommand } from "./domain/protocol-codec.mjs";
 
@@ -493,28 +494,7 @@ export function createUiBridgeStation(options) {
     },
 
     onMetaUpdate(patch) {
-      const next = { ...(patch ?? {}) };
-      // Normalize model payloads at the Station boundary so both `model_change`
-      // events (string or { model }) and host readbacks share one shape.
-      if (next.model !== undefined) {
-        const raw = next.model;
-        const text = typeof raw === "string"
-          ? raw
-          : typeof raw?.model === "string"
-            ? raw.model
-            : null;
-        if (text) {
-          const slash = text.indexOf("/");
-          next.model = slash > 0
-            ? { provider: text.slice(0, slash), id: text.slice(slash + 1) }
-            : { provider: raw?.provider ?? "", id: text };
-        } else if (raw && typeof raw === "object") {
-          const id = typeof raw.id === "string" ? raw.id : typeof raw.modelId === "string" ? raw.modelId : null;
-          if (id) next.model = { provider: raw.provider ?? "", id };
-        }
-      }
-      if (next.thinkingLevel === undefined && next.level !== undefined) next.thinkingLevel = next.level;
-      if (next.thinkingLevel !== undefined) delete next.level;
+      const next = normalizeMetaPatch(patch);
       state.meta = { ...state.meta, ...next };
       dispatch({ type: "meta.update", payload: next });
       return { ok: true };

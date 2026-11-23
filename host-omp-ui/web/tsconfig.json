@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/lib/utils": ["./shims/lib/utils.ts"],
+      "@/lib/ime": ["./shims/lib/ime.ts"],
+      "@/core/clipboard": ["./shims/core/clipboard.ts"],
+      "@/core/uploads": ["./shims/core/uploads.ts"],
+      "@/core/streamdown/plugins": ["./shims/core/streamdown/plugins.ts"],
+      "@/core/streamdown/preprocess": ["./shims/core/streamdown/preprocess.ts"],
+      "@/*": ["../../../deer-flow/frontend/src/*"]
+    }
+  },
+  "include": ["src", "shims", "scripts"]
+}

@@ -1,0 +1,24 @@
+/**
+ * Canonical runtime narrowing for the untrusted wire. Everything from
+ * `/ws` and `/api/*` enters through these guards, then the reducer works with
+ * typed views.
+ */
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+export function asNumber(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+export function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item)).filter((item) => item.length > 0)
+    : [];
+}

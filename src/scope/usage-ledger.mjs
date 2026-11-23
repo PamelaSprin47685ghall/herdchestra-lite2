@@ -24,8 +24,8 @@ const MAX_TOKENS_PER_CHAR = 0.8;
 const SMOOTH_ALPHA = 0.3;
 const SMOOTH_SAMPLES = 8;
 
-function digest(value) {
-	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+function digestText(text) {
+	return createHash("sha256").update(text).digest("hex");
 }
 
 function headerSummary(header) {
@@ -33,7 +33,7 @@ function headerSummary(header) {
 		return null;
 	}
 	const text = JSON.stringify(header);
-	return { key: digest(header), bytes: Buffer.byteLength(text, "utf8") };
+	return { key: digestText(text), bytes: Buffer.byteLength(text, "utf8") };
 }
 
 function extendsMessages(previous, next) {

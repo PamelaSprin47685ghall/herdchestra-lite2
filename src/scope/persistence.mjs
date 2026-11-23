@@ -220,7 +220,7 @@ export function deserializeState(input) {
     }
     if (!validCharges(data.charges)) return createState();
     const amends = Array.isArray(data.amends) ? data.amends : [];
-    if (!Array.isArray(amends) || !amends.every((key) => typeof key === "string")) {
+    if (!amends.every((key) => typeof key === "string")) {
       return createState();
     }
     // `scopes` and `collapses` are retired history: a snapshot that still

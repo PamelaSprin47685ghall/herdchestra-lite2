@@ -57,7 +57,7 @@ export function installComposerCapture({ ComposerClass, onCaptured } = {}) {
 	const proto = ComposerClass.prototype;
 	let state = proto[CAPTURE];
 	if (!state) {
-		state = { callback: undefined, installed: true };
+		state = { callback: undefined };
 		Object.defineProperty(proto, CAPTURE, { value: state, configurable: true });
 		const originalRender = proto.renderFrame;
 		const originalSetEditor = proto.setEditor;

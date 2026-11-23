@@ -348,5 +348,5 @@ export async function createManagerServer({ preferredPort = 37421, token, static
    },
   },
  });
- return { port: server.port, url: `http://127.0.0.1:${server.port}`, token, close, server };
+ return { port: server.port, url: `http://127.0.0.1:${server.port}`, token, close };
 }

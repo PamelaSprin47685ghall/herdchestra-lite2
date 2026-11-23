@@ -38,9 +38,11 @@ function reused(live) {
 /**
  * @param {{
  *   loadSessions: () => unknown[] | Promise<unknown[]>,
- *   findLiveInstance?: (sessionId: string) => unknown,
- *   launch: (plan: unknown, session: unknown) => unknown,
+ *   findLiveInstance?: (sessionId: string) => { instanceId?: unknown } | null | Promise<{ instanceId?: unknown } | null>,
+ *   launch: (plan: unknown, session?: unknown) => unknown,
  *   buildPlan?: (session: unknown) => unknown,
+ *   buildNewPlan?: (input: { cwd?: unknown }) => unknown,
+ *   awaitRegistration?: (plan: unknown) => unknown | Promise<unknown>,
  * }} deps
  */
 export function createSessionService({ loadSessions, findLiveInstance, launch, buildPlan, buildNewPlan, awaitRegistration }) {

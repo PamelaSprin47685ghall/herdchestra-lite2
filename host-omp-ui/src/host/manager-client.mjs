@@ -11,6 +11,8 @@ import { systemTray } from "./system-tray.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const portBusyMessage = (port) => `固定端口 ${port} 已被其他服务占用；如有旧版 DeerFlow 正在运行，请退出占用端口的旧实例后重启。`;
+
 export async function sharedManagerToken() {
 	const dir = join(process.env.XDG_RUNTIME_DIR || join(homedir(), ".omp", "run"), "herd-omp-ui");
 	await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -56,6 +58,10 @@ export async function createManagerClient(options = {}) {
 	};
 	const report = (label, error) => diagnostics?.record?.(label, error);
 	const status = (state, reason) => options.onStatus?.(state, reason);
+	const disconnectAll = () => {
+		for (const clientId of clients) options.onClientDisconnect?.(clientId);
+		clients.clear();
+	};
 	const facade = {
 		port: preferredPort, url, token,
 		get clientCount() { return clients.size; },
@@ -65,8 +71,7 @@ export async function createManagerClient(options = {}) {
 		async close() {
 			closed = true;
 			if (reconnectTimer) clearTimeout(reconnectTimer);
-			for (const clientId of clients) options.onClientDisconnect?.(clientId);
-			clients.clear();
+			disconnectAll();
 			socket?.close();
 			if (leader) await leader.close();
 		},
@@ -99,13 +104,13 @@ export async function createManagerClient(options = {}) {
 					} catch { /* Preserve the original bind error. */ }
 					if (!identity) {
 						if (listenerResponded || error?.code === "EADDRINUSE" || String(error).includes("EADDRINUSE")) {
-							throw new Error(`固定端口 ${preferredPort} 已被其他服务占用；如有旧版 DeerFlow 正在运行，请退出占用端口的旧实例后重启。`);
+							throw new Error(portBusyMessage(preferredPort));
 						}
 						throw error;
 					}
 				}
 			}
-			if (identity && identity.name !== "herd-omp-ui-manager") throw new Error(`固定端口 ${preferredPort} 已被其他服务占用；如有旧版 DeerFlow 正在运行，请退出占用端口的旧实例后重启。`);
+			if (identity && identity.name !== "herd-omp-ui-manager") throw new Error(portBusyMessage(preferredPort));
 			if (closed) { await leader?.close(); return; }
 			const ws = new WebSocket(`${url.replace(/^http/, "ws")}/agent?token=${encodeURIComponent(token)}`);
 			socket = ws;
@@ -143,8 +148,7 @@ export async function createManagerClient(options = {}) {
 			};
 			ws.onerror = (error) => { report("manager-socket", error); status("error", "无法连接管理器或认证失败"); };
 			ws.onclose = () => {
-				for (const clientId of clients) options.onClientDisconnect?.(clientId);
-				clients.clear();
+				disconnectAll();
 				if (!closed) { status("disconnected", "管理器连接已断开，正在重试"); reconnectTimer = setTimeout(() => void connect(), 500); }
 			};
 		} catch (error) {

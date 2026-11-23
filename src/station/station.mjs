@@ -38,12 +38,10 @@ import {
 } from "../scope/index.mjs";
 import { recordTurnSample } from "../scope/turn-stats.mjs";
 import {
-	adoptLedger as adoptLedgerDefault,
+	adoptLedger,
 	conversationKeyOf,
-	ledgerFor as ledgerForDefault,
+	ledgerFor,
 } from "../scope/fork-registry.mjs";
-const ledgerFor = ledgerForDefault;
-const adoptLedger = adoptLedgerDefault;
 
 import {
 	findAmendTarget,
@@ -72,7 +70,6 @@ import {
 } from "./execute.mjs";
 import { PANHANDLE_TOOL } from "./domain/panhandle.mjs";
 import {
-	commitJoin,
 	confirmJoinPersistence,
 	renderJoinResult,
 } from "./fork-controls.mjs";
@@ -196,6 +193,7 @@ export function shapeHost(host) {
 	const fork = source.fork ?? {};
 	const report = source.report ?? {};
 	const pick = (grouped, flat) => grouped ?? flat;
+	const pricing = pick(accounting.pricing, source.pricing);
 	return {
 		session: {
 			managerOf: pick(session.managerOf, source.managerOf),
@@ -217,11 +215,9 @@ export function shapeHost(host) {
 		},
 		accounting: {
 			usage: pick(accounting.usage, source.usage),
-			pricing: pick(accounting.pricing, source.pricing) && {
-				...pick(accounting.pricing, source.pricing),
-				emptyCatalog:
-					pick(accounting.pricing, source.pricing)?.emptyCatalog ??
-					source.createEmptyCatalog,
+			pricing: pricing && {
+				...pricing,
+				emptyCatalog: pricing?.emptyCatalog ?? source.createEmptyCatalog,
 			},
 		},
 		fork: {
@@ -857,7 +853,6 @@ export class SessionStation {
 	 * the same answer instead of looking for a child that is already closed.
 	 */
 	finalizeJoin(toolCallId, record, ctx) {
-		commitJoin(this, record, toolCallId);
 		const persisted = confirmJoinPersistence(this);
 		if (persisted === false) {
 			this.noteError?.("fork", new Error("join receipt was not persisted"), {

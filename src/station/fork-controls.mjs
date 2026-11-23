@@ -322,6 +322,11 @@ function unionTargets(first, second) {
   return out;
 }
 
+/** One amended or revived line; both sections share this shape. */
+function amendmentLine(entry) {
+  return `- ${entry.scopeId}: ${budgetDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`;
+}
+
 /** Human-readable budget delta for a fork result line. */
 function budgetDelta(added) {
   const points = Object.entries(added?.tools ?? {})
@@ -796,17 +801,13 @@ export function handleForkCall(station, call, options = {}) {
   if (amended.length > 0) {
     sections.push([
       `Amended ${amended.length} existing scope${amended.length === 1 ? "" : "s"}:`,
-      ...amended.map((entry) =>
-        `- ${entry.scopeId}: ${budgetDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`,
-      ),
+      ...amended.map(amendmentLine),
     ].join("\n"));
   }
   if (revived.length > 0) {
     sections.push([
       `Revived ${revived.length} blocked scope${revived.length === 1 ? "" : "s"}:`,
-      ...revived.map((entry) =>
-        `- ${entry.scopeId}: ${budgetDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`,
-      ),
+      ...revived.map(amendmentLine),
     ].join("\n"));
   }
   if (continued.length > 0) {
@@ -975,7 +976,6 @@ export function handleJoinCall(station, call, options = {}) {
       active: unreceivedChildren(ledger, ownerId).length,
     });
   }
-  commitJoin(station, taken.fork, call.id);
   const persisted = confirmJoinPersistence(station);
   if (persisted === false) {
     station.noteError?.("fork", new Error("join receipt was not persisted"), {
@@ -989,15 +989,6 @@ export function handleJoinCall(station, call, options = {}) {
     closeToolCallId: call.id,
     persisted,
   });
-}
-
-/**
- * File one taken bracket in the receiver's receipt chain. Both the immediate
- * take and the ticket's later take use this one commit, so a waited join and
- * an immediate join leave the same persisted evidence.
- */
-export function commitJoin(station, record) {
-  return record;
 }
 
 /**

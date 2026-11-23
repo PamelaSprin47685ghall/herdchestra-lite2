@@ -32,6 +32,9 @@ All notable changes to this extension. The format follows
   mode buttons stand on their own.
 - Center the empty-conversation state in the viewport instead of anchoring it
   near the top.
+- Fix the conversation view throwing `ReferenceError: ChevronDownIcon is not
+  defined` when a compaction or branch boundary summary rendered:
+  `content-blocks.tsx` used the icon without importing it.
 
 ### Changed — scope size is a constant, enforced by rebuke
 

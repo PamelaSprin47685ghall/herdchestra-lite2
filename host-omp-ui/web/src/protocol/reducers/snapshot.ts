@@ -167,12 +167,15 @@ export function reduceSnapshot(state: WebState, frame: ServerFrame): WebState {
         snap.artifacts !== undefined
           ? normalizeArtifacts(snap.artifacts)
           : state.artifacts,
+      // The host always ships this field as null, and nothing in the repo emits
+      // artifact.select yet. A null snapshot therefore means "no opinion", not
+      // "clear", and must not undo a client-local selection (same rule as
+      // fenceStatus below). The artifact.select case in frames.ts is retained
+      // for a future artifact drawer; unhandled frames are dropped by default.
       activeArtifactId:
-        snap.activeArtifactId === undefined
-          ? state.activeArtifactId
-          : typeof snap.activeArtifactId === "string"
-            ? snap.activeArtifactId
-            : null,
+        typeof snap.activeArtifactId === "string"
+          ? snap.activeArtifactId
+          : state.activeArtifactId,
       toolExecutions: tools ?? state.toolExecutions,
       widgets: widgets ?? state.widgets,
       notifications,

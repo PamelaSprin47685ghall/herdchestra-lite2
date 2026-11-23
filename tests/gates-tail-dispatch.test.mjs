@@ -162,6 +162,8 @@ test("a read-only session still carries the shared first turn", () => {
 		content: [{ type: "text", text: "shared snapshot" }],
 		timestamp: 1,
 		attribution: "user",
+		// The shared opening turn is synthetic history, not a user request.
+		synthetic: true,
 	});
 	expect(result.messages[1]).toBe(messages[0]);
 	expect(onContext(station, messages, CTX).messages).toBe(messages);

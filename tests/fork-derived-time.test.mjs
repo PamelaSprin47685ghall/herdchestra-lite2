@@ -1,7 +1,7 @@
-// Red contract: the fork wall clock is derived from the session's two
-// sufficient statistics. The model no longer supplies `time`; the system does.
-// A turn is one LLM request. With {turnMs: 40000, turns: 2} the average is 20s,
-// and four declared tool points buy 80s.
+// Red contract: the fork wall clock is derived from this session's measured
+// requests for this model. The model no longer supplies `time`; the system
+// does. A turn is one LLM request. Two measured 20s requests average 20s, and
+// four declared tool points buy 80s. Lifetime totals are not a sample source.
 
 import { describe, expect, test } from "bun:test";
 
@@ -9,6 +9,7 @@ import { createBracketLedger, forkOf } from "../src/scope/forkjoin.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 import { validateFork } from "../src/station/domain/fork-join.mjs";
 import { createState } from "../src/scope/state.mjs";
+import { recordTurnSample } from "../src/scope/turn-stats.mjs";
 import * as descriptions from "../src/tools/descriptions.mjs";
 
 function stationWith(ledger, spawned = []) {
@@ -40,9 +41,12 @@ function forkCall(argumentsForFork) {
 describe("fork time is derived from measured turns", () => {
 	test("two 20s turns and four points buy an 80s wall clock", () => {
 		const ledger = createBracketLedger();
-		ledger.totals = { turnMs: 40_000, turns: 2 };
 		const spawned = [];
 		const station = stationWith(ledger, spawned);
+		// Budgets read this session's per-model samples, not lifetime totals.
+		station.state.baseModelKey = "test/model";
+		recordTurnSample(ledger, "test/model", 20_000);
+		recordTurnSample(ledger, "test/model", 20_000);
 
 		const out = handleForkCall(station, forkCall({}));
 		expect(out.isError).toBeUndefined();

@@ -266,6 +266,8 @@ export function reduceFrame(state: WebState, frame: ServerFrame): WebState | und
       return reduceToast(state, frame);
     case "widget.update":
       return reduceWidgetUpdate(state, frame);
+    // No in-repo producer; retained for a future artifact drawer. Unknown
+    // frames fall through to default, so this case is the only entry point.
     case "artifact.select":
       return reduceArtifactSelect(state, frame);
     case "client.error":

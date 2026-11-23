@@ -30,6 +30,7 @@
 	},
 	"scripts": {
 		"test": "bun test tests",
+		"test:gate": "bun test tests/architecture tests/host-omp-ui",
 		"lint": "eslint .",
 		"sync:plugin": "bun scripts/sync-plugin.mjs",
 		"smoke:relay": "bun scripts/smoke-relay.mjs"

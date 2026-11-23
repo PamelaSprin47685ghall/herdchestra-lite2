@@ -87,6 +87,29 @@ function artifactFor(path, content, language) {
     : { path, content: `${text.slice(0, limit)}\n… [truncated]`, language, truncated: true };
 }
 
+// Line numbers reach the mapper as JSON straight from the model, so a string
+// like "x" is possible even though the tool itself rejects it. The card must
+// never render a fabricated range such as "NaN-": an unusable number means the
+// range is unknown, and an empty range renders as nothing.
+function lineNumber(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : Number.NaN;
+  return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function readRange(args) {
+  const offset = lineNumber(args.offset, 1);
+  const limit = lineNumber(args.limit, 0);
+  if (offset === null || limit === null) return "";
+  // `limit` counts lines, so the range ends at offset + limit - 1.
+  return limit > 0 ? `${offset}-${offset + limit - 1}` : `${offset}-`;
+}
+
 export function describeToolCall(toolCall, toolResult) {
   const name = toolCall?.name ?? "unknown";
   const args = toolCall?.args ?? {};
@@ -94,10 +117,7 @@ export function describeToolCall(toolCall, toolResult) {
   const isError = Boolean(toolResult?.isError);
 
   if (name === "read") {
-    const offset = Number(args.offset ?? 1);
-    const limit = Number(args.limit ?? 0);
-    // `limit` counts lines, so the range ends at offset + limit - 1.
-    const range = limit > 0 ? `${offset}-${offset + limit - 1}` : `${offset}-`;
+    const range = readRange(args);
     return {
       kind: "read",
       title: args.description ?? `Read ${args.path ?? ""}`,

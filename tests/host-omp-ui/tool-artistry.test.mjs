@@ -33,6 +33,22 @@ test("read becomes a file preview with path, range and language", async () => {
 	expect(typeof view.language).toBe("string");
 });
 
+test("read range never fabricates a line number from a malformed argument", async () => {
+	const { describeToolCall } = await load();
+	const path = "src/a.mjs";
+	for (const args of [
+		{ path, offset: "x", limit: 20 },
+		{ path, offset: 10, limit: "x" },
+		{ path, offset: -1, limit: 20 },
+		{ path, offset: 10, limit: 1.5 },
+		{ path, offset: 10, limit: -2 },
+	]) {
+		expect(describeToolCall(...call("read", args, "")).range).toBe("");
+	}
+	expect(describeToolCall(...call("read", { path, offset: undefined, limit: undefined }, "")).range).toBe("1-");
+	expect(describeToolCall(...call("read", { path, offset: "10", limit: "20" }, "")).range).toBe("10-29");
+});
+
 test("write and edit become diff-bearing file changes", async () => {
 	const { describeToolCall } = await load();
 	const write = describeToolCall(...call("write", { path: "src/b.mjs", content: "export const b = 2;" }, "ok"));

@@ -502,7 +502,7 @@ describe("selectors", () => {
 		expect(kinds).toContain("assistant");
 	});
 
-	test("selectActiveArtifact returns the active artifact, or null", async () => {
+	test("selectActiveArtifact follows client selection and ignores a null snapshot", async () => {
 		const api = await load();
 		let state = api.createInitialWebState();
 		state = api.reduceWebState(
@@ -514,7 +514,19 @@ describe("selectors", () => {
 		);
 		expect(api.selectActiveArtifact(state).id).toBe("a2");
 
-		state = api.reduceWebState(state, snapshot({ activeArtifactId: null }));
+		// The host always ships activeArtifactId: null; it must not undo a
+		// selection already held in client state (set here via the
+		// artifact.select reducer, which has no dispatcher yet).
+		state = api.reduceWebState(
+			state,
+			snapshot({
+				artifacts: [{ id: "a1", name: "one" }, { id: "a2", name: "two" }],
+				activeArtifactId: null,
+			}),
+		);
+		expect(api.selectActiveArtifact(state).id).toBe("a2");
+
+		state = api.reduceWebState(state, { type: "artifact.select", id: "" });
 		expect(api.selectActiveArtifact(state)).toBeNull();
 	});
 });

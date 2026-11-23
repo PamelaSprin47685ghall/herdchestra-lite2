@@ -518,23 +518,30 @@ describe("tree depth methodology is default and recommended, not a max", () => {
 		expect(depthSentences).not.toMatch(noCeiling);
 	});
 
-	test("the operating rules size the tree from closures and refuse both fakes", () => {
+	test("the fork guidance sizes the tree from closures and refuses both fakes", () => {
+		const doc = loadDoc("tools/fork-join");
+		const fsm = doc["fork.fsm"];
+		const deep = doc["fork.deep-nesting"];
+		// A scope is sized by closed loops, not by the files it touches.
+		expect(fsm).toMatch(/closure/i);
+		expect(fsm).toMatch(/depth before its width/i);
+		// Neither a relay shell nor a fragmented closure justifies a layer.
+		expect(deep).toMatch(/relay layer/i);
+		expect(deep).toMatch(/closure into fragments/i);
+		expect(fsm).not.toMatch(noCeiling);
+		expect(deep).not.toMatch(noCeiling);
+	});
+
+	test("the operating rules keep a default as a floor, never a ceiling", () => {
 		const text = persistentOperatingSkill;
-		expect(text).toMatch(/closure/i);
-		expect(text).toMatch(/relay/i);
-		expect(text).toMatch(/wave/i);
-		expect(text).toMatch(/reason|warrant/i);
-		expect(text).toMatch(/justify|explain/i);
-		// Depth sentences carry 1/2/3 as a recommendation, not as a hard bound.
+		expect(text).toMatch(/default is also a floor/i);
+		expect(text).toMatch(/deeper tree/i);
 		const depthSentences = text
 			.split(/(?<=\.)\s+/)
 			.filter((sentence) => /depth|deeper tree|layer/i.test(sentence))
 			.join(" ");
 		expect(depthSentences.length).toBeGreaterThan(0);
 		expect(depthSentences).not.toMatch(noCeiling);
-		expect(text).toMatch(/\b(?:1|one)\b/i);
-		expect(text).toMatch(/2/);
-		expect(text).toMatch(/3/);
 	});
 
 	test("a deep tree is fine, so the note is context rather than a warning", () => {

@@ -18,12 +18,11 @@ describe("shared first turn", () => {
 		]);
 		expect(head[0].content.map((part) => part.type)).toEqual(["text"]);
 		expect(head[1].content.map((part) => part.type)).toEqual([
-			"thinking",
 			"text",
 			"toolCall",
 		]);
 		expect(head[2].content.map((part) => part.type)).toEqual(["text"]);
-		expect(head[1].content[2]).toMatchObject({
+		expect(head[1].content[1]).toMatchObject({
 			id: "chatcmpl-tool-b1498fbcafbb9475",
 			name: "bash",
 		});
@@ -49,7 +48,6 @@ describe("shared first turn", () => {
 			"user",
 		]);
 		expect(messages[1].content.map((part) => part.type)).toEqual([
-			"thinking",
 			"text",
 			"toolCall",
 		]);

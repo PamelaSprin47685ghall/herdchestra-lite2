@@ -8,7 +8,7 @@ Omit to infer the operation from the supplied fields. `view` is read-only and do
 
 ## list
 
-Replacement ledger for `init`. Use `[]` to submit an empty ledger, not to bypass relay evaluation when autopilot is on.
+Replacement ledger for `init`. Use `[]` to submit an empty ledger. With autopilot on, two empty writes from two holders finish the chain; a stop is not one of them.
 
 ## list.item
 

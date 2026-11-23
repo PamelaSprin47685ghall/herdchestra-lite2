@@ -1,5 +1,5 @@
 ## evaluation-none
-not evaluated yet
+no write yet
 
 ## evaluation-empty
 empty ledger

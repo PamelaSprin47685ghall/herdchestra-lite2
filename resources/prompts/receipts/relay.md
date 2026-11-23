@@ -36,7 +36,7 @@ Continue the open items. If you stop with work open, the next generation inherit
 
 ## next.unchanged
 
-No relay evaluation. Only a successful todo write counts.
+No relay change. Only a successful todo write counts.
 
 ## next.inside-scope
 
@@ -60,7 +60,7 @@ Generation: {{generation}} ({{holder}}).
 
 ## status.evaluation
 
-First todo evaluation of this generation: {{label}}.
+First todo write of this generation: {{label}}.
 
 ## status.ledger
 
@@ -68,7 +68,7 @@ Ledger: {{state}} ({{total}} total; {{open}} open; {{blocked}} blocked; {{comple
 
 ## status.ledger-none
 
-Ledger: not evaluated yet.
+Ledger: no write yet.
 
 ## status.can-stop
 
@@ -100,15 +100,15 @@ Flow: {{flow}}.
 
 ## next.simple
 
-A natural stop hands off without advancing the relay. Submit a todo ledger only if the task needs one.
+Stopping is enough to hand off: your report and pins go to a successor. A stop never finishes the chain and never counts as an empty ledger. Submit a todo ledger only if the task needs one.
 
 ## stop-rule
 
-Only two empty evaluations end the relay: the one that starts the handoff and the successor's first. A natural stop is never one of them; it hands off without advancing the count.
+Ending takes two empty `todo` writes from two holders: you write an empty ledger, then your successor's first write is also empty. A stop is neither; it only hands off.
 
 ## next.retire
 
-The successor inherits the ledger on record. Write the handoff report now; do not call tools.
+The successor inherits the ledger on record. Write the handoff report now, once; do not call tools.
 
 ## inherited-ledger
 
@@ -124,7 +124,7 @@ Read the relevant Pinned Context documents in full before changing the work.
 
 ## successor-rule
 
-Investigate before your first root todo write if needed. A todo view does not count. If your first evaluation finds open work, finish it and hand off again.
+Investigate before your first root todo write if needed. A todo view does not count. If your first write finds open work, finish it and hand off again.
 
 ## successor-opening.head
 

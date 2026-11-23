@@ -138,7 +138,7 @@ Scope accounting failed closed: {{error}}. No tool ran. Retry the call; if it fa
 
 ## inherited-ledger-unviewed
 
-The previous generation retired with open work, so its ledger is yours to read first. Call `todo({ op: "view" })` once. It is free and does not submit a ledger; then write your own.
+The previous holder stopped with open work, so its ledger is yours to read first. Call `todo({ op: "view" })` once. It is free and does not submit a ledger; then write your own.
 
 ## todo-native-unavailable
 

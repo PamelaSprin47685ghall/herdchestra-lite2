@@ -52,6 +52,17 @@ function resolveModel(ctx, provider, modelId) {
 	return null;
 }
 
+// The live session exposes effort selectors on the extension context. A host
+// without the hook reports nothing rather than an empty list.
+function availableEffortLevels(ctx) {
+	try {
+		const value = ctx?.session?.getAvailableEffortSelectors?.();
+		return Array.isArray(value) ? value.filter((item) => typeof item === "string") : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function createHostTickets({
 	adapter,
 	pi,
@@ -232,13 +243,7 @@ export function createHostTickets({
 				// ctx.model is a live getter in the extension context; the model query
 				// fallback supports hosts exposing current() instead.
 				const current = ctx?.model ?? ctx?.models?.current?.();
-				let levels;
-				try {
-					const value = ctx?.session?.getAvailableEffortSelectors?.();
-					if (Array.isArray(value)) levels = value.filter((item) => typeof item === "string");
-				} catch {
-					levels = undefined;
-				}
+				const levels = availableEffortLevels(ctx);
 				const reported = {
 					...(current ? { model: current } : {}),
 					...(levels !== undefined ? { thinkingLevels: levels } : {}),
@@ -259,14 +264,7 @@ export function createHostTickets({
 				if (!THINKING_LEVELS.has(level)) return { ok: false, code: "invalid_level" };
 				pi.setThinkingLevel(level);
 				const current = pi?.getThinkingLevel?.();
-				const levels = (() => {
-					try {
-						const value = ctx?.session?.getAvailableEffortSelectors?.();
-						return Array.isArray(value) ? value.filter((item) => typeof item === "string") : undefined;
-					} catch {
-						return undefined;
-					}
-				})();
+				const levels = availableEffortLevels(ctx);
 				const reported = {
 					...(current !== undefined ? { thinkingLevel: current } : {}),
 					...(levels !== undefined ? { thinkingLevels: levels } : {}),

@@ -1,6 +1,6 @@
 {
 	"name": "herdchestra-host-omp",
-	"version": "3.0.0",
+	"version": "3.1.0",
 	"description": "Host binding for Herdchestra, an integration workbench built on DeerFlow: wiring, host stations, and the plugin entry point",
 	"type": "module",
 	"license": "SEE LICENSE IN LICENSE",

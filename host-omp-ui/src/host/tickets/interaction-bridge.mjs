@@ -20,6 +20,22 @@ import {
 export function createUiBridge({ station, getServer } = {}) {
 	const pending = new Map();
 	let sequence = 0;
+	// Every station call is best-effort; a broken station must not break the
+	// dialog ledger.
+	const closeQuietly = (id) => {
+		try {
+			station?.closeInteraction?.(id);
+		} catch {
+			// Closing is best-effort.
+		}
+	};
+	const detachQuietly = (entry) => {
+		try {
+			entry.detachAbort?.();
+		} catch {
+			// Detaching a finished abort listener is best-effort.
+		}
+	};
 	return {
 		hasClient() {
 			return (getServer()?.clientCount ?? 0) > 0;
@@ -74,11 +90,7 @@ export function createUiBridge({ station, getServer } = {}) {
 				}
 				if (signal?.aborted) {
 					pending.delete(requestId);
-					try {
-						station?.closeInteraction?.(requestId);
-					} catch {
-						// Closing is best-effort.
-					}
+					closeQuietly(requestId);
 					reject(new Error("interaction aborted"));
 					return;
 				}
@@ -87,11 +99,7 @@ export function createUiBridge({ station, getServer } = {}) {
 						const current = pending.get(requestId);
 						if (!current) return;
 						pending.delete(requestId);
-						try {
-							station?.closeInteraction?.(requestId);
-						} catch {
-							// Closing is best-effort.
-						}
+						closeQuietly(requestId);
 						current.reject(new Error("interaction aborted"));
 					};
 					signal.addEventListener("abort", onAbort, { once: true });
@@ -108,11 +116,7 @@ export function createUiBridge({ station, getServer } = {}) {
 			const input = recordOf(payload) ?? {};
 			const settle = (value) => {
 				pending.delete(requestId);
-				try {
-					entry.detachAbort?.();
-				} catch {
-					// Detaching a finished abort listener is best-effort.
-				}
+				detachQuietly(entry);
 				entry.resolve(value);
 				return { ok: true, kind: entry.kind, value };
 			};
@@ -175,11 +179,7 @@ export function createUiBridge({ station, getServer } = {}) {
 			const entry = pending.get(requestId);
 			if (!entry) return false;
 			pending.delete(requestId);
-			try {
-				entry.detachAbort?.();
-			} catch {
-				// Detaching a finished abort listener is best-effort.
-			}
+			detachQuietly(entry);
 			entry.reject(error ?? new Error("interaction cancelled"));
 			return true;
 		},

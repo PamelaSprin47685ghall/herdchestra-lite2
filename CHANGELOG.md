@@ -6,6 +6,23 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — zero-semantic cleanup
+
+- Station: extract `amendmentLine`, delete the dead `commitJoin`, remove the
+  `ledgerFor`/`adoptLedger` import aliases, and hoist the repeated pricing
+  pick.
+- Scope: hash the usage header once for both the key and the byte count, and
+  drop the unreachable `Array.isArray(amends)` guard.
+- Bridge: drop the redundant `snapshot(limit = 80)` default and extract
+  `streamingFrom`/`lastStepIndexIn` in the transcript model.
+- Web: extract `statusFromRaw`, reuse `earlyType` and `selectModelKey`, bind
+  repeated predicates in the header, conversation view, composer, and dialogs,
+  and merge the identical tool `todo`/`ask` cases.
+- Kept deliberately: the duplicate `displayGroups` computation in
+  `ui-bridge-station.mjs`. `fitSnapshot` measures `sizeOf(doc)` before it
+  overwrites the field, so removing it would change snapshot trimming.
+- Tests: 467 pass / 0 fail / 1772 expect / 50 files; `build:web` exits 0.
+
 ### Changed — a fork item carries a parallel state machine
 
 - The `scope_fork` item contract field is now `fsm`: describe the work as a parallel state machine — the states, the transition that advances each one, and the branches that can run at once — and say how to build the result fastest, not only what the finished thing is. The ledger record keeps the internal name `intent`, so existing snapshots still restore. Error codes (`INVALID_FSM`, `MISSING_FSM`), receipts, and documentation follow the model-facing name.

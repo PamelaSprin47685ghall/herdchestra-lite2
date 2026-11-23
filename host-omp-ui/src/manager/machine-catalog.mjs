@@ -72,38 +72,33 @@ async function collectRoot(root, files, diagnostics) {
 		return;
 	}
 
-	let entries;
-	try {
-		entries = await readdir(root, { withFileTypes: true });
-	} catch (error) {
-		diagnostics.push(diagnostic(root, "unreadable", describe(error)));
-		return;
-	}
-
-	for (const entry of entries) {
-		if (entry.isSymbolicLink()) continue;
-		const path = resolve(root, entry.name);
-		if (isJsonl(entry.name)) {
-			files.add(path);
-			continue;
-		}
-		if (!entry.isDirectory()) continue;
-		await collectBucket(path, files, diagnostics);
-	}
+	await scanDirectory(root, files, diagnostics, true);
 }
 
 async function collectBucket(path, files, diagnostics) {
-	let entries;
-	try {
-		entries = await readdir(path, { withFileTypes: true });
-	} catch (error) {
-		diagnostics.push(diagnostic(path, "unreadable", describe(error)));
-		return;
-	}
+	await scanDirectory(path, files, diagnostics, false);
+}
+
+async function scanDirectory(dir, files, diagnostics, descend) {
+	const entries = await readEntries(dir, diagnostics);
+	if (!entries) return;
 
 	for (const entry of entries) {
 		if (entry.isSymbolicLink()) continue;
-		if (isJsonl(entry.name)) files.add(resolve(path, entry.name));
+		if (isJsonl(entry.name)) {
+			files.add(resolve(dir, entry.name));
+			continue;
+		}
+		if (descend && entry.isDirectory()) await collectBucket(resolve(dir, entry.name), files, diagnostics);
+	}
+}
+
+async function readEntries(dir, diagnostics) {
+	try {
+		return await readdir(dir, { withFileTypes: true });
+	} catch (error) {
+		diagnostics.push(diagnostic(dir, "unreadable", describe(error)));
+		return null;
 	}
 }
 

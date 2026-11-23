@@ -140,14 +140,20 @@ function launch({ command, args, onClick, env }) {
 		let settled = false;
 		let errors = "";
 		const lines = createInterface({ input: child.stdout });
-		const timer = setTimeout(() => { if (!settled) { settled = true; child.kill(); reject(new Error("System tray startup timed out")); } }, 7000);
+		const timer = setTimeout(() => settle(() => { child.kill(); reject(new Error("System tray startup timed out")); }), 7000);
+		function settle(fn) {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			fn();
+		}
 		child.stderr.on("data", (data) => { errors = (errors + data.toString()).slice(-2000); });
 		lines.on("line", (line) => {
-			if (line === "ready" && !settled) { settled = true; clearTimeout(timer); child.unref(); child.stdin.unref?.(); child.stdout.unref?.(); child.stderr.unref?.(); resolve(child); }
+			if (line === "ready") settle(() => { child.unref(); child.stdin.unref?.(); child.stdout.unref?.(); child.stderr.unref?.(); resolve(child); });
 			else if (line === "click") onClick();
 		});
-		child.on("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } });
-		child.on("exit", () => { if (!settled) { settled = true; clearTimeout(timer); reject(new Error(errors.trim() || "System tray exited")); } });
+		child.on("error", (error) => settle(() => reject(error)));
+		child.on("exit", () => settle(() => reject(new Error(errors.trim() || "System tray exited"))));
 	});
 }
 

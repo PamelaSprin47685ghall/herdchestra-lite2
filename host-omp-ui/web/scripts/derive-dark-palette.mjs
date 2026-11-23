@@ -215,6 +215,9 @@ function feasibleV(h, s, requirements) {
   return best;
 }
 
+const minContrast = (hex, reqs, key) =>
+  Math.min(...reqs.map((r) => contrast(hex, r[key])));
+
 /**
  * Calibrate every ink token against the authored light surfaces. Returns
  * [{name, light, dark, v0, v, lightMin, darkMin, changed, deadlock}].
@@ -259,12 +262,8 @@ function calibrate(tokens) {
         dark: flip(t.light),
         v0,
         v: v0,
-        lightMin: Math.min(
-          ...requirements.map((r) => contrast(t.light, r.lightHex)),
-        ),
-        darkMin: Math.min(
-          ...requirements.map((r) => contrast(flip(t.light), r.darkHex)),
-        ),
+        lightMin: minContrast(t.light, requirements, "lightHex"),
+        darkMin: minContrast(flip(t.light), requirements, "darkHex"),
         changed: false,
         deadlock: true,
       };
@@ -279,12 +278,8 @@ function calibrate(tokens) {
       dark: darkHex,
       v0,
       v,
-      lightMin: Math.min(
-        ...requirements.map((r) => contrast(lightHex, r.lightHex)),
-      ),
-      darkMin: Math.min(
-        ...requirements.map((r) => contrast(darkHex, r.darkHex)),
-      ),
+      lightMin: minContrast(lightHex, requirements, "lightHex"),
+      darkMin: minContrast(darkHex, requirements, "darkHex"),
       changed: lightHex !== t.light,
       deadlock: false,
     };
@@ -396,8 +391,9 @@ function writeDerived(css, rows) {
   return guardIcons(out);
 }
 
+const pad = (s, n) => String(s).padEnd(n);
+
 function printCalibration(rows) {
-  const pad = (s, n) => String(s).padEnd(n);
   console.log(
     pad("token", 14) +
       pad("light", 10) +
@@ -480,7 +476,6 @@ function audit(css) {
   const rows = calibrate(tokens);
   const light = new Map(rows.map((r) => [r.name, r.light]));
   const dark = new Map(rows.map((r) => [r.name, r.dark]));
-  const pad = (s, n) => String(s).padEnd(n);
   console.log("pair".padEnd(38) + "light   dark    floor  verdict");
   let fails = 0;
   for (const [fg, bg] of PAIRS) {

@@ -84,7 +84,6 @@ export function createManagerTray({ url, token, adapter, openUrl = defaultOpenUr
 	return {
 		start,
 		stop,
-		click: open,
 		get visible() {
 			return handle !== null;
 		},

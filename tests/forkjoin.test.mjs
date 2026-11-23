@@ -504,6 +504,44 @@ describe("owner queries", () => {
     expect(taken.content[0].text).toContain("Call scope_join again to take the next one.");
   });
 
+  test("appends the optional markdown to the end of the child's record", async () => {
+    const { handleReturnCall, handleJoinCall } = await import(
+      "../src/station/fork-controls.mjs"
+    );
+    const ledger = createBracketLedger();
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "found the leak" }] },
+    ];
+    const child = {
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
+      forkLedgerPort: () => ledger,
+      forkIdentityPort: () => ({
+        forkId: "call-p",
+        parentOwnerId: "root",
+        ownScopeId: "call-p",
+      }),
+      contextMessages: () => messages,
+      setChildOutcome: () => {},
+    };
+    fork(ledger, "call-p", "root", 0);
+    const table = "| a | b |\n|---|---|\n| 1 | 2 |";
+    const returned = handleReturnCall(child, {
+      id: "call-rp",
+      arguments: { markdown: table },
+    });
+    expect(returned.details.awaitingReceipt).toBe(true);
+    const station = {
+      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
+      forkLedgerPort: () => ledger,
+    };
+    const taken = handleJoinCall(station, { id: "call-jp", arguments: {} });
+    const text = taken.content[0].text;
+    expect(taken.details.joined).toBe(true);
+    expect(text).toContain("found the leak");
+    expect(text).toContain(table);
+    expect(text.indexOf(table)).toBeGreaterThan(text.indexOf("found the leak"));
+  });
+
   test("refuses scope_return outside a forked child", async () => {
     const { handleReturnCall } = await import("../src/station/fork-controls.mjs");
     const station = {

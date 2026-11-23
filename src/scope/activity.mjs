@@ -11,6 +11,7 @@ export function scopeActivity(ledger, lastOwnerId, rootBusy, clock = null) {
 	let idle = Number(!rootBusy);
 	for (const id of ledger.order) {
 		const branch = forkOf(ledger, id);
+		if (!branch || branch.supersededAt) continue;
 		const paused = branch?.clockPausedAt != null &&
 			(!clock || clock.info(branch).bounded !== false);
 		if (branch?.status === RUNNING && !paused) busy++;

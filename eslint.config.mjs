@@ -110,4 +110,53 @@ export default [
 			],
 		},
 	},
+	{
+		// `host-omp-ui` is a separate plugin: it may bridge omp, but it must not
+		// import the other host package, directly or by package name.
+		files: ["host-omp-ui/src/**/*.mjs"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: [
+								"herdchestra-host-omp",
+								"herdchestra-host-omp/*",
+								"../host-omp/*",
+								"../../host-omp/*",
+							],
+							message:
+								"host-omp-ui is a separate plugin; it must not import host-omp.",
+						},
+						{
+							group: ["../src/*", "../../src/*", "../../../src/*"],
+							message:
+								"Import the core by package name (`herdchestra-lite2`), never by a relative path.",
+						},
+					],
+				},
+			],
+		},
+	},
+	{
+		// The UI bridge station is the same aggregate-root rule as the core:
+		// every state transition is synchronous, waits belong to tickets.
+		files: ["host-omp-ui/src/station/**/*.mjs"],
+		languageOptions: {
+			ecmaVersion: 2024,
+			sourceType: "module",
+		},
+		rules: {
+			"no-dupe-class-members": "error",
+			"no-restricted-syntax": [
+				"error",
+				stationRule,
+				noAsync,
+				noFunctionExpressionAsync,
+				noAwait,
+				noForAwait,
+			],
+		},
+	},
 ];

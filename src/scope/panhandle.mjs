@@ -6,12 +6,19 @@
 // parent. The tool is free, so a branch with nothing left can still ask.
 //
 // Two bounds keep one instruction from turning a measured budget into an
-// unbounded one: a per-call cap for each tool, and a per-call cap for seconds.
-// A branch can ask again. Every grant stays on the record, so the account text
-// shows how often it had to.
+// unbounded one: a total for each request, and a cap for seconds. A branch can
+// ask again, and what a request asks past the total still lands — the receipt
+// names the number and the caller sees the tally. Seconds alone are refused.
+// Every grant stays on the record, so the account text shows how often it had
+// to.
 
-import { isFreeTool, normalizeToolName } from "./budget.mjs";
+import {
+  SCOPE_MAX_BUDGET_POINTS,
+  isFreeTool,
+  normalizeToolName,
+} from "./budget.mjs";
 import { forkOf } from "./forkjoin.mjs";
+import { sumBudgetPoints } from "./turn-stats.mjs";
 import {
   copyCounts,
   failure,
@@ -20,7 +27,11 @@ import {
   put,
 } from "./state.mjs";
 
-export const PANHANDLE_MAX_PER_TOOL = 8;
+// One request carries a total, not a per-tool allowance: nine points of
+// "read" or six of "read" and three of "edit" are the same size. Over the total
+// the grant still lands; the receipt rebukes it and the record keeps the tally.
+export const PANHANDLE_DEFAULT_POINTS = 6;
+export const PANHANDLE_MAX_POINTS = 9;
 export const PANHANDLE_MAX_SECONDS = 300;
 
 const RUNNING = "running";
@@ -57,14 +68,6 @@ function readTools(value) {
       );
     }
     put(tools, tool, (Object.hasOwn(tools, tool) ? tools[tool] : 0) + amount);
-  }
-  for (const tool of Object.keys(tools)) {
-    if (tools[tool] > PANHANDLE_MAX_PER_TOOL) {
-      return failure(
-        "PANHANDLE_TOOL_LIMIT",
-        `One panhandle grants at most ${PANHANDLE_MAX_PER_TOOL} points of "${tool}".`,
-      );
-    }
   }
   return { ok: true, tools };
 }
@@ -119,17 +122,6 @@ export function grantBudget(record, request = {}, options = {}) {
     );
   }
 
-  if (options?.totalCap === true) {
-    for (const tool of Object.keys(tools)) {
-      const current = Number.isFinite(record.budget?.[tool]) ? record.budget[tool] : 0;
-      if (current + tools[tool] > PANHANDLE_MAX_PER_TOOL) {
-        return failure(
-          "PANHANDLE_TOOL_LIMIT",
-          `This branch would exceed ${PANHANDLE_MAX_PER_TOOL} points of "${tool}".`,
-        );
-      }
-    }
-  }
   if (!isPlainObject(record.budget)) record.budget = {};
   if (!isPlainObject(record.remaining)) record.remaining = copyCounts(record.budget);
   for (const tool of Object.keys(tools)) {
@@ -155,7 +147,23 @@ export function grantBudget(record, request = {}, options = {}) {
     // A grant that moves the deadline back into the future ends overtime.
     record.overtimeAt = null;
   }
-  return { ok: true, tools: { ...tools }, seconds, record };
+  // A reuse grows one scope, so its overage is the scope's own total. A
+  // panhandle is metered over the whole request, whichever tools it names.
+  const pointsRequested = sumBudgetPoints(tools);
+  const totalPoints = sumBudgetPoints(record.budget);
+  const overLimit =
+    options?.scopeCap === true || options?.totalCap === true
+      ? pointsRequested > 0 && totalPoints > SCOPE_MAX_BUDGET_POINTS
+      : pointsRequested > PANHANDLE_MAX_POINTS;
+  return {
+    ok: true,
+    tools: { ...tools },
+    seconds,
+    pointsRequested,
+    overLimit,
+    totalPoints,
+    record,
+  };
 }
 
 /**
@@ -191,6 +199,9 @@ export function applyPanhandle(ledger, forkId, request = {}, options = {}) {
     tools: granted.tools,
     seconds: granted.seconds,
     count: record.panhandles.length,
+    pointsRequested: granted.pointsRequested,
+    overLimit: granted.overLimit,
+    totalPoints: granted.totalPoints,
     record,
   };
 }

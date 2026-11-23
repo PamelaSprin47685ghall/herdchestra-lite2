@@ -71,17 +71,52 @@ function bindForkPorts(station, { registry, ledger, identity }) {
  * - conversationKey: the object or string that names this conversation's ledger
  * - identity: { forkId, parentOwnerId, ownScopeId } when the station is a child
  */
-export function attachBaseForkPorts(station, wiring, options = {}) {
-	if (!station || typeof station !== "object") {
-		const registry = wiring?.registry ?? createForkRegistry(adapters);
-		return { registry, ledger: null, identity: null };
-	}
-	const existing = statesOf(wiring)?.get(station);
-	if (existing) return existing;
+// The ledger names the registry that owns its waiters. That association is the
+// reason a child needs no second copy of the registry: the ledger it already
+// carries from its identity answers the question. Two registries over one
+// ledger would split the waiter set, so a parent's wake would never reach a
+// child parked in scope_return, and the join would hang with no visible child.
+const LEDGER_REGISTRY = Symbol.for("herdchestra-lite2.ledger-registry.v1");
 
-	const registry = wiring?.registry ?? createForkRegistry(adapters);
+function registryOfLedger(ledger) {
+	if (!ledger || typeof ledger !== "object") return null;
+	const registry = ledger[LEDGER_REGISTRY];
+	return registry && typeof registry === "object" ? registry : null;
+}
+
+function bindLedgerRegistry(ledger, registry) {
+	if (!ledger || typeof ledger !== "object") return null;
+	if (!registry || typeof registry !== "object") return null;
+	const bound = registryOfLedger(ledger);
+	if (bound) return bound;
+	// Non-enumerable: `copyData` walks own enumerable keys, so the association
+	// never enters a persisted snapshot and cannot fail `validLedger`.
+	Object.defineProperty(ledger, LEDGER_REGISTRY, {
+		value: registry,
+		enumerable: false,
+		configurable: true,
+	});
+	return registry;
+}
+
+export function attachBaseForkPorts(station, wiring, options = {}) {
+	const owner = wiring && typeof wiring === "object" ? wiring : null;
 	const identity =
 		options.identity && typeof options.identity === "object" ? options.identity : null;
+	// The ledger a child carries already names the registry that holds its
+	// parent's waiters. Prefer it over this wiring's registry: a child attached
+	// through a second wiring must still park in the parent's waiter set.
+	const carrier = identity?.ledger ?? station?.state?.brackets ?? null;
+	const registry =
+		registryOfLedger(carrier) ??
+		owner?.registry ??
+		createForkRegistry(owner?.adapters);
+	if (!station || typeof station !== "object") {
+		return { registry, ledger: null, identity: null };
+	}
+	const existing = statesOf(owner)?.get(station);
+	if (existing) return existing;
+
 	const conversationKey = options.conversationKey ?? null;
 	// A child must use the ledger its fork was registered on. Its own context
 	// may name a different manager object, and deriving the key again would
@@ -95,13 +130,14 @@ export function attachBaseForkPorts(station, wiring, options = {}) {
 	const restored = station.state?.brackets ?? null;
 	const { ledger } = selectForkLedger({ identity, indexed, restored });
 	if (!identity) adoptLedger(registry, conversationKey, ledger);
+	bindLedgerRegistry(ledger, registry);
 	// `SessionStation.bindForkPorts` derives owner/depth/persistence once; a
 	// plain test double receives the same capabilities. Never write the legacy
 	// duplicate owner field: `forkOwnerId()` is the single owner seam.
 	bindForkPorts(station, { registry, ledger, identity });
 	const state = { registry, ledger, identity, phase: "base" };
-	if (!identity) wiring.ledger = ledger;
-	statesOf(wiring)?.set(station, state);
+	if (!identity && owner) owner.ledger = ledger;
+	statesOf(owner)?.set(station, state);
 	return state;
 }
 
@@ -109,6 +145,10 @@ function spawnPortFor(station, base, binder, options, wiring) {
 	if (typeof options.createSession !== "function") return undefined;
 	const createSession = options.createSession;
 	return () => (spec) => {
+		// Bind the ledger to this registry before the child station exists. A
+		// child attached through another wiring then still lands on the
+		// parent's waiter set instead of a second one nobody wakes.
+		bindLedgerRegistry(base.ledger, base.registry);
 		// The child's station does not exist yet. Record who it is before the
 		// spawn so that station can find its own fork the moment the host
 		// builds it.
@@ -184,18 +224,21 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 	if (!base) base = attachBaseForkPorts(station, wiring, options);
 	base = states?.get(station) ?? base;
 
+	// A wiring that was never created is still a legal attach; reads must not
+	// throw on it, and the spawner needs this wiring to report through.
+	const host = wiring && typeof wiring === "object" ? wiring : {};
 	const existing = base?.binder ? base : null;
 	if (existing) {
 		if (Object.hasOwn(options, "display")) existing.binder.updateDisplay(options.display);
 		if (typeof options.createSession === "function") {
-			station.childSpawnPort = spawnPortFor(station, base, existing.binder, options);
+			station.childSpawnPort = spawnPortFor(station, base, existing.binder, options, host);
 		}
 		return { registry: base.registry, ledger: base.ledger };
 	}
 
 	// A holder passed in is shared with the parent; a port is wrapped in a
 	// fresh holder; null starts empty and accepts a late UI.
-	const binder = createDisplayBinder({ display: options.display, report: (domain, error, detail) => wiring.report?.(domain, error, detail) });
+	const binder = createDisplayBinder({ display: options.display, report: (domain, error, detail) => host.report?.(domain, error, detail) });
 	station.displayPort = binder.currentDisplay;
 	station.setDisplayPort = (port) => binder.setDisplayPort(port);
 	station.noteRootWait = !base.identity
@@ -204,7 +247,7 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 	station.noteScopeRequest = base.ledger
 		? () => binder.currentDisplay()?.request(base.ledger, station.forkOwnerId?.() ?? null)
 		: null;
-	const spawn = spawnPortFor(station, base, binder, options, wiring);
+	const spawn = spawnPortFor(station, base, binder, options, host);
 	if (spawn) station.childSpawnPort = spawn;
 	if (base && typeof base === "object") {
 		base.binder = binder;

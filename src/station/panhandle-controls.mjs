@@ -4,6 +4,10 @@
 // execute core owns persistence and the per-call idempotence cache.
 
 import { applyPanhandle, forkBudgetText } from "../scope/index.mjs";
+import {
+	PANHANDLE_DEFAULT_POINTS,
+	PANHANDLE_MAX_POINTS,
+} from "../scope/panhandle.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 import { decidePanhandle } from "./domain/panhandle.mjs";
@@ -80,14 +84,27 @@ export function handlePanhandleCall(station, call) {
 
 	const clock =
 		typeof station.clockPort === "function" ? station.clockPort() : null;
+	const granted = render(G["panhandle.granted"], {
+		grant: describeGrant(applied.tools, applied.seconds),
+		budget: forkBudgetText(record, now, clock),
+		because: decision.reason,
+	});
+	// The grant landed. An oversized ask gets the grant and the rebuke together,
+	// so the next shortfall is planned against the cap instead of re-learned.
+	const text =
+		applied.overLimit === true
+			? `${granted}\n\n${render(G["panhandle.over-limit"], {
+					points: applied.pointsRequested,
+					defaultPoints: PANHANDLE_DEFAULT_POINTS,
+					maxPoints: PANHANDLE_MAX_POINTS,
+				})}`
+			: granted;
 	return textResult(
-		render(G["panhandle.granted"], {
-			grant: describeGrant(applied.tools, applied.seconds),
-			budget: forkBudgetText(record, now, clock),
-			because: decision.reason,
-		}),
+		text,
 		{
 			code: "PANHANDLE_GRANTED",
+			overLimit: applied.overLimit === true,
+			pointsRequested: applied.pointsRequested ?? 0,
 			tools: applied.tools,
 			seconds: applied.seconds,
 			count: applied.count,

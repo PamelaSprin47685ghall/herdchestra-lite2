@@ -17,7 +17,8 @@ import {
 } from "../src/scope/forkjoin.mjs";
 import {
   applyPanhandle,
-  PANHANDLE_MAX_PER_TOOL,
+  PANHANDLE_DEFAULT_POINTS,
+  PANHANDLE_MAX_POINTS,
   PANHANDLE_MAX_SECONDS,
 } from "../src/scope/panhandle.mjs";
 
@@ -164,13 +165,34 @@ describe("a refusal states the rule and changes nothing", () => {
     unchanged(ledger, record);
   });
 
-  test("a grant above the per-call tool cap", () => {
+  test("a grant above the per-call point cap lands and reports the overage", () => {
     const { ledger, record } = ledgerWith();
+    expect(PANHANDLE_DEFAULT_POINTS).toBe(6);
+    expect(PANHANDLE_MAX_POINTS).toBe(9);
+    expect(PANHANDLE_DEFAULT_POINTS).toBeLessThan(PANHANDLE_MAX_POINTS);
+    const atCap = applyPanhandle(ledger, "f1", { tools: { read: PANHANDLE_MAX_POINTS } }, { now: 2_000 });
+    expect(atCap.ok).toBe(true);
+    expect(atCap.overLimit).toBe(false);
+    expect(atCap.pointsRequested).toBe(PANHANDLE_MAX_POINTS);
+
     const out = applyPanhandle(ledger, "f1", {
-      tools: { read: PANHANDLE_MAX_PER_TOOL + 1 },
-    });
-    expect(out.code).toBe("PANHANDLE_TOOL_LIMIT");
-    unchanged(ledger, record);
+      tools: { bash: PANHANDLE_MAX_POINTS + 1 },
+    }, { now: 3_000 });
+    expect(out.ok).toBe(true);
+    expect(out.overLimit).toBe(true);
+    expect(out.pointsRequested).toBe(PANHANDLE_MAX_POINTS + 1);
+    expect(record.budget.bash).toBe(1 + PANHANDLE_MAX_POINTS + 1);
+    expect(record.remaining.bash).toBe(1 + PANHANDLE_MAX_POINTS + 1);
+  });
+
+  test("the cap counts the whole request, not each tool", () => {
+    const { ledger, record } = ledgerWith();
+    const split = applyPanhandle(ledger, "f1", { tools: { grep: 5, read: 5 } }, { now: 2_000 });
+    expect(split.ok).toBe(true);
+    expect(split.overLimit).toBe(true);
+    expect(split.pointsRequested).toBe(10);
+    expect(record.budget.grep).toBe(5);
+    expect(record.budget.read).toBe(7);
   });
 
   test("a fractional or negative point", () => {

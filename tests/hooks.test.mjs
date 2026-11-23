@@ -121,13 +121,17 @@ describe("hook wiring", () => {
 				return { messages };
 			},
 		};
+		const firstTurn = [
+			{ role: "user", content: [{ type: "text", text: "question" }] },
+			{ role: "assistant", content: [{ type: "text", text: "answer" }] },
+		];
 		const pi = fakePi();
-		wireHooks(pi, { stationFor: () => station }, "shared snapshot");
+		wireHooks(pi, { stationFor: () => station }, firstTurn);
 		const messages = [{ role: "user", content: "hello", timestamp: 2 }];
 
 		const result = pi.handlers.get("context")({ messages }, {});
 
-		expect(seen).toEqual([{ messages, firstTurn: "shared snapshot" }]);
+		expect(seen).toEqual([{ messages, firstTurn }]);
 		expect(result).toEqual({ messages });
 	});
 });

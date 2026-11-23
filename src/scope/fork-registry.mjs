@@ -5,7 +5,7 @@
 // module is the holder the wiring injects as the four ports. It holds no host
 // objects: a ledger is plain data, and every wait is a plain Promise.
 
-import { forkOf, markReady, takeReady } from "./forkjoin.mjs";
+import { forkOf, markReady, takeReady, subscribeLedger, unreceivedChildren, openChildren } from "./forkjoin.mjs";
 import { emptyTotals } from "./turn-stats.mjs";
 import { normalizeTargets, validTargets } from "./targets.mjs";
 
@@ -304,6 +304,7 @@ async function park(registry, signal) {
  * spurious wake costs no work.
  */
 export async function waitForReady(registry, ledger, options = {}) {
+  subscribeLedger(ledger, registry.wake ??= () => notifyWaiters(registry));
   const ownerId = options.ownerId;
   const levelKey = options.levelKey;
   const signal = options.signal ?? null;
@@ -326,6 +327,12 @@ export async function waitForReady(registry, ledger, options = {}) {
     if (signal?.aborted) {
       return failure("JOIN_INTERRUPTED", "The join was interrupted; the children keep running.");
     }
+    if (unreceivedChildren(ledger, ownerId).length === 0) {
+      return failure("NO_UNRECEIVED_WORK", "No unreceived child remains.");
+    }
+    if (openChildren(ledger, ownerId).length === 0) {
+      return failure("LEDGER_PAIRING_BROKEN", "Ready child is missing from its queue.");
+    }
     const woke = await park(registry, signal);
     if (woke?.ok === false) {
       return failure("JOIN_INTERRUPTED", "The join was interrupted; the children keep running.");
@@ -339,6 +346,7 @@ export async function waitForReady(registry, ledger, options = {}) {
  * the record in its queue.
  */
 export async function waitForJoin(registry, ledger, forkId, options = {}) {
+  subscribeLedger(ledger, registry.wake ??= () => notifyWaiters(registry));
   const signal = options.signal ?? null;
   const outcome = options.outcome ?? null;
   const record = forkOf(ledger, forkId);

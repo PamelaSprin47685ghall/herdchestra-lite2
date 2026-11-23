@@ -8,6 +8,7 @@
 import {
   adoptFork,
   amendFork,
+  annotateFork,
   forkOf,
   liveReceiverOf,
   markReady,
@@ -15,13 +16,22 @@ import {
   readyChildren,
   registerFork,
   reparentOrphans,
+  reviveBlockedFork,
   supersedeFork,
   takeReady,
   unreceivedChildren,
 } from "../scope/forkjoin.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { createClockOn } from "../scope/clock.mjs";
-import { deriveTimeBudgetSeconds } from "../scope/turn-stats.mjs";
+import { deriveTimeBudgetSeconds, sumBudgetPoints } from "../scope/turn-stats.mjs";
+import {
+  FORK_DEFAULT_DEPTH,
+  FORK_DEFAULT_FANOUT,
+  FORK_MAX_FANOUT,
+  FORK_RECOMMENDED_DEPTH,
+  SCOPE_DEFAULT_BUDGET_POINTS,
+  SCOPE_MAX_BUDGET_POINTS,
+} from "../scope/budget.mjs";
 import {
   decideJoinAdmission,
   decideRegister,
@@ -264,6 +274,8 @@ export function childReceiptText(spec) {
     render(S["fork.child-status"], {
       marker: childReceiptMarker(spec.scopeId ?? spec.forkId),
       depth: spec.childDepth,
+      defaultDepth: FORK_DEFAULT_DEPTH,
+      recommendedDepth: FORK_RECOMMENDED_DEPTH,
       intent: spec.intent,
       budget: budgetText(spec.budget),
       targets: targetsText(spec.targets),
@@ -330,6 +342,8 @@ function generationReceiptText({ scopeId, childDepth, generation, standing, inte
     render(S["fork.child-status"], {
       marker: childReceiptMarker(scopeId),
       depth: childDepth,
+      defaultDepth: FORK_DEFAULT_DEPTH,
+      recommendedDepth: FORK_RECOMMENDED_DEPTH,
       intent: standing,
       budget: budgetText(budget),
       targets: targetsText(targets),
@@ -529,12 +543,19 @@ export function handleForkCall(station, call, options = {}) {
       }
       const fork = registered.fork;
       // `registerFork` is the only place a budget is born, and it copies the
-      // input into both `budget` and `remaining`. Assigning the budget here
-      // after the fact would leave `remaining` at the empty object the ledger
-      // started with, and the child's first normal tool call would be refused
-      // as exhausted.
-      fork.targets = item.targets;
-      fork.model = item.model;
+      // input into both `budget` and `remaining`. The remaining fields go
+      // through the ledger's annotate entry, which is also what wakes parked
+      // joins: a bare field write would skip the change notification.
+      const created = annotateFork(ledger, fork.forkId, {
+        targets: item.targets,
+        model: item.model,
+      });
+      if (!created.ok) {
+        station.noteError?.("fork", new Error(created.reason ?? created.code), {
+          forkId,
+          phase: "fork",
+        });
+      }
       forkIdByScope.set(key, fork.forkId);
       if (item.blocked === true) {
         deferred.push({ forkId, scopeId: item.scopeId, intent: item.intent });
@@ -582,16 +603,22 @@ export function handleForkCall(station, call, options = {}) {
         intent: item.intent,
         added: out.added,
         queued: Math.max(0, (Array.isArray(target.requirements) ? target.requirements.length : 0) - before),
+        overLimit: out.overLimit === true,
+        totalPoints: out.totalPoints,
       };
       if (target.status === "blocked" && item.blocked !== true) {
         if (typeof spawner !== "function") {
           noteFailure(target.forkId, item, E["child-spawner-unavailable"] || "No child spawner is wired.");
           continue;
         }
-        target.status = "running";
-        target.startedAt = Date.now();
+        const startedAt = Date.now();
+        const revivedFork = reviveBlockedFork(ledger, target.forkId, startedAt);
+        if (!revivedFork.ok) {
+          noteFailure(target.forkId, item, revivedFork.code);
+          continue;
+        }
         if (clock && typeof clock.start === "function") {
-          clock.start(target, target.timeBudgetMs, target.startedAt);
+          clock.start(target, target.timeBudgetMs, startedAt);
         }
         queueChild(target, item, target.intent, childReceiptText({
           scopeId: item.scopeId,
@@ -607,6 +634,17 @@ export function handleForkCall(station, call, options = {}) {
       continue;
     }
 
+    // Decide the reuse budget before touching the old record. A reuse that can
+    // never start must leave a ready generation deliverable: superseding first
+    // and failing after would park the old scope in scope_return against a take
+    // that no longer exists.
+    const budget = sumBudgets(target.remaining, item.budget);
+    if (Object.keys(budget).length === 0) {
+      noteFailure(target.forkId, item, render(E["scope-reuse-empty"] || "This reuse adds no budget and the previous generation has none left.", {
+        scopeId: item.scopeId,
+      }));
+      continue;
+    }
     if (target.status === "ready") {
       const superseded = supersedeFork(ledger, target.forkId);
       if (!superseded.ok) {
@@ -617,13 +655,6 @@ export function handleForkCall(station, call, options = {}) {
       // that reuse just cancelled. Wake it so it can close its bracket.
       const wait = station.forkWaitPort?.() ?? null;
       if (wait?.registry) notifyWaiters(wait.registry);
-    }
-    const budget = sumBudgets(target.remaining, item.budget);
-    if (Object.keys(budget).length === 0) {
-      noteFailure(target.forkId, item, render(E["scope-reuse-empty"] || "This reuse adds no budget and the previous generation has none left.", {
-        scopeId: item.scopeId,
-      }));
-      continue;
     }
     const generation = (Number.isInteger(target.generation) ? target.generation : 1) + 1;
     const forkId = nextForkId(index, generation);
@@ -647,8 +678,16 @@ export function handleForkCall(station, call, options = {}) {
       continue;
     }
     const fork = registered.fork;
-    fork.targets = unionTargets(target.targets, item.targets);
-    fork.model = item.model ?? target.model ?? null;
+    const continuedFork = annotateFork(ledger, fork.forkId, {
+      targets: unionTargets(target.targets, item.targets),
+      model: item.model ?? target.model ?? null,
+    });
+    if (!continuedFork.ok) {
+      station.noteError?.("fork", new Error(continuedFork.reason ?? continuedFork.code), {
+        forkId,
+        phase: "fork",
+      });
+    }
     forkIdByScope.set(key, fork.forkId);
     queueChild(fork, item, standing, generationReceiptText({
       scopeId: item.scopeId,
@@ -786,6 +825,48 @@ export function handleForkCall(station, call, options = {}) {
   if (unreceived.length > 0) {
     sections.push(render(F["fork.unreceived"], { children: unreceived.join(", ") }));
   }
+  // Every over-cap batch already ran. The rebuke rides after the result so the
+  // next split starts from the cap instead of rediscovering it.
+  const overBudget = [];
+  for (const entry of [...started, ...continued, ...deferred]) {
+    const points = sumBudgetPoints(forkOf(ledger, entry.forkId)?.budget ?? {});
+    if (points > SCOPE_MAX_BUDGET_POINTS) {
+      overBudget.push(`${entry.scopeId} (${points} pts)`);
+    }
+  }
+  for (const entry of [...amended, ...revived]) {
+    if (entry.overLimit) {
+      overBudget.push(`${entry.scopeId} (${entry.totalPoints} pts)`);
+    }
+  }
+  if (overBudget.length > 0) {
+    sections.push(render(F["fork.over-budget"], {
+      defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
+      maxPoints: SCOPE_MAX_BUDGET_POINTS,
+      offenders: overBudget.join(", "),
+    }));
+  }
+  if (decision.items.length > FORK_MAX_FANOUT) {
+    sections.push(render(F["fork.over-fanout"], {
+      count: decision.items.length,
+      defaultFanout: FORK_DEFAULT_FANOUT,
+      maxFanout: FORK_MAX_FANOUT,
+    }));
+  }
+  // A fourth layer still runs. The note is context, not a rebuke: unlike the
+  // budget and the fan-out, depth has no floor to defend, so a deeper tree is
+  // fine when the work needs it and needs no written justification. Only a
+  // new child earns the note; amending a live fork does not.
+  const born =
+    started.length + continued.length + revived.length + deferred.length;
+  if (born > 0 && depth + 1 > FORK_RECOMMENDED_DEPTH) {
+    sections.push(render(F["fork.deep-nesting"], {
+      childDepth: depth + 1,
+      defaultDepth: FORK_DEFAULT_DEPTH,
+      recommendedDepth: FORK_RECOMMENDED_DEPTH,
+      defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
+    }));
+  }
   return textResult(sections.join("\n\n"), {
     started: started.map((entry) => entry.forkId),
     amended: amended.map((entry) => entry.forkId),
@@ -852,14 +933,14 @@ export function handleJoinCall(station, call, options = {}) {
         render(E["join-context-exceeded"], { detail }),
         {
           ownerId,
-          active: openChildren(ledger, ownerId).length,
+          active: unreceivedChildren(ledger, ownerId).length,
           blocked: taken.blocked ?? [],
         },
       );
     }
     return errorResult("NO_READY_CHILD", E["no-ready-child"], {
       ownerId,
-      active: openChildren(ledger, ownerId).length,
+      active: unreceivedChildren(ledger, ownerId).length,
     });
   }
   commitJoin(station, taken.fork, call.id);
@@ -1008,6 +1089,7 @@ export function handleReturnCall(station, call) {
   // record cannot tell a silent child from a broken one. Amends are filtered
   // first: a withdrawn beat must never return through a replay.
   let renderedRecord = null;
+  const markdown = typeof args.markdown === "string" ? args.markdown.trim() : "";
   if (typeof station.setChildOutcome === "function") {
     const messages =
       typeof station.contextMessages === "function" ? station.contextMessages() : [];
@@ -1018,6 +1100,11 @@ export function handleReturnCall(station, call) {
     renderedRecord = renderChildRecord(visible, {
       start: childRecordStart(visible, record),
     });
+    // The optional markdown goes last: the child named it deliberately, so it
+    // must survive the replay that keeps only assistant text and tool names.
+    if (markdown !== "") {
+      renderedRecord = renderedRecord === "" ? markdown : `${renderedRecord}\n\n${markdown}`;
+    }
     station.setChildOutcome(selfForkId, {
       record: renderedRecord,
       failed: false,

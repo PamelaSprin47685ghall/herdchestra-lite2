@@ -71,11 +71,18 @@ describe("amendFork", () => {
 		);
 	});
 
-	test("reuses the panhandle caps", () => {
-		const { ledger } = open({ budget: { read: 8 } });
-		expect(amendFork(ledger, "f1", { budget: { read: 1 } }).code).toBe(
-			"PANHANDLE_TOOL_LIMIT",
-		);
+	test("amending past the scope cap lands with an overage mark, not a refusal", () => {
+		const { ledger, record } = open({ budget: { read: 18 } });
+		const toCap = amendFork(ledger, "f1", { budget: { read: 9 } }, { now: NOW });
+		expect(toCap.ok).toBe(true);
+		expect(toCap.overLimit).toBe(false);
+		expect(record.budget.read).toBe(27);
+
+		const toOver = amendFork(ledger, "f1", { budget: { read: 2 } }, { now: NOW });
+		expect(toOver.ok).toBe(true);
+		expect(toOver.overLimit).toBe(true);
+		expect(record.budget.read).toBe(29);
+
 		expect(amendFork(ledger, "f1", { seconds: 301 }).code).toBe(
 			"PANHANDLE_SECONDS_LIMIT",
 		);

@@ -127,7 +127,9 @@ test("the registered scope_return explains the sealed final receipt and the dige
 	const tools = new Map();
 	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
 	const returning = tools.get("scope_return");
-	expect(returning.parameters.properties).toEqual({});
+	expect(returning.parameters.required).toBeUndefined();
+	expect(returning.parameters.properties.markdown.type).toBe("string");
+	expect(returning.parameters.properties.markdown.description).toMatch(/appended verbatim/i);
 	expect(returning.description).toMatch(/(?:last|latest|final)[^.]*receipt[^.]*seal/i);
 	expect(returning.description).toContain("bare names of the tools");
 	expect(returning.description).not.toContain("elder_report");

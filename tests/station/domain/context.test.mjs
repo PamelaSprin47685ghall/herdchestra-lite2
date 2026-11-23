@@ -122,38 +122,66 @@ describe("projectContext", () => {
 		expect(result.usage).toBeNull();
 	});
 
-	test("prepends the shared first turn before the outbound list", () => {
+	const turn = [
+		{ role: "user", content: [{ type: "text", text: "what did we settle" }] },
+		{
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "let me recall", signature: "sig" },
+				{ type: "text", text: "we settled this" },
+			],
+		},
+	];
+
+	test("prepends the shared opening exchange before the outbound list", () => {
 		const user = { role: "user", content: "hello", timestamp: 2 };
 		const result = projectContext(
 			{ amends: [] },
-			{ original: [user], modelKey: "m1", firstTurn: "shared snapshot" },
+			{ original: [user], modelKey: "m1", firstTurn: turn },
 		);
 
-		expect(result.messages).toEqual([
-			{
-				role: "user",
-				content: [{ type: "text", text: "shared snapshot" }],
-				timestamp: 1,
-				attribution: "user",
-			},
-			user,
+		expect(result.messages.map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+			"user",
 		]);
+		expect(result.messages[0]).toMatchObject({
+			role: "user",
+			content: turn[0].content,
+			timestamp: 1,
+			attribution: "user",
+		});
+		// The host walks an assistant message as real history. Every field it
+		// reads must exist, or a DeepSeek-compatible child aborts before its
+		// first answer.
+		expect(result.messages[1]).toMatchObject({
+			role: "assistant",
+			content: turn[1].content,
+			api: "openai-completions",
+			provider: "herdchestra",
+			model: "shared-opening",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+			stopReason: "stop",
+			timestamp: 1,
+			attribution: "assistant",
+		});
+		expect(result.messages[2]).toBe(user);
 		expect(result.usage.messages).toBe(result.messages);
 		expect(result.usage.frontier).toBe(1);
 	});
 
 	test("an empty first turn leaves the list unchanged", () => {
 		const user = { role: "user", content: "hello", timestamp: 2 };
-		const result = projectContext({}, { original: [user], firstTurn: "" });
+		const result = projectContext({}, { original: [user], firstTurn: [] });
 		expect(result.messages).toEqual([user]);
 	});
 
 	test("the first turn does not count as a branch position", () => {
 		const result = projectContext(
 			{},
-			{ original: [], modelKey: "m1", firstTurn: "shared snapshot" },
+			{ original: [], modelKey: "m1", firstTurn: turn },
 		);
-		expect(result.messages).toHaveLength(1);
+		expect(result.messages).toHaveLength(2);
 		expect(result.usage.frontier).toBe(0);
 	});
 
@@ -162,14 +190,25 @@ describe("projectContext", () => {
 		const user = { role: "user", content: "hello", timestamp: 2 };
 		const result = projectContext(
 			{},
-			{ original: [developer, user], firstTurn: "shared snapshot" },
+			{ original: [developer, user], firstTurn: turn },
 		);
 		expect(result.messages.map((message) => message.role)).toEqual([
 			"developer",
 			"user",
+			"assistant",
 			"user",
 		]);
-		expect(result.messages[1].content[0].text).toBe("shared snapshot");
+		expect(result.messages[1].content[0].text).toBe("what did we settle");
+	});
+
+	test("strips parts a role cannot carry", () => {
+		const withImage = [
+			{ role: "user", content: [{ type: "text", text: "q" }, { type: "image", data: "x", mimeType: "image/png" }] },
+			{ role: "assistant", content: [{ type: "text", text: "a" }, { type: "toolCall", id: "t", name: "x", arguments: {} }] },
+		];
+		const result = projectContext({}, { original: [], firstTurn: withImage });
+		expect(result.messages[0].content.map((part) => part.type)).toEqual(["text"]);
+		expect(result.messages[1].content.map((part) => part.type)).toEqual(["text"]);
 	});
 });
 

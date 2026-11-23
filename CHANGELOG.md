@@ -6,6 +6,58 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Fixed — standalone omp web bridge
+
+- Repair the UI fence imports for the compiled omp host, browser asset bundling,
+  dialog routing, session switching, model selection and bidirectional draft
+  synchronization. Reuse DeerFlow's UI components without its backend.
+- Add Web session creation and switching, composer attachments (including
+  steer and follow-up), and keyboard access to the TUI surface. The bridge
+  remains a loopback service protected by an access token; terminal-specific
+  presentation may differ in the browser.
+
+### Changed — scope size is a constant, enforced by rebuke
+
+- A working scope is sized at about 18 total tool-budget points and never more
+  than 27, amendments included; one `scope_fork` call starts about 4 children
+  and never more than 6; one `scope_panhandle` asks for about 6 total points
+  and never more than 9 across every tool. The former `sqrt(n)` guidance and
+  the hardcoded `8` per-tool allowance are gone.
+- The caps are soft: an oversized call still runs and its receipt carries a
+  `WARNING` that names the excess and forbids a repeat. `scope_panhandle`
+  measures one total across all tools instead of a per-tool maximum, so its
+  schema no longer carries a per-tool `maximum`.
+- `PANHANDLE_MAX_PER_TOOL` is replaced by `PANHANDLE_DEFAULT_POINTS` (6) and
+  `PANHANDLE_MAX_POINTS` (9); `scope_fork` amendments no longer borrow the
+  panhandle cap and are judged against `SCOPE_MAX_BUDGET_POINTS` (27).
+- Fixed: `panhandle.tools` and `panhandle.seconds` reached the tool schema with
+  their `{{maxPoints}}` and `{{maxSeconds}}` placeholders unrendered.
+
+### Changed — tree depth is a default and a recommendation, not a ceiling
+
+- A tree is sized from independent closures, not tool calls: one closure is a
+  18–27 point leaf. Up to about six closures stay one layer deep, seven to
+  twenty-four default to two, and a larger job is recommended through three.
+  `FORK_DEFAULT_DEPTH` (2) and `FORK_RECOMMENDED_DEPTH` (3) state this for the
+  prompts; neither is a limit, and a deeper tree with a real reason runs.
+- A child's birth receipt now places it: `depth X (default tree depth 2,
+  recommended through depth 3)`. A fourth layer still starts and carries a
+  calm `Note —` explaining the cost of one more layer — the record compresses
+  to prose again and the ancestor prefix grows — with no refusal and no
+  demand for a written justification. Amending a live deep scope repeats no
+  note.
+- The guidance refuses two fakes: a single-child relay layer, and serializing
+  ten independent closures into repeated root waves instead of adding one
+  subtree layer.
+
+### Added — `scope_return` takes an optional closing markdown
+
+- `scope_return({ markdown })` appends the string verbatim to the end of the
+  record the parent receives. The field is optional; a blank value changes
+  nothing. The replay still carries only assistant text and tool names, so the
+  field exists for what that replay drops: tables, code blocks, and deliberate
+  closing notes.
+
 ### Added — every outbound request shares one first turn
 
 - The `context` hook prepends a fixed user message built from

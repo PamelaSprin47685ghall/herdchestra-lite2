@@ -7,9 +7,37 @@
 
 import { decideAbandon } from "./abandon.mjs";
 import { deadlineInfo } from "./clock.mjs";
-import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
+import { emptyTotals, normalizeTotals, sumBudgetPoints } from "./turn-stats.mjs";
 import { publicScopeId } from "./scope-id.mjs";
 import { grantBudget } from "./panhandle.mjs";
+
+const listeners = Symbol("ledger listeners");
+
+export function subscribeLedger(ledger, listener) {
+  if (!ledger[listeners]) Object.defineProperty(ledger, listeners, { value: new Set() });
+  ledger[listeners].add(listener);
+}
+
+function changed(ledger) {
+  for (const listener of ledger[listeners] ?? []) listener();
+}
+
+export function reviveBlockedFork(ledger, forkId, startedAt = Date.now()) {
+  const record = forkOf(ledger, forkId);
+  if (!record || record.status !== BLOCKED) return failure("FORK_NOT_BLOCKED", "Fork is not blocked.");
+  record.status = RUNNING;
+  record.startedAt = startedAt;
+  changed(ledger);
+  return { ok: true, record };
+}
+
+export function annotateFork(ledger, forkId, fields = {}) {
+  const record = forkOf(ledger, forkId);
+  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
+  if (fields.targets !== undefined) record.targets = fields.targets;
+  if (fields.model !== undefined) record.model = fields.model;
+  return { ok: true, record };
+}
 
 const RUNNING = "running";
 const READY = "ready";
@@ -186,6 +214,7 @@ export function markReady(ledger, forkId, outcome = {}) {
   if (typeof outcome?.record === "string") record.record = outcome.record;
   const queue = queueFor(ledger, record.ownerId);
   queue.push(forkId);
+  changed(ledger);
   return { ok: true, fork: record, position: queue.length - 1 };
 }
 
@@ -211,7 +240,7 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
     granted = grantBudget(
       record,
       { tools, ...(seconds > 0 ? { seconds } : {}) },
-      { ...options, allowClockOff: true, totalCap: true },
+      { ...options, allowClockOff: true, scopeCap: true },
     );
     if (!granted.ok) return granted;
   }
@@ -234,6 +263,9 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
     added: { tools: { ...granted.tools }, seconds: granted.seconds },
     queued: Array.isArray(record.requirements) ? record.requirements.length : 0,
     status: record.status,
+    pointsRequested: granted.pointsRequested ?? 0,
+    overLimit: granted.overLimit === true,
+    totalPoints: sumBudgetPoints(record.budget),
     record,
   };
 }
@@ -250,6 +282,7 @@ export function supersedeFork(ledger, forkId, now = Date.now()) {
   }
   record.supersededAt = Number.isFinite(now) ? now : Date.now();
   removeFromQueues(ledger, forkId);
+  changed(ledger);
   return { ok: true, record };
 }
 
@@ -333,6 +366,7 @@ export function takeReady(ledger, options = {}) {
     if (!Object.hasOwn(ledger.levels, levelKey)) put(ledger.levels, levelKey, []);
     ledger.levels[levelKey].push(record.forkId);
     record.levelKey = levelKey;
+    changed(ledger);
     return { ok: true, fork: record };
   }
   if (blocked.length > 0) {
@@ -390,7 +424,8 @@ export function adoptFork(ledger, forkId, toOwnerId) {
   if (record.status === READY) removeFromQueues(ledger, forkId);
   record.reparentedFrom = record.ownerId;
   record.ownerId = toOwnerId;
-  if (record.status === READY) queueFor(ledger, toOwnerId).push(forkId);
+  if (record.status === READY && !record.supersededAt) queueFor(ledger, toOwnerId).push(forkId);
+  changed(ledger);
   return { ok: true, record, adopted: true };
 }
 
@@ -420,6 +455,7 @@ export function rehomeReadyResults(ledger) {
     .filter((record) => record && record.status === READY && !record.supersededAt)
     .sort((left, right) => (left.readySeq ?? 0) - (right.readySeq ?? 0));
   for (const record of ready) queueFor(ledger, record.ownerId).push(record.forkId);
+  changed(ledger);
   return { moved };
 }
 
@@ -466,6 +502,7 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
   const remaining = [];
   for (const forkId of source) {
     const record = forkOf(ledger, forkId);
+    if (record && record.status === READY && record.supersededAt) continue;
     if (record && record.status === READY) {
       record.ownerId = receiverId;
       target.push(forkId);
@@ -475,6 +512,7 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
     remaining.push(forkId);
   }
   ledger.queues[fromOwnerId] = remaining;
+  changed(ledger);
   return { ok: true, moved, transferred };
 }
 
@@ -493,6 +531,7 @@ export function abandon(ledger, forkId, reason = null) {
   record.outcome = FAILED;
   record.reason = typeof reason === "string" && reason !== "" ? reason : null;
   removeFromQueues(ledger, forkId);
+  changed(ledger);
   return { ok: true, fork: record };
 }
 
@@ -609,6 +648,9 @@ export function assertPairing(ledger) {
     }
     if (record.status === READY && !Number.isInteger(record.readySeq)) {
       problems.push(`ready fork "${forkId}" has no readySeq`);
+    }
+    if (record.status === READY && !record.supersededAt && !(ledger.queues[record.ownerId] ?? []).includes(forkId)) {
+      problems.push(`ready fork "${forkId}" is not queued`);
     }
   }
   for (const ownerId of Object.keys(ledger.queues)) {

@@ -150,7 +150,12 @@ test("a read-only session still carries the shared first turn", () => {
 		},
 	};
 
-	const result = onContext(station, messages, CTX, "shared snapshot");
+	const result = onContext(
+		station,
+		messages,
+		CTX,
+		[{ role: "user", content: [{ type: "text", text: "shared snapshot" }] }],
+	);
 
 	expect(result.messages[0]).toEqual({
 		role: "user",

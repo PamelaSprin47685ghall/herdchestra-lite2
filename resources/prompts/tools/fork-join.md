@@ -8,11 +8,15 @@ Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter
 
 ## fork.intent
 
-Name the goal the child will make true, the surface it owns, and what a successor can take over. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A scope that only reads still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size it to finish and to be taken over; when the request needs about n tool calls, roughly sqrt(n) is a guide, not a mandate. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. On a new scope `intent` is required. When the `scopeId` is reused it is optional: the text is appended as one more requirement and delivered at the child's next turn boundary, never in the middle of a running tool.
+Name the goal the child will make true, the surface it owns, and what a successor can take over. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A scope that only reads still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. A good scope size is about {{defaultPoints}} total tool-budget points and never more than {{maxPoints}}: size it to finish and to be taken over, not to fill a context. One call starts about {{defaultFanout}} children and never more than {{maxFanout}}; a default is also a floor, so hoarding the work in one scope, or serializing the whole plan into a single child out of caution, buys nothing and starves the plan of the attention a fresh subtree would have paid it. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. Choose the tree's depth before its width. A job of no more than about six closures needs one layer; the default is {{defaultDepth}} layers, and the recommended depth for work spanning dozens of closures is {{recommendedDepth}}. Deeper is fine when the work truly needs it, and you need not explain the choice. Say in the intent whether the child is a `subtree` lead that divides again or a `leaf` that closes directly. On a new scope `intent` is required. When the `scopeId` is reused it is optional: the text is appended as one more requirement and delivered at the child's next turn boundary, never in the middle of a running tool.
+
+## fork.deep-nesting
+
+Note — this batch starts a scope at depth {{childDepth}}, past the default tree depth of {{defaultDepth}} and the recommended depth of {{recommendedDepth}}, which already covers dozens to a few hundred closed loops. The work runs as asked; a deeper tree is fine when the work truly warrants it, and you need not explain it. Check yourself once: every extra layer compresses your child's record into prose and carries one more ancestor prefix into what the next scope reads. Do not grow a relay layer whose only job is to hold a single child, and do not break a {{defaultPoints}}-point closure into fragments to make the tree look organized.
 
 ## fork.budget
 
-Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A branch that runs out may hold out its hand with `scope_panhandle`, at most 8 per tool in one call. Sibling fork items each have their own budget; each item funds its own child at any depth, and the caller's balance is never charged.
+Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A working scope holds about {{defaultPoints}} total points and never more than {{maxPoints}}, amendments included. A branch that runs out may hold out its hand with `scope_panhandle` for about {{panhandleDefault}} total points across all tools, never more than {{panhandleMax}} total in one call. Sibling fork items each have their own budget; each item funds its own child at any depth, and the caller's balance is never charged.
 
 ## fork.time
 
@@ -24,7 +28,15 @@ Required, non-empty array of natural-language descriptions of what this scope ex
 
 ## fork.forks
 
-Include the remaining plan, both ready and blocked items. Order does not express dependencies. Invalid input prevents the whole batch from starting.
+Include the remaining plan, both ready and blocked items. Order does not express dependencies. Invalid input prevents the whole batch from starting. Start about {{defaultFanout}} items in one call and never more than {{maxFanout}}: past that the parent's context, not the children, becomes the bottleneck, so send the surplus as a deeper subtree. A batch of one names the overlap or dependency that made it one.
+
+## fork.over-budget
+
+WARNING — the scope budget is over the cap. {{offenders}} went past {{maxPoints}} total points, where a working scope holds about {{defaultPoints}}. The work runs; nothing was refused. Do not repeat this: a scope that keeps growing loses the thread it was hired to hold, and the cost lands on the context you read next. Split the next one into fresh subtrees, where the budget is minted and never charged to you.
+
+## fork.over-fanout
+
+WARNING — the fanout is over the cap. You started {{count}} children in one call, where about {{defaultFanout}} start and {{maxFanout}} is the most. Every one of them runs; nothing was refused. Do not repeat this: a parent that opens more fronts than it can join reads none of them well. Group the next plan into a deeper subtree.
 
 ## fork.blocked
 
@@ -81,6 +93,10 @@ Still unreceived: {{remaining}}.
 ## return.tool
 
 Hand the record to the parent; the parent receives it with `scope_join`. Any unreceived child work transfers to that parent, or to the nearest live receiver above it when the parent has already returned. Put your conclusions in your text: the record keeps what you said plus the bare names of the tools you called, so a result you never state is lost. The last receipt at your level is sealed in full.
+
+## return.markdown
+
+Optional text appended verbatim to the end of the record your parent receives. Use it for what the replay drops — a table, a code block, a closing note — and omit it when your text already says everything.
 
 ## return.pending
 

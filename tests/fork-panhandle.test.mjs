@@ -184,13 +184,18 @@ describe("the request has limits and a reason", () => {
 		]);
 	});
 
-	test("over-cap points, over-cap seconds, and a free tool are refused", () => {
+	test("over-cap points land with a warning, over-cap seconds and a free tool are refused", () => {
 		const ledger = createBracketLedger();
-		branch(ledger, { startedAt: Date.now() });
+		const record = branch(ledger, { startedAt: Date.now() });
 		station = stationWith(ledger, "worker");
 
-		expect(call("g1", { tools: { read: 9 }, because: "more" }).details.code)
-			.toBe("PANHANDLE_TOOL_LIMIT");
+		const soft = call("g1", { tools: { read: 10 }, because: "more" });
+		expect(soft.isError).toBeUndefined();
+		expect(soft.details.overLimit).toBe(true);
+		expect(soft.details.pointsRequested).toBe(10);
+		expect(soft.content[0].text).toContain("WARNING");
+		expect(record.budget.read).toBe(10);
+
 		expect(call("g2", { seconds: 301, because: "more" }).details.code)
 			.toBe("PANHANDLE_SECONDS_LIMIT");
 		expect(call("g3", { tools: { scope_context: 1 }, because: "more" }).details.code)

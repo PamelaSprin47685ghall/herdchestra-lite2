@@ -6,11 +6,11 @@ You burned what you were given and now you are on the corner with your hand out.
 
 This is not a funding round. It is a hand held out in public: every handout stays on this scope's record beside the words you used to ask for it, and the parent sees the tally when you return. Ask for the smallest amount that reaches the next checkpoint. A second panhandle for the same shortfall does not prove the work was underfunded; it proves you cannot plan.
 
-At least one of `tools` and `seconds` is required. One call grants at most {{maxPoints}} points per tool and {{maxSeconds}} seconds.
+At least one of `tools` and `seconds` is required. Ask for about {{defaultPoints}} total points across all tools; one call grants at most {{maxPoints}} total points and {{maxSeconds}} seconds. A handout buys the last step, not a scope that was never sized: a scope that needs more than {{maxPoints}} points was one `scope_fork` short several turns ago.
 
 ## panhandle.tools
 
-Tool points to add, mapping tool names to positive integers. A tool that was absent from the fork budget starts at zero on both sides of the account, so the handout shows in the budget line. At most {{maxPoints}} points per tool in one call.
+Tool points to add, mapping tool names to positive integers. A tool that was absent from the fork budget starts at zero on both sides of the account, so the handout shows in the budget line. The points count as one total across every tool: about {{defaultPoints}} by default, at most {{maxPoints}} total in one call.
 
 ## panhandle.seconds
 
@@ -25,3 +25,7 @@ One sentence on what the handout buys. State it in the call; a request without a
 Granted: {{grant}}. You are now at {{budget}}.
 
 You said this was for {{because}}. Spend it there; a second panhandle for the same shortfall is a confession, not a case.
+
+## panhandle.over-limit
+
+WARNING — the handout is over the cap. You asked for {{points}} points, where a handout carries about {{defaultPoints}} and never more than {{maxPoints}}. It was granted; nothing was refused. Do not repeat this: a panhandle buys the last step, and a scope that needs more than {{maxPoints}} points needed a `scope_fork` several turns ago. Fork the remainder now.

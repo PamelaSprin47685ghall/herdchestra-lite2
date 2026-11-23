@@ -71,7 +71,6 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 				{ ownerId: ownerIdOf(station) },
 			);
 		}
-		if (!waitForReady) return first;
 		const waited = await (async () => {
 			// The parent's own clock stops while it waits for a child. Hiring
 			// people does not spend the manager's personal time budget.
@@ -119,10 +118,17 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 export async function returnTicket(station, toolCallId, params, ctx, signal = null, host = {}) {
 	try {
 		const queued = station.executeReturn(toolCallId, params, ctx);
-		if (queued?.details?.awaitingReceipt !== true) return queued;
 		const wait = station.forkWaitPort?.() ?? null;
-		if (!wait || !waitForJoin) return queued;
-		notifyWaiters?.(wait.registry);
+		if (queued?.details?.awaitingReceipt !== true) {
+			// The return changed the ledger even when it answers at once: a
+			// retried id hits ALREADY_READY, and a failed mark still moved the
+			// bracket. Waking here keeps "every ledger write wakes its waiters"
+			// true for this entry point too; a spurious wake costs one loop.
+			if (wait?.registry) notifyWaiters(wait.registry);
+			return queued;
+		}
+		if (!wait) return queued;
+		notifyWaiters(wait.registry);
 		const waited = await (async () => {
 			// The child has finished its work. Waiting for the parent to take
 			// the record is not the child's own time, so its clock stops.

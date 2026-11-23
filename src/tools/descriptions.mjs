@@ -5,9 +5,18 @@
 
 import { loadDoc, render } from "../prompts/index.mjs";
 import {
-	PANHANDLE_MAX_PER_TOOL,
+	PANHANDLE_DEFAULT_POINTS,
+	PANHANDLE_MAX_POINTS,
 	PANHANDLE_MAX_SECONDS,
 } from "../scope/panhandle.mjs";
+import {
+	FORK_DEFAULT_DEPTH,
+	FORK_DEFAULT_FANOUT,
+	FORK_MAX_FANOUT,
+	FORK_RECOMMENDED_DEPTH,
+	SCOPE_DEFAULT_BUDGET_POINTS,
+	SCOPE_MAX_BUDGET_POINTS,
+} from "../scope/budget.mjs";
 
 const notes = loadDoc("tools/notes");
 
@@ -28,25 +37,47 @@ export const PIN_CONCLUSION_DESCRIPTION = notes["pin.conclusion"];
 const forkJoin = loadDoc("tools/fork-join");
 
 export const FORK_DESCRIPTION = forkJoin["fork.tool"];
-export const FORK_INTENT_DESCRIPTION = forkJoin["fork.intent"];
-export const FORK_BUDGET_DESCRIPTION = forkJoin["fork.budget"];
+export const FORK_INTENT_DESCRIPTION = render(forkJoin["fork.intent"], {
+	defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
+	maxPoints: SCOPE_MAX_BUDGET_POINTS,
+	defaultFanout: FORK_DEFAULT_FANOUT,
+	maxFanout: FORK_MAX_FANOUT,
+	defaultDepth: FORK_DEFAULT_DEPTH,
+	recommendedDepth: FORK_RECOMMENDED_DEPTH,
+});
+export const FORK_BUDGET_DESCRIPTION = render(forkJoin["fork.budget"], {
+	defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
+	maxPoints: SCOPE_MAX_BUDGET_POINTS,
+	panhandleDefault: PANHANDLE_DEFAULT_POINTS,
+	panhandleMax: PANHANDLE_MAX_POINTS,
+});
 const FORK_TARGETS_DESCRIPTION = forkJoin["fork.targets"];
 const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
-const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
+const FORK_ITEMS_DESCRIPTION = render(forkJoin["fork.forks"], {
+	defaultFanout: FORK_DEFAULT_FANOUT,
+	maxFanout: FORK_MAX_FANOUT,
+});
 const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
 export const JOIN_DESCRIPTION = forkJoin["join.tool"];
 export const RETURN_DESCRIPTION = forkJoin["return.tool"];
+export const RETURN_MARKDOWN_DESCRIPTION = forkJoin["return.markdown"];
 
 import { SCOPE_ID_PATTERN, MAX_SCOPE_ID_LENGTH } from "../scope/scope-id.mjs";
 
 const panhandle = loadDoc("tools/panhandle");
 
 export const PANHANDLE_DESCRIPTION = render(panhandle["panhandle.tool"], {
-	maxPoints: PANHANDLE_MAX_PER_TOOL,
+	defaultPoints: PANHANDLE_DEFAULT_POINTS,
+	maxPoints: PANHANDLE_MAX_POINTS,
 	maxSeconds: PANHANDLE_MAX_SECONDS,
 });
-export const PANHANDLE_TOOLS_DESCRIPTION = panhandle["panhandle.tools"];
-export const PANHANDLE_SECONDS_DESCRIPTION = panhandle["panhandle.seconds"];
+export const PANHANDLE_TOOLS_DESCRIPTION = render(panhandle["panhandle.tools"], {
+	defaultPoints: PANHANDLE_DEFAULT_POINTS,
+	maxPoints: PANHANDLE_MAX_POINTS,
+});
+export const PANHANDLE_SECONDS_DESCRIPTION = render(panhandle["panhandle.seconds"], {
+	maxSeconds: PANHANDLE_MAX_SECONDS,
+});
 export const PANHANDLE_BECAUSE_DESCRIPTION = panhandle["panhandle.because"];
 
 const forkItem = {
@@ -98,13 +129,17 @@ export const joinParameters = {
 	properties: {},
 };
 
-// scope_return takes no arguments. A returning child does not summarize the
-// parent's elder: the last receipt of its own level has no later sibling to
-// archive it, so it is sealed instead of being reported.
+// `markdown` is optional: the child's text already reaches the parent, so the
+// field exists for what the replay cannot carry — a table, a code block, a
+// deliberate closing note. A returning child does not summarize the parent's
+// elder: the last receipt of its own level has no later sibling to archive it,
+// so it is sealed instead of being reported.
 export const returnParameters = {
 	type: "object",
 	additionalProperties: false,
-	properties: {},
+	properties: {
+		markdown: { type: "string", description: RETURN_MARKDOWN_DESCRIPTION },
+	},
 };
 
 const amendObject = {
@@ -169,10 +204,11 @@ export const panhandleParameters = {
 	properties: {
 		tools: {
 			type: "object",
+			// No `maximum`: an oversized request must reach the handler, which
+			// grants it and rebukes the model. A schema refusal would block work.
 			additionalProperties: {
 				type: "integer",
 				minimum: 1,
-				maximum: PANHANDLE_MAX_PER_TOOL,
 			},
 			description: PANHANDLE_TOOLS_DESCRIPTION,
 		},

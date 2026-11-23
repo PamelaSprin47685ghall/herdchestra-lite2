@@ -7,6 +7,7 @@
 // `projectContext(snapshot, ctx)`:
 //   snapshot = { amends }
 //   ctx      = { original, tree, needsRebase, ports, modelKey, header, firstTurn }
+//              firstTurn = [{ role, content }], the recorded opening exchange
 //
 // Returns:
 //   {
@@ -25,38 +26,71 @@ export function shouldRebase({ needsRebase, tree, outbound } = {}) {
 	return sameTail(tree, outbound);
 }
 
+// The synthetic opening claims no host identity: it is provider-neutral
+// history, so every outbound request converts it the same way regardless of
+// which model answers. A constant timestamp keeps the shared prefix
+// byte-identical, so the provider's prompt cache can reuse it each turn.
+const FIRST_TURN_TIMESTAMP = 1;
+const FIRST_TURN_API = "openai-completions";
+const FIRST_TURN_PROVIDER = "herdchestra";
+const FIRST_TURN_MODEL = "shared-opening";
+
+function firstTurnUsage() {
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+}
+
+/** Keep only parts a message of this role may carry on the wire. */
+function firstTurnContent(role, content) {
+	if (!Array.isArray(content)) return [];
+	if (role !== "assistant") return content.filter((part) => part?.type === "text");
+	return content.filter((part) => part?.type === "text" || part?.type === "thinking");
+}
+
 /**
- * A fixed opening message shared by every outbound request. The timestamp is
- * constant so the provider sees a byte-identical prefix on every call; a
- * clock reading would invalidate the prompt cache each turn.
+ * Make one recorded turn a complete host message.
+ *
+ * A bare `{ role, content }` is not enough: the host treats an assistant
+ * message as real history and reads `api`, `provider`, `model`, `usage`,
+ * `stopReason`, and `timestamp` while preparing the request. A synthetic turn
+ * without them aborts a DeepSeek-compatible child before its first answer.
  */
-export function firstTurnMessage(text) {
+export function firstTurnMessage(message) {
+	if (message?.role === "assistant") {
+		return {
+			role: "assistant",
+			content: firstTurnContent("assistant", message.content),
+			api: FIRST_TURN_API,
+			provider: FIRST_TURN_PROVIDER,
+			model: FIRST_TURN_MODEL,
+			usage: firstTurnUsage(),
+			stopReason: "stop",
+			timestamp: FIRST_TURN_TIMESTAMP,
+			attribution: "assistant",
+		};
+	}
 	return {
 		role: "user",
-		content: [{ type: "text", text }],
-		timestamp: 1,
+		content: firstTurnContent("user", message?.content),
+		timestamp: FIRST_TURN_TIMESTAMP,
 		attribution: "user",
 	};
 }
 
 /**
- * Put the shared first turn before the conversation, after any leading
+ * Put the shared opening block before the conversation, after any leading
  * system/developer preamble. A user message before a system message is
  * invalid on providers that require the system prompt first.
  */
-export function prependFirstTurn(messages, text) {
-	if (typeof text !== "string" || text === "") return messages;
+export function prependFirstTurn(messages, turn) {
+	if (!Array.isArray(turn) || turn.length === 0) return messages;
 	let at = 0;
 	while (at < messages.length) {
 		const role = messages[at]?.role;
 		if (role !== "system" && role !== "developer") break;
 		at += 1;
 	}
-	return [
-		...messages.slice(0, at),
-		firstTurnMessage(text),
-		...messages.slice(at),
-	];
+	const head = turn.map(firstTurnMessage);
+	return [...messages.slice(0, at), ...head, ...messages.slice(at)];
 }
 
 export function projectContext(snapshot = {}, input = {}) {

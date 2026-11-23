@@ -66,8 +66,14 @@ describe("tool contracts map to their documents", () => {
 		const doc = loadDoc("tools/fork-join");
 		const notes = loadDoc("tools/notes");
 		expect(scopeTools.FORK_DESCRIPTION).toBe(doc["fork.tool"]);
-		expect(scopeTools.FORK_INTENT_DESCRIPTION).toBe(doc["fork.intent"]);
-		expect(scopeTools.FORK_BUDGET_DESCRIPTION).toBe(doc["fork.budget"]);
+		// The size caps arrive through render(), so the exported text is the
+		// filled sentence, not the raw template.
+		for (const text of [
+			scopeTools.FORK_INTENT_DESCRIPTION,
+			scopeTools.FORK_BUDGET_DESCRIPTION,
+		]) {
+			expect(text).not.toContain("{{");
+		}
 		expect(scopeTools.FORK_TIME_DESCRIPTION).toBeUndefined();
 		expect(scopeTools.JOIN_DESCRIPTION).toBe(doc["join.tool"]);
 		// join takes no argument: the child record arrives as a digest, so no
@@ -119,8 +125,8 @@ describe("tool contracts map to their documents", () => {
 		const item = scopeTools.forkParameters.properties.forks.items;
 		expect(item.required).toEqual(["scopeId", "blocked", "budget", "targets"]);
 		expect(item.required).not.toContain("intent");
-		expect(item.properties.intent.description).toBe(doc["fork.intent"]);
-		expect(item.properties.budget.description).toBe(doc["fork.budget"]);
+		expect(item.properties.intent.description).toBe(scopeTools.FORK_INTENT_DESCRIPTION);
+		expect(item.properties.budget.description).toBe(scopeTools.FORK_BUDGET_DESCRIPTION);
 		expect(item.properties.time).toBeUndefined();
 		expect(item.properties.targets.description).toBe(doc["fork.targets"]);
 		expect(item.properties).not.toHaveProperty("stage");
@@ -369,5 +375,194 @@ describe("fork item schema", () => {
 			expect(typeof errors[key]).toBe("string");
 			expect(errors[key].length).toBeGreaterThan(0);
 		}
+	});
+});
+
+describe("scope size stays O(1) at every depth", () => {
+	test("no exported description leaks a template placeholder", () => {
+		const leaked = Object.entries(scopeTools)
+			.filter(([, value]) => typeof value === "string" && value.includes("{{"))
+			.map(([name]) => name);
+		expect(leaked).toEqual([]);
+	});
+
+	test("the fork intent asks for a small scope, not sqrt(n)", () => {
+		const intent = scopeTools.FORK_INTENT_DESCRIPTION;
+		expect(intent).not.toContain("sqrt");
+		expect(intent).toMatch(/\b(?:18|eighteen)\b/i);
+		expect(intent).toMatch(/\b(?:27|twenty-seven)\b/i);
+	});
+
+	test("the budget names the panhandle's small total and keeps its funding rule", () => {
+		const budget = scopeTools.FORK_BUDGET_DESCRIPTION;
+		expect(budget).not.toContain("at most 8");
+		// The working scope carries the tripled turn budget.
+		expect(budget).toMatch(/\b(?:18|eighteen)\b/i);
+		expect(budget).toMatch(/\b(?:27|twenty-seven)\b/i);
+		// The panhandle stays a third of the scope.
+		expect(budget).toMatch(/\b(?:6|six)\b/i);
+		expect(budget).toMatch(/\b(?:9|nine)\b/i);
+		expect(budget).toContain("each item funds its own child at any depth");
+		expect(budget).toContain("never charged");
+		expect(budget).toContain("is free at any depth, so it needs no entry either");
+	});
+
+	test("the batch names the fanout floor and cap for one call", () => {
+		const forks = scopeTools.forkParameters.properties.forks;
+		expect(forks.description).toMatch(/\b(?:4|four)\b/i);
+		expect(forks.description).toMatch(/\b(?:6|six)\b/i);
+		// The cap is a rebuke, not a schema gate: over-cap batches still run.
+		expect(forks.maxItems).toBeUndefined();
+		const budget = scopeTools.forkParameters.properties.forks.items.properties.budget;
+		expect(budget.additionalProperties.maximum).toBeUndefined();
+	});
+
+	test("the operating rules carry the floor and the cap at every depth", () => {
+		const text = persistentOperatingSkill;
+		// Scoped to the size sentence so an unrelated "Six project skills"
+		// cannot satisfy the floor.
+		const size = text
+			.split(/(?<=\.)\s+/)
+			.filter((sentence) =>
+				/scope size|per scope|each scope|a scope should|scope should/i.test(sentence),
+			)
+			.join(" ");
+		expect(size.length).toBeGreaterThan(0);
+		expect(size).toMatch(/\b(?:18|eighteen)\b/i);
+		expect(size).toMatch(/\b(?:27|twenty-seven)\b/i);
+		// The panhandle keeps its own sentence and stays a third of the scope.
+		const panhandle = text
+			.split(/(?<=\.)\s+/)
+			.filter((sentence) => /panhandle/i.test(sentence))
+			.join(" ");
+		expect(panhandle.length).toBeGreaterThan(0);
+		expect(panhandle).toMatch(/\b(?:6|six)\b/i);
+		expect(panhandle).toMatch(/\b(?:9|nine)\b/i);
+		// The floor exists to refuse hoarding work and serial retreat.
+		expect(text).toMatch(/hoard(?:ing)?|\bserial\b|hold(?:ing)? work back/i);
+	});
+
+	test("an over-cap batch still runs and earns a rebuke", () => {
+		const fork = loadDoc("tools/fork-join");
+		for (const key of ["fork.over-budget", "fork.over-fanout"]) {
+			expect(typeof fork[key]).toBe("string");
+			expect(fork[key].length).toBeGreaterThan(0);
+			expect(fork[key]).toMatch(/\byou\b|\byour\b/i);
+		}
+	});
+});
+
+describe("panhandle caps render and measure one total", () => {
+	test("the parameter descriptions render their placeholders", () => {
+		for (const text of [
+			scopeTools.PANHANDLE_DESCRIPTION,
+			scopeTools.PANHANDLE_TOOLS_DESCRIPTION,
+			scopeTools.PANHANDLE_SECONDS_DESCRIPTION,
+		]) {
+			expect(text).not.toContain("{{");
+		}
+	});
+
+	test("tools are capped as one total across every tool, so no per-tool maximum", () => {
+		const tools = scopeTools.PANHANDLE_TOOLS_DESCRIPTION;
+		expect(tools).toMatch(/\b(?:6|six)\b/i);
+		expect(tools).toMatch(/\b(?:9|nine)\b/i);
+		expect(tools).toMatch(/total|altogether|combined|in all/i);
+		// The tool description carries the same numbers as its parameters.
+		const description = scopeTools.PANHANDLE_DESCRIPTION;
+		expect(description).not.toContain("{{");
+		expect(description).toMatch(/\b(?:6|six)\b/i);
+		expect(description).toMatch(/\b(?:9|nine)\b/i);
+		const schema = scopeTools.panhandleParameters.properties.tools;
+		expect(schema.description).toBe(tools);
+		expect(schema.additionalProperties.minimum).toBe(1);
+		// A per-tool maximum would contradict the single-total cap.
+		expect(schema.additionalProperties.maximum).toBeUndefined();
+	});
+
+	test("seconds keep their own cap and render it", () => {
+		const seconds = scopeTools.PANHANDLE_SECONDS_DESCRIPTION;
+		expect(seconds).toMatch(/\b(?:300|three hundred)\b/i);
+		const schema = scopeTools.panhandleParameters.properties.seconds;
+		expect(schema.description).toBe(seconds);
+		expect(schema.maximum).toBe(300);
+	});
+
+	test("an oversized panhandle still runs and earns a rebuke", () => {
+		const section = loadDoc("tools/panhandle")["panhandle.over-limit"];
+		expect(typeof section).toBe("string");
+		expect(section.length).toBeGreaterThan(0);
+		expect(section).toMatch(/\byou\b|\byour\b/i);
+	});
+});
+
+describe("tree depth methodology is default and recommended, not a max", () => {
+	// Depth is the one dimension where the default is a target, not a floor:
+	// a small job must not grow a relay layer just to look organized.
+	const noCeiling = /\bmax\b|\bmaximum\b|\bceiling\b/i;
+
+	test("the fork intent states the default depth and the roles that use it", () => {
+		const intent = scopeTools.FORK_INTENT_DESCRIPTION;
+		expect(intent).not.toContain("{{");
+		expect(intent).toMatch(/2/);
+		expect(intent).toMatch(/3/);
+		expect(intent).toMatch(/recommended/i);
+		expect(intent).toMatch(/leaf|subtree/i);
+		// The guidance is advice. Any sentence carrying the depth must read as
+		// a default, never as a hard bound.
+		const depthSentences = intent
+			.split(/(?<=\.)\s+/)
+			.filter((sentence) => /depth|layer|level/i.test(sentence))
+			.join(" ");
+		expect(depthSentences.length).toBeGreaterThan(0);
+		expect(depthSentences).not.toMatch(noCeiling);
+	});
+
+	test("the operating rules size the tree from closures and refuse both fakes", () => {
+		const text = persistentOperatingSkill;
+		expect(text).toMatch(/closure/i);
+		expect(text).toMatch(/relay/i);
+		expect(text).toMatch(/wave/i);
+		expect(text).toMatch(/reason|warrant/i);
+		expect(text).toMatch(/justify|explain/i);
+		// Depth sentences carry 1/2/3 as a recommendation, not as a hard bound.
+		const depthSentences = text
+			.split(/(?<=\.)\s+/)
+			.filter((sentence) => /depth|deeper tree|layer/i.test(sentence))
+			.join(" ");
+		expect(depthSentences.length).toBeGreaterThan(0);
+		expect(depthSentences).not.toMatch(noCeiling);
+		expect(text).toMatch(/\b(?:1|one)\b/i);
+		expect(text).toMatch(/2/);
+		expect(text).toMatch(/3/);
+	});
+
+	test("a deep tree is fine, so the note is context rather than a warning", () => {
+		const section = loadDoc("tools/fork-join")["fork.deep-nesting"];
+		expect(typeof section).toBe("string");
+		expect(section.length).toBeGreaterThan(0);
+		for (const name of [
+			"childDepth",
+			"defaultDepth",
+			"recommendedDepth",
+			"defaultPoints",
+		]) {
+			expect(section).toContain(`{{${name}}}`);
+		}
+		// The closure size is a constant, not a number baked into the prose.
+		expect(section).not.toMatch(/six-point|6-point/i);
+		// It informs. It does not scold, and it never presents itself as a cap.
+		expect(section).not.toMatch(/WARNING/);
+		expect(section).not.toMatch(/do not repeat/i);
+		expect(section).not.toMatch(/\bmax\b/i);
+	});
+
+	test("the child's birth receipt shows its depth against the recommendation", () => {
+		const status = loadDoc("receipts/scope")["fork.child-status"];
+		expect(status.startsWith("{{marker}}")).toBe(true);
+		for (const name of ["depth", "defaultDepth", "recommendedDepth"]) {
+			expect(status).toContain(`{{${name}}}`);
+		}
+		expect(status).not.toMatch(/\bmax\b/i);
 	});
 });

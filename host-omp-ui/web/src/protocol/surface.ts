@@ -26,6 +26,13 @@ function textOf(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+const MAX_TEXT_CHARS = 1_000_000;
+function capText(value: string): string {
+  return value.length > MAX_TEXT_CHARS
+    ? `${value.slice(0, MAX_TEXT_CHARS)}\n… [truncated]`
+    : value;
+}
+
 export function normalizeSurfaceNode(raw: unknown, fallbackId = "node"): SurfaceNode {
   const value = record(raw) ?? {};
   const props = record(value.p) ?? record(value.props) ?? {};
@@ -188,7 +195,7 @@ function applyObjectOp(document: SurfaceDocument, raw: unknown): void {
     const node = findSurfaceNode(document, id);
     if (!node) return;
     const next = typeof op.text === "string" ? op.text : "";
-    node.text = op.mode === "append" ? `${node.text ?? ""}${next}` : next;
+    node.text = capText(op.mode === "append" ? `${node.text ?? ""}${next}` : next);
     return;
   }
   if (name === "splice") {
@@ -210,7 +217,7 @@ function applyObjectOp(document: SurfaceDocument, raw: unknown): void {
     const remove = Math.max(0, Number(op.del ?? op.remove ?? 0));
     const text = typeof op.text === "string" ? op.text : "";
     const current = node.text ?? "";
-    node.text = `${current.slice(0, at)}${text}${current.slice(at + remove)}`;
+    node.text = capText(`${current.slice(0, at)}${text}${current.slice(at + remove)}`);
     return;
   }
   if (name === "move") {
@@ -268,7 +275,7 @@ function applyTupleOp(document: SurfaceDocument, raw: readonly unknown[]): void 
     const remove = Math.max(0, Number(b ?? 0));
     const text = typeof c === "string" ? c : "";
     const current = node.text ?? "";
-    node.text = `${current.slice(0, at)}${text}${current.slice(at + remove)}`;
+    node.text = capText(`${current.slice(0, at)}${text}${current.slice(at + remove)}`);
     return;
   }
   if (name === "move") {

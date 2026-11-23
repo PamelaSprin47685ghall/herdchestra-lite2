@@ -275,6 +275,7 @@ export type LiveSessionState = {
 };
 
 export type WebState = {
+  transcriptSeq: number;
   commands: Record<string, CommandEntry>;
   session: SessionSummary | null;
   liveSession: LiveSessionState;

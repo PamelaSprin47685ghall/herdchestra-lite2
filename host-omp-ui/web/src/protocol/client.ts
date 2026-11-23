@@ -84,10 +84,19 @@ export function createBridgeClient(): BridgeClient {
 
   const emit = (frame?: unknown) => {
     if (frame !== undefined) {
-      if (isRecord(frame) && frame.type === "snapshot") latestSnapshot = frame;
-      if (listeners.size === 0) {
+      if (isRecord(frame) && frame.type === "snapshot") {
+        latestSnapshot = frame;
+        if (listeners.size === 0) pending = [frame];
+      } else if (listeners.size === 0) {
         pending.push(frame);
-        if (pending.length > 200) pending = pending.slice(-200);
+        if (pending.length > 200) {
+          const snapshotIndex = pending.findIndex(
+            (item) => isRecord(item) && item.type === "snapshot",
+          );
+          pending = snapshotIndex >= 0
+            ? [pending[snapshotIndex], ...pending.slice(snapshotIndex + 1).slice(-199)]
+            : pending.slice(-200);
+        }
       }
     }
     for (const listener of listeners) listener(frame, state);

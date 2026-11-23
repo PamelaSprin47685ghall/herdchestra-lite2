@@ -80,7 +80,11 @@ export function computeLineDiff(oldText, newText) {
 }
 
 function artifactFor(path, content, language) {
-  return { path, content, language };
+  const text = typeof content === "string" ? content : "";
+  const limit = 128 * 1024;
+  return text.length <= limit
+    ? { path, content: text, language }
+    : { path, content: `${text.slice(0, limit)}\n… [truncated]`, language, truncated: true };
 }
 
 export function describeToolCall(toolCall, toolResult) {

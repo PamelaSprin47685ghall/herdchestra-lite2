@@ -63,7 +63,7 @@ export async function createManagerServer({ preferredPort = 37421, token, static
   const generation = ++client.generation;
   client.historyRequests?.clear();
   client.selected = instanceId;
-  const barrier = { generation, requestId, frames: [], timer: null, previousId: previous?.instanceId };
+  const barrier = { generation, requestId, frames: [], bytes: 0, timer: null, previousId: previous?.instanceId };
   const restore = () => {
    const fallback = agents.get(barrier.previousId);
    if (fallback && fallback.instanceId !== instanceId) select(client, fallback.instanceId);
@@ -209,14 +209,19 @@ export async function createManagerServer({ preferredPort = 37421, token, static
         if (frame.frame.type === "snapshot") { agent.snapshot = frame.frame; if (frame.frame.session) agent.session = frame.frame.session; publish(); }
         for (const client of browsers.values()) if (client.selected === agent.instanceId) {
          if (!client.barrier) send(client.ws, frame.frame);
-         else if (client.barrier.frames.length < 4096) client.barrier.frames.push({ revision: frame.revision, frame: frame.frame });
          else {
-          const barrier = client.barrier;
-          clearTimeout(barrier.timer);
-          result(client.ws, barrier.requestId, false, "snapshot_overflow");
-          client.barrier = null;
-          send(agent.ws, { type: "manager.client_disconnected", clientId: client.id });
-          barrier.restore();
+          const bytes = JSON.stringify(frame.frame).length;
+          if (client.barrier.frames.length < 4096 && client.barrier.bytes + bytes <= 16 * 1024 * 1024) {
+           client.barrier.frames.push({ revision: frame.revision, frame: frame.frame });
+           client.barrier.bytes += bytes;
+          } else {
+           const barrier = client.barrier;
+           clearTimeout(barrier.timer);
+           result(client.ws, barrier.requestId, false, "snapshot_overflow");
+           client.barrier = null;
+           send(agent.ws, { type: "manager.client_disconnected", clientId: client.id });
+           barrier.restore();
+          }
          }
         }
        } else if (frame.type === "agent.client_frame") {
@@ -227,8 +232,18 @@ export async function createManagerServer({ preferredPort = 37421, token, static
          if (!barrier || frame.generation !== barrier.generation) return;
          clearTimeout(barrier.timer); client.barrier = null;
          send(client.ws, frame.frame);
+         const snapshotSeq = typeof frame.frame?.seq === "number"
+          ? frame.frame.seq
+          : typeof frame.frame?.payload?.seq === "number"
+            ? frame.frame.payload.seq
+            : null;
          for (const pendingFrame of barrier.frames) {
-          if (typeof frame.revision !== "number" || typeof pendingFrame.revision !== "number" || pendingFrame.revision > frame.revision) send(client.ws, pendingFrame.frame);
+          const pendingSeq = typeof pendingFrame.frame?.seq === "number" ? pendingFrame.frame.seq : null;
+          if (snapshotSeq !== null && pendingSeq !== null) {
+           if (pendingSeq > snapshotSeq) send(client.ws, pendingFrame.frame);
+          } else if (typeof frame.revision !== "number" || typeof pendingFrame.revision !== "number" || pendingFrame.revision > frame.revision) {
+           send(client.ws, pendingFrame.frame);
+          }
          }
          result(client.ws, barrier.requestId, true);
         } else if (!client.barrier) {

@@ -20,8 +20,139 @@ import { extractArtifacts } from "./domain/tool-artistry.mjs";
 import { applyTspOpsToDocument, createEmptyDocument } from "./domain/surface-fence.mjs";
 import { parseClientCommand } from "./domain/protocol-codec.mjs";
 
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
+const MAX_SNAPSHOT_CHARS = 8 * 1024 * 1024;
+const MAX_MESSAGE_CHARS = 128 * 1024;
+const MAX_TOOL_CHARS = 128 * 1024;
+const MAX_ARGS_CHARS = 64 * 1024;
+const MAX_ARTIFACT_CHARS = 128 * 1024;
+const MAX_HISTORY_LIMIT = 200;
+
+function cappedText(value, limit) {
+  if (typeof value !== "string" || value.length <= limit) return { text: value, truncated: false };
+  return { text: `${value.slice(0, limit)}\n… [truncated]`, truncated: true };
+}
+
+function capValue(value, limit) {
+  if (typeof value === "string") return cappedText(value, limit).text;
+  if (Array.isArray(value)) return value.map((item) => capValue(item, limit));
+  if (value && typeof value === "object") {
+    const next = {};
+    for (const [key, item] of Object.entries(value)) next[key] = capValue(item, limit);
+    return next;
+  }
+  return value;
+}
+
+function capBlock(block) {
+  if (!block || typeof block !== "object") return block;
+  const next = { ...block };
+  if (typeof next.text === "string") {
+    const capped = cappedText(next.text, MAX_MESSAGE_CHARS);
+    next.text = capped.text;
+    if (capped.truncated) next.truncated = true;
+  }
+  if (Array.isArray(next.result)) next.result = next.result.map(capBlock);
+  if (typeof next.resultText === "string") next.resultText = capValue(next.resultText, MAX_TOOL_CHARS);
+  if (next.args && typeof next.args === "object") {
+    const args = JSON.stringify(next.args);
+    if (args.length > MAX_ARGS_CHARS) {
+      next.args = { truncated: true, preview: args.slice(0, MAX_ARGS_CHARS) };
+      next.truncated = true;
+    }
+  }
+  return next;
+}
+
+function capMessage(message) {
+  if (!message || typeof message !== "object") return message;
+  const next = { ...message };
+  if (Array.isArray(next.blocks)) next.blocks = next.blocks.map(capBlock);
+  for (const key of ["text", "output", "content", "summary", "command"]) {
+    if (typeof next[key] === "string") {
+      const capped = cappedText(next[key], MAX_MESSAGE_CHARS);
+      next[key] = capped.text;
+      if (capped.truncated) next.truncated = true;
+    }
+  }
+  if (Array.isArray(next.result)) next.result = next.result.map(capBlock);
+  return next;
+}
+
+function capTool(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  const next = { ...entry };
+  for (const key of ["result", "partialResult"]) {
+    if (typeof next[key] === "string") {
+      const capped = cappedText(next[key], MAX_TOOL_CHARS);
+      next[key] = capped.text;
+      if (capped.truncated) next.truncated = true;
+    } else if (next[key] && typeof next[key] === "object") {
+      next[key] = capValue(next[key], MAX_TOOL_CHARS);
+    }
+  }
+  if (next.args && typeof next.args === "object") {
+    const args = JSON.stringify(next.args);
+    if (args.length > MAX_ARGS_CHARS) {
+      next.args = { truncated: true, preview: args.slice(0, MAX_ARGS_CHARS) };
+      next.truncated = true;
+    }
+  }
+  return next;
+}
+
+function capArtifact(artifact) {
+  if (!artifact || typeof artifact !== "object") return artifact;
+  const next = { ...artifact };
+  if (typeof next.content === "string") {
+    const capped = cappedText(next.content, MAX_ARTIFACT_CHARS);
+    next.content = capped.text;
+    if (capped.truncated) next.truncated = true;
+  }
+  return next;
+}
+
+function sizeOf(value) {
+  if (typeof value === "string") return value.length;
+  if (Array.isArray(value)) return value.reduce((total, item) => total + sizeOf(item), 0);
+  if (value && typeof value === "object") return Object.values(value).reduce((total, item) => total + sizeOf(item), 0);
+  return 0;
+}
+
+function fitSnapshot(doc) {
+  const requestedHasMore = doc.history?.hasMore === true;
+  const initialMessageCount = doc.messages.length;
+  let messageLimit = doc.messages.length;
+  let toolLimit = Object.keys(doc.toolExecutions).length;
+  let artifactLimit = doc.artifacts.length;
+  while (
+    sizeOf(doc) > MAX_SNAPSHOT_CHARS &&
+    (messageLimit > 1 || toolLimit > 1 || artifactLimit > 1)
+  ) {
+    messageLimit = Math.max(1, Math.floor(messageLimit / 2));
+    toolLimit = Math.max(1, Math.floor(toolLimit / 2));
+    artifactLimit = Math.max(1, Math.floor(artifactLimit / 2));
+    doc.messages = doc.messages.slice(-messageLimit);
+    doc.toolExecutions = Object.fromEntries(Object.entries(doc.toolExecutions).slice(-toolLimit));
+    doc.artifacts = doc.artifacts.slice(-artifactLimit);
+  }
+  if (sizeOf(doc) > MAX_SNAPSHOT_CHARS) {
+    doc.surface = capValue(doc.surface, MAX_MESSAGE_CHARS);
+    doc.sessions = Array.isArray(doc.sessions) ? doc.sessions.slice(-50) : doc.sessions;
+    doc.widgets = Array.isArray(doc.widgets)
+      ? doc.widgets.slice(-50).map((widget) => ({
+          ...widget,
+          lines: Array.isArray(widget.lines)
+            ? widget.lines.slice(-50).map((line) => capValue(line, MAX_MESSAGE_CHARS))
+            : widget.lines,
+        }))
+      : doc.widgets;
+  }
+  doc.displayGroups = groupTranscriptForDisplay(doc.messages);
+  doc.history = {
+    hasMore: requestedHasMore || doc.messages.length < initialMessageCount,
+    oldestId: doc.messages[0]?.id ?? null,
+  };
+  return doc;
 }
 
 // A page must not start in the middle of a turn. When the first message is not
@@ -73,9 +204,10 @@ export function createDeltaMerger(dispatch, schedule = (run) => setTimeout(run, 
       pending.payload.blockIndex === payload.blockIndex
     ) {
       pending.payload.delta += payload.delta ?? "";
+      if (typeof frame.seq === "number") pending.seq = Math.max(pending.seq ?? 0, frame.seq);
     } else {
       flush();
-      pending = { type: "transcript.delta", payload: { ...payload } };
+      pending = { type: "transcript.delta", seq: frame.seq, payload: { ...payload } };
     }
     if (!scheduled) {
       scheduled = true;
@@ -108,12 +240,15 @@ function wireDelta(event, next) {
         payload: {
           kind: update.type,
           messageId: next.streaming?.id ?? event.message?.id,
-          blockIndex: Math.max(0, (next.streaming?.blocks?.length ?? 1) - 1),
+          blockIndex: next.blockIndex ?? 0,
           delta: update.delta ?? "",
         },
       };
     }
     if (update.type === "toolcall_start" || update.type === "toolcall_delta" || update.type === "toolcall_end") {
+      const block = update.type === "toolcall_end"
+        ? next.streaming?.blocks?.find((item) => item.type === "toolCall" && item.id === update.toolCallId)
+        : null;
       return {
         type: "transcript.delta",
         payload: {
@@ -121,6 +256,8 @@ function wireDelta(event, next) {
           messageId: next.streaming?.id ?? event.message?.id,
           toolCallId: update.toolCallId,
           toolName: update.toolName,
+          argsText: update.argumentsDelta ?? "",
+          args: block?.args,
           delta: update.argumentsDelta ?? "",
         },
       };
@@ -197,47 +334,75 @@ export function createUiBridgeStation(options) {
   }
 
   function snapshot(limit = 80) {
-    const size = Number.isInteger(limit) && limit > 0 ? limit : 80;
+    const size = Math.min(Number.isInteger(limit) && limit > 0 ? limit : 80, 64);
     const rawStart = Math.max(0, state.messages.length - size);
     const start = alignToTurnStart(state.messages, rawStart);
-    const messages = state.messages.slice(start);
-    return clone({
-      session: state.session,
+    const messages = state.messages.slice(start).slice(-64).map(capMessage);
+    const tools = Object.values(state.toolExecutions).slice(-32).map(capTool);
+    const doc = {
+      seq: state.seq ?? 0,
+      session: { ...state.session },
       messages,
       displayGroups: groupTranscriptForDisplay(messages),
-      history: {
-        hasMore: start > 0,
-        oldestId: messages[0]?.id ?? null,
+      history: { hasMore: start > 0 || state.messages.length > 64, oldestId: messages[0]?.id ?? null },
+      artifacts: state.artifacts.slice(-16).map(capArtifact),
+      todos: Array.isArray(state.todos) ? state.todos.map((todo) => ({ ...todo })) : state.todos,
+      usage: state.usage
+        ? {
+            ...state.usage,
+            tokens: state.usage.tokens ? { ...state.usage.tokens } : state.usage.tokens,
+            cost: state.usage.cost ? { ...state.usage.cost } : state.usage.cost,
+          }
+        : state.usage,
+      meta: { ...state.meta },
+      draft: {
+        ...state.draft,
+        images: Array.isArray(state.draft?.images) ? [...state.draft.images] : state.draft?.images,
+        texts: Array.isArray(state.draft?.texts) ? [...state.draft.texts] : state.draft?.texts,
+        composer: state.draft?.composer && typeof state.draft.composer === "object"
+          ? { ...state.draft.composer }
+          : state.draft?.composer,
       },
-      artifacts: state.artifacts,
-      todos: state.todos,
-      usage: state.usage,
-      meta: state.meta,
-      draft: state.draft,
-      completion: state.completion,
+      completion: {
+        ...state.completion,
+        items: Array.isArray(state.completion?.items)
+          ? state.completion.items.map((item) => ({ ...item }))
+          : state.completion?.items,
+      },
       pendingInteractions: pendingInteractions(),
-      widgets: Object.entries(state.widgets).map(([key, lines]) => ({ key, lines })),
-      surface: state.surface,
-      toasts: state.toasts,
+      widgets: Object.entries(state.widgets).map(([key, lines]) => ({
+        key,
+        lines: Array.isArray(lines) ? [...lines] : lines,
+      })),
+      surface: state.surface ? { ...state.surface } : state.surface,
+      toasts: Array.isArray(state.toasts) ? state.toasts.map((toast) => ({ ...toast })) : state.toasts,
       streaming: Boolean(state.meta.busy),
-      models: state.models,
+      models: Array.isArray(state.models) ? [...state.models] : state.models,
       thinkingLevel: state.meta.thinkingLevel,
       thinkingLevels: state.meta.thinkingLevels,
       modes: state.meta.modes,
-      sessions: state.sessions,
-      queue: state.queue,
+      sessions: Array.isArray(state.sessions) ? state.sessions.map((session) => ({ ...session })) : state.sessions,
+      queue: {
+        steering: Array.isArray(state.queue?.steering) ? [...state.queue.steering] : state.queue?.steering,
+        followUp: Array.isArray(state.queue?.followUp) ? [...state.queue.followUp] : state.queue?.followUp,
+      },
       activeArtifactId: state.activeArtifactId,
-      fence: state.meta.fence,
-      fenceStatus: state.fenceStatus,
-      toolExecutions: state.toolExecutions,
-    });
+      fence: state.meta.fence && typeof state.meta.fence === "object"
+        ? { ...state.meta.fence }
+        : state.meta.fence,
+      fenceStatus: state.fenceStatus && typeof state.fenceStatus === "object"
+        ? { ...state.fenceStatus }
+        : state.fenceStatus,
+      toolExecutions: Object.fromEntries(tools.map((entry) => [entry.toolCallId, entry])),
+    };
+    return fitSnapshot(doc);
   }
 
   const station = {
     snapshot,
 
     historyPage(input) {
-      const limit = Number(input?.limit);
+      const limit = Math.min(Number(input?.limit), MAX_HISTORY_LIMIT);
       if (!Number.isInteger(limit) || limit <= 0) {
         return { ok: false, code: "invalid_limit" };
       }
@@ -246,10 +411,10 @@ export function createUiBridgeStation(options) {
       if (index < 0) return { ok: false, code: "stale_cursor" };
       const rawStart = Math.max(0, index - limit);
       const start = alignToTurnStart(state.messages, rawStart);
-      const messages = state.messages.slice(start, index);
+      const messages = state.messages.slice(start, index).map(capMessage);
       return {
         ok: true,
-        messages: clone(messages),
+        messages,
         history: {
           hasMore: start > 0,
           oldestId: messages[0]?.id ?? null,
@@ -408,7 +573,7 @@ export function createUiBridgeStation(options) {
           toolResult: message.role === "toolResult" ? message : undefined,
         })),
       );
-      dispatch({ type: "snapshot", payload: snapshot() });
+      dispatch({ type: "snapshot", seq: state.seq ?? 0, payload: snapshot() });
       return { ok: true };
     },
 
@@ -426,7 +591,7 @@ export function createUiBridgeStation(options) {
       state.streaming = null;
       state.toolExecutions = {};
       state.queue = { steering: [], followUp: [] };
-      dispatch({ type: "session.switched", payload: { snapshot: snapshot() } });
+      dispatch({ type: "session.switched", seq: state.seq ?? 0, payload: { snapshot: snapshot() } });
       return { ok: true };
     },
 
@@ -450,13 +615,20 @@ export function createUiBridgeStation(options) {
       state.messages = next.messages;
       state.streaming = next.streaming;
       state.toolExecutions = next.toolExecutions;
+      if (Object.keys(state.toolExecutions).length > 256) {
+        state.toolExecutions = Object.fromEntries(Object.entries(state.toolExecutions).slice(-256));
+      }
       state.displayGroups = groupTranscriptForDisplay(state.messages);
       state.meta = { ...state.meta, busy: event?.type !== "agent_end" };
       const delta = wireDelta(event, next);
-      if (delta) deltaMergerFor(dispatch).push(delta);
+      if (delta) {
+        state.seq = (state.seq ?? 0) + 1;
+        delta.seq = state.seq;
+        deltaMergerFor(dispatch).push(delta);
+      }
       if (event?.type === "message_end" || event?.type === "agent_end") {
         deltaMergerFor(dispatch).flush();
-        dispatch({ type: "snapshot", payload: snapshot() });
+        dispatch({ type: "snapshot", seq: state.seq ?? 0, payload: snapshot() });
       }
       return { ok: true };
     },

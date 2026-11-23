@@ -37,6 +37,7 @@ import { asNumber, asString, isRecord } from "./guards";
 
 export function createInitialWebState(): WebState {
   return {
+    transcriptSeq: 0,
     commands: {},
     session: null,
     liveSession: { messages: [], session: null },
@@ -788,6 +789,13 @@ function ensureAssistant(
   return created;
 }
 
+const MAX_BLOCK_CHARS = 1_000_000;
+function capBlockText(value: string): string {
+  return value.length > MAX_BLOCK_CHARS
+    ? `${value.slice(0, MAX_BLOCK_CHARS)}\n… [truncated]`
+    : value;
+}
+
 function appendTextBlock(
   message: UiMessage,
   index: number,
@@ -797,7 +805,7 @@ function appendTextBlock(
   message.blocks ??= [];
   const current = message.blocks[index];
   if (current && current.type === type) {
-    current.text += delta;
+    current.text = capBlockText(current.text + delta);
     return;
   }
   // A reconciler may reuse blockIndex after finishing a tool call. Appending
@@ -885,6 +893,13 @@ function updateBlockResult(
 }
 
 function applyDelta(state: WebState, frame: ServerFrame): WebState {
+  const seq = asNumber(frame.seq);
+  if (seq !== undefined && seq <= state.transcriptSeq) return state;
+  const next = applyDeltaInner(state, frame);
+  return seq !== undefined ? { ...next, transcriptSeq: Math.max(next.transcriptSeq, seq) } : next;
+}
+
+function applyDeltaInner(state: WebState, frame: ServerFrame): WebState {
   const deltaKind =
     asString(frame.kind) ||
     (frame.type === "transcript.delta" ? "" : frame.type);
@@ -974,6 +989,14 @@ function applyDelta(state: WebState, frame: ServerFrame): WebState {
       const name = asString(frame.toolName ?? frame.name, "tool");
       const previous = tools[id];
       const argsDelta = asString(frame.delta ?? frame.argsDelta);
+      const joinedArgs =
+        deltaKind === "toolcall_delta"
+          ? `${previous?.argsText ?? ""}${argsDelta}`
+          : previous?.argsText;
+      const argsText =
+        joinedArgs && joinedArgs.length > 64 * 1024
+          ? `${joinedArgs.slice(0, 64 * 1024)}\n… [truncated]`
+          : joinedArgs;
       const next: ToolExecution = {
         ...(previous ?? {
           id,
@@ -985,22 +1008,21 @@ function applyDelta(state: WebState, frame: ServerFrame): WebState {
         id,
         name: name === "tool" && previous?.name ? previous.name : name,
         status: "running",
-        argsText:
-          deltaKind === "toolcall_delta"
-            ? `${previous?.argsText ?? ""}${argsDelta}`
-            : previous?.argsText,
+        argsText: deltaKind === "toolcall_end" ? undefined : argsText,
         args:
           deltaKind === "toolcall_end"
             ? frame.args ?? previous?.args
             : previous?.args ?? frame.args,
         messageId: messageId || previous?.messageId,
       };
-      const rawArgs = next.argsText ?? "";
-      if (rawArgs) {
-        try {
-          next.args = JSON.parse(rawArgs);
-        } catch {
-          // Partial JSON is expected while the call streams.
+      if (deltaKind === "toolcall_end" && next.args === undefined) {
+        const rawArgs = argsText ?? "";
+        if (rawArgs) {
+          try {
+            next.args = JSON.parse(rawArgs);
+          } catch {
+            // The streamed arguments may be incomplete or truncated.
+          }
         }
       }
       tools[id] = next;
@@ -1129,6 +1151,16 @@ function normalizeSurfaceForSnapshot(raw: unknown): SurfaceDocument {
  * ------------------------------------------------------------------ */
 
 export function reduceWebState(state: WebState, rawFrame: ServerFrame): WebState {
+  const frame = normalizeFrame(rawFrame);
+  const next = reduceWebStateInner(state, frame);
+  if (frame.type === "snapshot") {
+    const seq = asNumber(frame.seq);
+    if (seq !== undefined) return { ...next, transcriptSeq: seq };
+  }
+  return next;
+}
+
+function reduceWebStateInner(state: WebState, rawFrame: ServerFrame): WebState {
   const frame = normalizeFrame(rawFrame);
   const activeId = state.liveSession.session?.id;
   if (frame.type !== "session.select" && typeof frame.sessionId === "string" && activeId && frame.sessionId !== activeId) return state;
@@ -1405,6 +1437,15 @@ export function reduceWebState(state: WebState, rawFrame: ServerFrame): WebState
     }
 
     case "surface.frame": {
+      const nextSf = typeof frame.sf === "string" ? frame.sf : state.surface.sf;
+      const nextS = asNumber(frame.s);
+      if (
+        nextS !== undefined &&
+        (nextSf ?? null) === (state.surface.sf ?? null) &&
+        nextS <= (state.surface.seq ?? 0)
+      ) {
+        return state;
+      }
       const ops = Array.isArray(frame.ops)
         ? frame.ops
         : isRecord(frame.surface) && Array.isArray(frame.surface.ops)

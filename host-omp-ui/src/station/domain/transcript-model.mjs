@@ -11,6 +11,44 @@ function textOf(content) {
     .join("");
 }
 
+const MAX_STORED_TEXT = 128 * 1024;
+const MAX_ARGS_TEXT = 64 * 1024;
+
+function capStoredText(value, limit = MAX_STORED_TEXT) {
+  if (typeof value !== "string" || value.length <= limit) return value;
+  return `${value.slice(0, limit)}\n… [truncated]`;
+}
+
+function capStoredValue(value, limit = MAX_STORED_TEXT) {
+  if (typeof value === "string") return capStoredText(value, limit);
+  if (Array.isArray(value)) return value.map((item) => capStoredValue(item, limit));
+  if (value && typeof value === "object") {
+    const next = {};
+    for (const [key, item] of Object.entries(value)) next[key] = capStoredValue(item, limit);
+    return next;
+  }
+  return value;
+}
+
+function capMessageTexts(message) {
+  if (!message || typeof message !== "object") return message;
+  if (Array.isArray(message.blocks)) {
+    for (const block of message.blocks) {
+      if (typeof block?.text === "string") {
+        const capped = capStoredText(block.text);
+        if (capped !== block.text) {
+          block.text = capped;
+          block.truncated = true;
+        }
+      }
+    }
+  }
+  for (const key of ["text", "output", "content", "summary"]) {
+    if (typeof message[key] === "string") message[key] = capStoredText(message[key]);
+  }
+  return message;
+}
+
 function blocksOf(content) {
   if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
   if (!Array.isArray(content)) return [];
@@ -153,11 +191,29 @@ export function reconstructTranscriptFromEntries(entries) {
 
 function upsertBlock(blocks, type, text) {
   const last = blocks[blocks.length - 1];
+  const delta = String(text ?? "");
   if (last && last.type === type) {
-    last.text += text;
-    return;
+    const current = typeof last.text === "string" ? last.text : "";
+    const room = Math.max(0, MAX_STORED_TEXT - current.length);
+    if (room === 0) {
+      last.truncated = true;
+      return blocks.length - 1;
+    }
+    if (delta.length > room) {
+      last.text = `${current}${delta.slice(0, room)}\n… [truncated]`;
+      last.truncated = true;
+    } else {
+      last.text = `${current}${delta}`;
+    }
+    return blocks.length - 1;
   }
-  blocks.push({ type, text });
+  const truncated = delta.length > MAX_STORED_TEXT;
+  blocks.push({
+    type,
+    text: truncated ? `${delta.slice(0, MAX_STORED_TEXT)}\n… [truncated]` : delta,
+    ...(truncated ? { truncated: true } : {}),
+  });
+  return blocks.length - 1;
 }
 
 export function applyAgentEvent(state, event) {
@@ -194,9 +250,9 @@ export function applyAgentEvent(state, event) {
     const update = event.assistantMessageEvent;
     if (!update) return next;
     if (update.type === "thinking_delta") {
-      upsertBlock(next.streaming.blocks, "thinking", update.delta ?? "");
+      next.blockIndex = upsertBlock(next.streaming.blocks, "thinking", update.delta ?? "");
     } else if (update.type === "text_delta") {
-      upsertBlock(next.streaming.blocks, "text", update.delta ?? "");
+      next.blockIndex = upsertBlock(next.streaming.blocks, "text", update.delta ?? "");
     } else if (update.type === "toolcall_start") {
       next.streaming.blocks.push({
         type: "toolCall",
@@ -205,25 +261,37 @@ export function applyAgentEvent(state, event) {
         args: {},
         argsText: "",
       });
+      next.blockIndex = next.streaming.blocks.length - 1;
     } else if (update.type === "toolcall_delta") {
-      const block = next.streaming.blocks.find(
+      const index = next.streaming.blocks.findIndex(
         (item) => item.type === "toolCall" && item.id === update.toolCallId,
       );
+      const block = next.streaming.blocks[index];
       if (block) {
-        block.argsText = (block.argsText ?? "") + (update.argumentsDelta ?? "");
-        try {
-          block.args = JSON.parse(block.argsText);
-        } catch {
-          // A partial JSON fragment is expected while the call streams.
-        }
+        const current = typeof block.argsText === "string" ? block.argsText : "";
+        const room = Math.max(0, MAX_ARGS_TEXT - current.length);
+        const raw = String(update.argumentsDelta ?? "");
+        if (room > 0) block.argsText = current + raw.slice(0, room);
+        if (raw.length > room) block.truncated = true;
+        next.blockIndex = index;
       }
     } else if (update.type === "toolcall_end") {
-      const block = next.streaming.blocks.find(
+      const index = next.streaming.blocks.findIndex(
         (item) => item.type === "toolCall" && item.id === update.toolCallId,
       );
+      const block = next.streaming.blocks[index];
       if (block) {
-        block.args = update.arguments ?? block.args ?? {};
+        if (update.arguments !== undefined) block.args = update.arguments;
+        else if (block.argsText) {
+          try {
+            block.args = JSON.parse(block.argsText);
+          } catch {
+            block.args = block.args ?? {};
+          }
+        }
+        block.args = capStoredValue(block.args ?? {}, MAX_ARGS_TEXT);
         delete block.argsText;
+        next.blockIndex = index;
       }
     }
     return next;
@@ -237,6 +305,7 @@ export function applyAgentEvent(state, event) {
         ? { ...next.streaming, attribution: raw?.attribution ?? next.streaming.attribution ?? null }
         : next.streaming;
     if (finalized) {
+      capMessageTexts(finalized);
       const index = finalized.id == null ? -1 : next.messages.findIndex((message) => message.id === finalized.id);
       if (index < 0) next.messages.push(finalized);
       else next.messages[index] = finalized;
@@ -256,21 +325,21 @@ export function applyAgentEvent(state, event) {
       next.toolExecutions[id] = {
         ...current,
         toolName: event.toolName,
-        args: event.args,
+        args: capStoredValue(event.args, MAX_ARGS_TEXT),
         status: "running",
       };
     } else if (event.type === "tool_execution_update") {
       next.toolExecutions[id] = {
         ...current,
         toolName: event.toolName,
-        partialResult: event.partialResult,
+        partialResult: capStoredValue(event.partialResult, MAX_STORED_TEXT),
         status: "running",
       };
     } else {
       next.toolExecutions[id] = {
         ...current,
         toolName: event.toolName,
-        result: event.result,
+        result: capStoredValue(event.result, MAX_STORED_TEXT),
         isError: Boolean(event.isError),
         status: "completed",
       };

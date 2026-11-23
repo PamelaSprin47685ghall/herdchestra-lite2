@@ -1,0 +1,12 @@
+{
+  "name": "herdchestra-host-omp-ui",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": { ".": "./src/main.mjs", "./package.json": "./package.json" },
+  "omp": { "extensions": ["./src/main.mjs"] },
+  "pi": { "extensions": ["./src/main.mjs"] },
+  "files": ["src/", "web/dist/", "assets/"],
+  "engines": { "bun": ">=1.4.4" },
+  "scripts": { "build:web": "bun web/scripts/build.mjs" }
+}

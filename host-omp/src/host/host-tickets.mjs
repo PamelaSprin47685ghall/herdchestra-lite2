@@ -40,7 +40,7 @@ function safeSession(ctx) {
 export async function sendSteerTicket(pi, text) {
 	if (!text) return;
 	try {
-		await pi?.sendUserMessage?.(text, { deliverAs: "steer" });
+		await pi?.sendUserMessage?.(text, { deliverAs: "steer", attribution: "agent" });
 	} catch (error) {
 		// Steer delivery stays best-effort: it never escapes as an unhandled
 		// rejection. But a nudge the model never receives looks exactly like an
@@ -56,7 +56,7 @@ export async function sendSteerTicket(pi, text) {
 export async function sendUserMessageTicket(pi, text) {
 	if (!text) return;
 	try {
-		await pi?.sendUserMessage?.(text);
+		await pi?.sendUserMessage?.(text, { attribution: "agent" });
 	} catch (error) {
 		// A host that rejects the message must not leak an unhandled rejection,
 		// but `/herd-autopilot <text>` promises the user one turn: losing that message in

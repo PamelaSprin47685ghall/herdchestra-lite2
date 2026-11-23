@@ -68,6 +68,23 @@ describe("delivery tickets", () => {
 		expect(records).toHaveLength(1);
 		expect(records[0].detail).toEqual({ kind: "prompt", chars: 12 });
 	});
+
+	test("extension-delivered messages are attributed to the agent", async () => {
+		const calls = [];
+		const pi = {
+			sendUserMessage: async (text, options) => {
+				calls.push({ text, options });
+			},
+		};
+
+		await sendSteerTicket(pi, "keep going");
+		await sendUserMessageTicket(pi, "do the thing");
+
+		expect(calls).toEqual([
+			{ text: "keep going", options: { deliverAs: "steer", attribution: "agent" } },
+			{ text: "do the thing", options: { attribution: "agent" } },
+		]);
+	});
 });
 
 describe("status branch usage", () => {

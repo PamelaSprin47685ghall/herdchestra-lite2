@@ -1,5 +1,15 @@
 import { Button } from "@herd/deer-flow-ui/ui/button";
 
+const SPECIAL: Record<string, string> = {
+  Escape: "\u001b", Enter: "\r",
+  Backspace: "\u007f", Delete: "\u001b[3~", ArrowUp: "\u001b[A",
+  ArrowDown: "\u001b[B", ArrowRight: "\u001b[C", ArrowLeft: "\u001b[D",
+  Home: "\u001b[H", End: "\u001b[F", PageUp: "\u001b[5~", PageDown: "\u001b[6~",
+};
+const ARROWS: Record<string, string> = { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D", Home: "H", End: "F" };
+const TILDE: Record<string, number> = { Insert: 2, Delete: 3, PageUp: 5, PageDown: 6, F5: 15, F6: 17, F7: 18, F8: 19, F9: 20, F10: 21, F11: 23, F12: 24 };
+const FKEYS: Record<string, string> = { F1: "P", F2: "Q", F3: "R", F4: "S" };
+
 export const KEYS: Array<{ label: string; data: string; title: string }> = [
   { label: "Esc", data: "\u001b", title: "Escape" },
   { label: "Tab", data: "\t", title: "Tab" },
@@ -48,20 +58,11 @@ export function KeyPassthrough({ onKeys }: { onKeys: (data: string) => void }) {
             // Ctrl+C is a terminal interrupt; paste is handled by onPaste.
             if (!event.ctrlKey || event.key.toLowerCase() !== "c") return;
           }
-          const special: Record<string, string> = {
-            Escape: "\u001b", Enter: "\r", Tab: event.shiftKey ? "\u001b[Z" : "\t",
-            Backspace: "\u007f", Delete: "\u001b[3~", ArrowUp: "\u001b[A",
-            ArrowDown: "\u001b[B", ArrowRight: "\u001b[C", ArrowLeft: "\u001b[D",
-            Home: "\u001b[H", End: "\u001b[F", PageUp: "\u001b[5~", PageDown: "\u001b[6~",
-          };
-          let data = special[event.key];
+          let data = event.key === "Tab" ? (event.shiftKey ? "\u001b[Z" : "\t") : SPECIAL[event.key];
           const modifier = 1 + (event.shiftKey ? 1 : 0) + (event.altKey ? 2 : 0) + (event.ctrlKey ? 4 : 0);
-          const arrows: Record<string, string> = { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D", Home: "H", End: "F" };
-          const tilde: Record<string, number> = { Insert: 2, Delete: 3, PageUp: 5, PageDown: 6, F5: 15, F6: 17, F7: 18, F8: 19, F9: 20, F10: 21, F11: 23, F12: 24 };
-          const fkeys: Record<string, string> = { F1: "P", F2: "Q", F3: "R", F4: "S" };
-          if (arrows[event.key] && modifier > 1) data = `\u001b[1;${modifier}${arrows[event.key]}`;
-          else if (tilde[event.key]) data = `\u001b[${tilde[event.key]}${modifier > 1 ? `;${modifier}` : ""}~`;
-          else if (fkeys[event.key]) data = modifier > 1 ? `\u001b[1;${modifier}${fkeys[event.key]}` : `\u001bO${fkeys[event.key]}`;
+          if (ARROWS[event.key] && modifier > 1) data = `\u001b[1;${modifier}${ARROWS[event.key]}`;
+          else if (TILDE[event.key]) data = `\u001b[${TILDE[event.key]}${modifier > 1 ? `;${modifier}` : ""}~`;
+          else if (FKEYS[event.key]) data = modifier > 1 ? `\u001b[1;${modifier}${FKEYS[event.key]}` : `\u001bO${FKEYS[event.key]}`;
           if (!data && event.ctrlKey && /^[a-z]$/i.test(event.key)) {
             data = String.fromCharCode(event.key.toUpperCase().charCodeAt(0) - 64);
           } else if (!data && !event.ctrlKey && event.key.length === 1) {
@@ -69,7 +70,7 @@ export function KeyPassthrough({ onKeys }: { onKeys: (data: string) => void }) {
           }
           if (!data) return;
           event.preventDefault();
-          const encodedModifier = modifier > 1 && Boolean(arrows[event.key] || tilde[event.key] || fkeys[event.key]);
+          const encodedModifier = modifier > 1 && Boolean(ARROWS[event.key] || TILDE[event.key] || FKEYS[event.key]);
           onKeys(event.altKey && !encodedModifier ? `\u001b${data}` : data);
         }}
       />

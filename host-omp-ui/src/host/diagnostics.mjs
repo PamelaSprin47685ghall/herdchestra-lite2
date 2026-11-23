@@ -1,12 +1,10 @@
-// Bounded in-process diagnostics ring. This runs inside omp's extension host,
-// where one uncaught throw tears down the whole session; every caller records
-// and degrades instead of rethrowing.
-const MAX_ENTRIES = 100;
-const entries = [];
+// Diagnostics sink. This runs inside omp's extension host, where one uncaught
+// throw tears down the whole session; every caller records and degrades instead
+// of rethrowing.
 let sequence = 0;
 
 export function record(domain, error, context) {
-	const entry = {
+	return {
 		seq: ++sequence,
 		ts: Date.now(),
 		domain,
@@ -14,9 +12,6 @@ export function record(domain, error, context) {
 		stack: error instanceof Error ? error.stack : undefined,
 		context,
 	};
-	entries.push(entry);
-	if (entries.length > MAX_ENTRIES) entries.shift();
-	return entry;
 }
 
 

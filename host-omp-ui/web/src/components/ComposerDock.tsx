@@ -21,19 +21,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@herd/deer-flow-ui/ui/tooltip";
-import { selectModeStatus, selectModelKey } from "../protocol/store";
 import { ModelControlsBar } from "./composer/model-controls";
 import { CompletionMenu, QueueChips } from "./composer/overlays";
 import type { CompletionState, DraftState, ModelRef, WebState } from "../protocol/types";
 import type { InstanceCapabilities } from "../lib/instance-capabilities";
+import { resolveComposerSubmit } from "../lib/composer-action";
 
 export type SubmitMode = "default" | "steer" | "followUp";
-
-export type { ComposerAction } from "../lib/composer-action";
-import {
-  resolveComposerSubmit,
-  type ComposerAction,
-} from "../lib/composer-action";
 
 type ComposerProps = {
   draft: DraftState;
@@ -189,8 +183,6 @@ function ComposerForm({
     }
   };
 
-  const plan = selectModeStatus(modes, "plan");
-  const vibe = selectModeStatus(modes, "vibe");
   const levels =
     thinkingLevel && !thinkingLevels.includes(thinkingLevel)
       ? [thinkingLevel, ...thinkingLevels]

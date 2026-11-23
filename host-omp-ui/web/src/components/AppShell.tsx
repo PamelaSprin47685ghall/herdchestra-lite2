@@ -101,9 +101,6 @@ export function AppShell() {
   const openingRef = useRef<{ id: string; previousId: string | null; previousInstanceId?: string; requestId?: string } | null>(null);
   const lastToast = useRef<{ key: string; at: number } | null>(null);
   const socketHydrated = useRef(false);
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const artifactsRef = useRef<WebState["artifacts"]>([]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");

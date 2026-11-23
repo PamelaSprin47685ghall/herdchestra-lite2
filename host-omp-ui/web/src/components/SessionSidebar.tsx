@@ -64,13 +64,6 @@ function dirLabel(cwd: string | null | undefined): string {
   return parts[parts.length - 1] ?? cwd;
 }
 
-function shortModel(model: { provider?: string; id?: string; name?: string } | null | undefined): string {
-  if (!model) return "";
-  const raw = model.name || model.id || "";
-  const tail = raw.split("/").filter(Boolean).pop() ?? raw;
-  return tail.replace(/^claude-/, "").slice(0, 18);
-}
-
 function modelTone(label: string): string {
   const key = label.toLowerCase();
   if (key.includes("claude") || key.includes("sonnet") || key.includes("opus")) return "border-violet-500/25 bg-violet-500/10 text-[#010102] dark:text-[#914cfd]";
@@ -85,7 +78,6 @@ export function SessionSidebarContent({
   onOpen,
   onRefresh,
   onNew,
-  onSwitch,
   onClose,
   refreshing,
   catalogStale,
@@ -97,7 +89,6 @@ export function SessionSidebarContent({
   startingInstances?: { instanceId: string; title?: string | null; cwd?: string | null }[];
   onOpen: (id: string) => void;
   onNew?: () => void;
-  onSwitch?: (id: string) => void;
   onRefresh?: () => void;
   onClose?: () => void;
   refreshing?: boolean;
@@ -283,7 +274,6 @@ export function SessionSidebar(props: {
   startingInstances?: { instanceId: string; title?: string | null; cwd?: string | null }[];
   onOpen: (id: string) => void;
   onNew?: () => void;
-  onSwitch?: (id: string) => void;
   onRefresh?: () => void;
   refreshing?: boolean;
   catalogStale?: boolean;
@@ -307,7 +297,6 @@ export function SessionSidebarSheet({
   startingInstances?: { instanceId: string; title?: string | null; cwd?: string | null }[];
   onOpen: (id: string) => void;
   onNew?: () => void;
-  onSwitch?: (id: string) => void;
   onRefresh?: () => void;
   refreshing?: boolean;
   catalogStale?: boolean;
@@ -328,7 +317,6 @@ export function SessionSidebarSheet({
           onRefresh={props.onRefresh}
           onClose={() => onOpenChange(false)}
           onNew={props.onNew}
-          onSwitch={props.onSwitch}
           refreshing={props.refreshing}
           catalogStale={props.catalogStale}
           liveIds={props.liveIds}

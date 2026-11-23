@@ -1001,7 +1001,7 @@ export class SessionStation {
 		return recordLedgerEvaluation(this, phases, op, options);
 	}
 
-	/** A natural stop is an empty-ledger submission; this records it as one. */
+	/** A natural stop is a small handoff: it transfers the holder, not the count. */
 	recordNaturalStop(ctx) {
 		return recordNaturalStop(this, ctx);
 	}

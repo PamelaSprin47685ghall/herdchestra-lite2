@@ -100,8 +100,9 @@ export function decideHandoffAdvance({
 }
 
 /**
- * A natural stop is a submission: a non-empty ledger retires, an empty one
- * evaluates. Children, manual stops, and already-ending relays have no plan.
+ * A natural stop is a small handoff: transfer the holder and the record, never
+ * count an empty evaluation. Children, manual stops, already-ending relays, and
+ * relays that still owe a child take no action.
  */
 export function decideNaturalStop({
 	relay,
@@ -111,17 +112,12 @@ export function decideNaturalStop({
 	unreceived = 0,
 } = {}) {
 	if (!owesLedger || !autopilot || isChild) return null;
-	// No natural-stop submission may count before every child is received.
-	// The equivalent empty ledger is withheld for the same reason: the root
-	// still owes a take, and the child parked in scope_return cannot move
+	// No natural-stop transfer may start before every child is received. The
+	// root still owes a take, and the child parked in scope_return cannot move
 	// until that take happens. The join nudge owns this turn instead.
 	if (unreceived > 0) return null;
 	if (!relay || relay.handoffPending || relay.canStop) return null;
-	const beforeFirstEvaluation =
-		relay.generation > 0 && relay.firstEvaluation === null;
-	const retired =
-		!beforeFirstEvaluation && relay.lastLedger?.empty === false;
-	return { kind: retired ? "retire" : "evaluate" };
+	return { kind: "retire" };
 }
 
 /** Clear the inherited-ledger requirement once the successor has looked. */

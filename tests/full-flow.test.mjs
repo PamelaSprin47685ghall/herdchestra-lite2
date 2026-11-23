@@ -16,7 +16,7 @@ function write(relay, phases, op = "init") {
 	return applyLedgerEvaluation(relay, phases, { op, at: 1 });
 }
 
-describe("retirement hands the ledger to a successor", () => {
+describe("a natural stop is a small handoff", () => {
 	test("a retirement keeps the ledger and never promotes", () => {
 		const retired = applyRetirement(write(createRelay(), WORK).relay);
 		expect(retired.action).toBe("retire");
@@ -26,25 +26,47 @@ describe("retirement hands the ledger to a successor", () => {
 		expect(retired.relay.lastLedger.open).toBe(1);
 	});
 
-	test("the successor of a retirement must empty twice before it may stop", () => {
-		const retired = applyRetirement(write(createRelay(), WORK).relay);
-		const carried = {
-			...retired.relay,
-			generation: 1,
-			handoffPending: false,
-			firstEvaluation: null,
-		};
-		// The stop is an empty evaluation, but the inherited ledger is not empty,
-		// so it hands off again instead of ending the chain.
-		const first = applyNaturalStop(carried, { at: 2 });
+	test("a stop before any empty write leaves two empty writes to finish", () => {
+		const stopped = applyNaturalStop(createRelay());
+		expect(stopped.action).toBe("retire");
+		expect(stopped.relay.handoffPending).toBe(true);
+		expect(stopped.relay.firstEvaluation).toBe(null);
+		expect(stopped.relay.canStop).toBe(false);
+		expect(stopped.relay.lastLedger).toBe(null);
+
+		const successor = beginGenerationAfterHandoff(stopped.relay, { at: 2 });
+		const first = write(successor, EMPTY);
 		expect(first.action).toBe("handoff");
-		expect(first.relay.canStop).toBe(false);
-		const second = applyNaturalStop(
-			{ ...first.relay, generation: 2, handoffPending: false, firstEvaluation: null },
-			{ at: 3 },
-		);
+
+		const next = beginGenerationAfterHandoff(first.relay, { at: 3 });
+		const second = write(next, EMPTY);
 		expect(second.action).toBe("promoted");
 		expect(second.relay.canStop).toBe(true);
+	});
+
+	test("a stop after an empty write keeps the count and the successor promotes", () => {
+		const armed = write(createRelay(), EMPTY).relay;
+		const successor = beginGenerationAfterHandoff(armed, { at: 2 });
+		const stopped = applyNaturalStop(successor);
+		expect(stopped.action).toBe("retire");
+		expect(stopped.relay.firstEvaluation).toBe(null);
+		expect(stopped.relay.canStop).toBe(false);
+		expect(stopped.relay.lastLedger.empty).toBe(true);
+
+		const next = beginGenerationAfterHandoff(stopped.relay, { at: 3 });
+		const promoted = write(next, EMPTY);
+		expect(promoted.action).toBe("promoted");
+	});
+
+	test("a stop with open work keeps the ledger and never writes an evaluation", () => {
+		const opened = write(createRelay(), WORK).relay;
+		const stopped = applyNaturalStop(opened);
+		expect(stopped.action).toBe("retire");
+		expect(stopped.relay.firstEvaluation).toBe("nonempty");
+		expect(stopped.relay.canStop).toBe(false);
+		expect(stopped.relay.handoffPending).toBe(true);
+		expect(stopped.relay.viewRequired).toBe(true);
+		expect(stopped.relay.lastLedger.open).toBe(1);
 	});
 });
 

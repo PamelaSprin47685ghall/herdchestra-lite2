@@ -6,6 +6,10 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — a natural stop is a small handoff
+
+- A natural stop now transfers the holder without counting as an empty evaluation. Only `todo` writes advance the two-empty-ledger protocol; a stop that leaves no ledger on record no longer lets one empty write end the chain. `applyNaturalStop` uses the retirement shape, `decideNaturalStop` always returns the small-handoff plan, the successor views an inherited ledger only when it holds open work, and the relay receipt, scope receipt, autopilot rules, README, and tests follow the new contract.
+
 ### Changed — zero-semantic cleanup
 
 - Station: extract `amendmentLine`, delete the dead `commitJoin`, remove the

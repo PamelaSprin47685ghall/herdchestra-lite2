@@ -48,7 +48,7 @@ Write the handoff report after receiving those results.
 
 ## receipt.simple-outside
 
-No ledger. Stopping counts as an empty evaluation; use `todo` to record remaining work.
+No ledger. A stop hands off without advancing the relay; use `todo` to record remaining work.
 
 ## receipt.view-required
 

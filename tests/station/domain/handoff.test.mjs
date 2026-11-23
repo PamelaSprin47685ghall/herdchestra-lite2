@@ -96,8 +96,13 @@ describe("decideRetirement", () => {
 		expect(decideRetirement({ relay: relay(), owesLedger: false })).toBeNull();
 	});
 
-	test("a non-empty ledger retires", () => {
-		const result = decideRetirement({ relay: relay(), owesLedger: true });
+	test("a non-empty ledger retires and requires the view", () => {
+		const result = decideRetirement({
+			relay: relay({
+				lastLedger: { empty: false, open: 1, total: 1, at: 1 },
+			}),
+			owesLedger: true,
+		});
 		expect(result.action).toBe("retire");
 		expect(result.changed).toBe(true);
 		expect(result.relay.handoffPending).toBe(true);
@@ -212,17 +217,17 @@ describe("decideNaturalStop", () => {
 		).toBeNull();
 	});
 
-	test("generation 0 and a fresh successor evaluate", () => {
+	test("generation 0 and a fresh successor take the small handoff", () => {
 		expect(
 			decideNaturalStop({ relay: relay(), owesLedger: true, autopilot: true }),
-		).toEqual({ kind: "evaluate" });
+		).toEqual({ kind: "retire" });
 		const successor = beginGenerationAfterHandoff(relay(), {
 			at: 1,
 			fromGeneration: 0,
 		});
 		expect(
 			decideNaturalStop({ relay: successor, owesLedger: true, autopilot: true }),
-		).toEqual({ kind: "evaluate" });
+		).toEqual({ kind: "retire" });
 	});
 
 	test("an unreceived child withholds every natural-stop submission", () => {

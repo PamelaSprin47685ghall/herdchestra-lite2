@@ -150,8 +150,10 @@ describe("the natural-stop transition", () => {
 
 		const applied = recordNaturalStop(station, {});
 
-		expect(applied?.action).toBe("handoff");
+		expect(applied?.action).toBe("retire");
 		expect(station.state.relay.handoffPending).toBe(true);
+		expect(station.state.relay.firstEvaluation).toBe(null);
+		expect(station.state.relay.canStop).toBe(false);
 		expect(delivered).toHaveLength(1);
 	});
 });

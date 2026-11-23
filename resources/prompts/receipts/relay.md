@@ -100,15 +100,15 @@ Flow: {{flow}}.
 
 ## next.simple
 
-A natural stop counts as an empty evaluation. Submit a todo ledger only if the task needs one.
+A natural stop hands off without advancing the relay. Submit a todo ledger only if the task needs one.
 
 ## stop-rule
 
-Only two consecutive empty evaluations end the relay: the one that starts the handoff and the successor's first. Stopping without open work counts as empty.
+Only two empty evaluations end the relay: the one that starts the handoff and the successor's first. A natural stop is never one of them; it hands off without advancing the count.
 
 ## next.retire
 
-The successor inherits the open ledger. Write the handoff report now; do not call tools.
+The successor inherits the ledger on record. Write the handoff report now; do not call tools.
 
 ## inherited-ledger
 

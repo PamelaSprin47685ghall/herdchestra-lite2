@@ -93,11 +93,12 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 	const lastLedger = { ...stats, at };
 	const first = current.firstEvaluation === null;
 	// Ending takes two empty evaluations: the one that armed this handoff, and
-	// this generation's first. A handoff armed by a retirement carries the
-	// non-empty ledger forward, so the stop it allows is another retirement, not
-	// an end. A session with no ledger at all has nothing outstanding, so it
-	// reads as empty here.
-	const incomingEmpty = current.lastLedger === null || current.lastLedger.empty === true;
+	// this generation's first. Only a ledger an earlier holder actually wrote
+	// can arm that first step. A generation with no ledger on record inherited
+	// no empty evaluation: a natural stop leaves the record untouched, so a
+	// successor after a stop must still submit two empty writes of its own.
+	const incomingEmpty =
+		current.lastLedger !== null && current.lastLedger.empty === true;
 	if (stats.empty) {
 		// The successor's FIRST empty evaluation ends the chain and returns the
 		// session to simple mode. A later empty write by that promoted holder is
@@ -162,19 +163,19 @@ export function applyLedgerEvaluation(relay, phases, options = {}) {
 }
 
 /**
- * A natural stop outside every scope is an empty-ledger submission, not a
- * violation. It runs the same transition as `todo({ list: [] })`, so ending a
- * session still takes two empty evaluations: the stop that arms the handoff,
- * and the successor's first evaluation.
+ * A natural stop outside every scope is a small handoff: it transfers the
+ * holder and the ledger on record, but it is not an empty evaluation. It never
+ * arms the two-empty-ledger count and never promotes; only `todo` writes
+ * advance the relay.
  */
-export function applyNaturalStop(relay, options = {}) {
-	return applyLedgerEvaluation(relay, [], { ...options, op: "natural-stop" });
+export function applyNaturalStop(relay) {
+	return applyRetirement(relay);
 }
 
 /**
- * A stop with a non-empty ledger is a retirement, not a violation: the holder
- * is exhausted, the ledger stays on record, and the next generation continues
- * the work. A retirement is not an empty evaluation, so it never promotes.
+ * A small handoff: the holder is exhausted, the ledger stays on record, and
+ * the next generation continues. It is not an empty evaluation, so it never
+ * promotes. The successor must read the ledger only when it holds open work.
  */
 export function applyRetirement(relay) {
 	const current = copyRelay(relay);
@@ -183,7 +184,12 @@ export function applyRetirement(relay) {
 		return { relay: current, stats, action: null, changed: false };
 	}
 	return {
-		relay: { ...current, handoffPending: true, fullFlow: true, viewRequired: true },
+		relay: {
+			...current,
+			handoffPending: true,
+			fullFlow: true,
+			viewRequired: current.viewRequired || current.lastLedger?.empty === false,
+		},
 		stats,
 		action: "retire",
 		changed: true,

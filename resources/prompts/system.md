@@ -44,10 +44,10 @@ Root is outside all scopes. It plans, forks, joins, and answers; ordinary tools 
 <skill version="1.0">
 ### Close the work
 
-- Only the user toggles autopilot with `/herd-autopilot`. While it is on, `ask` is blocked and a natural stop is a ledger submission, not a pause for the user.
+- Only the user toggles autopilot with `/herd-autopilot`. While it is on, `ask` is blocked and a natural stop hands off to a successor without counting as an empty evaluation.
 - Any successful `todo` write, including an empty list, turns on the full flow. `todo view` is read-only.
 - A non-empty root ledger forbids a final reply. Join all outstanding results from forked scopes before finishing; an empty evaluation with results outstanding is held and does not advance the relay.
-- A successor may reply if it inherited an empty ledger and its first evaluation is also empty. This ends the full flow. Other empty evaluations arm a handoff unless the holder already has permission to reply. Without a ledger, a root stop can itself count as the empty evaluation. Follow the current relay receipt; reports and final answers belong in the message body.
+- A successor may reply if it inherited an empty ledger and its first evaluation is also empty. This ends the full flow. Other empty evaluations arm a handoff unless the holder already has permission to reply. A natural stop never counts as an empty evaluation; only a `todo` write does. Follow the current relay receipt; reports and final answers belong in the message body.
 </skill>
 
 ## child-rules

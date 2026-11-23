@@ -108,7 +108,11 @@ describe("applyLedgerEvaluation", () => {
 	});
 
 	test("generation 1 first empty ledger promotes and allows a stop", () => {
-		let relay = beginGenerationAfterHandoff(createRelay(), {
+		const armed = applyLedgerEvaluation(createRelay(), [], {
+			op: "init",
+			at: 1,
+		}).relay;
+		let relay = beginGenerationAfterHandoff(armed, {
 			at: 1,
 			fromGeneration: 0,
 		});
@@ -144,8 +148,12 @@ describe("applyLedgerEvaluation", () => {
 	});
 
 	test("a promoted successor that reports open work loses canStop", () => {
+		const armed = applyLedgerEvaluation(createRelay(), [], {
+			op: "init",
+			at: 1,
+		}).relay;
 		const promoted = applyLedgerEvaluation(
-			beginGenerationAfterHandoff(createRelay(), { at: 1, fromGeneration: 0 }),
+			beginGenerationAfterHandoff(armed, { at: 1, fromGeneration: 0 }),
 			[],
 			{ op: "init", at: 2 },
 		);
@@ -208,7 +216,11 @@ describe("handoff transitions", () => {
 	});
 
 	test("invalidatePromotion is a no-op before promotion so successor audit scopes never block promotion", () => {
-		const relay = beginGenerationAfterHandoff(createRelay(), { at: 42, fromGeneration: 0 });
+		const armed = applyLedgerEvaluation(createRelay(), [], {
+			op: "init",
+			at: 41,
+		}).relay;
+		const relay = beginGenerationAfterHandoff(armed, { at: 42, fromGeneration: 0 });
 		const afterAuditScope = invalidatePromotion(relay);
 		expect(afterAuditScope.promotionInvalidated).toBe(false);
 		const evaluated = applyLedgerEvaluation(afterAuditScope, [], { op: "init", at: 43 });
@@ -238,8 +250,12 @@ describe("relay text", () => {
 	const doc = loadDoc("receipts/relay");
 
 	test("status names the generation, first evaluation, ledger, and next step", () => {
+		const armed = applyLedgerEvaluation(createRelay(), [], {
+			op: "init",
+			at: 1,
+		}).relay;
 		const promoted = applyLedgerEvaluation(
-			beginGenerationAfterHandoff(createRelay(), { at: 1, fromGeneration: 0 }),
+			beginGenerationAfterHandoff(armed, { at: 1, fromGeneration: 0 }),
 			[],
 			{ op: "init", at: 2 },
 		);

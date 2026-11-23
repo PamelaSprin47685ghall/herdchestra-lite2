@@ -1,8 +1,9 @@
 // Relay state: creation, copying, and validation. Pure data. No I/O.
 //
-// The invariant: a natural stop is legal only after an empty ledger triggers a
-// self-handoff and the successor's FIRST todo evaluation is also empty. Every
-// other outside-scope stop must produce a nudge.
+// The invariant: a natural stop is a small handoff. It transfers the holder
+// and the record but never counts as an empty evaluation; only empty todo
+// writes advance the two-empty-ledger protocol, and ending a chain takes two
+// of them across generations.
 
 const FIRST_EVALUATIONS = new Set(["empty", "nonempty"]);
 

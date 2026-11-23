@@ -98,9 +98,9 @@ function recordLedgerEvaluation(station, phases, op, options = {}) {
 }
 
 /**
- * Record one retirement: the holder is exhausted, the non-empty ledger is
- * inherited, and the next generation continues the work. A retirement never
- * promotes; it only arms the handoff.
+ * Record one small handoff: the holder is exhausted, the ledger on record is
+ * inherited, and the next generation continues the work. It never promotes;
+ * it only arms the handoff.
  */
 function recordRetirement(station) {
 	// `none` owes nothing, so a retirement must not arm a handoff either.
@@ -117,12 +117,11 @@ function recordRetirement(station) {
 /**
  * Record one natural stop outside every scope.
  *
- * A stop is a submission, never a violation. With a non-empty ledger it is a
- * retirement: the holder is exhausted, the ledger is inherited, and the next
- * generation continues the work. Otherwise it is the empty evaluation the same
- * holder would have submitted with `todo({ list: [] })`. Either way the
- * transition decides, and a handoff it arms sends the one demand as a user
- * prompt.
+ * A stop is a small handoff, never a submission. It transfers the holder and
+ * the ledger on record, but it counts no empty evaluation: only a `todo` write
+ * advances the two-empty-ledger protocol. A non-empty inherited ledger still
+ * requires the successor to view it before writing. The transition decides,
+ * and a handoff it arms sends the one demand as a user prompt.
  */
 function recordNaturalStop(station, ctx) {
 	const plan = decideNaturalStop({
@@ -133,10 +132,7 @@ function recordNaturalStop(station, ctx) {
 		unreceived: unreceivedRootChildren(station),
 	});
 	if (!plan) return null;
-	const applied =
-		plan.kind === "retire"
-			? recordRetirement(station)
-			: recordLedgerEvaluation(station, [], "natural-stop");
+	const applied = recordRetirement(station);
 	if (!applied || applied.action === null) return applied;
 	if (applied.action !== "handoff" && applied.action !== "retire") return applied;
 	if (!armHandoff(station, ctx)) return applied;

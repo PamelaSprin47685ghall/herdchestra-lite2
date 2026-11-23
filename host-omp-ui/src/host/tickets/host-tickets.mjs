@@ -63,6 +63,47 @@ function availableEffortLevels(ctx) {
 	}
 }
 
+const decodeText = (bytes) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+
+// Validate and decode the browser attachment envelope before any host call.
+// Same discriminated codes, same order, as the inline loop it replaces.
+function decodeAttachments(attachments) {
+	if (!Array.isArray(attachments) || attachments.length > 10) return { ok: false, code: "invalid_attachments" };
+	let total = 0;
+	const decoded = [];
+	for (let item of attachments) {
+		if (!item || typeof item.name !== "string" || typeof item.mimeType !== "string" || typeof item.data !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.data)) return { ok: false, code: "invalid_attachment" };
+		const bytes = Buffer.from(item.data, "base64");
+		total += bytes.length;
+		if (bytes.length > 5 * 1024 * 1024 || total > 10 * 1024 * 1024) return { ok: false, code: "attachment_too_large" };
+		if (["application/json", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript"].includes(item.mimeType)) item = { ...item, mimeType: "text/plain" };
+		if (!/^image\/(?:png|jpeg|gif|webp)$/.test(item.mimeType) && !item.mimeType.startsWith("text/")) return { ok: false, code: "unsupported_attachment" };
+		if (item.mimeType.startsWith("image/")) {
+			const matches = item.mimeType === "image/png" ? bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : item.mimeType === "image/jpeg" ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 : item.mimeType === "image/gif" ? /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString("ascii")) : bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
+			if (!matches) return { ok: false, code: "invalid_attachment_type" };
+		} else {
+			decodeText(bytes);
+		}
+		decoded.push({ ...item, bytes });
+	}
+	return { ok: true, decoded };
+}
+
+// `extra` carries the host's current model/thinking reading; the effort
+// selectors are appended once, and mirrored at the top level for the web
+// receipt. Key order is part of the wire shape: extra, then thinkingLevels.
+function reportExtras(ctx, extra) {
+	const levels = availableEffortLevels(ctx);
+	const reported = {
+		...extra,
+		...(levels !== undefined ? { thinkingLevels: levels } : {}),
+	};
+	return {
+		...(Object.keys(reported).length ? { reported } : {}),
+		...(levels !== undefined ? { thinkingLevels: levels } : {}),
+	};
+}
+
 export function createHostTickets({
 	adapter,
 	pi,
@@ -113,28 +154,13 @@ export function createHostTickets({
 		async submitComposerTicket({ text, mode, attachments = [] } = {}) {
 			try {
 				let content = typeof text === "string" ? text : String(text ?? "");
-				if (!Array.isArray(attachments) || attachments.length > 10) return { ok: false, code: "invalid_attachments" };
-				let total = 0;
-				const decoded = [];
-				for (let item of attachments) {
-					if (!item || typeof item.name !== "string" || typeof item.mimeType !== "string" || typeof item.data !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.data)) return { ok: false, code: "invalid_attachment" };
-					const bytes = Buffer.from(item.data, "base64");
-					total += bytes.length;
-					if (bytes.length > 5 * 1024 * 1024 || total > 10 * 1024 * 1024) return { ok: false, code: "attachment_too_large" };
-					if (["application/json", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript"].includes(item.mimeType)) item = { ...item, mimeType: "text/plain" };
-					if (!/^image\/(?:png|jpeg|gif|webp)$/.test(item.mimeType) && !item.mimeType.startsWith("text/")) return { ok: false, code: "unsupported_attachment" };
-					if (item.mimeType.startsWith("image/")) {
-						const matches = item.mimeType === "image/png" ? bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : item.mimeType === "image/jpeg" ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 : item.mimeType === "image/gif" ? /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString("ascii")) : bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
-						if (!matches) return { ok: false, code: "invalid_attachment_type" };
-					} else {
-						new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-					}
-					decoded.push({ ...item, bytes });
-				}
+				const checked = decodeAttachments(attachments);
+				if (!checked.ok) return checked;
+				const decoded = checked.decoded;
 				if (mode === "steer" || mode === "followUp") {
 					if (typeof pi?.sendUserMessage !== "function") return { ok: false, code: "unsupported" };
 					if (decoded.length) {
-						const textParts = [content, ...decoded.filter((item) => item.mimeType.startsWith("text/")).map((item) => new TextDecoder("utf-8", { fatal: true }).decode(item.bytes))].filter(Boolean);
+						const textParts = [content, ...decoded.filter((item) => item.mimeType.startsWith("text/")).map((item) => decodeText(item.bytes))].filter(Boolean);
 						const blocks = [...(textParts.length ? [{ type: "text", text: textParts.join("\n\n") }] : []), ...decoded.filter((item) => item.mimeType.startsWith("image/")).map((item) => ({ type: "image", mimeType: item.mimeType, data: item.data }))];
 						await pi.sendUserMessage(blocks, { deliverAs: mode });
 					} else await pi.sendUserMessage(content, { deliverAs: mode });
@@ -156,7 +182,7 @@ export function createHostTickets({
 							editor.pendingImages.push({ type: "image", mimeType: item.mimeType, data: item.data });
 							editor.pendingImageLinks.push(undefined);
 							editor.insertText(`[Image #${editor.pendingImages.length}]`);
-						} else editor.insertTextAttachment(new TextDecoder("utf-8", { fatal: true }).decode(item.bytes));
+						} else editor.insertTextAttachment(decodeText(item.bytes));
 					}
 					if (typeof editor.getText === "function") content = editor.getText();
 					if (typeof editor.submitRemote === "function") editor.submitRemote(content);
@@ -243,16 +269,10 @@ export function createHostTickets({
 				// ctx.model is a live getter in the extension context; the model query
 				// fallback supports hosts exposing current() instead.
 				const current = ctx?.model ?? ctx?.models?.current?.();
-				const levels = availableEffortLevels(ctx);
-				const reported = {
-					...(current ? { model: current } : {}),
-					...(levels !== undefined ? { thinkingLevels: levels } : {}),
-				};
 				return {
 					ok: true,
 					value: model,
-					...(Object.keys(reported).length ? { reported } : {}),
-					...(levels !== undefined ? { thinkingLevels: levels } : {}),
+					...reportExtras(ctx, current ? { model: current } : {}),
 				};
 			} catch (error) {
 				return fail("set-model", error);
@@ -264,15 +284,9 @@ export function createHostTickets({
 				if (!THINKING_LEVELS.has(level)) return { ok: false, code: "invalid_level" };
 				pi.setThinkingLevel(level);
 				const current = pi?.getThinkingLevel?.();
-				const levels = availableEffortLevels(ctx);
-				const reported = {
-					...(current !== undefined ? { thinkingLevel: current } : {}),
-					...(levels !== undefined ? { thinkingLevels: levels } : {}),
-				};
 				return {
 					ok: true,
-					...(Object.keys(reported).length ? { reported } : {}),
-					...(levels !== undefined ? { thinkingLevels: levels } : {}),
+					...reportExtras(ctx, current !== undefined ? { thinkingLevel: current } : {}),
 				};
 			} catch (error) {
 				return fail("set-thinking", error);

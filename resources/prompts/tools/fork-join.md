@@ -12,7 +12,7 @@ Write the child's contract as Dafny-style pseudo-code. A scope that only reads s
 
 ## fork.profession
 
-Required identity statement for the child scope's LLM. Start with "You are " and name the famous it should behave as, for example "You are a famous artist like Van Gogh. " The spawner injects it as the child's identity prefix, directly under the receipt marker and before the task; make it a role, not a restatement of the `dafny_pseudo_code`. Reusing a running or blocked scope updates the record for its next generation, but cannot rewrite the receipt already delivered to the live child.
+Required identity statement for the child scope's LLM. Start with "You are " and name the famous person it should emulate, for example "You are a famous artist like Van Gogh. " The spawner injects it as the child's identity prefix, directly under the receipt marker and before the task; make it a role, not a restatement of the `dafny_pseudo_code`. Reusing a running or blocked scope updates the record for its next generation, but cannot rewrite the receipt already delivered to the live child.
 
 ## fork.deep-nesting
 

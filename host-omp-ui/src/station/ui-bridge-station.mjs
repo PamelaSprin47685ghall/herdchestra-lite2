@@ -23,6 +23,16 @@ import { normalizeMetaPatch } from "./domain/meta-normalize.mjs";
 import { applyTspOpsToDocument, createEmptyDocument } from "./domain/surface-fence.mjs";
 import { parseClientCommand } from "./domain/protocol-codec.mjs";
 
+const clonePlainObject = (value) => ({ ...value });
+
+function mapIfArray(value) {
+  return Array.isArray(value) ? value.map(clonePlainObject) : value;
+}
+
+function copyIfArray(value) {
+  return Array.isArray(value) ? [...value] : value;
+}
+
 export function createDeltaMerger(dispatch, schedule = (run) => setTimeout(run, 16)) {
   let pending = null;
   let timer = null;
@@ -145,9 +155,9 @@ export function createUiBridgeStation(options) {
   const ledger = createInteractionLedger();
 
   const state = {
+    seq: 0,
     session: { id: null, file: null, title: null, cwd: options?.cwd ?? null },
     messages: [],
-    displayGroups: [],
     artifacts: [],
     todos: [],
     usage: { tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: { total: 0 }, context: null },
@@ -201,7 +211,7 @@ export function createUiBridgeStation(options) {
       displayGroups: groupTranscriptForDisplay(messages),
       history: { hasMore: start > 0 || state.messages.length > 64, oldestId: messages[0]?.id ?? null },
       artifacts: state.artifacts.slice(-16).map(capArtifact),
-      todos: Array.isArray(state.todos) ? state.todos.map((todo) => ({ ...todo })) : state.todos,
+      todos: mapIfArray(state.todos),
       usage: state.usage
         ? {
             ...state.usage,
@@ -212,34 +222,32 @@ export function createUiBridgeStation(options) {
       meta: { ...state.meta },
       draft: {
         ...state.draft,
-        images: Array.isArray(state.draft?.images) ? [...state.draft.images] : state.draft?.images,
-        texts: Array.isArray(state.draft?.texts) ? [...state.draft.texts] : state.draft?.texts,
+        images: copyIfArray(state.draft?.images),
+        texts: copyIfArray(state.draft?.texts),
         composer: state.draft?.composer && typeof state.draft.composer === "object"
           ? { ...state.draft.composer }
           : state.draft?.composer,
       },
       completion: {
         ...state.completion,
-        items: Array.isArray(state.completion?.items)
-          ? state.completion.items.map((item) => ({ ...item }))
-          : state.completion?.items,
+        items: mapIfArray(state.completion?.items),
       },
       pendingInteractions: pendingInteractions(),
       widgets: Object.entries(state.widgets).map(([key, lines]) => ({
         key,
-        lines: Array.isArray(lines) ? [...lines] : lines,
+        lines: copyIfArray(lines),
       })),
       surface: state.surface ? { ...state.surface } : state.surface,
-      toasts: Array.isArray(state.toasts) ? state.toasts.map((toast) => ({ ...toast })) : state.toasts,
+      toasts: mapIfArray(state.toasts),
       streaming: Boolean(state.meta.busy),
-      models: Array.isArray(state.models) ? [...state.models] : state.models,
+      models: copyIfArray(state.models),
       thinkingLevel: state.meta.thinkingLevel,
       thinkingLevels: state.meta.thinkingLevels,
       modes: state.meta.modes,
-      sessions: Array.isArray(state.sessions) ? state.sessions.map((session) => ({ ...session })) : state.sessions,
+      sessions: mapIfArray(state.sessions),
       queue: {
-        steering: Array.isArray(state.queue?.steering) ? [...state.queue.steering] : state.queue?.steering,
-        followUp: Array.isArray(state.queue?.followUp) ? [...state.queue.followUp] : state.queue?.followUp,
+        steering: copyIfArray(state.queue?.steering),
+        followUp: copyIfArray(state.queue?.followUp),
       },
       activeArtifactId: state.activeArtifactId,
       fence: state.meta.fence && typeof state.meta.fence === "object"
@@ -264,7 +272,6 @@ export function createUiBridgeStation(options) {
       cwd: ctx?.cwd ?? state.session.cwd,
     };
     state.messages = reconstructTranscriptFromEntries(manager?.getBranch?.() ?? []);
-    state.displayGroups = groupTranscriptForDisplay(state.messages);
     state.artifacts = [];
     state.streaming = null;
     state.toolExecutions = {};
@@ -428,7 +435,6 @@ export function createUiBridgeStation(options) {
     onSessionHydrate(session, entries) {
       state.session = { ...state.session, ...session };
       state.messages = reconstructTranscriptFromEntries(entries ?? []);
-      state.displayGroups = groupTranscriptForDisplay(state.messages);
       state.artifacts = extractArtifacts(
         state.messages.map((message) => ({
           toolCall: message.blocks?.find((block) => block.type === "toolCall"),
@@ -466,7 +472,6 @@ export function createUiBridgeStation(options) {
       if (Object.keys(state.toolExecutions).length > 256) {
         state.toolExecutions = Object.fromEntries(Object.entries(state.toolExecutions).slice(-256));
       }
-      state.displayGroups = groupTranscriptForDisplay(state.messages);
       state.meta = { ...state.meta, busy: event?.type !== "agent_end" };
       const delta = wireDelta(event, next);
       if (delta) {

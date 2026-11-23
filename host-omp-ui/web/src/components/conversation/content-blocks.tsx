@@ -1,8 +1,8 @@
 import { memo } from "react";
 import {
+  ChevronDownIcon,
   CircleSlashIcon,
   FileIcon,
-  SparklesIcon,
   TerminalIcon,
 } from "lucide-react";
 import {
@@ -15,19 +15,15 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@herd/deer-flow-ui/ui/collapsible";
-import { Message, MessageContent } from "@herd/deer-flow-ui/ai-elements/message";
 import type { BundledLanguage } from "shiki";
-import { IncremarkMessage } from "../IncremarkMessage";
 import { ToolStepCard } from "../ToolStepCard";
 import type {
   MessageBlock,
   ToolExecution,
   UiMessage,
 } from "../../protocol/types";
-import { buildSteps } from "../../lib/build-steps";
-import { ProcessingSteps } from "./steps";
 
-export function textBlocks(message: UiMessage, type: "text" | "thinking"): string {
+function textBlocks(message: UiMessage, type: "text" | "thinking"): string {
   return (message.blocks ?? [])
     .filter((block) => block.type === type)
     .map((block) => ("text" in block ? block.text : ""))
@@ -199,66 +195,3 @@ export function OrphanToolResult({
   );
 }
 
-export const AssistantMessage = memo(function AssistantMessage({
-  message,
-  tools,
-}: {
-  message: UiMessage;
-  tools: Record<string, ToolExecution>;
-}) {
-  const { steps, body: text } = buildSteps(message);
-  const isStreaming = Boolean(message.streaming);
-  const hasSteps = steps.length > 0;
-  if (!hasSteps && !text) {
-    if (!isStreaming) return null;
-    return (
-      <div className="text-muted-foreground flex items-center gap-2 text-sm">
-        <SparklesIcon className="size-4 animate-pulse" />
-        正在生成…
-      </div>
-    );
-  }
-  return (
-    <div className="flex w-full flex-col gap-3">
-      <ProcessingSteps
-        segments={[{ id: message.id, steps }]}
-        totalSteps={steps.length}
-        hasStreamingStep={steps.some((step) => step.streaming)}
-        runningTools={
-          steps.filter(
-            (step) => step.kind === "tool" && step.tool.status === "running",
-          ).length
-        }
-        bodyFinished={!isStreaming}
-        tools={tools}
-      />
-      {(text || imageBlocks(message).length > 0) && (
-        <Message from="assistant" className="gap-1">
-          <MessageContent className="w-full">
-            {text && (
-              <IncremarkMessage streaming={isStreaming && text !== ""}>
-                {text}
-              </IncremarkMessage>
-            )}
-            {imageBlocks(message).map((image, index) =>
-              image.url ? (
-                <img
-                  key={`${image.url}-${index}`}
-                  src={image.url}
-                  alt={image.alt ?? "assistant attachment"}
-                  className="max-h-72 rounded-md border object-contain"
-                />
-              ) : null,
-            )}
-          </MessageContent>
-          {isStreaming && (
-            <span className="text-muted-foreground flex items-center gap-1.5 pl-1 text-xs">
-              <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
-              生成中
-            </span>
-          )}
-        </Message>
-      )}
-    </div>
-  );
-});

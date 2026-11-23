@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { shutdownRuntime } from "../../host-omp-ui/src/activation/index.mjs";
+import { bindStationDispatch, shutdownRuntime } from "../../host-omp-ui/src/activation/index.mjs";
 
 function makeRuntime(bootPromise) {
 	const calls = [];
@@ -37,6 +37,27 @@ test("shutdown marks disposed first and waits for the in-flight boot before flus
 	expect(calls).toContain("server-close");
 	expect(calls).toContain("unsubscribe");
 });
+
+test("a station dispatches to the runtime it was born with, not the newest one", () => {
+	const receivedBy = { a: [], b: [] };
+	const refA = { capabilitiesDispatch: (event) => receivedBy.a.push(event) };
+	const refB = { capabilitiesDispatch: (event) => receivedBy.b.push(event) };
+	const dispatchA = bindStationDispatch(refA);
+
+	// A new session replaces the module-level current runtime; A's station
+	// must still deliver its own frames to A's channel.
+	refB.capabilitiesDispatch = (event) => receivedBy.b.push(event);
+	dispatchA({ type: "transcript.delta", payload: { kind: "text_delta", messageId: "m", blockIndex: 0, delta: "x" } });
+
+	expect(receivedBy.a).toHaveLength(1);
+	expect(receivedBy.b).toHaveLength(0);
+});
+
+test("a runtime ref without a dispatch capability is inert", () => {
+	const dispatch = bindStationDispatch({});
+	expect(() => dispatch({ type: "snapshot" })).not.toThrow();
+});
+
 
 test("a rejected boot does not reject shutdown", async () => {
 	const { current, calls } = makeRuntime(Promise.reject(new Error("boot failed")));

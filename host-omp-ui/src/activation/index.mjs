@@ -63,6 +63,13 @@ function settleBoot(boot, deadlineMs) {
 	});
 }
 
+// A station's dispatch must resolve through the runtimeRef it was born with.
+// Reading the module-level current runtime at flush time would deliver one
+// session's pending deltas to whichever session was installed most recently.
+export function bindStationDispatch(runtimeRef) {
+	return (event) => runtimeRef?.capabilitiesDispatch?.(event);
+}
+
 export async function shutdownRuntime(current, { deadlineMs = 2000 } = {}) {
 	if (!current) return;
 	current.disposed = true;
@@ -120,7 +127,10 @@ export function wireUiExtension(pi, env = {}) {
 			};
 			const station = createUiBridgeStation({
 				cwd: ctx.cwd,
-				capabilities: { dispatch: (event) => runtime?.capabilitiesDispatch?.(event) },
+				// Bind to this session's ref, not the module-level current runtime:
+				// during shutdown's bounded boot wait a new runtime may already be
+				// installed, and this station's pending deltas must never reach it.
+				capabilities: { dispatch: bindStationDispatch(runtimeRef) },
 			});
 			const tickets = createHostTickets({
 				adapter,

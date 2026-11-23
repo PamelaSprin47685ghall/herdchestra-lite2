@@ -1,7 +1,7 @@
 import { asString, isRecord } from "../../protocol/guards";
 import type { AnyRecord } from "./shared";
 
-export type FormOption = { label: string; value: string };
+type FormOption = { label: string; value: string };
 export type FormField = {
   name: string;
   label: string;

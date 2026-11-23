@@ -24,6 +24,14 @@ import {
   type Respond,
 } from "./shared";
 
+const fallbackOptions = [
+  { id: "execute", label: "Execute", disabled: false },
+  { id: "compact", label: "Compact", disabled: false },
+  { id: "keep", label: "Keep", disabled: false },
+  { id: "refine", label: "Refine", disabled: false },
+  { id: "save", label: "Save", disabled: false },
+];
+
 export function DialogFooter({
   item,
   onRespond,
@@ -62,11 +70,10 @@ export function ApproveCard({
     asString(payload.question) ||
     payloadText(item);
   const choices = normalizeChoices(payload.choices);
+  const session = asString(payload.session);
   const fallback = [
     { label: "允许本次", value: "once" },
-    ...(asString(payload.session)
-      ? [{ label: asString(payload.session), value: "session" }]
-      : []),
+    ...(session ? [{ label: session, value: "session" }] : []),
     { label: "拒绝", value: "deny" },
   ];
   const finalChoices = choices.length ? choices : fallback;
@@ -317,13 +324,6 @@ export function PlanReviewCard({
     payload.planContent ?? payload.plan ?? payload.summary ?? payload.message,
   );
   const rawOptions = Array.isArray(payload.options) ? payload.options : [];
-  const fallbackOptions = [
-    { id: "execute", label: "Execute", disabled: false },
-    { id: "compact", label: "Compact", disabled: false },
-    { id: "keep", label: "Keep", disabled: false },
-    { id: "refine", label: "Refine", disabled: false },
-    { id: "save", label: "Save", disabled: false },
-  ];
   const options = rawOptions.length
     ? rawOptions
         .map((raw) => {

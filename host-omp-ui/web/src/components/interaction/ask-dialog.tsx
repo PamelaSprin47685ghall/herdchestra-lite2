@@ -7,11 +7,13 @@ import { asString, isRecord } from "../../protocol/guards";
 import type { InteractionRequest } from "../../protocol/types";
 import { payloadRecord, type Respond } from "./shared";
 
+type AskOption = { label: string; description?: string; preview?: string };
+
 type AskQuestion = {
   id: string;
   question: string;
   header?: string;
-  options: Array<{ label: string; description?: string; preview?: string }>;
+  options: AskOption[];
   multi: boolean;
   recommended?: number;
 };
@@ -38,7 +40,7 @@ function normalizeQuestions(raw: unknown): AskQuestion[] {
               : null;
           })
           .filter(
-            (option): option is { label: string; description?: string; preview?: string } =>
+            (option): option is AskOption =>
               option !== null,
           )
       : [];

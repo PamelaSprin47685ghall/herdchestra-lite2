@@ -442,7 +442,7 @@ export function SurfaceNodeView({
     );
   }
 
-  if (node.kind === "json" || node.kind === "tree" || node.kind === "code") {
+  if (node.kind === "json" || node.kind === "tree") {
     return (
       <pre className="bg-muted/30 max-h-64 overflow-auto rounded-md border p-2 font-mono text-[11px] whitespace-pre-wrap">
         {propText(textValue) || JSON.stringify(node.props, null, 2)}

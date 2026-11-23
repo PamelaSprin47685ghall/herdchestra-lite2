@@ -11,6 +11,7 @@ import { selectModelKey } from "../protocol/store";
 import {
   groupModelsByProvider,
   modelNickname,
+  providerKey,
   type ModelGroup,
 } from "../lib/model-display";
 import type { ModelRef } from "../protocol/types";
@@ -21,11 +22,6 @@ type Props = {
   disabled?: boolean;
   onModel: (provider: string, id: string) => void;
 };
-
-function providerOf(model: ModelRef | null | undefined): string {
-  const raw = (model?.provider || "other").trim();
-  return raw.split("/")[0] || raw || "other";
-}
 
 export function ModelPickerDialog({ modelKey, models, disabled, onModel }: Props) {
   const [open, setOpen] = useState(false);
@@ -51,7 +47,7 @@ export function ModelPickerDialog({ modelKey, models, disabled, onModel }: Props
     () => groupModelsByProvider(allModels, selected),
     [allModels, selected],
   );
-  const currentProvider = providerOf(selected);
+  const currentProvider = selected ? providerKey(selected) : "other";
 
   useEffect(() => {
     if (!open) return;

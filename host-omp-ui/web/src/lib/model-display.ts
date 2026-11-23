@@ -5,7 +5,7 @@ export type ModelGroup = {
   models: ModelRef[];
 };
 
-function providerKey(model: ModelRef): string {
+export function providerKey(model: ModelRef): string {
   const raw = (model.provider || "other").trim();
   return raw.split("/")[0] || raw || "other";
 }

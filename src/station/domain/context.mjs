@@ -39,11 +39,9 @@ function firstTurnUsage() {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
 }
 
-/** Keep only parts a message of this role may carry on the wire. */
-function firstTurnContent(role, content) {
-	if (!Array.isArray(content)) return [];
-	if (role !== "assistant") return content.filter((part) => part?.type === "text");
-	return content.filter((part) => part?.type === "text" || part?.type === "thinking");
+/** The recorded content is forwarded verbatim; the host adapter owns the wire shape. */
+function firstTurnContent(content) {
+	return content;
 }
 
 /**
@@ -55,10 +53,13 @@ function firstTurnContent(role, content) {
  * without them aborts a DeepSeek-compatible child before its first answer.
  */
 export function firstTurnMessage(message) {
-	if (message?.role === "assistant") {
+	const role = message?.role;
+	const content = firstTurnContent(message?.content);
+	if (role === "assistant") {
 		return {
-			role: "assistant",
-			content: firstTurnContent("assistant", message.content),
+			...message,
+			role,
+			content,
 			api: FIRST_TURN_API,
 			provider: FIRST_TURN_PROVIDER,
 			model: FIRST_TURN_MODEL,
@@ -68,12 +69,21 @@ export function firstTurnMessage(message) {
 			attribution: "assistant",
 		};
 	}
+	if (role === "user") {
+		return {
+			...message,
+			role,
+			content,
+			timestamp: FIRST_TURN_TIMESTAMP,
+			attribution: "user",
+			synthetic: true,
+		};
+	}
 	return {
-		role: "user",
-		content: firstTurnContent("user", message?.content),
-		timestamp: FIRST_TURN_TIMESTAMP,
-		attribution: "user",
-		synthetic: true,
+		...message,
+		role,
+		content,
+		timestamp: message?.timestamp ?? FIRST_TURN_TIMESTAMP,
 	};
 }
 

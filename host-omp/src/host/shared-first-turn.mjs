@@ -37,8 +37,8 @@ export function loadSharedFirstTurn() {
 	} catch (error) {
 		throw fail("resources/first-turn.json is not valid JSON", error);
 	}
-	if (!Array.isArray(parsed) || parsed.length === 0) {
-		throw new TypeError("resources/first-turn.json must hold a non-empty array");
+	if (!Array.isArray(parsed)) {
+		throw new TypeError("resources/first-turn.json must hold an array");
 	}
 
 	cached = Object.freeze(
@@ -46,32 +46,22 @@ export function loadSharedFirstTurn() {
 			if (message === null || typeof message !== "object") {
 				throw new TypeError("first-turn message must be an object");
 			}
-			if (message.role !== "user" && message.role !== "assistant") {
-				throw new TypeError(
-					`first-turn message has an unsupported role: ${String(message.role)}`,
-				);
+			if (typeof message.role !== "string" || message.role.length === 0) {
+				throw new TypeError("first-turn message must carry a role");
 			}
-			if (!Array.isArray(message.content) || message.content.length === 0) {
-				throw new TypeError("first-turn message must carry a content array");
+			if (typeof message.content !== "string" && !Array.isArray(message.content)) {
+				throw new TypeError("first-turn message must carry content");
+			}
+			if (!Array.isArray(message.content)) {
+				return Object.freeze({ ...message });
 			}
 			const content = message.content.map((part) => {
 				if (part === null || typeof part !== "object") {
 					throw new TypeError("first-turn content part must be an object");
 				}
-				if (part.type !== "text" && part.type !== "thinking") {
-					throw new TypeError(
-						`first-turn content part has an unsupported type: ${String(part.type)}`,
-					);
-				}
-				const body = part.type === "text" ? part.text : part.thinking;
-				if (typeof body !== "string" || body.length === 0) {
-					throw new TypeError(
-						`first-turn ${part.type} part must carry its text`,
-					);
-				}
 				return Object.freeze({ ...part });
 			});
-			return Object.freeze({ role: message.role, content: Object.freeze(content) });
+			return Object.freeze({ ...message, content: Object.freeze(content) });
 		}),
 	);
 	return cached;

@@ -201,14 +201,22 @@ describe("projectContext", () => {
 		expect(result.messages[1].content[0].text).toBe("what did we settle");
 	});
 
-	test("strips parts a role cannot carry", () => {
+	test("keeps every part and role verbatim", () => {
 		const withImage = [
 			{ role: "user", content: [{ type: "text", text: "q" }, { type: "image", data: "x", mimeType: "image/png" }] },
 			{ role: "assistant", content: [{ type: "text", text: "a" }, { type: "toolCall", id: "t", name: "x", arguments: {} }] },
+			{ role: "toolResult", toolCallId: "t", content: [{ type: "text", text: "r" }] },
 		];
 		const result = projectContext({}, { original: [], firstTurn: withImage });
-		expect(result.messages[0].content.map((part) => part.type)).toEqual(["text"]);
-		expect(result.messages[1].content.map((part) => part.type)).toEqual(["text"]);
+		expect(result.messages.map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+			"toolResult",
+		]);
+		expect(result.messages[0].content).toEqual(withImage[0].content);
+		expect(result.messages[1].content).toEqual(withImage[1].content);
+		expect(result.messages[2].content).toEqual(withImage[2].content);
+		expect(result.messages[2].toolCallId).toBe("t");
 	});
 });
 

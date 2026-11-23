@@ -219,11 +219,11 @@ function parseFields(html) {
 
 export function parseAskHtmlForm(html) {
   const clean = sanitize(html);
-  const { fields } = parseFields(clean);
+  const { fields, byName } = parseFields(clean);
   return {
     contexts: contextsOf(clean),
     fields,
-    byName: new Map(fields.map((field) => [field.name, field])),
+    byName,
   };
 }
 
@@ -237,7 +237,7 @@ export function buildDefaultFormData(parsedForm) {
   return data;
 }
 
-function errorFor(field, value, parsedForm) {
+function errorFor(field, value) {
   if (field.type === "hidden") return undefined;
   if (value === undefined || value === null) {
     return field.required ? "Required" : undefined;
@@ -329,7 +329,7 @@ export function validateFormSubmission(parsedForm, data) {
       value = Array.from(new Set(value));
       normalized[field.name] = value;
     }
-    const error = errorFor(field, value, parsedForm);
+    const error = errorFor(field, value);
     if (error) errors[field.name] = error;
   }
 

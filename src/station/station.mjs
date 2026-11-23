@@ -105,6 +105,7 @@ import {
 } from "./domain/tool-call-ledger.mjs";
 import {
 	modelKey,
+	modelKeyOf,
 	actualModel,
 	observeActualModel,
 	reconcileActualModel,
@@ -169,22 +170,6 @@ function mergeHost(fromRegistry, fromConstructor) {
  * `accounting`, `fork`, `report`); a double written against the older flat bag
  * is widened here so no station carries a second convention.
  */
-/** Stable identity of the model that produced one assistant message. */
-function modelKeyOf(message) {
-	const raw =
-		message?.modelKey ??
-		message?.modelId ??
-		message?.model ??
-		message?.metadata?.model;
-	if (typeof raw === "string" && raw !== "") return raw;
-	if (raw && typeof raw === "object") {
-		const provider = raw.provider ?? raw.providerId ?? "";
-		const id = raw.id ?? raw.model ?? raw.name ?? "";
-		if (id) return provider ? `${provider}/${id}` : String(id);
-	}
-	return "";
-}
-
 export function shapeHost(host) {
 	const source = host && typeof host === "object" ? host : {};
 	const session = source.session ?? {};
@@ -325,7 +310,7 @@ export class SessionStation {
 			contextMessages: () => this.contextMessages(),
 			persist: () => this.persist(),
 			noteError: (domain, error) => this.noteError(domain, error),
-			modelKeyOf: (message) => modelKey(message),
+			modelKeyOf,
 			actualModelOf: (ctx) => actualModel(ctx, this.host),
 			usage: this.host?.accounting?.usage ?? null,
 			pricing: this.host?.accounting?.pricing ?? null,

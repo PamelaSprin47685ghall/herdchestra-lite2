@@ -26,8 +26,9 @@ test("read becomes a file preview with path, range and language", async () => {
 	const view = describeToolCall(...call("read", { path: "src/a.mjs", offset: 10, limit: 20, description: "Read a" }, "export const a = 1;\n"));
 	expect(view.kind).toBe("read");
 	expect(view.path).toBe("src/a.mjs");
-	expect(String(view.range)).toContain("10");
-	expect(String(view.range)).toContain("20");
+	// limit counts lines: offset 10 plus 20 lines ends at line 29.
+	expect(view.range).toBe("10-29");
+	expect(describeToolCall(...call("read", { path: "src/a.mjs" }, "")).range).toBe("1-");
 	expect(view.preview).toContain("export const a = 1");
 	expect(typeof view.language).toBe("string");
 });

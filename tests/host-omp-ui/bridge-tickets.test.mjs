@@ -186,6 +186,27 @@ test("failed command tickets notify clients instead of disappearing", async () =
 	expect(frames).toContainEqual(expect.objectContaining({ type: "toast", level: "error" }));
 });
 
+test("wiring hands the raw ticket result to the reconciler", async () => {
+	const { buildBridgeCapabilities } = await import("../../host-omp-ui/src/activation/tickets.mjs");
+	const seen = [];
+	const frames = [];
+	const result = { ok: false, code: "unknown_model", reported: { model: null } };
+	const { dispatch } = buildBridgeCapabilities({
+		tickets: {
+			setModelTicket: async () => result,
+			broadcastFrameTicket: (frame) => frames.push(frame),
+		},
+		onResult: (event, received) => {
+			seen.push([event.type, received]);
+			return { outcomes: [{ kind: "toast", level: "error", message: "reconciled" }] };
+		},
+	});
+	dispatch({ type: "setModel", payload: { provider: "p", modelId: "missing" } });
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(seen).toEqual([["setModel", result]]);
+	expect(frames).toEqual([{ type: "toast", level: "error", message: "reconciled" }]);
+});
+
 describe("createUiBridge request payloads", () => {
 	test("select keeps title, options, and selection flags", async () => {
 		const { createUiBridge } = await load();

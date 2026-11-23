@@ -112,6 +112,14 @@ export function stableModes(
   return sameModes(normalized, previous) ? previous : normalized;
 }
 
+function sameMetaKeys(a: MetaState, b: MetaState): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    if (!Object.is(a[key], b[key])) return false;
+  }
+  return true;
+}
+
 export function stableMeta(
   next: MetaState | undefined,
   previous: MetaState,
@@ -128,13 +136,5 @@ export function stableMeta(
     ),
     modes: stableModes(next.modes, previous.modes),
   };
-  const unchanged =
-    merged.busy === previous.busy &&
-    merged.title === previous.title &&
-    merged.fence === previous.fence &&
-    merged.model === previous.model &&
-    merged.thinkingLevel === previous.thinkingLevel &&
-    merged.thinkingLevels === previous.thinkingLevels &&
-    merged.modes === previous.modes;
-  return unchanged ? previous : merged;
+  return sameMetaKeys(merged, previous) ? previous : merged;
 }

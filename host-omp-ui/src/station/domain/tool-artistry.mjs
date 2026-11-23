@@ -96,7 +96,8 @@ export function describeToolCall(toolCall, toolResult) {
   if (name === "read") {
     const offset = Number(args.offset ?? 1);
     const limit = Number(args.limit ?? 0);
-    const range = limit > 0 ? `${offset}-${limit}` : `${offset}-`;
+    // `limit` counts lines, so the range ends at offset + limit - 1.
+    const range = limit > 0 ? `${offset}-${offset + limit - 1}` : `${offset}-`;
     return {
       kind: "read",
       title: args.description ?? `Read ${args.path ?? ""}`,

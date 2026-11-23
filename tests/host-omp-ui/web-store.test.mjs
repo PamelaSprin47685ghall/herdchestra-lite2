@@ -674,3 +674,37 @@ test("message-only frames preserve model and thinking selections by reference", 
 	expect(state.thinkingLevels).toBe(thinkingLevels);
 	expect(state.modes).toBe(modes);
 });
+
+test("stableMeta keeps setStatus and setWorkingMessage changes", async () => {
+	const { stableMeta } = await import(
+		"../../host-omp-ui/web/src/protocol/reducers/stable.ts"
+	);
+	const previous = {
+		busy: false,
+		title: "Session 1",
+		fence: null,
+		model: null,
+		thinkingLevel: null,
+		thinkingLevels: [],
+		modes: {},
+	};
+
+	const withStatus = stableMeta({ ...previous, setStatus: "idle" }, previous);
+	expect(withStatus).not.toBe(previous);
+	expect(withStatus.setStatus).toBe("idle");
+
+	const withWorking = stableMeta(
+		{ ...previous, setWorkingMessage: "thinking" },
+		previous,
+	);
+	expect(withWorking).not.toBe(previous);
+	expect(withWorking.setWorkingMessage).toBe("thinking");
+
+	// Equal values must still keep the previous reference.
+	expect(stableMeta({ ...previous, setStatus: "idle" }, withStatus)).toBe(
+		withStatus,
+	);
+	expect(
+		stableMeta({ ...previous, setWorkingMessage: "thinking" }, withWorking),
+	).toBe(withWorking);
+});

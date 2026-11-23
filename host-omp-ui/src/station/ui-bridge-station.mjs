@@ -79,17 +79,6 @@ export function createDeltaMerger(dispatch, schedule = (run) => setTimeout(run, 
   return { push, flush };
 }
 
-const deltaMergers = new WeakMap();
-
-function deltaMergerFor(dispatch) {
-  let merger = deltaMergers.get(dispatch);
-  if (!merger) {
-    merger = createDeltaMerger(dispatch);
-    deltaMergers.set(dispatch, merger);
-  }
-  return merger;
-}
-
 function wireDelta(event, next) {
   const update = event.assistantMessageEvent;
   if (event.type === "message_start") {
@@ -150,6 +139,74 @@ function wireDelta(event, next) {
   return null;
 }
 
+/**
+ * Interpret a ticket result into broadcast decisions. The station owns this
+ * rule set; wiring only carries the outcomes out. It stays a pure function so
+ * the bridge can run without a station (tests) and the station can reuse it.
+ */
+export function ticketResultOutcomes(event, result) {
+  const outcomes = [];
+  const { clientId, requestId } = event?.payload ?? {};
+  if (result?.ok !== false && result?.reported) {
+    outcomes.push({ kind: "meta", patch: result.reported });
+  }
+  if (clientId && requestId) {
+    outcomes.push({ kind: "receipt", clientId, requestId, ok: result?.ok !== false, code: result?.code });
+  }
+  if (result?.ok === false) {
+    outcomes.push({ kind: "toast", level: "error", message: `${event.type}: ${result.code ?? "failed"}` });
+  }
+  return { outcomes };
+}
+
+const STOP_AFTER_HANDLER = Symbol("stop-after-handler");
+
+// A client command names a synchronous domain transition. The factory receives
+// exactly those transitions and the transport dispatch, never the station, so a
+// handler cannot reach an onXxx entrypoint even by accident.
+export function createClientCommandHandlers(transitions, dispatch) {
+  return {
+    "composer.draft": ({ clientId, payload }) => {
+      transitions.applyDraft({ source: "web", ...payload, clientId });
+    },
+    "manager.history": ({ clientId, payload }) => {
+      const page = transitions.historyPage({ before: payload.before, limit: payload.limit });
+      dispatch({
+        type: "sendClientFrame",
+        payload: {
+          clientId,
+          frame: { type: "history.page", requestId: payload.requestId, ...page },
+        },
+      });
+      return STOP_AFTER_HANDLER;
+    },
+    "composer.submit": ({ clientId, payload }) => {
+      transitions.submitComposer({ ...payload, clientId });
+    },
+    "session.abort": ({ clientId, payload }) => {
+      transitions.abort({ ...payload, clientId });
+    },
+    "session.set_model": ({ clientId, payload }) => {
+      transitions.setModel({ ...payload, clientId });
+    },
+    "session.set_thinking": ({ clientId, payload }) => {
+      transitions.setThinking({ ...payload, clientId });
+    },
+    "session.set_mode": ({ clientId, payload }) => {
+      transitions.setMode({ ...payload, clientId });
+    },
+    "interaction.respond": ({ payload }) => {
+      transitions.resolveInteraction(payload.requestId, "web", payload);
+    },
+    "surface.event": ({ payload }) => {
+      transitions.applySurfaceEvent(payload);
+    },
+    "surface.keys": ({ payload }) => {
+      transitions.applySurfaceKeys(payload);
+    },
+  };
+}
+
 export function createUiBridgeStation(options) {
   const capabilities = options?.capabilities ?? {};
   const ledger = createInteractionLedger();
@@ -187,6 +244,11 @@ export function createUiBridgeStation(options) {
     if (typeof capabilities.dispatch === "function") capabilities.dispatch(event);
   }
 
+  // One merger per station. The dispatch closure is stable, so the old
+  // module-level WeakMap added a lookup and left shutdown with nothing to
+  // enumerate. The station owns the merger and can flush it directly.
+  const deltaMerger = createDeltaMerger(dispatch, options?.schedule);
+
   function pendingInteractions() {
     return listOpenInteractions(ledger).map((entry) => ({
       id: entry.id,
@@ -209,7 +271,7 @@ export function createUiBridgeStation(options) {
       session: { ...state.session },
       messages,
       displayGroups: groupTranscriptForDisplay(messages),
-      history: { hasMore: start > 0 || state.messages.length > 64, oldestId: messages[0]?.id ?? null },
+      history: { hasMore: start > 0, oldestId: messages[0]?.id ?? null },
       artifacts: state.artifacts.slice(-16).map(capArtifact),
       todos: mapIfArray(state.todos),
       usage: state.usage
@@ -477,13 +539,17 @@ export function createUiBridgeStation(options) {
       if (delta) {
         state.seq = (state.seq ?? 0) + 1;
         delta.seq = state.seq;
-        deltaMergerFor(dispatch).push(delta);
+        deltaMerger.push(delta);
       }
       if (event?.type === "message_end" || event?.type === "agent_end") {
-        deltaMergerFor(dispatch).flush();
+        deltaMerger.flush();
         dispatch({ type: "snapshot", seq: state.seq ?? 0, payload: snapshot() });
       }
       return { ok: true };
+    },
+
+    flushDeltas() {
+      deltaMerger.flush();
     },
 
     onTodoUpdate(phases) {
@@ -569,12 +635,24 @@ export function createUiBridgeStation(options) {
         return parsed;
       }
       const { type, payload } = parsed;
-      const handler = CLIENT_COMMAND_HANDLERS[type];
+      const handler = clientCommandHandlers[type];
       if (handler) {
         const outcome = handler({ clientId, payload: payload ?? {} });
         if (outcome === STOP_AFTER_HANDLER) return;
       }
       return { ok: true, type };
+    },
+
+    reconcileTicketResult(event, result) {
+      const { outcomes } = ticketResultOutcomes(event, result);
+      const rest = [];
+      for (const outcome of outcomes) {
+        // A meta patch is a state commit: onMetaUpdate writes it and dispatches
+        // the same frame, so the wiring must not broadcast it a second time.
+        if (outcome.kind === "meta") station.onMetaUpdate(outcome.patch);
+        else rest.push(outcome);
+      }
+      return { outcomes: rest };
     },
 
     onTuiDraftChanged(draft) {
@@ -594,49 +672,21 @@ export function createUiBridgeStation(options) {
     },
   };
 
-  // A client command names a synchronous domain handler. No handler calls
-  // another onXxx entrypoint; only the shared private transitions above.
-  const STOP_AFTER_HANDLER = Symbol("stop-after-handler");
-  const CLIENT_COMMAND_HANDLERS = {
-    "composer.draft": ({ clientId, payload }) => {
-      station.applyDraft({ source: "web", ...payload, clientId });
+  const clientCommandHandlers = createClientCommandHandlers(
+    {
+      applyDraft: station.applyDraft,
+      historyPage: station.historyPage,
+      submitComposer: station.submitComposer,
+      abort: station.abort,
+      setModel: station.setModel,
+      setThinking: station.setThinking,
+      setMode: station.setMode,
+      resolveInteraction: station.resolveInteraction,
+      applySurfaceEvent: station.applySurfaceEvent,
+      applySurfaceKeys: station.applySurfaceKeys,
     },
-    "manager.history": ({ clientId, payload }) => {
-      const page = station.historyPage({ before: payload.before, limit: payload.limit });
-      dispatch({
-        type: "sendClientFrame",
-        payload: {
-          clientId,
-          frame: { type: "history.page", requestId: payload.requestId, ...page },
-        },
-      });
-      return STOP_AFTER_HANDLER;
-    },
-    "composer.submit": ({ clientId, payload }) => {
-      station.submitComposer({ ...payload, clientId });
-    },
-    "session.abort": ({ clientId, payload }) => {
-      station.abort({ ...payload, clientId });
-    },
-    "session.set_model": ({ clientId, payload }) => {
-      station.setModel({ ...payload, clientId });
-    },
-    "session.set_thinking": ({ clientId, payload }) => {
-      station.setThinking({ ...payload, clientId });
-    },
-    "session.set_mode": ({ clientId, payload }) => {
-      station.setMode({ ...payload, clientId });
-    },
-    "interaction.respond": ({ payload }) => {
-      station.resolveInteraction(payload.requestId, "web", payload);
-    },
-    "surface.event": ({ payload }) => {
-      station.applySurfaceEvent(payload);
-    },
-    "surface.keys": ({ payload }) => {
-      station.applySurfaceKeys(payload);
-    },
-  };
+    dispatch,
+  );
 
   return station;
 }

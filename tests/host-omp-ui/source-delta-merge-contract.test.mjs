@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createDeltaMerger } from "../../host-omp-ui/src/station/ui-bridge-station.mjs";
+import { createDeltaMerger, createUiBridgeStation } from "../../host-omp-ui/src/station/ui-bridge-station.mjs";
 
 function harness() {
 	const frames = [];
@@ -42,4 +42,31 @@ test("message_end flushes pending delta before dispatch", () => {
 	merger.push(text("a"));
 	merger.push({ type: "transcript.delta", payload: { kind: "message_end", messageId: "m1" } });
 	expect(frames.map((f) => f.payload.kind)).toEqual(["text_delta", "message_end"]);
+});
+
+test("station.flushDeltas dispatches the pending merge without rescheduling", () => {
+	const frames = [];
+	const scheduled = [];
+	const station = createUiBridgeStation({
+		capabilities: { dispatch: (frame) => frames.push(frame) },
+		schedule: (run) => { scheduled.push(run); return scheduled.length; },
+	});
+	const message = { id: "a1", role: "assistant", content: [], timestamp: 10 };
+	station.onAgentEvent({ type: "message_start", message });
+	station.onAgentEvent({
+		type: "message_update",
+		message,
+		assistantMessageEvent: { type: "text_delta", delta: "a" },
+	});
+	const deltas = () => frames.filter((frame) => frame.payload?.kind === "text_delta");
+	expect(deltas()).toHaveLength(0);
+	expect(scheduled).toHaveLength(1);
+
+	station.flushDeltas();
+	expect(deltas()).toHaveLength(1);
+	expect(deltas()[0].payload.delta).toBe("a");
+	expect(scheduled).toHaveLength(1);
+
+	station.flushDeltas();
+	expect(deltas()).toHaveLength(1);
 });

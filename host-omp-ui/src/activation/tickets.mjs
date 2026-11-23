@@ -1,4 +1,5 @@
 import { toServerFrame } from "../station/domain/protocol-codec.mjs";
+import { ticketResultOutcomes } from "../station/ui-bridge-station.mjs";
 
 // Fire-and-forget safety shell and the single-hop capability bag. Every ticket
 // invocation leaves through detach, so a rejected promise can never surface as
@@ -52,9 +53,10 @@ const SERVER_FRAMES = new Set([
 	"session.switched",
 ]);
 
-export function buildBridgeCapabilities({ tickets, diagnostics, onReported } = {}) {
+export function buildBridgeCapabilities({ tickets, diagnostics, onResult } = {}) {
 	const broadcast = (label, frame) =>
 		detach(tickets?.broadcastFrameTicket?.(frame), (error) => diagnostics?.record?.(label, error));
+	const decide = onResult ?? ticketResultOutcomes;
 	const dispatch = (event) => {
 		if (!event || typeof event.type !== "string") return;
 		if (event.type === "syncEditorDraft") {
@@ -67,31 +69,29 @@ export function buildBridgeCapabilities({ tickets, diagnostics, onReported } = {
 		if (!ticketName) return;
 		const ticket = tickets?.[ticketName];
 		if (typeof ticket !== "function") return;
-		const report = (code) => {
-			if (typeof tickets?.broadcastFrameTicket !== "function") return;
-			broadcast("broadcast:ticket-error", { type: "toast", level: "error", message: `${event.type}: ${code}` });
-		};
-		const receipt = (result) => {
-			const { clientId, requestId } = event.payload ?? {};
-			if (clientId && requestId) {
-				detach(tickets?.sendClientFrameTicket?.({ clientId, frame: { type: "command.result", requestId, ok: result?.ok !== false, code: result?.code } }), (error) => diagnostics?.record?.("receipt", error));
+		const settle = (result) => {
+			const { outcomes } = decide(event, result);
+			for (const outcome of outcomes) {
+				if (outcome.kind === "receipt") {
+					detach(tickets?.sendClientFrameTicket?.({
+						clientId: outcome.clientId,
+						frame: { type: "command.result", requestId: outcome.requestId, ok: outcome.ok, code: outcome.code },
+					}), (error) => diagnostics?.record?.("receipt", error));
+				} else if (outcome.kind === "meta") {
+					broadcast("broadcast:reported", { type: "meta.update", ...outcome.patch });
+				} else if (outcome.kind === "toast") {
+					broadcast("broadcast:ticket-error", { type: "toast", level: outcome.level, message: outcome.message });
+				}
 			}
 		};
-		try {
-			detach(Promise.resolve(ticket(event.payload ?? event)).then((result) => {
-				if (result?.ok !== false && result?.reported) {
-					if (typeof onReported === "function") onReported(result.reported);
-					else if (typeof tickets?.broadcastFrameTicket === "function") {
-						broadcast("broadcast:reported", { type: "meta.update", ...result.reported });
-					}
-				}
-				receipt(result);
-				if (result?.ok === false) report(result.code ?? "failed");
-			}), (error) => { receipt({ ok: false, code: "failed" }); diagnostics?.record?.(`ticket:${event.type}`, error); report("failed"); });
-		} catch (error) {
-			receipt({ ok: false, code: "failed" });
+		const fail = (error) => {
 			diagnostics?.record?.(`ticket:${event.type}`, error);
-			report("failed");
+			settle({ ok: false, code: "failed" });
+		};
+		try {
+			detach(Promise.resolve(ticket(event.payload ?? event)).then(settle, fail), fail);
+		} catch (error) {
+			fail(error);
 		}
 	};
 	return { dispatch };

@@ -57,10 +57,10 @@ function appendTextBlock(
   // preserves the earlier text instead of overwriting it.
   const last = message.blocks[message.blocks.length - 1];
   if (last && last.type === type && index >= message.blocks.length) {
-    last.text += delta;
+    last.text = capText(last.text + delta);
     return;
   }
-  message.blocks.push({ type, text: delta });
+  message.blocks.push({ type, text: capText(delta) });
 }
 
 function attachToolBlock(

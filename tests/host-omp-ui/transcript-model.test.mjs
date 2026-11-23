@@ -242,3 +242,37 @@ test("classifies task, terminal runs and boundary summaries", async () => {
 	expect(kinds).toContain("terminal_run");
 	expect(kinds).toContain("boundary_summary");
 });
+
+test("a delta appended past the last block still respects the 1MB text budget", async () => {
+	const { applyDelta } = await import(
+		"../../host-omp-ui/web/src/protocol/reducers/transcript.ts"
+	);
+	const atCap = "x".repeat(1_000_000);
+	const state = {
+		transcriptSeq: 0,
+		streaming: true,
+		models: [],
+		model: null,
+		thinkingLevel: null,
+		thinkingLevels: [],
+		modes: {},
+		meta: { busy: true },
+		toolExecutions: {},
+		liveSession: {
+			messages: [
+				{ id: "a1", role: "assistant", blocks: [{ type: "text", text: atCap }] },
+			],
+			session: {},
+		},
+	};
+	const next = applyDelta(state, {
+		type: "transcript.delta",
+		kind: "text_delta",
+		messageId: "a1",
+		blockIndex: 5,
+		delta: "tail",
+	});
+	const block = next.liveSession.messages[0].blocks[0];
+	expect(block.text.endsWith("… [truncated]")).toBe(true);
+	expect(block.text.length).toBeLessThan(atCap.length + 32);
+});

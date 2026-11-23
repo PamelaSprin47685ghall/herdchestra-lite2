@@ -133,6 +133,16 @@ describe("snapshot carries a tail window", () => {
 		expect(snapshot.history).toEqual({ hasMore: false, oldestId: "m0" });
 	});
 
+	test("a transcript up to the window size reports no more history", () => {
+		for (const count of [65, 70, 80]) {
+			const { station } = makeStation(count);
+			const snapshot = station.snapshot();
+
+			expect(snapshot.messages).toHaveLength(count);
+			expect(snapshot.history).toEqual({ hasMore: false, oldestId: "m0" });
+		}
+	});
+
 	test("display groups are generated from the same window, not the full transcript", () => {
 		const { station } = makeStation(200);
 		const snapshot = station.snapshot();

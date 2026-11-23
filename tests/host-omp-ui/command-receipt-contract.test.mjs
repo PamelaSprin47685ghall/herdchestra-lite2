@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 
-import { createUiBridgeStation } from "../../host-omp-ui/src/station/ui-bridge-station.mjs";
+import { createClientCommandHandlers, createUiBridgeStation } from "../../host-omp-ui/src/station/ui-bridge-station.mjs";
 import { buildBridgeCapabilities } from "../../host-omp-ui/src/activation/tickets.mjs";
 import { parseClientCommand } from "../../host-omp-ui/src/station/domain/protocol-codec.mjs";
 import { createManagerClient } from "../../host-omp-ui/src/host/manager-client.mjs";
@@ -283,5 +283,85 @@ describe("browser-shaped draft frames and real terminal writes", () => {
 		}
 		const InertEditor = new (createBridgeEditorClass(Inert))({ draft() {} });
 		expect(InertEditor.applyRemoteDraft({ text: "终端同步" })).toBe(false);
+	});
+});
+
+describe("client command handler namespace", () => {
+	test("each command reaches only its own transition", () => {
+		const calls = [];
+		const transitions = {};
+		for (const name of [
+			"applyDraft",
+			"historyPage",
+			"submitComposer",
+			"abort",
+			"setModel",
+			"setThinking",
+			"setMode",
+			"resolveInteraction",
+			"applySurfaceEvent",
+			"applySurfaceKeys",
+		]) {
+			transitions[name] = (...args) => calls.push([name, ...args]);
+		}
+		const handlers = createClientCommandHandlers(transitions, () => {});
+		const cases = [
+			["composer.draft", "applyDraft"],
+			["composer.submit", "submitComposer"],
+			["session.abort", "abort"],
+			["session.set_model", "setModel"],
+			["session.set_thinking", "setThinking"],
+			["session.set_mode", "setMode"],
+			["interaction.respond", "resolveInteraction"],
+			["surface.event", "applySurfaceEvent"],
+			["surface.keys", "applySurfaceKeys"],
+		];
+		for (const [type, expected] of cases) {
+			calls.length = 0;
+			handlers[type]({ clientId: "c1", payload: { requestId: "r1" } });
+			expect(calls.map(([name]) => name)).toEqual([expected]);
+		}
+	});
+
+	test("manager.history pages, sends one frame, and stops the envelope", () => {
+		const calls = [];
+		const frames = [];
+		const handlers = createClientCommandHandlers(
+			{
+				historyPage: ({ before, limit }) => {
+					calls.push({ before, limit });
+					return { ok: true, messages: [], history: { hasMore: false, oldestId: null } };
+				},
+			},
+			(event) => frames.push(event),
+		);
+		const outcome = handlers["manager.history"]({
+			clientId: "c1",
+			payload: { before: "m9", limit: 5, requestId: "r1" },
+		});
+		expect(typeof outcome).toBe("symbol");
+		expect(calls).toEqual([{ before: "m9", limit: 5 }]);
+		expect(frames).toEqual([
+			{
+				type: "sendClientFrame",
+				payload: {
+					clientId: "c1",
+					frame: {
+						type: "history.page",
+						requestId: "r1",
+						ok: true,
+						messages: [],
+						history: { hasMore: false, oldestId: null },
+					},
+				},
+			},
+		]);
+	});
+
+	test("an unknown command keeps the parse-error envelope and calls no transition", () => {
+		const { station, dispatched } = makeHarness();
+		const result = station.onClientCommand("c1", { type: "nope" });
+		expect(result).toEqual({ ok: false, code: "unknown_type" });
+		expect(dispatched.map((event) => event.type)).toEqual(["client.error"]);
 	});
 });

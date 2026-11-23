@@ -99,7 +99,7 @@ export function wireUiExtension(pi, env = {}) {
 			runtimeRef.capabilitiesDispatch = buildBridgeCapabilities({
 				tickets,
 				diagnostics: diagnostics(),
-				onReported: (patch) => station.onMetaUpdate(patch),
+				onResult: (event, result) => station.reconcileTicketResult(event, result),
 			}).dispatch;
 			runtime = runtimeRef;
 			if (isTui) runtimeRef.unsubscribeCapture = subscribeComposerCapture((capture) => {
@@ -172,8 +172,11 @@ export function wireUiExtension(pi, env = {}) {
 
 	const onSessionShutdown = async () => {
 		const current = runtime;
-		runtime = null;
 		if (!current) return;
+		// Flush before clearing runtime: dispatch resolves through runtime, so a
+		// pending merged delta would otherwise be dropped on the way out.
+		current.station?.flushDeltas?.();
+		runtime = null;
 		current.disposed = true;
 		current.unsubscribeCapture?.();
 		try {

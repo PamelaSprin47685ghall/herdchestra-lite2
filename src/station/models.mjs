@@ -1,8 +1,28 @@
 export function modelKey(model) {
 	const id = model?.id ?? model?.model;
-	return typeof id === "string" && id
-		? model?.provider ? `${model.provider}/${id}` : id
-		: null;
+	if (typeof id !== "string" || id === "") return null;
+	const provider = model?.provider;
+	return provider && !id.startsWith(`${provider}/`) ? `${provider}/${id}` : id;
+}
+
+/** Stable identity of the model behind a message or a model object. */
+export function modelKeyOf(value) {
+	if (!value || typeof value !== "object") return modelKey(value) ?? "";
+	const raw =
+		value.modelKey ??
+		value.modelId ??
+		value.model ??
+		value.metadata?.model;
+	if (typeof raw === "string" && raw !== "") {
+		return modelKey({ provider: value.provider, id: raw }) ?? "";
+	}
+	if (raw && typeof raw === "object") {
+		return modelKey({
+			provider: raw.provider ?? raw.providerId ?? value.provider,
+			id: raw.id ?? raw.model ?? raw.name,
+		}) ?? "";
+	}
+	return modelKey(value) ?? "";
 }
 
 export function actualModel(ctx, host = null) {

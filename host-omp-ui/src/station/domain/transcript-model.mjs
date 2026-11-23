@@ -216,6 +216,17 @@ function upsertBlock(blocks, type, text) {
   return blocks.length - 1;
 }
 
+function streamingFrom(event) {
+  return {
+    id: event.message?.id,
+    role: event.message?.role ?? "assistant",
+    attribution: event.message?.attribution ?? null,
+    synthetic: event.message?.synthetic === true,
+    blocks: [],
+    timestamp: event.message?.timestamp,
+  };
+}
+
 export function applyAgentEvent(state, event) {
   const next = {
     messages: state.messages ?? [],
@@ -225,27 +236,13 @@ export function applyAgentEvent(state, event) {
   if (!event) return next;
 
   if (event.type === "message_start") {
-    next.streaming = {
-      id: event.message?.id,
-      role: event.message?.role ?? "assistant",
-      attribution: event.message?.attribution ?? null,
-      synthetic: event.message?.synthetic === true,
-      blocks: [],
-      timestamp: event.message?.timestamp,
-    };
+    next.streaming = streamingFrom(event);
     return next;
   }
 
   if (event.type === "message_update") {
     if (!next.streaming) {
-      next.streaming = {
-        id: event.message?.id,
-        role: event.message?.role ?? "assistant",
-        attribution: event.message?.attribution ?? null,
-        synthetic: event.message?.synthetic === true,
-        blocks: [],
-        timestamp: event.message?.timestamp,
-      };
+      next.streaming = streamingFrom(event);
     }
     const update = event.assistantMessageEvent;
     if (!update) return next;
@@ -391,6 +388,13 @@ function stepFromBlock(block, message) {
   return null;
 }
 
+function lastStepIndexIn(blocks) {
+  return blocks.reduce(
+    (last, block, index) => (block.type === "thinking" || block.type === "toolCall" ? index : last),
+    -1,
+  );
+}
+
 // A user message opens a turn. Inside one turn, thinking, tool calls and
 // intermediate text are all steps; only the final assistant's trailing text
 // is the answer body. A transcript segment with no user message keeps the
@@ -408,10 +412,7 @@ export function groupTranscriptForDisplay(items) {
     let bodyText = null;
     if (allowBody && lastAssistant) {
       const blocks = lastAssistant.blocks ?? [];
-      const lastStepIndex = blocks.reduce(
-        (last, block, index) => (block.type === "thinking" || block.type === "toolCall" ? index : last),
-        -1,
-      );
+      const lastStepIndex = lastStepIndexIn(blocks);
       const trailing = blocks
         .slice(lastStepIndex + 1)
         .filter((block) => block.type === "text" && hasVisibleText(block.text));
@@ -451,10 +452,7 @@ export function groupTranscriptForDisplay(items) {
         continue;
       }
       const isBody = allowBody && message === lastAssistant && bodyText !== null;
-      const lastStepIndex = blocks.reduce(
-        (last, block, index) => (block.type === "thinking" || block.type === "toolCall" ? index : last),
-        -1,
-      );
+      const lastStepIndex = lastStepIndexIn(blocks);
       for (let index = 0; index < blocks.length; index += 1) {
         const block = blocks[index];
         if (isBody && block.type === "text" && index > lastStepIndex) continue;

@@ -195,7 +195,7 @@ export function createUiBridgeStation(options) {
     }));
   }
 
-  function snapshot(limit = 80) {
+  function snapshot(limit) {
     const requested = Number.isInteger(limit) && limit > 0 ? limit : 80;
     const size = Math.min(requested, state.messages.length);
     const rawStart = Math.max(0, state.messages.length - size);

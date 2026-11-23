@@ -220,11 +220,6 @@ function reduceWidgetUpdate(state: WebState, frame: ServerFrame): WebState {
   return { ...state, widgets };
 }
 
-function reduceArtifactSelect(state: WebState, frame: ServerFrame): WebState {
-  const id = asString(frame.id);
-  return { ...state, activeArtifactId: id || null };
-}
-
 function reduceClientError(state: WebState, frame: ServerFrame): WebState {
   return {
     ...state,
@@ -266,10 +261,6 @@ export function reduceFrame(state: WebState, frame: ServerFrame): WebState | und
       return reduceToast(state, frame);
     case "widget.update":
       return reduceWidgetUpdate(state, frame);
-    // No in-repo producer; retained for a future artifact drawer. Unknown
-    // frames fall through to default, so this case is the only entry point.
-    case "artifact.select":
-      return reduceArtifactSelect(state, frame);
     case "client.error":
       return reduceClientError(state, frame);
     default:

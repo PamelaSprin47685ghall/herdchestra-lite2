@@ -8,7 +8,6 @@ import {
 import { asNumber, asString, isRecord } from "./guards";
 export {
   selectDisplayGroups,
-  selectActiveArtifact,
   selectUsage,
   selectModelKey,
   selectModeStatus,
@@ -60,7 +59,6 @@ export function createInitialWebState(): WebState {
     fenceStatus: null,
     sessions: [],
     artifacts: [],
-    activeArtifactId: null,
     toolExecutions: {},
     widgets: {},
   };

@@ -304,7 +304,6 @@ export type WebState = {
   fenceStatus: string | null;
   sessions: SessionSummary[];
   artifacts: ArtifactItem[];
-  activeArtifactId: string | null;
   toolExecutions: Record<string, ToolExecution>;
   widgets: Record<string, string[] | null>;
 };

@@ -180,13 +180,3 @@ export function applyTspOpsToDocument(document, ops) {
   for (const op of ops ?? []) applyOp(doc, op);
   return doc;
 }
-
-export function summarizeSurfaceFrame(frame) {
-  const ops = frame?.ops ?? [];
-  return {
-    surfaceId: frame?.sf,
-    seq: frame?.s,
-    opCount: ops.length,
-    kinds: ops.map((op) => (Array.isArray(op) ? op[0] : op?.op)),
-  };
-}

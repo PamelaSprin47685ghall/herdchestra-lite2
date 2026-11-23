@@ -212,8 +212,8 @@ test("the interaction ledger settles once, first writer wins", async () => {
 	expect(resolveInteraction(ledger, "r1", "web", {})).toMatchObject({ ok: false, code: "not_found" });
 });
 
-test("surface ops maintain a small document and summarize frames", async () => {
-	const { createEmptyDocument, applyTspOpsToDocument, summarizeSurfaceFrame } = await load(SURFACE);
+test("surface ops maintain a small document", async () => {
+	const { createEmptyDocument, applyTspOpsToDocument } = await load(SURFACE);
 	let doc = createEmptyDocument();
 	doc = applyTspOpsToDocument(doc, [
 		{ op: "add", parent: "root", node: { id: "a", kind: "text", text: "hello" } },
@@ -241,14 +241,10 @@ test("surface ops maintain a small document and summarize frames", async () => {
 
 	doc = applyTspOpsToDocument(doc, [{ op: "del", id: "b" }]);
 	expect(findNode(doc.root, "b")).toBeUndefined();
-
-	const summary = summarizeSurfaceFrame({ sf: "s:1", s: 3, ops: [{ op: "add" }, { op: "set" }] });
-	expect(summary).toMatchObject({ surfaceId: "s:1", seq: 3, opCount: 2 });
-	expect(summary.kinds).toEqual(["add", "set"]);
 });
 
 test("positional TspOp tuples from the real Reconciler reduce as documents", async () => {
-	const { createEmptyDocument, applyTspOpsToDocument, summarizeSurfaceFrame } = await load(SURFACE);
+	const { createEmptyDocument, applyTspOpsToDocument } = await load(SURFACE);
 	const doc = applyTspOpsToDocument(createEmptyDocument(), [
 		["add", "main", "s:web", null, { id: "main", k: "col" }],
 		["add", "dock", "s:web", null, { id: "dock", k: "col" }],
@@ -286,17 +282,10 @@ test("positional TspOp tuples from the real Reconciler reduce as documents", asy
 		{ op: "add", id: "flat", parent: "root", kind: "text", props: { text: "flat" } },
 	]);
 	expect(findNode(flat.root, "flat")).toMatchObject({ kind: "text", text: "flat" });
-
-	const summary = summarizeSurfaceFrame({
-		sf: "s:web",
-		s: 2,
-		ops: [["add", "x", "main", null, { id: "x", k: "text" }], ["del", "x"]],
-	});
-	expect(summary.kinds).toEqual(["add", "del"]);
 });
 
 test("client commands fail closed and server frames carry a sequence", async () => {
-	const { parseClientCommand, encodeServerFrame } = await load(CODEC);
+	const { parseClientCommand, toServerFrame } = await load(CODEC);
 	expect(parseClientCommand('{"type":"composer.submit","text":"hi"}')).toMatchObject({
 		ok: true,
 		type: "composer.submit",
@@ -311,8 +300,8 @@ test("client commands fail closed and server frames carry a sequence", async () 
 		code: "invalid_payload",
 	});
 
-	const frame = encodeServerFrame("state.patch", { model: "x" }, 7);
-	expect(frame).toMatchObject({ type: "state.patch", payload: { model: "x" }, seq: 7 });
+	const frame = toServerFrame({ type: "state.patch", payload: { model: "x", seq: 7 } });
+	expect(frame).toMatchObject({ type: "state.patch", model: "x", seq: 7 });
 });
 
 test("the station commits before dispatch and stays synchronous", async () => {

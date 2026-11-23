@@ -188,20 +188,15 @@ test("final user and assistant messages retain the host's finalized content", as
 	expect(state.messages[1].blocks).toEqual([{ type: "text", text: "rewritten" }]);
 });
 
-test("agent_end reconciles the activity context without duplicating history", async () => {
-	const { reconcileAgentEnd } = await load();
-	const state = {
-		messages: [{ id: "a1", role: "assistant", blocks: [{ type: "text", text: "one" }] }],
-		streaming: null,
-		toolExecutions: {},
-	};
-	const next = reconcileAgentEnd(state, [
-		{ id: "a1", role: "assistant", blocks: [{ type: "text", text: "one" }] },
-		{ id: "a2", role: "assistant", blocks: [{ type: "text", text: "two" }] },
-	]);
-	expect(next.messages.map((message) => message.id)).toEqual(["a1", "a2"]);
-	const again = reconcileAgentEnd(next, next.messages);
-	expect(again.messages.map((message) => message.id)).toEqual(["a1", "a2"]);
+test("finalized messages keep one row per id", async () => {
+	const { applyAgentEvent } = await load();
+	const message = (id, text) => ({ id, role: "assistant", timestamp: 1, content: [{ type: "text", text }] });
+	let state = { messages: [], streaming: null, toolExecutions: {} };
+	state = applyAgentEvent(state, { type: "message_end", message: message("a1", "one") });
+	state = applyAgentEvent(state, { type: "message_end", message: message("a2", "two") });
+	state = applyAgentEvent(state, { type: "message_end", message: message("a1", "one again") });
+	expect(state.messages.map((item) => item.id)).toEqual(["a1", "a2"]);
+	expect(state.messages[0].blocks).toEqual([{ type: "text", text: "one again" }]);
 });
 
 test("groups thinking and tool work into a thought group, then the final answer", async () => {

@@ -46,7 +46,6 @@ function snapshot(overrides = {}) {
 		fenceStatus: "live",
 		sessions: [{ id: "s1", title: "Session 1" }],
 		artifacts: [{ id: "a1", name: "artifact.txt" }],
-		activeArtifactId: "a1",
 		...overrides,
 	};
 }
@@ -133,7 +132,6 @@ describe("snapshot", () => {
 		expect(state.openInteractions.map((item) => item.id)).toEqual(["r1"]);
 		expect(state.sessions.map((item) => item.id)).toEqual(["s1"]);
 		expect(state.artifacts[0].id).toBe("a1");
-		expect(state.activeArtifactId).toBe("a1");
 	});
 });
 
@@ -500,34 +498,6 @@ describe("selectors", () => {
 		const kinds = groups.map((group) => group.kind);
 		expect(kinds).toContain("processing");
 		expect(kinds).toContain("assistant");
-	});
-
-	test("selectActiveArtifact follows client selection and ignores a null snapshot", async () => {
-		const api = await load();
-		let state = api.createInitialWebState();
-		state = api.reduceWebState(
-			state,
-			snapshot({
-				artifacts: [{ id: "a1", name: "one" }, { id: "a2", name: "two" }],
-				activeArtifactId: "a2",
-			}),
-		);
-		expect(api.selectActiveArtifact(state).id).toBe("a2");
-
-		// The host always ships activeArtifactId: null; it must not undo a
-		// selection already held in client state (set here via the
-		// artifact.select reducer, which has no dispatcher yet).
-		state = api.reduceWebState(
-			state,
-			snapshot({
-				artifacts: [{ id: "a1", name: "one" }, { id: "a2", name: "two" }],
-				activeArtifactId: null,
-			}),
-		);
-		expect(api.selectActiveArtifact(state).id).toBe("a2");
-
-		state = api.reduceWebState(state, { type: "artifact.select", id: "" });
-		expect(api.selectActiveArtifact(state)).toBeNull();
 	});
 });
 

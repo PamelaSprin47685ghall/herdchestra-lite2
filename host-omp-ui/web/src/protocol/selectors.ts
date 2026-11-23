@@ -1,12 +1,10 @@
 import type {
-  ArtifactItem,
   DisplayGroup,
   ModelRef,
   UsageState,
   WebState,
   WidgetEntry,
 } from "./types";
-import { argsOf, basename, languageFor, resultText } from "./tool-view";
 import { asNumber, isRecord } from "./guards";
 import { normalizeWidgetEntries } from "./reducers/widgets";
 
@@ -44,89 +42,6 @@ export function selectDisplayGroups(state: WebState): DisplayGroup[] {
     }
   }
   return groups;
-}
-
-/**
- * Snapshot artifacts are only rebuilt on session hydrate. During a live turn
- * they are stale, so merge file tools from the transcript with the snapshot
- * list. Path is the stable identity the tool cards already use.
- */
-function selectArtifacts(state: WebState): ArtifactItem[] {
-  const byPath = new Map<string, ArtifactItem>();
-  for (const artifact of state.artifacts) {
-    byPath.set(artifact.path ?? artifact.id, artifact);
-  }
-  for (const message of state.liveSession.messages.length
-    ? state.liveSession.messages
-    : state.messages) {
-    for (const block of message.blocks ?? []) {
-      if (block.type !== "tool" && block.type !== "toolCall") continue;
-      const id = block.type === "toolCall" ? block.id : block.toolCallId;
-      const execution = state.toolExecutions[id];
-      const name = execution?.name ?? block.name;
-      if (
-        name !== "read" &&
-        name !== "write" &&
-        name !== "edit" &&
-        name !== "apply_patch"
-      ) {
-        continue;
-      }
-      const args = argsOf({
-        args: execution?.args ?? block.args,
-        argsText:
-          execution?.argsText ??
-          (block.type === "toolCall" ? block.argsText : undefined),
-      });
-      const path = typeof args.path === "string" ? args.path : "";
-      if (!path) continue;
-      const content =
-        name === "read"
-          ? resultText(
-              execution?.result ?? execution?.partialResult ?? block.result,
-            )
-          : name === "write"
-            ? String(args.content ?? "")
-            : name === "apply_patch"
-              ? String(args.patch ?? "")
-              : String(args.new_string ?? args.newText ?? "");
-      const previous =
-        name === "edit"
-          ? String(args.old_string ?? args.oldText ?? "")
-          : undefined;
-      const existing = byPath.get(path);
-      const blockError = block.type === "toolCall" ? block.isError : false;
-      byPath.set(path, {
-        id: existing?.id ?? path,
-        path,
-        name: existing?.name ?? basename(path),
-        kind: name === "apply_patch" ? "edit" : name,
-        language: languageFor(path),
-        content: content || existing?.content || "",
-        previous: previous ?? existing?.previous,
-        diff: existing?.diff ?? null,
-        isError: Boolean(execution?.isError || blockError || existing?.isError),
-      });
-    }
-  }
-  return Array.from(byPath.values());
-}
-
-export function selectActiveArtifact(state: WebState): ArtifactItem | null {
-  return selectArtifactById(state, state.activeArtifactId);
-}
-
-function selectArtifactById(
-  state: WebState,
-  id: string | null,
-): ArtifactItem | null {
-  if (!id) return null;
-  const artifacts = selectArtifacts(state);
-  return (
-    artifacts.find((item) => item.id === id) ??
-    artifacts.find((item) => item.path === id) ??
-    null
-  );
 }
 
 export type UsageView = {

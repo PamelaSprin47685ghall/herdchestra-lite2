@@ -236,7 +236,6 @@ export function createUiBridgeStation(options) {
     models: [],
     sessions: [],
     queue: { steering: [], followUp: [] },
-    activeArtifactId: null,
     fenceStatus: null,
   };
 
@@ -311,7 +310,6 @@ export function createUiBridgeStation(options) {
         steering: copyIfArray(state.queue?.steering),
         followUp: copyIfArray(state.queue?.followUp),
       },
-      activeArtifactId: state.activeArtifactId,
       fence: state.meta.fence && typeof state.meta.fence === "object"
         ? { ...state.meta.fence }
         : state.meta.fence,

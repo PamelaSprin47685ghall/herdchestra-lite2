@@ -192,24 +192,3 @@ test("Other free text is legal only where Other is offered", async () => {
 	expect(noOther.ok).toBe(false);
 	expect(noOther.errors.solo).toBeTruthy();
 });
-
-test("formats answers as ordered name/question/value entries and hides secrets", async () => {
-	const { parseAskHtmlForm, formatFormAnswers } = await load();
-	const parsed = parseAskHtmlForm(HTML);
-	const answers = formatFormAnswers(parsed, {
-		color: "blue",
-		name: "Ada",
-		token: "abc",
-		features: ["a"],
-		notes: "hello",
-	});
-	expect(Array.isArray(answers)).toBe(true);
-	for (const answer of answers) {
-		expect(answer).toHaveProperty("name");
-		expect(answer).toHaveProperty("question");
-		expect(answer).toHaveProperty("answer");
-	}
-	expect(answers.some((answer) => answer.name === "token")).toBe(false);
-	const color = answers.find((answer) => answer.name === "color");
-	expect(String(color.answer).toLowerCase()).toContain("blue");
-});

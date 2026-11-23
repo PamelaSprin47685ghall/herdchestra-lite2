@@ -345,22 +345,6 @@ export function applyAgentEvent(state, event) {
   return next;
 }
 
-export function reconcileAgentEnd(state, messages) {
-  const merged = state.messages ? [...state.messages] : [];
-  const index = new Map(merged.map((message, position) => [message.id, position]));
-  for (const message of messages ?? []) {
-    if (!message || !message.id) continue;
-    const position = index.get(message.id);
-    if (position === undefined) {
-      index.set(message.id, merged.length);
-      merged.push(message);
-    } else {
-      merged[position] = message;
-    }
-  }
-  return { ...state, messages: merged };
-}
-
 function hasVisibleText(text) {
   return typeof text === "string" && text.trim().length > 0;
 }

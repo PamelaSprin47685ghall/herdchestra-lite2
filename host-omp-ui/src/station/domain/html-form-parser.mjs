@@ -336,24 +336,4 @@ export function validateFormSubmission(parsedForm, data) {
   return { ok: Object.keys(errors).length === 0, normalized, errors };
 }
 
-export function formatFormAnswers(parsedForm, data) {
-  const answers = [];
-  for (const field of parsedForm.fields) {
-    if (field.type === "hidden") continue;
-    if (!Object.prototype.hasOwnProperty.call(data, field.name)) continue;
-    const value = data[field.name];
-    if (value === undefined) continue;
-    let answer = value;
-    if (field.type === "radio" || field.type === "select") {
-      const option = field.options.find((item) => item.value === value);
-      answer = option ? option.label : value;
-    } else if (field.type === "checkbox") {
-      const values = Array.isArray(value) ? value : [value];
-      answer = values
-        .map((entry) => field.options.find((option) => option.value === entry)?.label ?? entry)
-        .join(", ");
-    }
-    answers.push({ name: field.name, question: field.question, answer });
-  }
-  return answers;
-}
+

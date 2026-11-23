@@ -42,6 +42,56 @@ function status() {
 
 const startRuntime = createStartRuntimeTicket({ record });
 
+// Teardown order matters. `disposed` goes first so a boot still in flight
+// cannot install a runtime; then we wait for that boot to settle (bounded),
+// so its later writes land before the final flush; then the flush runs while
+// `runtime` still resolves dispatch; only then do we clear and tear down.
+// A boot that is already past its disposed checks closes its own server.
+function settleBoot(boot, deadlineMs) {
+	if (!boot) return Promise.resolve();
+	return new Promise((resolve) => {
+		let settled = false;
+		const timer = setTimeout(() => finish(), deadlineMs);
+		timer.unref?.();
+		function finish() {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve();
+		}
+		Promise.resolve(boot).then(finish, finish);
+	});
+}
+
+export async function shutdownRuntime(current, { deadlineMs = 2000 } = {}) {
+	if (!current) return;
+	current.disposed = true;
+	await settleBoot(current.bootPromise, deadlineMs);
+	current.station?.flushDeltas?.();
+	if (runtime === current) runtime = null;
+	current.unsubscribeCapture?.();
+	try {
+		current.bridge?.cancel?.();
+	} catch (error) {
+		record("bridge-cancel", error);
+	}
+	try {
+		current.watcher?.dispose?.();
+	} catch (error) {
+		record("watcher-dispose", error);
+	}
+	try {
+		current.uiDecoration?.dispose?.();
+	} catch (error) {
+		record("ui-decoration-dispose", error);
+	}
+	try {
+		await current.server?.close?.();
+	} catch (error) {
+		record("server-close", error);
+	}
+}
+
 export function wireUiExtension(pi, env = {}) {
 	const onSessionStart = async (_event, ctx) => {
 		try {
@@ -164,41 +214,16 @@ export function wireUiExtension(pi, env = {}) {
 				noteFenceError(runtimeRef, "capture-host", error);
 			}
 			station.onMetaUpdate?.({ fence: runtimeRef.fence });
-			void startRuntime(runtimeRef, env, adapter, ctx);
+			// Keep the boot promise so shutdown can wait for it. startRuntime has
+			// its own error boundary, so a failure never escapes as a rejection.
+			runtimeRef.bootPromise = startRuntime(runtimeRef, env, adapter, ctx);
 		} catch (error) {
 			record("session-start", error);
 		}
 	};
 
 	const onSessionShutdown = async () => {
-		const current = runtime;
-		if (!current) return;
-		// Flush before clearing runtime: dispatch resolves through runtime, so a
-		// pending merged delta would otherwise be dropped on the way out.
-		current.station?.flushDeltas?.();
-		runtime = null;
-		current.disposed = true;
-		current.unsubscribeCapture?.();
-		try {
-			current.bridge?.cancel?.();
-		} catch (error) {
-			record("bridge-cancel", error);
-		}
-		try {
-			current.watcher?.dispose?.();
-		} catch (error) {
-			record("watcher-dispose", error);
-		}
-		try {
-			current.uiDecoration?.dispose?.();
-		} catch (error) {
-			record("ui-decoration-dispose", error);
-		}
-		try {
-			await current.server?.close?.();
-		} catch (error) {
-			record("server-close", error);
-		}
+		await shutdownRuntime(runtime);
 	};
 
 	wireHooks({

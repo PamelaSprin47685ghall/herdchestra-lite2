@@ -22,7 +22,7 @@ const receipt = (forkId = FORK_ID, timestamp = 300) => ({
 	role: "user",
 	content: childReceiptText({
 		forkId,
-		intent: "read the version",
+		knuth_nfa_inspired_fsm: "read the version",
 		budget: { read: 2 },
 		targets: ["src/parser.mjs"],
 		childDepth: 1,

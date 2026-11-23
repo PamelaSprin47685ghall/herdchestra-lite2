@@ -9,7 +9,7 @@ import { forkParameters } from "../src/tools/descriptions.mjs";
 
 const base = {
   scopeId: "alpha",
-  intent: "read the parser",
+  knuth_nfa_inspired_fsm: "read the parser",
   profession: "You are a precise reviewer who rejects a claim without evidence",
   blocked: false,
   budget: { read: 2 },

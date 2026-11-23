@@ -89,14 +89,14 @@ describe("adoption keeps the parent ahead of its children", () => {
 			forkId: "p",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent",
+			knuth_nfa_inspired_fsm: "parent",
 			depth: 0,
 		});
 		registerFork(ledger, {
 			forkId: "c1",
 			ownerId: "p",
 			levelKey: "p|0|0",
-			intent: "child",
+			knuth_nfa_inspired_fsm: "child",
 			depth: 1,
 		});
 		// The child finishes first; its record waits in the parent's queue.
@@ -120,14 +120,14 @@ describe("adoption keeps the parent ahead of its children", () => {
 			forkId: "p",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent",
+			knuth_nfa_inspired_fsm: "parent",
 			depth: 0,
 		});
 		registerFork(ledger, {
 			forkId: "c1",
 			ownerId: "p",
 			levelKey: "p|0|0",
-			intent: "child",
+			knuth_nfa_inspired_fsm: "child",
 			depth: 1,
 		});
 		markReady(ledger, "p");
@@ -149,14 +149,14 @@ describe("adoption files the result at the receiver's level", () => {
 			forkId: "p",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent",
+			knuth_nfa_inspired_fsm: "parent",
 			depth: 0,
 		});
 		registerFork(ledger, {
 			forkId: "c1",
 			ownerId: "p",
 			levelKey: "p|0|0",
-			intent: "child",
+			knuth_nfa_inspired_fsm: "child",
 			depth: 1,
 		});
 		markReady(ledger, "c1");
@@ -179,7 +179,7 @@ describe("a child record is frozen before the parent can take it", () => {
 			forkId: "p",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent",
+			knuth_nfa_inspired_fsm: "parent",
 			depth: 0,
 		});
 		const outcomes = new Map();
@@ -207,7 +207,7 @@ describe("the outbound projection keeps a plain record", () => {
 		const state = createState();
 		const messages = [
 			assistantWith("f1", "scope_fork", { forks: [] }),
-			toolResult("f1", "scope_fork", "[fork f1] intent: \"probe\""),
+			toolResult("f1", "scope_fork", "[fork f1] knuth_nfa_inspired_fsm: \"probe\""),
 			assistantWith("j1", "scope_join", {}),
 			toolResult("j1", "scope_join", "full child record for f1"),
 		];

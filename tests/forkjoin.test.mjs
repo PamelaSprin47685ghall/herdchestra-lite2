@@ -25,7 +25,7 @@ function fork(ledger, forkId, ownerId = "root", depth = 0, levelKey = "L0") {
     forkId,
     ownerId,
     levelKey,
-    intent: `task ${forkId}`,
+    knuth_nfa_inspired_fsm: `task ${forkId}`,
     depth,
   });
   expect(result.ok).toBe(true);
@@ -49,18 +49,18 @@ describe("registration", () => {
     const again = registerFork(ledger, {
       forkId: "f1",
       ownerId: "root",
-      intent: "again",
+      knuth_nfa_inspired_fsm: "again",
       depth: 0,
     });
     expect(again.ok).toBe(false);
     expect(again.code).toBe("DUPLICATE_FORK");
   });
 
-  test("refuses an empty intent on a new scope", async () => {
+  test("refuses an empty knuth_nfa_inspired_fsm on a new scope", async () => {
     const { handleForkCall } = await import("../src/station/fork-controls.mjs");
     const item = {
       scopeId: "probe",
-      intent: "   ",
+      knuth_nfa_inspired_fsm: "   ",
       blocked: false,
       budget: { read: 1 },
       targets: ["src/parser.mjs"],
@@ -75,11 +75,11 @@ describe("registration", () => {
       },
     };
     const result = handleForkCall(station, {
-      id: "call-empty-intent",
+      id: "call-empty-knuth_nfa_inspired_fsm",
       arguments: { forks: [item] },
     });
     expect(result.isError).toBe(true);
-    expect(result.details.code).toBe("MISSING_INTENT");
+    expect(result.details.code).toBe("MISSING_FSM");
     expect(result.details.scopeId).toBe("probe");
     expect(result.content[0].text).toContain("A new scope needs a non-empty");
     expect(spawned).toHaveLength(0);
@@ -334,7 +334,7 @@ describe("owner queries", () => {
         forks: [
           {
             scopeId: "cache-probe",
-            intent: "probe the cache",
+            knuth_nfa_inspired_fsm: "probe the cache",
             blocked: false,
             budget: { read: 2 },
             time: 60,
@@ -390,7 +390,7 @@ describe("owner queries", () => {
       arguments: {
         forks: [
           {
-            scopeId: "probe", intent: "x",
+            scopeId: "probe", knuth_nfa_inspired_fsm: "x",
             blocked: false,
             budget: { read: 1 },
             time: 30,
@@ -407,16 +407,16 @@ describe("owner queries", () => {
     const { validateFork } = await import("../src/station/domain/fork-join.mjs");
     const state = { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
     const base = {
-      scopeId: "probe", intent: "x",
+      scopeId: "probe", knuth_nfa_inspired_fsm: "x",
       budget: { read: 1 },
       time: 30,
       targets: ["src/parser.mjs"],
     };
     expect(validateFork(base).ok).toBe(true);
-    // An empty intent is legal for an amendment; a *new* scope rejects it in
+    // An empty knuth_nfa_inspired_fsm is legal for an amendment; a *new* scope rejects it in
     // the handler, where the name's existence is known.
-    expect(validateFork({ ...base, intent: "  " }).ok).toBe(true);
-    expect(validateFork({ ...base, intent: "  " }).intent).toBe("");
+    expect(validateFork({ ...base, knuth_nfa_inspired_fsm: "  " }).ok).toBe(true);
+    expect(validateFork({ ...base, knuth_nfa_inspired_fsm: "  " }).knuth_nfa_inspired_fsm).toBe("");
     expect(validateFork({ ...base, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
     expect(validateFork({ ...base, time: 0 }).ok).toBe(true);
     expect(validateFork({ ...base, time: 0 }).time).toBeUndefined();
@@ -434,7 +434,7 @@ describe("owner queries", () => {
     const targets = ["fix any defect you find", "the parts of the source that involve caching"];
     const item = {
       scopeId: "natural",
-      intent: "fix defects",
+      knuth_nfa_inspired_fsm: "fix defects",
       blocked: false,
       budget: { read: 1 },
       time: 30,

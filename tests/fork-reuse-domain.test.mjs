@@ -27,7 +27,7 @@ function open(overrides = {}) {
 		forkId: "f1",
 		scopeId: "worker",
 		ownerId: "root",
-		intent: "first",
+		knuth_nfa_inspired_fsm: "first",
 		depth: 0,
 		budget: { read: 2 },
 		time: 60,
@@ -44,7 +44,7 @@ describe("amendFork", () => {
 		const out = amendFork(
 			ledger,
 			"f1",
-			{ budget: { read: 3 }, seconds: 30, intent: "more" },
+			{ budget: { read: 3 }, seconds: 30, knuth_nfa_inspired_fsm: "more" },
 			{ now: NOW },
 		);
 		expect(out.ok).toBe(true);
@@ -56,7 +56,7 @@ describe("amendFork", () => {
 
 	test("keeps a blocked branch blocked and queues the requirement", () => {
 		const { ledger, record } = open({ blocked: true });
-		const out = amendFork(ledger, "f1", { intent: "unblock me" }, { now: NOW });
+		const out = amendFork(ledger, "f1", { knuth_nfa_inspired_fsm: "unblock me" }, { now: NOW });
 		expect(out.ok).toBe(true);
 		expect(record.status).toBe("blocked");
 		expect(record.requirements).toEqual(["unblock me"]);
@@ -107,7 +107,7 @@ describe("supersede and live lookup", () => {
 			forkId: "f2",
 			scopeId: "worker",
 			ownerId: "root",
-			intent: "second",
+			knuth_nfa_inspired_fsm: "second",
 			depth: 0,
 			generation: 2,
 			continuesForkId: "f1",

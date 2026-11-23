@@ -30,7 +30,7 @@ function ledgerWith(ids) {
       forkId: id,
       ownerId: "root",
       levelKey: "root|0|0",
-      intent: `work ${id}`,
+      knuth_nfa_inspired_fsm: `work ${id}`,
       depth: 0,
     });
   }

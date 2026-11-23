@@ -94,14 +94,14 @@ describe("a station with no display at attach time", () => {
 			forkId: "child",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "ui probe",
+			knuth_nfa_inspired_fsm: "ui probe",
 			depth: 0,
 		});
 		expect(registered.ok).toBe(true);
 		station.childSpawnPort()({
 			forkId: "child",
 			childDepth: 1,
-			intent: "ui probe",
+			knuth_nfa_inspired_fsm: "ui probe",
 			receipt: "child receipt",
 			parentOwnerId: "root",
 		});
@@ -197,14 +197,14 @@ async function spawnBeforeDisplay() {
 		forkId: "child-before-ui",
 		ownerId: "root",
 		levelKey: "root|0|0",
-		intent: "late display",
+		knuth_nfa_inspired_fsm: "late display",
 		depth: 0,
 	});
 	expect(registered.ok).toBe(true);
 	station.childSpawnPort()({
 		forkId: "child-before-ui",
 		childDepth: 1,
-		intent: "late display",
+		knuth_nfa_inspired_fsm: "late display",
 		receipt: "child receipt",
 		parentOwnerId: "root",
 	});
@@ -250,14 +250,14 @@ describe("a child spawned before the UI appears", () => {
 			forkId: "child-after-ui",
 			ownerId: "root",
 			levelKey: "root|0|1",
-			intent: "late display next",
+			knuth_nfa_inspired_fsm: "late display next",
 			depth: 0,
 		});
 		expect(next.ok).toBe(true);
 		station.childSpawnPort()({
 			forkId: "child-after-ui",
 			childDepth: 1,
-			intent: "late display next",
+			knuth_nfa_inspired_fsm: "late display next",
 			receipt: "child receipt",
 			parentOwnerId: "root",
 		});
@@ -324,14 +324,14 @@ describe("a grandchild spawned before the UI appears", () => {
 			forkId: "child-before-ui",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "grandchild display",
+			knuth_nfa_inspired_fsm: "grandchild display",
 			depth: 0,
 		});
 		expect(childRegistered.ok).toBe(true);
 		root.childSpawnPort()({
 			forkId: "child-before-ui",
 			childDepth: 1,
-			intent: "grandchild display",
+			knuth_nfa_inspired_fsm: "grandchild display",
 			receipt: "child receipt",
 			parentOwnerId: "root",
 		});
@@ -355,14 +355,14 @@ describe("a grandchild spawned before the UI appears", () => {
 			forkId: "grand-before-ui",
 			ownerId: "child-before-ui",
 			levelKey: "root|0|0|0",
-			intent: "grandchild display",
+			knuth_nfa_inspired_fsm: "grandchild display",
 			depth: 0,
 		});
 		expect(grandRegistered.ok).toBe(true);
 		childStation.childSpawnPort()({
 			forkId: "grand-before-ui",
 			childDepth: 2,
-			intent: "grandchild display",
+			knuth_nfa_inspired_fsm: "grandchild display",
 			receipt: "grandchild receipt",
 			parentOwnerId: "child-before-ui",
 		});

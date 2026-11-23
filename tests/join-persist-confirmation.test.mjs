@@ -23,7 +23,7 @@ function ledgerWithReady(id, record = "child says done") {
     forkId: id,
     ownerId: "root",
     levelKey: "root|0|0",
-    intent: `work ${id}`,
+    knuth_nfa_inspired_fsm: `work ${id}`,
     depth: 0,
   });
   markReady(ledger, id, { ok: true, record });

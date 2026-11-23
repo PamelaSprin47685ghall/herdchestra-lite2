@@ -225,9 +225,9 @@ test.each(["root", "child"])("%s takes the free stream slot and the other stream
 
 test("the native working row follows the latest requester and omits Root", () => {
 	const ledger = createBracketLedger();
-	registerFork(ledger, { forkId: "opaque|id", ownerId: "root", scopeId: "oh-my-pie", intent: "parent", depth: 0 });
-	registerFork(ledger, { forkId: "nested|id", ownerId: "opaque|id", scopeId: "sub_sub_scope", intent: "child", depth: 1 });
-	registerFork(ledger, { forkId: "plan", ownerId: "root", scopeId: "plan", intent: "deferred", depth: 0, blocked: true });
+	registerFork(ledger, { forkId: "opaque|id", ownerId: "root", scopeId: "oh-my-pie", knuth_nfa_inspired_fsm: "parent", depth: 0 });
+	registerFork(ledger, { forkId: "nested|id", ownerId: "opaque|id", scopeId: "sub_sub_scope", knuth_nfa_inspired_fsm: "child", depth: 1 });
+	registerFork(ledger, { forkId: "plan", ownerId: "root", scopeId: "plan", knuth_nfa_inspired_fsm: "deferred", depth: 0, blocked: true });
 	const root = new Session();
 	root.isStreaming = true;
 	let label;

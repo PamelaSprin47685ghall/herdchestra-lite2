@@ -72,7 +72,7 @@ test("registerFork no longer computes the deadline inline", () => {
 	const registered = registerFork(ledger, {
 		forkId: "child-1",
 		ownerId: "root",
-		intent: "hold the wall clock",
+		knuth_nfa_inspired_fsm: "hold the wall clock",
 		depth: 0,
 		time: 60,
 		startedAt: 1_000,
@@ -110,7 +110,7 @@ test("the station's clock methods ask the injected clock implementation", () => 
 	registerFork(ledger, {
 		forkId: "child-1",
 		ownerId: "root",
-		intent: "use the injected clock",
+		knuth_nfa_inspired_fsm: "use the injected clock",
 		depth: 0,
 	});
 	const station = createTestStation(SessionStation, 

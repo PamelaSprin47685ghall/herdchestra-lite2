@@ -26,7 +26,7 @@ function forkCall(argumentsForFork) {
 			forks: [
 				{
 					scopeId: "parser",
-					intent: "read the parser",
+					knuth_nfa_inspired_fsm: "read the parser",
 					blocked: false,
 					budget: { read: 2, bash: 2 },
 					targets: ["src/parser.mjs"],
@@ -69,7 +69,7 @@ describe("fork time is derived from measured turns", () => {
 	test("a fork item without time is valid", () => {
 		const verdict = validateFork({
 			scopeId: "parser",
-			intent: "read the parser",
+			knuth_nfa_inspired_fsm: "read the parser",
 			blocked: false,
 			budget: { read: 2, bash: 2 },
 			targets: ["src/parser.mjs"],

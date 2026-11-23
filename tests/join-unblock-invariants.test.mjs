@@ -73,7 +73,7 @@ function registerChild(ledger, forkId, ownerId = "root", options = {}) {
 		forkId,
 		ownerId,
 		levelKey: options.levelKey ?? "L0",
-		intent: options.intent ?? `task ${forkId}`,
+		knuth_nfa_inspired_fsm: options.knuth_nfa_inspired_fsm ?? `task ${forkId}`,
 		depth: options.depth ?? (ownerId === "root" ? 0 : 1),
 		blocked: options.blocked === true,
 	});
@@ -442,7 +442,7 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 				forks: [
 					{
 						scopeId: "c-broken",
-						intent: "will fail to spawn",
+						knuth_nfa_inspired_fsm: "will fail to spawn",
 						blocked: false,
 						budget: { read: 1 },
 						targets: ["src/a.mjs"],
@@ -529,7 +529,7 @@ describe("shared ledger across registries and wiring resilience", () => {
 			ownScopeId: "c-prop",
 			parentOwnerId: "root",
 			childDepth: 1,
-			intent: "check registry propagation",
+			knuth_nfa_inspired_fsm: "check registry propagation",
 			receipt: "hi",
 			budget: { read: 1 },
 			targets: ["x"],

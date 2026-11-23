@@ -14,7 +14,7 @@ function specFor(forkId) {
 	return {
 		forkId,
 		childDepth: 1,
-		intent: "probe",
+		knuth_nfa_inspired_fsm: "probe",
 		receipt: "You are the child of fork " + forkId,
 		parentOwnerId: "root",
 	};
@@ -28,7 +28,7 @@ describe("the fallback record for a child that never returns", () => {
 			forkId: "f1",
 			ownerId: "root",
 			levelKey: "L",
-			intent: "probe",
+			knuth_nfa_inspired_fsm: "probe",
 			depth: 0,
 		});
 

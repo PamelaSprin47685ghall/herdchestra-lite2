@@ -72,10 +72,10 @@ test("a promoted successor is ready to answer without reevaluating its ledger", 
 });
 
 test("routine scope status keeps local budget and pending work without repeating the assignment", () => {
-	const intent = "Write a report on the cave swallows of Costa Rica";
+	const knuth_nfa_inspired_fsm = "Write a report on the cave swallows of Costa Rica";
 	const state = { autopilot: true, startedAt: 0 };
 	const branch = {
-		intent,
+		knuth_nfa_inspired_fsm,
 		remaining: { read: 2, edit: 1 },
 		budget: { read: 8, edit: 3 },
 		clockPausedAt: 4000,
@@ -92,7 +92,7 @@ test("routine scope status keeps local budget and pending work without repeating
 	}
 	// It still ships exactly once in the skill text the system prompt carries.
 	expect(persistentOperatingSkill.split(chineseRequirement)).toHaveLength(2);
-	expect(pending).not.toContain(intent);
+	expect(pending).not.toContain(knuth_nfa_inspired_fsm);
 	expect(pending).toMatch(/read\s+2(?:\.00)?\/8(?:\.00)?\b/);
 	expect(pending).toMatch(/edit\s+1(?:\.00)?\/3(?:\.00)?\b/);
 	expect(pending).toMatch(/\btime\s+0:20\/0:24\b/);
@@ -108,9 +108,9 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 		forkLedgerPort: () => ledger,
 		childSpawnPort: () => () => {},
 	};
-	const launch = (scopeId, intent) => handleForkCall(station, {
+	const launch = (scopeId, knuth_nfa_inspired_fsm) => handleForkCall(station, {
 		id: `call-${scopeId}`,
-		arguments: { forks: [{ scopeId, intent, profession: "You are a careful observer of tides and harbor lights", blocked: false, budget: { read: 1 }, time: 30, targets: [`${scopeId}.mjs`] }] },
+		arguments: { forks: [{ scopeId, knuth_nfa_inspired_fsm, profession: "You are a careful observer of tides and harbor lights", blocked: false, budget: { read: 1 }, time: 30, targets: [`${scopeId}.mjs`] }] },
 	});
 	const prior = launch("earlier", "Measure the tide");
 	expect(prior.isError).toBeUndefined();
@@ -141,8 +141,8 @@ test("the registered scope_fork reads a repeated scopeId as an amendment", () =>
 	const item = tools.get("scope_fork").parameters.properties.forks.items;
 	expect(item.properties.scopeId.description).toMatch(/amends? that scope/i);
 	expect(item.properties.scopeId.description).toContain("only its owner");
-	expect(item.properties.intent.description).toMatch(/next turn boundary/i);
-	expect(item.required).not.toContain("intent");
+	expect(item.properties.knuth_nfa_inspired_fsm.description).toMatch(/next turn boundary/i);
+	expect(item.required).not.toContain("knuth_nfa_inspired_fsm");
 });
 
 test("the root receipt reports unreceived work until the root joins it", () => {
@@ -151,7 +151,7 @@ test("the root receipt reports unreceived work until the root joins it", () => {
 	station.forkLedgerPort = () => ledger;
 	station.forkOwnerId = () => null;
 	expect(registerFork(ledger, {
-		forkId: "worker-1", ownerId: "root", intent: "inspect the sample", depth: 0,
+		forkId: "worker-1", ownerId: "root", knuth_nfa_inspired_fsm: "inspect the sample", depth: 0,
 	}).ok).toBe(true);
 	expect(markReady(ledger, "worker-1").ok).toBe(true);
 

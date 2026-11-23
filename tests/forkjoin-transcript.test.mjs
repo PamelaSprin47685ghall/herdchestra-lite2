@@ -125,7 +125,7 @@ describe("child record rendering", () => {
         call("f9", "scope_fork", {
           forks: [
             {
-              intent: "measure the cache",
+              knuth_nfa_inspired_fsm: "measure the cache",
               budget: { read: 2, bash: 1 },
               time: 120,
               targets: ["cache.mjs"],

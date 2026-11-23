@@ -231,7 +231,7 @@ describe("a child's model-facing prompt", () => {
 });
 
 const childBranch = {
-	intent: "child work",
+	knuth_nfa_inspired_fsm: "child work",
 	remaining: { read: 1 },
 	budget: { read: 2 },
 	clockPausedAt: 0,

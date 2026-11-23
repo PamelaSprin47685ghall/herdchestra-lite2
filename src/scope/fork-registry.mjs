@@ -61,7 +61,10 @@ export function setIdentity(registry, forkId, identity) {
     ownScopeId: typeof identity.ownScopeId === "string" ? identity.ownScopeId : null,
     // The child's own scope needs the same shape the parent declared. These
     // are data, not decisions: the station opens the scope when it reads them.
-    intent: typeof identity.intent === "string" ? identity.intent : null,
+    knuth_nfa_inspired_fsm:
+      typeof identity.knuth_nfa_inspired_fsm === "string"
+        ? identity.knuth_nfa_inspired_fsm
+        : null,
     budget:
       identity.budget && typeof identity.budget === "object" ? { ...identity.budget } : null,
     time: Number.isFinite(identity.time) && identity.time > 0 ? identity.time : null,

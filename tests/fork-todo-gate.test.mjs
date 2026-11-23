@@ -17,7 +17,7 @@ function stationWith(children, { ownerId = "root", viewer = null } = {}) {
 			forkId,
 			ownerId,
 			levelKey: `${ownerId}|0|0`,
-			intent: `child ${forkId}`,
+			knuth_nfa_inspired_fsm: `child ${forkId}`,
 			depth: 0,
 			blocked: false,
 		});

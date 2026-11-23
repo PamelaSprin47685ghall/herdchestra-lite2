@@ -135,7 +135,7 @@ test("the child's identity spends the child's budget, never the root's", () => {
 			forkId: "fork_x",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "child work",
+			knuth_nfa_inspired_fsm: "child work",
 			depth: 0,
 			budget: { read: 2 },
 		}).ok,

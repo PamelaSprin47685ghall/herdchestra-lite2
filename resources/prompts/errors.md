@@ -42,9 +42,9 @@ Tool stopped at the scope deadline. Its result is gone. Calls now get one second
 
 Use a short ASCII `scopeId` other than `root`.
 
-## invalid-intent
+## invalid-fsm
 
-Give the child a non-empty `intent`.
+Give the child a non-empty `knuth_nfa_inspired_fsm`.
 
 ## invalid-profession
 
@@ -70,9 +70,9 @@ Do not pass `time`. The system derives the wall-clock budget from the session's 
 
 No bracket ledger is attached; fork/join is unavailable in this session. Continue in the current scope, or report the configuration.
 
-## missing-intent
+## missing-fsm
 
-A new scope needs a non-empty `intent`. Only a reuse of an existing `scopeId` may omit it.
+A new scope needs a non-empty `knuth_nfa_inspired_fsm`. Only a reuse of an existing `scopeId` may omit it.
 
 ## foreign-scope-id
 
@@ -84,7 +84,7 @@ Scope {{scopeId}} is running, so it cannot be marked blocked. Reuse it with a bu
 
 ## scope-reuse-empty
 
-Reusing `{{scopeId}}` changed nothing. Add budget, intent, or targets.
+Reusing `{{scopeId}}` changed nothing. Add budget, an FSM description, or targets.
 
 ## scope-not-amendable
 

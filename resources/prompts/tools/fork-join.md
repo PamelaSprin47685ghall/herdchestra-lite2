@@ -4,15 +4,15 @@ Start child scopes without waiting. Receive their records with `scope_join`.
 
 ## fork.scope-id
 
-Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name that already exists in this session — including a finished one — is reused instead of starting a new one; only its owner may reuse it, and the match is case-insensitive. Reuse is an upsert: `running` and `blocked` scopes take the budget as an increment, the intent as one more requirement, and the targets merged into the existing list; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history.
+Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name that already exists in this session — including a finished one — is reused instead of starting a new one; only its owner may reuse it, and the match is case-insensitive. Reuse is an upsert: `running` and `blocked` scopes take the budget as an increment, the FSM description as one more requirement, and the targets merged into the existing list; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history.
 
-## fork.intent
+## fork.knuth_nfa_inspired_fsm
 
-Name the goal the child will make true, the surface it owns, and what a successor can take over. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A scope that only reads still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. A good scope size is about {{defaultPoints}} total tool-budget points and never more than {{maxPoints}}: size it to finish and to be taken over, not to fill a context. One call starts about {{defaultFanout}} children and never more than {{maxFanout}}; a default is also a floor, so hoarding the work in one scope, or serializing the whole plan into a single child out of caution, buys nothing and starves the plan of the attention a fresh subtree would have paid it. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. Choose the tree's depth before its width. A job of no more than about six closures needs one layer; the default is {{defaultDepth}} layers, and the recommended depth for work spanning dozens of closures is {{recommendedDepth}}. Deeper is fine when the work truly needs it, and you need not explain the choice. Say in the intent whether the child is a `subtree` lead that divides again or a `leaf` that closes directly. On a new scope `intent` is required. When the `scopeId` is reused it is optional: the text is appended as one more requirement and delivered at the child's next turn boundary, never in the middle of a running tool.
+Describe the child's work as an NFA-inspired finite state machine: name the states the work moves through, the transitions between them, the acceptance or terminal state, and the failure states. A small task can be a short FSM. When the work warrants it, use rich orchestration — branching, concurrent sub-flows, retry and compensation, and explicit join points — and say which state each branch returns to. Also name the surface the child owns and what a successor can take over. A closure is a goal, not an activity: "read the parser" is a waypoint; "the parser now rejects X on the sample" is done. A scope that only reads still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. A good scope size is about {{defaultPoints}} total tool-budget points and never more than {{maxPoints}}: size it to finish and to be taken over, not to fill a context. One call starts about {{defaultFanout}} children and never more than {{maxFanout}}; a default is also a floor, so hoarding the work in one scope, or serializing the whole plan into a single child out of caution, buys nothing and starves the plan of the attention a fresh subtree would have paid it. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. Choose the tree's depth before its width. A job of no more than about six closures needs one layer; the default is {{defaultDepth}} layers, and the recommended depth for work spanning dozens of closures is {{recommendedDepth}}. Deeper is fine when the work truly needs it, and you need not explain the choice. Say in the FSM description whether the child is a `subtree` lead that divides again or a `leaf` that closes directly. On a new scope `knuth_nfa_inspired_fsm` is required. When the `scopeId` is reused it is optional: the text is appended as one more requirement and delivered at the child's next turn boundary, never in the middle of a running tool.
 
 ## fork.profession
 
-Required identity statement for the child scope's LLM. Start with "You are " and name the role it should hold, for example "You are a precise reviewer who rejects a claim without evidence". The spawner injects it as the child's identity prefix, directly under the receipt marker and before the task; make it a role, not a restatement of the intent. Reusing a running or blocked scope updates the record for its next generation, but cannot rewrite the receipt already delivered to the live child.
+Required identity statement for the child scope's LLM. Start with "You are " and name the role it should hold, for example "You are a precise reviewer who rejects a claim without evidence". The spawner injects it as the child's identity prefix, directly under the receipt marker and before the task; make it a role, not a restatement of the FSM description. Reusing a running or blocked scope updates the record for its next generation, but cannot rewrite the receipt already delivered to the live child.
 
 ## fork.deep-nesting
 
@@ -57,7 +57,7 @@ Started ({{count}}):
 
 ## fork.started-line
 
-- {{forkId}}: {{intent}}
+- {{forkId}}: {{knuth_nfa_inspired_fsm}}
 
 ## fork.batch-deferred
 
@@ -66,7 +66,7 @@ Deferred, not started ({{count}}):
 
 ## fork.deferred-line
 
-- {{forkId}}: {{intent}}
+- {{forkId}}: {{knuth_nfa_inspired_fsm}}
 
 ## fork.batch-failed
 
@@ -75,7 +75,7 @@ Failed to start ({{count}}):
 
 ## fork.failed-line
 
-- {{forkId}}: {{intent}} — {{reason}}
+- {{forkId}}: {{knuth_nfa_inspired_fsm}} — {{reason}}
 
 ## fork.checkpoint-only
 

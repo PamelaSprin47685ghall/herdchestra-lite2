@@ -53,7 +53,7 @@ function forkStation(ledger) {
 function forkItem(scopeId, overrides = {}) {
 	return {
 		scopeId,
-		intent: `work on ${scopeId}`,
+		knuth_nfa_inspired_fsm: `work on ${scopeId}`,
 		blocked: false,
 		budget: { read: 6 },
 		targets: [`src/${scopeId}.mjs`],
@@ -87,7 +87,7 @@ function branch(ledger, overrides = {}) {
 			forkId: "worker",
 			scopeId: "worker",
 			ownerId: "root",
-			intent: "finish the report",
+			knuth_nfa_inspired_fsm: "finish the report",
 			depth: 0,
 			startedAt: NOW,
 			budget: { read: 0 },
@@ -169,7 +169,7 @@ describe("one scope may hold more points than the cap", () => {
 });
 
 describe("adding points to a live scope is a soft cap too", () => {
-	test("18 plus 9 stays quiet, a further point warns, and a bare intent does not repeat it", () => {
+	test("18 plus 9 stays quiet, a further point warns, and a bare FSM description does not repeat it", () => {
 		const ledger = createBracketLedger();
 		const station = forkStation(ledger);
 		handleForkCall(station, {
@@ -198,14 +198,14 @@ describe("adding points to a live scope is a soft cap too", () => {
 		expect(forkOf(ledger, forkId).budget.edit).toBe(10);
 		expect(warnings(toOver.content[0].text)).toBe(1);
 
-		const intentOnly = handleForkCall(station, {
+		const fsmOnly = handleForkCall(station, {
 			id: "call-note",
 			arguments: {
-				forks: [forkItem("grow", { intent: "one more slice", budget: {} })],
+				forks: [forkItem("grow", { knuth_nfa_inspired_fsm: "one more slice", budget: {} })],
 			},
 		});
-		expect(intentOnly.isError).toBeUndefined();
-		expect(warnings(intentOnly.content[0].text)).toBe(0);
+		expect(fsmOnly.isError).toBeUndefined();
+		expect(warnings(fsmOnly.content[0].text)).toBe(0);
 		expect(forkOf(ledger, forkId).requirements).toEqual(["one more slice"]);
 	});
 
@@ -372,7 +372,7 @@ describe("recommended tree depth guidance", () => {
 		const text = childReceiptText({
 			forkId: "w1",
 			childDepth: 1,
-			intent: "leaf work",
+			knuth_nfa_inspired_fsm: "leaf work",
 			budget: "read 6",
 			targets: ["a.mjs"],
 		});

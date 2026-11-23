@@ -96,7 +96,7 @@ function depthOf(station) {
 
 const REFUSAL_KEY = {
   INVALID_SCOPE_ID: "invalid-scope-id",
-  INVALID_INTENT: "invalid-intent",
+  INVALID_FSM: "invalid-fsm",
   INVALID_PROFESSION: "invalid-profession",
   INVALID_BUDGET: "invalid-budget",
   INVALID_ARGUMENT: "invalid-argument",
@@ -277,7 +277,7 @@ export function childReceiptText(spec) {
       depth: spec.childDepth,
       defaultDepth: FORK_DEFAULT_DEPTH,
       recommendedDepth: FORK_RECOMMENDED_DEPTH,
-      intent: spec.intent,
+      knuth_nfa_inspired_fsm: spec.knuth_nfa_inspired_fsm,
       budget: budgetText(spec.budget),
       targets: targetsText(spec.targets),
     }),
@@ -287,8 +287,8 @@ export function childReceiptText(spec) {
 }
 
 // The receipt's marker, return note and routing note are fixed lines above the
-// rendered intent. Pricing them keeps a fork start from looking as small as
-// its intent alone.
+// rendered FSM. Pricing them keeps a fork start from looking as small as
+// its FSM alone.
 const FORK_RECEIPT_PREFIX_CHARS = 600;
 
 /** Add two tool-count maps, dropping zeros. */
@@ -338,21 +338,21 @@ function priorRecordText(record) {
 }
 
 /** Receipt for a generation that continues an already closed scope. */
-function generationReceiptText({ scopeId, childDepth, generation, standing, intent, budget, targets, prior }) {
+function generationReceiptText({ scopeId, childDepth, generation, standing, newRequirement, budget, targets, prior }) {
   return [
     render(S["fork.child-status"], {
       marker: childReceiptMarker(scopeId),
       depth: childDepth,
       defaultDepth: FORK_DEFAULT_DEPTH,
       recommendedDepth: FORK_RECOMMENDED_DEPTH,
-      intent: standing,
+      knuth_nfa_inspired_fsm: standing,
       budget: budgetText(budget),
       targets: targetsText(targets),
     }),
     `[Continuing scope ${scopeId} — generation ${generation}]`,
     "History only; do not re-execute it.",
     prior,
-    ...(intent === "" ? [] : ["", "[New requirement]", intent]),
+    ...(newRequirement === "" ? [] : ["", "[New requirement]", newRequirement]),
     S["fork.child-return"],
     S["fork.child-routing"],
   ].join("\n");
@@ -387,7 +387,7 @@ export function handleForkCall(station, call, options = {}) {
     return childReceiptText({
       scopeId: item.scopeId,
       childDepth: depth + 1,
-      intent: item.intent,
+      knuth_nfa_inspired_fsm: item.knuth_nfa_inspired_fsm,
       budget: item.budget,
       targets: item.targets,
     }).length + FORK_RECEIPT_PREFIX_CHARS + identityChars;
@@ -454,14 +454,14 @@ export function handleForkCall(station, call, options = {}) {
     });
   }
 
-  const blankIntent = decision.items.find(
-    (item) => item.action === "create" && item.intent === "",
+  const blankFsm = decision.items.find(
+    (item) => item.action === "create" && item.knuth_nfa_inspired_fsm === "",
   );
-  if (blankIntent) {
+  if (blankFsm) {
     return errorResult(
-      "MISSING_INTENT",
-      render(E["missing-intent"] || "A new scope needs an intent.", { scopeId: blankIntent.scopeId }),
-      { scopeId: blankIntent.scopeId },
+      "MISSING_FSM",
+      render(E["missing-fsm"] || "A new scope needs a knuth_nfa_inspired_fsm description.", { scopeId: blankFsm.scopeId }),
+      { scopeId: blankFsm.scopeId },
     );
   }
 
@@ -505,12 +505,12 @@ export function handleForkCall(station, call, options = {}) {
     return lines.join("\n");
   }
 
-  const specOf = (fork, item, intent) => ({
+  const specOf = (fork, item, knuth_nfa_inspired_fsm) => ({
     forkId: fork.forkId,
     scopeId: fork.scopeId,
     sourceToolCallId: baseId,
     childDepth: fork.childDepth,
-    intent,
+    knuth_nfa_inspired_fsm,
     profession: item.profession ?? fork.profession ?? "",
     budget: fork.budget,
     time: fork.timeBudgetMs == null ? null : fork.timeBudgetMs / 1000,
@@ -522,13 +522,13 @@ export function handleForkCall(station, call, options = {}) {
     parentDepth: depth,
   });
 
-  const queueChild = (fork, item, intent, receipt, kind = "created") => {
-    const spec = specOf(fork, item, intent);
+  const queueChild = (fork, item, knuth_nfa_inspired_fsm, receipt, kind = "created") => {
+    const spec = specOf(fork, item, knuth_nfa_inspired_fsm);
     spec.receipt = withProfession(receipt, spec.profession);
     pending.push({
       forkId: fork.forkId,
       scopeId: item.scopeId,
-      intent,
+      knuth_nfa_inspired_fsm,
       childDepth: fork.childDepth,
       kind,
       spec,
@@ -539,7 +539,7 @@ export function handleForkCall(station, call, options = {}) {
     failed.push({
       forkId,
       scopeId: item.scopeId,
-      intent: item.intent,
+      knuth_nfa_inspired_fsm: item.knuth_nfa_inspired_fsm,
       reason,
     });
   };
@@ -555,7 +555,7 @@ export function handleForkCall(station, call, options = {}) {
         scopeId: item.scopeId,
         ownerId: parentOwnerId,
         levelKey: levelKeyOf(station),
-        intent: item.intent,
+        knuth_nfa_inspired_fsm: item.knuth_nfa_inspired_fsm,
         depth,
         blocked: item.blocked === true,
         budget: item.budget,
@@ -583,13 +583,13 @@ export function handleForkCall(station, call, options = {}) {
       }
       forkIdByScope.set(key, fork.forkId);
       if (item.blocked === true) {
-        deferred.push({ forkId, scopeId: item.scopeId, intent: item.intent });
+        deferred.push({ forkId, scopeId: item.scopeId, knuth_nfa_inspired_fsm: item.knuth_nfa_inspired_fsm });
         continue;
       }
-      queueChild(fork, item, item.intent, childReceiptText({
+      queueChild(fork, item, item.knuth_nfa_inspired_fsm, childReceiptText({
         scopeId: item.scopeId,
         childDepth: fork.childDepth,
-        intent: item.intent,
+        knuth_nfa_inspired_fsm: item.knuth_nfa_inspired_fsm,
         budget: fork.budget,
         targets: fork.targets,
       }));
@@ -614,7 +614,7 @@ export function handleForkCall(station, call, options = {}) {
       const before = Array.isArray(target.requirements) ? target.requirements.length : 0;
       const out = amendFork(ledger, target.forkId, {
         budget: item.budget,
-        intent: item.intent,
+        knuth_nfa_inspired_fsm: item.knuth_nfa_inspired_fsm,
         profession: item.profession,
         targets: item.targets,
       }, { clock });
@@ -626,7 +626,7 @@ export function handleForkCall(station, call, options = {}) {
       const entry = {
         forkId: target.forkId,
         scopeId: item.scopeId,
-        intent: item.intent,
+        knuth_nfa_inspired_fsm: item.knuth_nfa_inspired_fsm,
         added: out.added,
         queued: Math.max(0, (Array.isArray(target.requirements) ? target.requirements.length : 0) - before),
         overLimit: out.overLimit === true,
@@ -646,10 +646,10 @@ export function handleForkCall(station, call, options = {}) {
         if (clock && typeof clock.start === "function") {
           clock.start(target, target.timeBudgetMs, startedAt);
         }
-        queueChild(target, item, target.intent, childReceiptText({
+        queueChild(target, item, target.knuth_nfa_inspired_fsm, childReceiptText({
           scopeId: item.scopeId,
           childDepth: target.childDepth,
-          intent: target.intent,
+          knuth_nfa_inspired_fsm: target.knuth_nfa_inspired_fsm,
           budget: target.budget,
           targets: target.targets,
         }), "revived");
@@ -684,13 +684,13 @@ export function handleForkCall(station, call, options = {}) {
     }
     const generation = (Number.isInteger(target.generation) ? target.generation : 1) + 1;
     const forkId = nextForkId(index, generation);
-    const standing = item.intent === "" ? target.intent : item.intent;
+    const standing = item.knuth_nfa_inspired_fsm === "" ? target.knuth_nfa_inspired_fsm : item.knuth_nfa_inspired_fsm;
     const registered = registerFork(ledger, {
       forkId,
       scopeId: item.scopeId,
       ownerId: parentOwnerId,
       levelKey: levelKeyOf(station),
-      intent: standing,
+      knuth_nfa_inspired_fsm: standing,
       depth,
       blocked: false,
       budget,
@@ -719,8 +719,8 @@ export function handleForkCall(station, call, options = {}) {
       scopeId: item.scopeId,
       childDepth: fork.childDepth,
       generation,
-      standing: target.intent,
-      intent: item.intent,
+      standing: target.knuth_nfa_inspired_fsm,
+      newRequirement: item.knuth_nfa_inspired_fsm,
       budget,
       targets: fork.targets,
       prior: priorRecordText(target),
@@ -728,7 +728,7 @@ export function handleForkCall(station, call, options = {}) {
     continued.push({
       forkId,
       scopeId: item.scopeId,
-      intent: item.intent,
+      knuth_nfa_inspired_fsm: item.knuth_nfa_inspired_fsm,
       generation,
       priorForkId: target.forkId,
       added: item.budget,
@@ -746,7 +746,7 @@ export function handleForkCall(station, call, options = {}) {
         started.push({
           forkId: entry.forkId,
           scopeId: entry.scopeId,
-          intent: entry.intent,
+          knuth_nfa_inspired_fsm: entry.knuth_nfa_inspired_fsm,
           childDepth: entry.childDepth,
         });
       }
@@ -757,7 +757,7 @@ export function handleForkCall(station, call, options = {}) {
       failed.push({
         forkId: entry.forkId,
         scopeId: entry.scopeId,
-        intent: entry.intent,
+        knuth_nfa_inspired_fsm: entry.knuth_nfa_inspired_fsm,
         reason,
       });
       markReady(ledger, entry.forkId, { ok: false, reason: `did not start: ${reason}` });
@@ -780,7 +780,7 @@ export function handleForkCall(station, call, options = {}) {
             render(F["fork.started-line"], {
               forkId: entry.scopeId,
               childDepth: entry.childDepth,
-              intent: entry.intent,
+              knuth_nfa_inspired_fsm: entry.knuth_nfa_inspired_fsm,
             }),
           )
           .join("\n"),
@@ -819,7 +819,7 @@ export function handleForkCall(station, call, options = {}) {
           .map((entry) =>
             render(F["fork.deferred-line"], {
               forkId: entry.scopeId,
-              intent: entry.intent,
+              knuth_nfa_inspired_fsm: entry.knuth_nfa_inspired_fsm,
             }),
           )
           .join("\n"),
@@ -834,7 +834,7 @@ export function handleForkCall(station, call, options = {}) {
           .map((entry) =>
             render(F["fork.failed-line"], {
               forkId: entry.scopeId,
-              intent: entry.intent,
+              knuth_nfa_inspired_fsm: entry.knuth_nfa_inspired_fsm,
               reason: entry.reason,
             }),
           )

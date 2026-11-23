@@ -30,7 +30,7 @@ function branch(ledger, overrides = {}) {
 		{
 			forkId: "worker",
 			ownerId: "root",
-			intent: "finish the report",
+			knuth_nfa_inspired_fsm: "finish the report",
 			depth: 0,
 			startedAt,
 			budget: { read: 0 },

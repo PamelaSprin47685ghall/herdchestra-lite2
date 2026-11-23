@@ -80,15 +80,15 @@ describe("admission decisions", () => {
 describe("fork validation and register", () => {
 	const item = {
 		scopeId: "probe",
-		intent: "x",
+		knuth_nfa_inspired_fsm: "x",
 		budget: { read: 1 },
 		time: 30,
 		targets: ["src/parser.mjs"],
 	};
 
-	test("validateFork normalizes targets and leaves intent to the decision", () => {
+	test("validateFork normalizes targets and leaves knuth_nfa_inspired_fsm to the decision", () => {
 		expect(validateFork(item).ok).toBe(true);
-		expect(validateFork({ ...item, intent: "  " })).toMatchObject({ ok: true, intent: "" });
+		expect(validateFork({ ...item, knuth_nfa_inspired_fsm: "  " })).toMatchObject({ ok: true, knuth_nfa_inspired_fsm: "" });
 		expect(validateFork({ ...item, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
 		expect(validateFork({ ...item, targets: [] }).code).toBe("INVALID_TARGETS");
 		expect(

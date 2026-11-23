@@ -35,7 +35,7 @@ function stationFor(ledger, options = {}) {
 function forkArgs(overrides = {}) {
   return {
     scopeId: "one",
-    intent: "audit the first seam",
+    knuth_nfa_inspired_fsm: "audit the first seam",
     budget: {},
     time: 60,
     targets: ["src/parser.mjs"],
@@ -62,7 +62,7 @@ describe("a batch whose first spawner throws", () => {
 
     const out = handleForkCall(station, {
       id: "batch",
-      arguments: { forks: [forkArgs(), forkArgs({ scopeId: "two", intent: "audit the second seam" })] },
+      arguments: { forks: [forkArgs(), forkArgs({ scopeId: "two", knuth_nfa_inspired_fsm: "audit the second seam" })] },
     });
 
     expect(out.isError).toBeUndefined();
@@ -88,6 +88,6 @@ describe("a batch whose first spawner throws", () => {
     // The surviving fork is registered and left running for its child.
     const startedFork = forkOf(ledger, "batch:1");
     expect(startedFork.status).toBe(RUNNING);
-    expect(startedFork.intent).toBe("audit the second seam");
+    expect(startedFork.knuth_nfa_inspired_fsm).toBe("audit the second seam");
   });
 });

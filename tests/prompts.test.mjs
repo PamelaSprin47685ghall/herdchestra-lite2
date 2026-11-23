@@ -69,7 +69,7 @@ describe("tool contracts map to their documents", () => {
 		// The size caps arrive through render(), so the exported text is the
 		// filled sentence, not the raw template.
 		for (const text of [
-			scopeTools.FORK_INTENT_DESCRIPTION,
+			scopeTools.FORK_FSM_DESCRIPTION,
 			scopeTools.FORK_BUDGET_DESCRIPTION,
 		]) {
 			expect(text).not.toContain("{{");
@@ -124,8 +124,8 @@ describe("tool contracts map to their documents", () => {
 		const doc = loadDoc("tools/fork-join");
 		const item = scopeTools.forkParameters.properties.forks.items;
 		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
-		expect(item.required).not.toContain("intent");
-		expect(item.properties.intent.description).toBe(scopeTools.FORK_INTENT_DESCRIPTION);
+		expect(item.required).not.toContain("knuth_nfa_inspired_fsm");
+		expect(item.properties.knuth_nfa_inspired_fsm.description).toBe(scopeTools.FORK_FSM_DESCRIPTION);
 		expect(item.properties.budget.description).toBe(scopeTools.FORK_BUDGET_DESCRIPTION);
 		expect(item.properties.time).toBeUndefined();
 		expect(item.properties.targets.description).toBe(doc["fork.targets"]);
@@ -353,11 +353,11 @@ describe("fork item schema", () => {
 		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
 	});
 
-	test("a reused scopeId amends, and intent may be omitted", () => {
+	test("a reused scopeId amends, and knuth_nfa_inspired_fsm may be omitted", () => {
 		const item = scopeTools.forkParameters.properties.forks.items;
 		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
-		expect(item.required).not.toContain("intent");
-		expect(item.properties.intent.description).toMatch(/next turn boundary/i);
+		expect(item.required).not.toContain("knuth_nfa_inspired_fsm");
+		expect(item.properties.knuth_nfa_inspired_fsm.description).toMatch(/next turn boundary/i);
 		expect(item.properties.scopeId.description).toMatch(/ready.*supersedes/i);
 		expect(item.properties.scopeId.description).toMatch(/joined.*failed.*new generation/i);
 	});
@@ -366,7 +366,7 @@ describe("fork item schema", () => {
 		const errors = loadDoc("errors");
 		expect(errors["duplicate-scope-id"]).toBeUndefined();
 		for (const key of [
-			"missing-intent",
+			"missing-fsm",
 			"foreign-scope-id",
 			"scope-running-blocked",
 			"scope-reuse-empty",
@@ -386,11 +386,11 @@ describe("scope size stays O(1) at every depth", () => {
 		expect(leaked).toEqual([]);
 	});
 
-	test("the fork intent asks for a small scope, not sqrt(n)", () => {
-		const intent = scopeTools.FORK_INTENT_DESCRIPTION;
-		expect(intent).not.toContain("sqrt");
-		expect(intent).toMatch(/\b(?:18|eighteen)\b/i);
-		expect(intent).toMatch(/\b(?:27|twenty-seven)\b/i);
+	test("the fork knuth_nfa_inspired_fsm asks for a small scope, not sqrt(n)", () => {
+		const knuth_nfa_inspired_fsm = scopeTools.FORK_FSM_DESCRIPTION;
+		expect(knuth_nfa_inspired_fsm).not.toContain("sqrt");
+		expect(knuth_nfa_inspired_fsm).toMatch(/\b(?:18|eighteen)\b/i);
+		expect(knuth_nfa_inspired_fsm).toMatch(/\b(?:27|twenty-seven)\b/i);
 	});
 
 	test("the budget names the panhandle's small total and keeps its funding rule", () => {
@@ -501,16 +501,16 @@ describe("tree depth methodology is default and recommended, not a max", () => {
 	// a small job must not grow a relay layer just to look organized.
 	const noCeiling = /\bmax\b|\bmaximum\b|\bceiling\b/i;
 
-	test("the fork intent states the default depth and the roles that use it", () => {
-		const intent = scopeTools.FORK_INTENT_DESCRIPTION;
-		expect(intent).not.toContain("{{");
-		expect(intent).toMatch(/2/);
-		expect(intent).toMatch(/3/);
-		expect(intent).toMatch(/recommended/i);
-		expect(intent).toMatch(/leaf|subtree/i);
+	test("the fork knuth_nfa_inspired_fsm states the default depth and the roles that use it", () => {
+		const knuth_nfa_inspired_fsm = scopeTools.FORK_FSM_DESCRIPTION;
+		expect(knuth_nfa_inspired_fsm).not.toContain("{{");
+		expect(knuth_nfa_inspired_fsm).toMatch(/2/);
+		expect(knuth_nfa_inspired_fsm).toMatch(/3/);
+		expect(knuth_nfa_inspired_fsm).toMatch(/recommended/i);
+		expect(knuth_nfa_inspired_fsm).toMatch(/leaf|subtree/i);
 		// The guidance is advice. Any sentence carrying the depth must read as
 		// a default, never as a hard bound.
-		const depthSentences = intent
+		const depthSentences = knuth_nfa_inspired_fsm
 			.split(/(?<=\.)\s+/)
 			.filter((sentence) => /depth|layer|level/i.test(sentence))
 			.join(" ");

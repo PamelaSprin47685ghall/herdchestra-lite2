@@ -77,9 +77,9 @@ export function decideForkAdmission({
  */
 export function validateFork(args) {
 	// Empty is valid here: a repeated scope id may carry only budget or
-	// targets. A *new* scope still needs an intent, and the handler enforces
+	// targets. A *new* scope still needs an FSM description, and the handler enforces
 	// that after it knows whether the name already exists.
-	const intent = trimText(args?.intent);
+	const fsm = trimText(args?.knuth_nfa_inspired_fsm);
 	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}
@@ -110,7 +110,7 @@ export function validateFork(args) {
 	return {
 		ok: true,
 		scopeId: args.scopeId,
-		intent,
+		knuth_nfa_inspired_fsm: fsm,
 		profession,
 		budget,
 		targets: normalizeTargets(args.targets),

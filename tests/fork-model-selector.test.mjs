@@ -58,7 +58,7 @@ function forkOne(station, ctx, overrides = {}) {
         forks: [
           {
             scopeId: "parser",
-            intent: "read the parser",
+            knuth_nfa_inspired_fsm: "read the parser",
             blocked: false,
             budget: { read: 1 },
             targets: ["src/parser.mjs"],
@@ -196,8 +196,8 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
         id: "fork-batch",
         arguments: {
           forks: [
-            { scopeId: "one", intent: "first", blocked: false, budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
-            { scopeId: "two", intent: "second", blocked: false, budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
+            { scopeId: "one", knuth_nfa_inspired_fsm: "first", blocked: false, budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
+            { scopeId: "two", knuth_nfa_inspired_fsm: "second", blocked: false, budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
           ],
         },
       },

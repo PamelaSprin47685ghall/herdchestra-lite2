@@ -70,7 +70,7 @@ function opened(ledger, forkId, ownerId = "root") {
     forkId,
     ownerId,
     levelKey: "root|0|0",
-    intent: `task ${forkId}`,
+    knuth_nfa_inspired_fsm: `task ${forkId}`,
     depth: 0,
   });
   expect(result.ok).toBe(true);

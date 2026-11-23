@@ -30,7 +30,7 @@ function register(ledger, forkId, ownerId) {
 		forkId,
 		ownerId,
 		levelKey: `${ownerId}|0|0`,
-		intent: `work for ${forkId}`,
+		knuth_nfa_inspired_fsm: `work for ${forkId}`,
 		depth: ownerId === "root" ? 0 : 1,
 	});
 	expect(result.ok).toBe(true);

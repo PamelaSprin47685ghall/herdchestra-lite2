@@ -30,7 +30,7 @@ function ledgerWith(overrides = {}) {
     {
       forkId: "f1",
       ownerId: "root",
-      intent: "finish the work",
+      knuth_nfa_inspired_fsm: "finish the work",
       depth: 0,
       budget: { read: 2, bash: 1 },
       time: 60,
@@ -71,7 +71,7 @@ describe("a panhandle lands on the branch's own account", () => {
     registerFork(ledger, {
       forkId: "p1",
       ownerId: "root",
-      intent: "parent",
+      knuth_nfa_inspired_fsm: "parent",
       depth: 0,
       budget: { read: 5 },
       time: 60,
@@ -80,7 +80,7 @@ describe("a panhandle lands on the branch's own account", () => {
     registerFork(ledger, {
       forkId: "c1",
       ownerId: "p1",
-      intent: "child",
+      knuth_nfa_inspired_fsm: "child",
       depth: 1,
       budget: { read: 0 },
       time: 60,

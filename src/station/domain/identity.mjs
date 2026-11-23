@@ -26,7 +26,10 @@ export function buildChildIdentity(spec = {}, deps = {}) {
 		parentOwnerId:
 			typeof spec.parentOwnerId === "string" ? spec.parentOwnerId : null,
 		ownScopeId: typeof spec.ownScopeId === "string" ? spec.ownScopeId : null,
-		intent: typeof spec.intent === "string" ? spec.intent : null,
+		knuth_nfa_inspired_fsm:
+			typeof spec.knuth_nfa_inspired_fsm === "string"
+				? spec.knuth_nfa_inspired_fsm
+				: null,
 		budget:
 			spec.budget && typeof spec.budget === "object" ? { ...spec.budget } : null,
 		time: Number.isFinite(spec.time) && spec.time > 0 ? spec.time : null,

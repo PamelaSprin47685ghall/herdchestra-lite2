@@ -26,7 +26,7 @@ const STATE = () => ({
 function item(overrides = {}) {
   return {
     scopeId: "worker",
-    intent: "first",
+    knuth_nfa_inspired_fsm: "first",
     blocked: false,
     budget: { read: 2 },
     targets: ["src/worker.mjs"],
@@ -56,7 +56,7 @@ describe("reuse while running", () => {
     expect(first.details.started).toHaveLength(1);
     const record = forkOf(ledger, "call-1");
 
-    const second = fork({ intent: "more", budget: { read: 1 } }, "call-2");
+    const second = fork({ knuth_nfa_inspired_fsm: "more", budget: { read: 1 } }, "call-2");
     expect(spawned).toHaveLength(1);
     expect(second.content[0].text).toContain("Amended");
     expect(second.details.amended).toEqual(["call-1"]);
@@ -65,12 +65,12 @@ describe("reuse while running", () => {
     expect(record.requirements).toEqual(["more"]);
   });
 
-  test("accepts budget without an intent", () => {
+  test("accepts budget without an knuth_nfa_inspired_fsm", () => {
     const { ledger, fork } = harness();
     fork({}, "call-1");
     const record = forkOf(ledger, "call-1");
     const before = record.requirements.length;
-    const second = fork({ intent: undefined, budget: { read: 1 } }, "call-2");
+    const second = fork({ knuth_nfa_inspired_fsm: undefined, budget: { read: 1 } }, "call-2");
     expect(second.content[0].text).not.toContain("needs a non-empty");
     expect(record.budget.read).toBe(3);
     expect(record.requirements.length).toBe(before);
@@ -79,20 +79,20 @@ describe("reuse while running", () => {
   test("refuses blocked:true on a running scope", () => {
     const { fork } = harness();
     fork({}, "call-1");
-    const second = fork({ blocked: true, intent: "stop" }, "call-2");
+    const second = fork({ blocked: true, knuth_nfa_inspired_fsm: "stop" }, "call-2");
     expect(second.details.failed).toEqual(["call-1"]);
     expect(second.content[0].text).toContain("cannot be marked blocked");
   });
 });
 
 describe("reuse while blocked", () => {
-  test("blocked:false revives and spawns with the standing intent", () => {
+  test("blocked:false revives and spawns with the standing knuth_nfa_inspired_fsm", () => {
     const { ledger, spawned, fork } = harness();
     fork({ blocked: true }, "call-1");
     expect(spawned).toHaveLength(0);
     const record = forkOf(ledger, "call-1");
 
-    const second = fork({ blocked: false, intent: "go" }, "call-2");
+    const second = fork({ blocked: false, knuth_nfa_inspired_fsm: "go" }, "call-2");
     expect(record.status).toBe("running");
     expect(spawned).toHaveLength(1);
     expect(second.details.revived).toEqual(["call-1"]);
@@ -104,7 +104,7 @@ describe("reuse while blocked", () => {
     const { ledger, spawned, fork } = harness();
     fork({ blocked: true }, "call-1");
     const record = forkOf(ledger, "call-1");
-    const second = fork({ blocked: true, intent: "later" }, "call-2");
+    const second = fork({ blocked: true, knuth_nfa_inspired_fsm: "later" }, "call-2");
     expect(record.status).toBe("blocked");
     expect(spawned).toHaveLength(0);
     expect(second.details.amended).toEqual(["call-1"]);
@@ -119,7 +119,7 @@ describe("reuse after the child closed", () => {
     markReady(ledger, "call-1", { record: "first" });
     expect(readyChildren(ledger, "root")).toEqual(["call-1"]);
 
-    const second = fork({ intent: "again", budget: { read: 1 } }, "call-2");
+    const second = fork({ knuth_nfa_inspired_fsm: "again", budget: { read: 1 } }, "call-2");
     const old = forkOf(ledger, "call-1");
     expect(old.supersededAt).not.toBeNull();
     expect(readyChildren(ledger, "root")).toEqual([]);
@@ -141,7 +141,7 @@ describe("reuse after the child closed", () => {
     expect(taken.ok).toBe(true);
     expect(taken.fork.status).toBe("joined");
 
-    fork({ intent: "continue", budget: { read: 1 } }, "call-2");
+    fork({ knuth_nfa_inspired_fsm: "continue", budget: { read: 1 } }, "call-2");
     const next = forkOf(ledger, "call-2");
     expect(next.generation).toBe(2);
     expect(next.continuesForkId).toBe("call-1");
@@ -152,7 +152,7 @@ describe("reuse after the child closed", () => {
     const { ledger, spawned, fork } = harness();
     fork({}, "call-1");
     markReady(ledger, "call-1", { ok: false, reason: "boom" });
-    fork({ intent: "retry", budget: { read: 1 } }, "call-2");
+    fork({ knuth_nfa_inspired_fsm: "retry", budget: { read: 1 } }, "call-2");
     const next = forkOf(ledger, "call-2");
     expect(next.generation).toBe(2);
     expect(spawned).toHaveLength(2);
@@ -167,8 +167,8 @@ describe("reuse inside one batch", () => {
       id: "call-batch",
       arguments: {
         forks: [
-          item({ scopeId: "worker", intent: "first", budget: { read: 2 } }),
-          item({ scopeId: "worker", intent: "second", budget: { read: 1 } }),
+          item({ scopeId: "worker", knuth_nfa_inspired_fsm: "first", budget: { read: 2 } }),
+          item({ scopeId: "worker", knuth_nfa_inspired_fsm: "second", budget: { read: 1 } }),
         ],
       },
     });
@@ -182,11 +182,11 @@ describe("reuse inside one batch", () => {
 });
 
 describe("reuse refusal", () => {
-  test("a new scope without an intent is refused", () => {
+  test("a new scope without an knuth_nfa_inspired_fsm is refused", () => {
     const { ledger, spawned, fork } = harness();
-    const out = fork({ scopeId: "fresh", intent: "   " }, "call-blank");
+    const out = fork({ scopeId: "fresh", knuth_nfa_inspired_fsm: "   " }, "call-blank");
     expect(out.isError).toBe(true);
-    expect(out.details.code).toBe("MISSING_INTENT");
+    expect(out.details.code).toBe("MISSING_FSM");
     expect(spawned).toHaveLength(0);
     expect(ledger.order).toHaveLength(0);
   });
@@ -197,7 +197,7 @@ describe("reuse refusal", () => {
       forkId: "theirs",
       scopeId: "worker",
       ownerId: "other",
-      intent: "not yours",
+      knuth_nfa_inspired_fsm: "not yours",
       depth: 0,
       budget: { read: 1 },
       time: 30,
@@ -215,7 +215,7 @@ describe("reuse refusal", () => {
     markReady(ledger, "call-1", { record: "done" });
     const record = forkOf(ledger, "call-1");
     record.remaining = {};
-    const out = fork({ budget: {}, intent: "more" }, "call-2");
+    const out = fork({ budget: {}, knuth_nfa_inspired_fsm: "more" }, "call-2");
     expect(out.details.failed).toEqual(["call-1"]);
     expect(out.content[0].text).toContain("changed nothing");
   });

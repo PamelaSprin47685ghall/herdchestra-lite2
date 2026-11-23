@@ -6,6 +6,18 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — a fork item describes an NFA-inspired FSM
+
+- `scope_fork`'s `intent` parameter is renamed to `knuth_nfa_inspired_fsm`
+  (string). The value now names states, transitions, acceptance and failure
+  states, and may describe branching, concurrent sub-flows, retry and
+  compensation, and join points. A small task can be a short FSM.
+- Error codes `MISSING_INTENT`/`INVALID_INTENT` become `MISSING_FSM`/`INVALID_FSM`;
+  receipts label the field `FSM:`.
+- Breaking at the tool edge: `additionalProperties: false` rejects the old
+  `intent` key. Ledger restore migrates an old `intent` record to the new key
+  once, so unfinished trees survive the upgrade.
+
 ### Changed — a fork item carries the child's profession
 
 - `scope_fork` now requires `profession` on every fork item: the child's identity statement, injected under the receipt marker.

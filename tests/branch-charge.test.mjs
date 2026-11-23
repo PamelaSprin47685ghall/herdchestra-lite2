@@ -13,7 +13,7 @@ function ledgerWith(forkId, budget) {
   const registered = registerFork(ledger, {
     forkId,
     ownerId: "root",
-    intent: "task",
+    knuth_nfa_inspired_fsm: "task",
     depth: 0,
     budget,
     startedAt: 0,

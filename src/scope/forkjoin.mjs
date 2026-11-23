@@ -113,8 +113,11 @@ export function registerFork(ledger, spec, options = {}) {
   if (!isNonEmptyString(s.ownerId)) {
     return failure("INVALID_OWNER", "ownerId must be a non-empty string.");
   }
-  if (!isNonEmptyString(s.intent)) {
-    return failure("INVALID_INTENT", "intent must be a non-empty string.");
+  if (!isNonEmptyString(s.knuth_nfa_inspired_fsm)) {
+    return failure(
+      "INVALID_FSM",
+      "knuth_nfa_inspired_fsm must be a non-empty string.",
+    );
   }
   if (!isDepth(s.depth)) {
     return failure("INVALID_DEPTH", "depth must be a non-negative integer.");
@@ -140,7 +143,7 @@ export function registerFork(ledger, spec, options = {}) {
     scopeId: s.scopeId,
     ownerId: s.ownerId,
     levelKey,
-    intent: s.intent.trim(),
+    knuth_nfa_inspired_fsm: s.knuth_nfa_inspired_fsm.trim(),
     // The identity statement handed to the child at spawn time. A record
     // without one is legal here only because older snapshots predate the
     // field; every tool-created fork validates it before registration.
@@ -153,7 +156,7 @@ export function registerFork(ledger, spec, options = {}) {
     continuesForkId: isNonEmptyString(s.continuesForkId)
       ? s.continuesForkId
       : null,
-    // Requirements queued after the birth intent, and how many the child has
+    // Requirements queued after the birth FSM, and how many the child has
     // been handed. A blocked entry can collect them before it ever runs.
     requirements: [],
     requirementsDelivered: 0,
@@ -255,10 +258,13 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
     );
     if (!granted.ok) return granted;
   }
-  const intent = typeof source.intent === "string" ? source.intent.trim() : "";
-  if (intent !== "") {
+  const fsm =
+    typeof source.knuth_nfa_inspired_fsm === "string"
+      ? source.knuth_nfa_inspired_fsm.trim()
+      : "";
+  if (fsm !== "") {
     if (!Array.isArray(record.requirements)) record.requirements = [];
-    record.requirements.push(intent);
+    record.requirements.push(fsm);
   }
   const profession =
     typeof source.profession === "string" ? source.profession.trim() : "";
@@ -772,7 +778,7 @@ function validRecord(forkId, record) {
   if (!isPlainObject(record)) return false;
   if (record.forkId !== forkId) return false;
   if (!isNonEmptyString(record.ownerId)) return false;
-  if (!isNonEmptyString(record.intent)) return false;
+  if (!isNonEmptyString(record.knuth_nfa_inspired_fsm)) return false;
   if (!isDepth(record.depth)) return false;
   if (!STATUSES.has(record.status)) return false;
   if (!Number.isInteger(record.openSeq) || record.openSeq < 0) return false;
@@ -833,8 +839,32 @@ export function serializeLedger(ledger) {
  * result: the parent can take it, read why it is empty, and decide whether to
  * re-declare the work. Ready results keep their frozen record and order.
  */
+// Old snapshots predate the rename and carry `intent` as the record key. Map
+// it once on restore; a snapshot that already has the new key wins unchanged.
+function migrateLegacyRecords(value) {
+  if (!isPlainObject(value) || !isPlainObject(value.forks)) return value;
+  let changed = false;
+  const forks = {};
+  for (const [forkId, record] of Object.entries(value.forks)) {
+    if (
+      isPlainObject(record) &&
+      !Object.hasOwn(record, "knuth_nfa_inspired_fsm") &&
+      Object.hasOwn(record, "intent")
+    ) {
+      const next = { ...record, knuth_nfa_inspired_fsm: record.intent };
+      delete next.intent;
+      forks[forkId] = next;
+      changed = true;
+    } else {
+      forks[forkId] = record;
+    }
+  }
+  return changed ? { ...value, forks } : value;
+}
+
 export function restoreLedgerChecked(value) {
   const out = createBracketLedger();
+  value = migrateLegacyRecords(value);
   if (!validLedger(value)) return { ok: false, ledger: out };
   out.seq = value.seq;
   out.closedSeq = value.closedSeq;

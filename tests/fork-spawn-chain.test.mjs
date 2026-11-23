@@ -90,7 +90,7 @@ function forkCall(id = "fork-call") {
       forks: [
         {
           scopeId: "parser",
-          intent: "read the parser",
+          knuth_nfa_inspired_fsm: "read the parser",
           blocked: false,
           budget: { read: 1 },
           time: 60,

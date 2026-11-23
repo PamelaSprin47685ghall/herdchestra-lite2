@@ -103,9 +103,9 @@ function Diff({ view }: { view: Extract<ToolView, { kind: "edit" }> }) {
           key={`${index}-${line.kind}`}
           className={
             line.kind === "add"
-              ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              ? "bg-emerald-500/10 text-[#007753] dark:text-[#00885f]"
               : line.kind === "remove"
-                ? "bg-rose-500/10 text-rose-700 dark:text-rose-300"
+                ? "bg-rose-500/10 text-[#130005] dark:text-[#ec0040]"
                 : "text-muted-foreground"
           }
         >
@@ -171,10 +171,10 @@ function ToolBody({
             <Badge variant="outline" className="font-mono text-[11px]">
               {view.path ?? "edit"}
             </Badge>
-            <Badge className="bg-emerald-500/15 text-[11px] text-emerald-700 dark:text-emerald-300">
+            <Badge className="bg-emerald-500/15 text-[11px] text-[#007753] dark:text-[#00885f]">
               +{view.diff.added}
             </Badge>
-            <Badge className="bg-rose-500/15 text-[11px] text-rose-700 dark:text-rose-300">
+            <Badge className="bg-rose-500/15 text-[11px] text-[#130005] dark:text-[#ec0040]">
               −{view.diff.removed}
             </Badge>
 

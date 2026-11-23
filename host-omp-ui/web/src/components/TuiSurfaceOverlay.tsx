@@ -70,11 +70,11 @@ function Spans({ value }: { value: unknown }) {
           /\b(error|danger)\b/.test(tokens)
             ? "text-destructive"
             : /\b(success|ins)\b/.test(tokens)
-              ? "text-emerald-600 dark:text-emerald-400"
+              ? "text-[#00774f] dark:text-[#00885a]"
               : /\b(warning)\b/.test(tokens)
-                ? "text-amber-600 dark:text-amber-400"
+                ? "text-[#452300] dark:text-[#ba5d00]"
                 : /\b(info|accent|link)\b/.test(tokens)
-                  ? "text-sky-600 dark:text-sky-400"
+                  ? "text-[#00263c] dark:text-[#007bc3]"
                   : /\b(muted|dim)\b/.test(tokens)
                     ? "text-muted-foreground"
                     : /\b(strong|em)\b/.test(tokens)
@@ -255,9 +255,9 @@ function SurfaceNodeView({
               key={index}
               className={
                 line.startsWith("+")
-                  ? "text-emerald-600 dark:text-emerald-400"
+                  ? "text-[#00774f] dark:text-[#00885a]"
                   : line.startsWith("-")
-                    ? "text-rose-600 dark:text-rose-400"
+                    ? "text-[#130005] dark:text-[#ec003f]"
                     : ""
               }
             >
@@ -643,7 +643,7 @@ export function TuiSurfaceOverlay({
               {surface.sf ?? "s:web"} · seq {surface.seq}
             </Badge>
             {overlays.length > 0 && (
-              <Badge className="bg-amber-500/15 text-[10px] text-amber-600 dark:text-amber-300">
+              <Badge className="bg-amber-500/15 text-[10px] text-[#452300] dark:text-[#ba5d00]">
                 {overlays.length} 个 overlay
               </Badge>
             )}

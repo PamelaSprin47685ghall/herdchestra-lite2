@@ -463,7 +463,7 @@ export function AppShell() {
             }
           />
           {connection === "offline" && (
-            <div className="flex items-center gap-2 border-b bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+            <div className="flex items-center gap-2 border-b bg-amber-500/10 px-4 py-1.5 text-xs text-[#381700] dark:text-[#c75200]">
               <WifiOffIcon className="size-3.5" />
               连接断开，正在自动重连；界面保留最后一帧状态。
             </div>

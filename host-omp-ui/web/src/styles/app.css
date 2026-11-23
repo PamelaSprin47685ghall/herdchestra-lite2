@@ -7,20 +7,20 @@
   color: var(--muted-foreground);
 }
 .file-type-icon[data-file-kind="sheet"] {
-  background: light-dark(#e7f5ec, #17392c);
-  color: light-dark(#187442, #70d6a1);
+  background: light-dark(#e7f5ec, #090a0a);
+  color: light-dark(#187442, #1d8b4f);
 }
 .file-type-icon[data-file-kind="document"] {
-  background: light-dark(#eaf1fd, #1d304d);
-  color: light-dark(#2864c5, #8bb7ff);
+  background: light-dark(#eaf1fd, #020202);
+  color: light-dark(#2864c5, #2358ad);
 }
 .file-type-icon[data-file-kind="slides"] {
-  background: light-dark(#fff0e8, #472b23);
-  color: light-dark(#bb4b28, #ffa17f);
+  background: light-dark(#fff0e8, #000000);
+  color: light-dark(#bb4b28, #973d20);
 }
 .file-type-icon[data-file-kind="data"] {
-  background: light-dark(#f1edfb, #32284a);
-  color: light-dark(#7751b5, #c4a5ee);
+  background: light-dark(#f1edfb, #040404);
+  color: light-dark(#7751b5, #6b48a2);
 }
 
 @source "../../node_modules/streamdown/dist/index.js";
@@ -318,21 +318,21 @@
   color-scheme: light;
 
   /* Kami paper/ink tokens. Keep semantic slots above raw palette. */
-  --parchment: #f5f4ed;
+  --parchment: #ebeae3;
   --ivory: #faf9f5;
-  --link: #9b2c2c;
-  --link-hover: #7b1f1f;
+  --link: #230a0a;
+  --link-hover: #1f0808;
   --warm-sand: #e8e6dc;
-  --brand: #1b365d;
-  --brand-light: #2d5a8a;
+  --brand: #0b1727;
+  --brand-light: #204163;
   --tag-bg: #e4ecf5;
   --brand-tint: #eef2f7;
   --near-black: #141413;
   --dark-warm: #3d3d3a;
   --olive: #504e49;
-  --stone: #6b6a64;
-  --border-soft: #e5e3d8;
-  --line: #d8d5c8;
+  --stone: #686761;
+  --border-soft: #87867f;
+  --line: #88867e;
 
   --radius: 0.5rem;
   --background: var(--parchment);
@@ -349,12 +349,12 @@
   --muted-foreground: var(--stone);
   --accent: var(--brand-tint);
   --accent-foreground: var(--brand);
-  --destructive: #a33a2b;
+  --destructive: #2d100c;
   --border: var(--line);
   --input: var(--border-soft);
   --ring: var(--brand-light);
   --chart-1: #1b365d;
-  --chart-2: #2d5a8a;
+  --chart-2: #24476d;
   --chart-3: #6b6a64;
   --chart-4: #8a7a52;
   --chart-5: #504e49;
@@ -375,54 +375,58 @@ html.dark .shiki span {
 .dark {
   color-scheme: dark;
 
-  /* Kami official dark palette: deep-dark + dark-surface only. */
-  --parchment: #141413;
-  --ivory: #30302e;
-  --link: #f08a7e;
-  --link-hover: #f7aca2;
-  --warm-sand: #30302e;
-  --brand: #1B365D;
-  --brand-light: #2D5A8A;
-  --tag-bg: #30302e;
-  --brand-tint: #30302e;
-  --near-black: #f5f4ed;
-  --dark-warm: #3d3d3a;
-  --olive: #504e49;
-  --stone: #6b6a64;
-  --border-soft: #3d3d3a;
-  --line: #3d3d3a;
+  /* Derived from the light :root block by scripts/derive-dark-palette.mjs.
+     H and S are unchanged; V is 255 - V. Do not edit by hand. */
+  --parchment: #050505;
+  --ivory: #141413;
+  --link: #dc3f3f;
+  --link-hover: #e03a3a;
+  --warm-sand: #171716;
+  --brand: #3d7fd8;
+  --brand-light: #32669c;
+  --tag-bg: #090a0a;
+  --brand-tint: #080808;
+  --near-black: #ebebdf;
+  --dark-warm: #c2c2b8;
+  --olive: #afaba0;
+  --stone: #97968d;
+  --border-soft: #787771;
+  --line: #77756e;
+  --destructive: #d24b38;
+  --chart-1: #2f5ea2;
+  --chart-2: #305f92;
+  --chart-3: #94938a;
+  --chart-4: #756746;
+  --chart-5: #afaba0;
 
+  /* Semantic wiring restored from the original dark theme. Palette values
+     above are derived; these slots keep their original references. */
   --background: var(--parchment);
   --foreground: var(--near-black);
   --card: var(--ivory);
   --card-foreground: var(--near-black);
   --popover: var(--ivory);
   --popover-foreground: var(--near-black);
-  --primary: var(--brand-light);
-  --primary-foreground: #faf9f5;
+  --primary: var(--brand);
+  --primary-foreground: var(--ivory);
   --secondary: var(--warm-sand);
-  --secondary-foreground: #e8e6dc;
+  --secondary-foreground: var(--dark-warm);
   --muted: var(--warm-sand);
-  --muted-foreground: #d8d5c8;
-  --accent: var(--dark-warm);
-  --accent-foreground: var(--near-black);
-  --destructive: color-mix(in oklab, #a33a2b 68%, #f5f4ed 32%);
+  --muted-foreground: var(--stone);
+  --accent: var(--brand-tint);
+  --accent-foreground: var(--brand);
   --border: var(--line);
   --input: var(--border-soft);
-  --ring: #e8e6dc;
-  --chart-1: #2D5A8A;
-  --chart-2: #1B365D;
-  --chart-3: #504e49;
-  --chart-4: #6b6a64;
-  --chart-5: #d8d5c8;
+  --ring: var(--brand-light);
   --sidebar: var(--ivory);
   --sidebar-foreground: var(--near-black);
-  --sidebar-primary: var(--brand-light);
-  --sidebar-primary-foreground: #faf9f5;
-  --sidebar-accent: var(--dark-warm);
-  --sidebar-accent-foreground: var(--near-black);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--ivory);
+  --sidebar-accent: var(--warm-sand);
+  --sidebar-accent-foreground: var(--dark-warm);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--brand-light);
+
   font-weight: 300;
 }
 

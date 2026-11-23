@@ -73,10 +73,10 @@ function shortModel(model: { provider?: string; id?: string; name?: string } | n
 
 function modelTone(label: string): string {
   const key = label.toLowerCase();
-  if (key.includes("claude") || key.includes("sonnet") || key.includes("opus")) return "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300";
-  if (key.includes("gpt") || key.includes("openai")) return "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
-  if (key.includes("deepseek")) return "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300";
-  if (key.includes("gemini")) return "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  if (key.includes("claude") || key.includes("sonnet") || key.includes("opus")) return "border-violet-500/25 bg-violet-500/10 text-[#010102] dark:text-[#914cfd]";
+  if (key.includes("gpt") || key.includes("openai")) return "border-emerald-500/25 bg-emerald-500/10 text-[#007753] dark:text-[#00885f]";
+  if (key.includes("deepseek")) return "border-sky-500/25 bg-sky-500/10 text-[#00243a] dark:text-[#007bc5]";
+  if (key.includes("gemini")) return "border-amber-500/25 bg-amber-500/10 text-[#381700] dark:text-[#c75200]";
   return "border-border bg-muted/60 text-muted-foreground";
 }
 
@@ -131,10 +131,9 @@ export function SessionSidebarContent({
     <div className="bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-1.5 px-3 pt-3">
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span
-            aria-hidden
-            className="inline-block h-4 w-[13px] shrink-0 bg-current [mask-image:url(/dist/deerflow-mark.svg)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
-          />
+          <span aria-hidden className="shrink-0 text-sm leading-none">
+            🐘
+          </span>
           <span className="truncate text-sm font-semibold">Herdchestra</span>
           {state.streaming && (
             <Loader2Icon className="text-brand size-3 animate-spin" />

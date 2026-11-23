@@ -29,8 +29,6 @@ Do not run Red. The dispatch pin records the written contract and authorizes Gre
 
 As soon as a slice has a red contract and its real prerequisites, include it in the next dispatch. Red and Green may run in parallel on different slices. Pin again before each new Green batch; an older pin does not authorize a new one.
 
-Pin the concurrency plan: ready slices, worker count, what is running, what is blocked and why, and the critical path. For each slice, name the contract files and cases, read and write sets, acceptance goal, wall time, tool budget, and whether it is a leaf or a subtree. Name the integrator and the owner of each shared file. Order overlapping writes or give them to one owner. Record the red contracts on disk and not run; the slices with their read and write sets; the remaining dependencies and critical path; and the dispatch now, with workers, budgets, integrators, and file owners. Edges follow dependencies, not convenience.
-
 A batch of one names the overlap or dependency that made it one. If you cannot name it, run the slices together. A batch of one that cannot name its dependency is a queue with better manners.
 
 The design record states module boundaries, consumer contracts, and failure isolation. Each slice builds against that record, not a private design; if the boundary is unknown, the slice is not ready.

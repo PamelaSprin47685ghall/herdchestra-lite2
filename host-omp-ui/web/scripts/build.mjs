@@ -87,5 +87,4 @@ if (css.status !== 0) process.exit(css.status ?? 1);
 
 copyFileSync(path.join(WEB_ROOT, "src/index.html"), path.join(DIST, "index.html"));
 copyFileSync(path.join(WEB_ROOT, "src/favicon.ico"), path.join(DIST, "favicon.ico"));
-copyFileSync(path.join(WEB_ROOT, "src/deerflow-mark.svg"), path.join(DIST, "deerflow-mark.svg"));
 console.log("CSS + html build ok");

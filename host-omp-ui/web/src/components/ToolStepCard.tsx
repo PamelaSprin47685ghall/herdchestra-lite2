@@ -200,9 +200,8 @@ function ToolBody({
               </Badge>
             )}
           </div>
-          <Code code={view.command} lang="bash" />
           {view.output && (
-            <pre className="bg-background max-h-80 overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap">
+            <pre className="max-h-80 overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">
               {view.output}
             </pre>
           )}
@@ -375,7 +374,18 @@ export const ToolStepCard = memo(function ToolStepCard({
           className="hover:bg-muted/40 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors"
         >
           <KindIcon view={view} />
-          <span className="min-w-0 flex-1 truncate font-medium">{view.title}</span>
+          {view.kind === "bash" ? (
+            <span className="min-w-0 flex-1 font-medium whitespace-pre-wrap break-words">
+              {view.command || view.title}
+            </span>
+          ) : (
+            <span className="min-w-0 flex-1 truncate font-medium">{view.title}</span>
+          )}
+          {view.kind === "bash" && view.title !== view.command.split("\n")[0] && (
+            <span className="text-muted-foreground hidden max-w-56 truncate text-[11px] sm:inline">
+              {view.title}
+            </span>
+          )}
           {view.path && (
             <span className="text-muted-foreground hidden max-w-56 truncate font-mono text-[11px] sm:inline">
               {view.path}

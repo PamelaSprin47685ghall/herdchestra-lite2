@@ -630,10 +630,9 @@ function ConversationViewInner({
         messages.length === 0 ? (
           <ConversationEmptyState
             icon={
-              <span
-                aria-hidden
-                className="inline-block h-8 w-[26px] bg-current [mask-image:url(/dist/deerflow-mark.svg)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
-              />
+              <span aria-hidden className="text-3xl leading-none">
+                🐘
+              </span>
             }
             title={streaming ? "Herdchestra 正在准备回复" : "会话是空的"}
             description="基于 DeerFlow 的集成工作台。在下方输入，Enter 发送，Shift+Enter 换行。"

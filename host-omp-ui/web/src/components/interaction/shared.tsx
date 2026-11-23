@@ -65,19 +65,16 @@ export function KindIcon({ kind }: { kind: string }) {
   }
 }
 
-export function normalizeChoices(raw: unknown): Array<{
+type Choice = {
   label: string;
   value: string;
   description?: string;
   disabled?: boolean;
-}> {
+};
+
+export function normalizeChoices(raw: unknown): Choice[] {
   if (!Array.isArray(raw)) return [];
-  const choices: Array<{
-    label: string;
-    value: string;
-    description?: string;
-    disabled?: boolean;
-  }> = [];
+  const choices: Choice[] = [];
   for (const entry of raw) {
     if (typeof entry === "string" && entry) {
       choices.push({ label: entry, value: entry });

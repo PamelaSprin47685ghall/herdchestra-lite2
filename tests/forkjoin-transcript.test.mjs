@@ -125,7 +125,7 @@ describe("child record rendering", () => {
         call("f9", "scope_fork", {
           forks: [
             {
-              intent: "measure the cache",
+              dafny_pseudo_code: "measure the cache",
               budget: { read: 2, bash: 1 },
               time: 120,
               targets: ["cache.mjs"],

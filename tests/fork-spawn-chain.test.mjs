@@ -90,7 +90,7 @@ function forkCall(id = "fork-call") {
       forks: [
         {
           scopeId: "parser",
-          intent: "read the parser",
+          dafny_pseudo_code: "read the parser",
           blocked: false,
           budget: { read: 1 },
           time: 60,

@@ -22,10 +22,10 @@ const STATE = () => ({
   relay: { generation: 0, fullFlow: false },
 });
 
-function item(intent, blocked = false) {
+function item(dafnyPseudoCode, blocked = false) {
   return {
-    scopeId: intent.replaceAll(" ", "-"),
-    intent,
+    scopeId: dafnyPseudoCode.replaceAll(" ", "-"),
+    dafny_pseudo_code: dafnyPseudoCode,
     blocked,
     budget: { read: 1 },
     targets: ["src/blocked.mjs"],

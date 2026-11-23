@@ -442,7 +442,7 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 				forks: [
 					{
 						scopeId: "c-broken",
-						intent: "will fail to spawn",
+						dafny_pseudo_code: "will fail to spawn",
 						blocked: false,
 						budget: { read: 1 },
 						targets: ["src/a.mjs"],

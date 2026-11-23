@@ -60,7 +60,7 @@ describe("registration", () => {
     const { handleForkCall } = await import("../src/station/fork-controls.mjs");
     const item = {
       scopeId: "probe",
-      intent: "   ",
+      dafny_pseudo_code: "   ",
       blocked: false,
       budget: { read: 1 },
       targets: ["src/parser.mjs"],
@@ -79,7 +79,7 @@ describe("registration", () => {
       arguments: { forks: [item] },
     });
     expect(result.isError).toBe(true);
-    expect(result.details.code).toBe("MISSING_INTENT");
+    expect(result.details.code).toBe("MISSING_DAFNY_PSEUDO_CODE");
     expect(result.details.scopeId).toBe("probe");
     expect(result.content[0].text).toContain("A new scope needs a non-empty");
     expect(spawned).toHaveLength(0);
@@ -334,7 +334,7 @@ describe("owner queries", () => {
         forks: [
           {
             scopeId: "cache-probe",
-            intent: "probe the cache",
+            dafny_pseudo_code: "probe the cache",
             blocked: false,
             budget: { read: 2 },
             time: 60,
@@ -390,7 +390,7 @@ describe("owner queries", () => {
       arguments: {
         forks: [
           {
-            scopeId: "probe", intent: "x",
+            scopeId: "probe", dafny_pseudo_code: "x",
             blocked: false,
             budget: { read: 1 },
             time: 30,
@@ -407,16 +407,16 @@ describe("owner queries", () => {
     const { validateFork } = await import("../src/station/domain/fork-join.mjs");
     const state = { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
     const base = {
-      scopeId: "probe", intent: "x",
+      scopeId: "probe", dafny_pseudo_code: "x",
       budget: { read: 1 },
       time: 30,
       targets: ["src/parser.mjs"],
     };
     expect(validateFork(base).ok).toBe(true);
-    // An empty intent is legal for an amendment; a *new* scope rejects it in
+    // An empty dafny_pseudo_code is legal for an amendment; a *new* scope rejects it in
     // the handler, where the name's existence is known.
-    expect(validateFork({ ...base, intent: "  " }).ok).toBe(true);
-    expect(validateFork({ ...base, intent: "  " }).intent).toBe("");
+    expect(validateFork({ ...base, dafny_pseudo_code: "  " }).ok).toBe(true);
+    expect(validateFork({ ...base, dafny_pseudo_code: "  " }).intent).toBe("");
     expect(validateFork({ ...base, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
     expect(validateFork({ ...base, time: 0 }).ok).toBe(true);
     expect(validateFork({ ...base, time: 0 }).time).toBeUndefined();
@@ -434,7 +434,7 @@ describe("owner queries", () => {
     const targets = ["fix any defect you find", "the parts of the source that involve caching"];
     const item = {
       scopeId: "natural",
-      intent: "fix defects",
+      dafny_pseudo_code: "fix defects",
       blocked: false,
       budget: { read: 1 },
       time: 30,

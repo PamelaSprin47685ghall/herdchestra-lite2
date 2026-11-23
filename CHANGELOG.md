@@ -6,6 +6,10 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — a fork item carries a Dafny-style contract
+
+- `scope_fork` item field `intent` is now `dafny_pseudo_code`: write `requires` (precondition) and `ensures` (postcondition), with optional `invariant`/`decreases`. The ledger record keeps the internal name `intent`, so existing snapshots still restore. Error codes, receipts, and documentation follow the model-facing name.
+
 ### Changed — a fork item carries the child's profession
 
 - `scope_fork` now requires `profession` on every fork item: the child's identity statement, injected under the receipt marker.

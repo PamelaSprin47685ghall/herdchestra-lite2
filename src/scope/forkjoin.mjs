@@ -114,7 +114,7 @@ export function registerFork(ledger, spec, options = {}) {
     return failure("INVALID_OWNER", "ownerId must be a non-empty string.");
   }
   if (!isNonEmptyString(s.intent)) {
-    return failure("INVALID_INTENT", "intent must be a non-empty string.");
+    return failure("INVALID_DAFNY_PSEUDO_CODE", "dafny_pseudo_code must be a non-empty string.");
   }
   if (!isDepth(s.depth)) {
     return failure("INVALID_DEPTH", "depth must be a non-negative integer.");

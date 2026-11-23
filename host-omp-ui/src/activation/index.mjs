@@ -30,6 +30,11 @@ function diagnostics() {
 	return { record };
 }
 
+function noteFenceError(runtimeRef, domain, error) {
+	runtimeRef.fence.moduleErrors.push(error instanceof Error ? error.message : String(error));
+	record(domain, error);
+}
+
 function status() {
 	if (runtime?.url) return { url: runtime.url, reason: null };
 	return { url: null, reason: runtime?.reason ?? "no active main session" };
@@ -135,16 +140,14 @@ export function wireUiExtension(pi, env = {}) {
 					runtimeRef.fence.moduleErrors.push("custom-editor-unavailable");
 				}
 			} catch (error) {
-				runtimeRef.fence.moduleErrors.push(error instanceof Error ? error.message : String(error));
-				record("editor", error);
+				noteFenceError(runtimeRef, "editor", error);
 			}
 			if (isTui) try {
 				const decorated = decorateUiContext({ ui: ctx.ui, mode: ctx.mode, isSubagent: false, bridge });
 				runtimeRef.uiDecoration = decorated;
 				runtimeRef.fence.uiDecorated = Boolean(decorated?.ok);
 			} catch (error) {
-				runtimeRef.fence.moduleErrors.push(error instanceof Error ? error.message : String(error));
-				record("decorate-ui", error);
+				noteFenceError(runtimeRef, "decorate-ui", error);
 			}
 			if (isTui) try {
 				const captured = captureHostFromEditorSlot(ctx.ui, bridge);
@@ -158,8 +161,7 @@ export function wireUiExtension(pi, env = {}) {
 				if (captured.error) runtimeRef.fence.moduleErrors.push(String(captured.error?.message ?? captured.error));
 				runtimeRef.capture = captured.captured ?? runtimeRef.capture;
 			} catch (error) {
-				runtimeRef.fence.moduleErrors.push(error instanceof Error ? error.message : String(error));
-				record("capture-host", error);
+				noteFenceError(runtimeRef, "capture-host", error);
 			}
 			station.onMetaUpdate?.({ fence: runtimeRef.fence });
 			void startRuntime(runtimeRef, env, adapter, ctx);

@@ -144,17 +144,20 @@ function ComposerForm({
     return () => clearTimeout(timer);
   }, [composing, text, draft.text]);
 
+  const busy = Boolean(streaming || working);
+  const noAttachments = capabilities?.canAttachments === false;
+
   const sendWithAttachments = async (value: string, mode: SubmitMode) => {
     const clean = value.trim();
     if (!clean && !attachments.length) {
-      if (streaming || working) onAbort();
+      if (busy) onAbort();
       return;
     }
     if (capabilities?.canSlashCommands === false && /^[\s]*[\/!$]/.test(value)) {
       setAttachmentError("此实例不支持斜杠命令或终端命令。");
       return;
     }
-    if (capabilities?.canAttachments === false && attachments.length) {
+    if (noAttachments && attachments.length) {
       setAttachmentError("此实例不支持附件，请先移除附件。");
       return;
     }
@@ -169,7 +172,7 @@ function ComposerForm({
         return { name: file.name, mimeType: file.type || "text/plain", data: await promise };
       }));
       const effectiveMode =
-        mode === "default" && (streaming || Boolean(working)) ? "steer" : mode;
+        mode === "default" && busy ? "steer" : mode;
       await onSubmit(clean, effectiveMode, encoded);
       setAttachments((current) => current.filter((file) => !submittedFiles.includes(file)));
       setAttachmentError("");
@@ -240,7 +243,7 @@ function ComposerForm({
                 event.key === "Enter" &&
                 !event.shiftKey &&
                 !event.nativeEvent.isComposing &&
-                Boolean(streaming || working) &&
+                busy &&
                 !text.trim() &&
                 attachments.length === 0
               ) {
@@ -253,9 +256,9 @@ function ComposerForm({
         <PromptInputFooter className="flex-nowrap gap-1.5 px-2 pb-2">
           <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-y-1 sm:flex-nowrap sm:gap-y-0">
             <label
-              className={`inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs hover:bg-accent/60 sm:px-2 ${blocked || capabilities?.canAttachments === false ? "pointer-events-none opacity-50" : ""}`}
+              className={`inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs hover:bg-accent/60 sm:px-2 ${blocked || noAttachments ? "pointer-events-none opacity-50" : ""}`}
               aria-label="添加附件"
-              title={capabilities?.canAttachments === false ? "此实例不支持附件" : "添加附件"}
+              title={noAttachments ? "此实例不支持附件" : "添加附件"}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="size-3.5" aria-hidden="true">
                 <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -264,7 +267,7 @@ function ComposerForm({
               <input
                 type="file"
                 className="hidden"
-                disabled={blocked || capabilities?.canAttachments === false}
+                disabled={blocked || noAttachments}
                 multiple
                 accept="image/png,image/jpeg,image/gif,image/webp,text/*,application/json,application/ld+json,application/xml,application/yaml,application/x-yaml,application/javascript"
                 onChange={(event) => {
@@ -345,7 +348,7 @@ function ComposerForm({
       </PromptInput>
       {(() => {
         const hints = [
-          capabilities?.canAttachments === false ? "此实例不支持附件" : null,
+          noAttachments ? "此实例不支持附件" : null,
           capabilities?.canSlashCommands === false
             ? "此实例不支持斜杠命令、! 与 $ 终端命令"
             : null,

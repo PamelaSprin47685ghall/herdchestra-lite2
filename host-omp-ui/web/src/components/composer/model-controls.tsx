@@ -53,6 +53,15 @@ function sameModels(a: ModelRef[], b: ModelRef[]) {
   });
 }
 
+function synthesizeModel(key: string): ModelRef {
+  const parts = key.split("/");
+  return {
+    provider: parts[0] ?? "",
+    id: parts.slice(1).join("/") || key,
+    name: parts[parts.length - 1] ?? key,
+  } as ModelRef;
+}
+
 function modelControlsEqual(a: ModelControlsProps, b: ModelControlsProps) {
   return (
     a.modelKey === b.modelKey &&
@@ -80,17 +89,11 @@ export const ModelControlsBar = memo(function ModelControlsBar({
   onMode,
 }: ModelControlsProps) {
   const selectedKey = modelKey || "";
+  const knownModel = models.find((model) => selectModelKey(model) === selectedKey);
   const selectedModel =
-    models.find((model) => selectModelKey(model) === selectedKey) ??
-    (selectedKey
-      ? ({
-          provider: selectedKey.split("/")[0] ?? "",
-          id: selectedKey.split("/").slice(1).join("/") || selectedKey,
-          name: selectedKey.split("/").pop() ?? selectedKey,
-        } as ModelRef)
-      : null);
+    knownModel ?? (selectedKey ? synthesizeModel(selectedKey) : null);
   const modelOptions =
-    selectedModel && !models.some((model) => selectModelKey(model) === selectedKey)
+    selectedModel && !knownModel
       ? [...models, selectedModel]
       : models;
   const levels = thinkingLevels.length

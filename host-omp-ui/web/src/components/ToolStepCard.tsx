@@ -285,6 +285,7 @@ function ToolBody({ view }: { view: ToolView }) {
         </div>
       );
     case "todo":
+    case "ask":
       return <p className="text-muted-foreground text-xs">{view.summary}</p>;
     case "task":
       return (
@@ -307,8 +308,6 @@ function ToolBody({ view }: { view: ToolView }) {
           </TaskContent>
         </Task>
       );
-    case "ask":
-      return <p className="text-muted-foreground text-xs">{view.summary}</p>;
     default:
       return (
         <div className="grid gap-2 md:grid-cols-2">

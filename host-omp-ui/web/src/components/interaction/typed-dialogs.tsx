@@ -71,6 +71,7 @@ export function ApproveCard({
     payloadText(item);
   const choices = normalizeChoices(payload.choices);
   const session = asString(payload.session);
+  const reason = asString(payload.reason);
   const fallback = [
     { label: "允许本次", value: "once" },
     ...(session ? [{ label: session, value: "session" }] : []),
@@ -79,8 +80,8 @@ export function ApproveCard({
   const finalChoices = choices.length ? choices : fallback;
   return (
     <div className="space-y-3">
-      {asString(payload.reason) && (
-        <p className="text-sm">{asString(payload.reason)}</p>
+      {reason && (
+        <p className="text-sm">{reason}</p>
       )}
       {full && (
         <pre className="bg-muted/40 max-h-72 overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap">
@@ -136,6 +137,7 @@ export function SelectCard({
   const marker = payload.selectionMarker;
   const markableCount = Math.max(0, Math.min(options.length, asNumber(payload.markableCount) ?? options.length));
   const details = Array.isArray(payload.optionDetails) ? payload.optionDetails : [];
+  const message = asString(payload.message);
   const [active, setActive] = useState(initialIndex);
   if (!options.length) {
     return (
@@ -149,8 +151,8 @@ export function SelectCard({
   }
   return (
     <div className="space-y-3">
-      {asString(payload.message) && (
-        <p className="text-sm">{asString(payload.message)}</p>
+      {message && (
+        <p className="text-sm">{message}</p>
       )}
       <div className="space-y-1.5">
         {options.map((option, index) => {

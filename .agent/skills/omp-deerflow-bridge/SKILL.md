@@ -72,6 +72,7 @@ host-omp-ui/
       tui-fence.mjs                   # TUI 篱笆：Composer.prototype.renderFrame/setEditor 捕获、Object.defineProperty 装饰 ctx.ui、BridgeEditor、Reconciler + overlayStack + injectDebugInput
       session-adapter.mjs             # omp 宿主会话、模型、上下文用量与模式适配；历史只读扫描，不打开会话争锁
       manager-client.mjs              # 实例注册/心跳/重连，将宿主状态与命令交由管理器路由
+      client-command.mjs               # 宿主命令适配：interaction.respond 在 Plan Review 工单与普通交互桥之间选择，其余命令单跳入 Station；组合根以 getter 注入迟到绑定字段
       manager-tray.mjs                # 托盘生命周期、默认浏览器打开与诊断（异步 adapter 契约）
       system-tray.mjs                 # 跨平台托盘 adapter：Linux StatusNotifierItem / macOS NSStatusBar / Windows NotifyIcon
       launch-context.mjs              # 一次性 0600 启动凭据（port/token）与陈旧文件清理

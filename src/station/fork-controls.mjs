@@ -97,6 +97,7 @@ function depthOf(station) {
 const REFUSAL_KEY = {
   INVALID_SCOPE_ID: "invalid-scope-id",
   INVALID_INTENT: "invalid-intent",
+  INVALID_PROFESSION: "invalid-profession",
   INVALID_BUDGET: "invalid-budget",
   INVALID_ARGUMENT: "invalid-argument",
   INVALID_TARGETS: "invalid-targets",
@@ -380,13 +381,16 @@ export function handleForkCall(station, call, options = {}) {
     typeof station.childSpawnPort === "function" ? station.childSpawnPort() : null;
   const receiptChars = batch.items.map((item) => {
     if (item.blocked === true) return 0;
+    const profession =
+      typeof item.profession === "string" ? item.profession.trim() : "";
+    const identityChars = profession === "" ? 0 : profession.length + 1;
     return childReceiptText({
       scopeId: item.scopeId,
       childDepth: depth + 1,
       intent: item.intent,
       budget: item.budget,
       targets: item.targets,
-    }).length + FORK_RECEIPT_PREFIX_CHARS;
+    }).length + FORK_RECEIPT_PREFIX_CHARS + identityChars;
   });
   const decision = decideRegister({
     items: batch.items,
@@ -461,6 +465,10 @@ export function handleForkCall(station, call, options = {}) {
     );
   }
 
+  // The tool schema requires `profession` for model calls. Internal callers
+  // (tests, programmatic spawns) may omit it; an empty identity is legal and
+  // is simply not rendered into the child receipt.
+
   const parentOwnerId = ownerIdOf(station);
   const clock = typeof station.clockPort === "function" ? station.clockPort() : createClockOn();
   const totals = ledger.totals;
@@ -489,12 +497,21 @@ export function handleForkCall(station, call, options = {}) {
     return `${base}:g${generation}`;
   };
 
+  /** Insert the child's identity statement directly under the receipt marker. */
+  function withProfession(receipt, profession) {
+    if (typeof profession !== "string" || profession.trim() === "") return receipt;
+    const lines = receipt.split("\n");
+    lines.splice(1, 0, profession.trim());
+    return lines.join("\n");
+  }
+
   const specOf = (fork, item, intent) => ({
     forkId: fork.forkId,
     scopeId: fork.scopeId,
     sourceToolCallId: baseId,
     childDepth: fork.childDepth,
     intent,
+    profession: item.profession ?? fork.profession ?? "",
     budget: fork.budget,
     time: fork.timeBudgetMs == null ? null : fork.timeBudgetMs / 1000,
     targets: fork.targets,
@@ -507,7 +524,7 @@ export function handleForkCall(station, call, options = {}) {
 
   const queueChild = (fork, item, intent, receipt, kind = "created") => {
     const spec = specOf(fork, item, intent);
-    spec.receipt = receipt;
+    spec.receipt = withProfession(receipt, spec.profession);
     pending.push({
       forkId: fork.forkId,
       scopeId: item.scopeId,
@@ -598,6 +615,7 @@ export function handleForkCall(station, call, options = {}) {
       const out = amendFork(ledger, target.forkId, {
         budget: item.budget,
         intent: item.intent,
+        profession: item.profession,
         targets: item.targets,
       }, { clock });
       if (!out.ok) {

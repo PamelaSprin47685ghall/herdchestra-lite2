@@ -110,7 +110,7 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 	};
 	const launch = (scopeId, intent) => handleForkCall(station, {
 		id: `call-${scopeId}`,
-		arguments: { forks: [{ scopeId, intent, blocked: false, budget: { read: 1 }, time: 30, targets: [`${scopeId}.mjs`] }] },
+		arguments: { forks: [{ scopeId, intent, profession: "You are a careful observer of tides and harbor lights", blocked: false, budget: { read: 1 }, time: 30, targets: [`${scopeId}.mjs`] }] },
 	});
 	const prior = launch("earlier", "Measure the tide");
 	expect(prior.isError).toBeUndefined();

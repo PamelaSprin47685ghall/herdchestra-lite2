@@ -58,6 +58,7 @@ const FORK_ITEMS_DESCRIPTION = render(forkJoin["fork.forks"], {
 	maxFanout: FORK_MAX_FANOUT,
 });
 const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
+const FORK_PROFESSION_DESCRIPTION = forkJoin["fork.profession"];
 export const JOIN_DESCRIPTION = forkJoin["join.tool"];
 export const RETURN_DESCRIPTION = forkJoin["return.tool"];
 export const RETURN_MARKDOWN_DESCRIPTION = forkJoin["return.markdown"];
@@ -86,10 +87,16 @@ const forkItem = {
 	// `intent` is optional here because a reused `scopeId` may carry only a
 	// budget increment, merged targets, or one more requirement. A new scope
 	// still needs it: the station refuses with MISSING_INTENT.
-	required: ["scopeId", "blocked", "budget", "targets"],
+	required: ["scopeId", "profession", "blocked", "budget", "targets"],
 	properties: {
 		scopeId: { type: "string", pattern: SCOPE_ID_PATTERN, maxLength: MAX_SCOPE_ID_LENGTH, description: forkJoin["fork.scope-id"] },
 		intent: { type: "string", minLength: 1, description: FORK_INTENT_DESCRIPTION },
+		profession: {
+			type: "string",
+			minLength: 9,
+			pattern: "^You are \\S",
+			description: FORK_PROFESSION_DESCRIPTION,
+		},
 		blocked: { type: "boolean", description: FORK_BLOCKED_DESCRIPTION },
 		budget: {
 			type: "object",

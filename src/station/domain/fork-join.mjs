@@ -97,10 +97,21 @@ export function validateFork(args) {
 	if (!validScopeId(args?.scopeId) || args.scopeId.toLowerCase() === "root") {
 		return { ok: false, code: "INVALID_SCOPE_ID" };
 	}
+	// The child's identity statement. It must open with "You are " so the
+	// spawned scope receives a role, not a task summary; the spawner injects
+	// it as the first line below the receipt marker, before any instruction.
+	// An empty value is legal here: a reused scope may carry only a budget
+	// increment, and a new scope is checked by the station after the action is
+	// known. The JSON schema already requires the field at the tool edge.
+	const profession = trimText(args?.profession);
+	if (profession !== "" && !profession.startsWith("You are ")) {
+		return { ok: false, code: "INVALID_PROFESSION" };
+	}
 	return {
 		ok: true,
 		scopeId: args.scopeId,
 		intent,
+		profession,
 		budget,
 		targets: normalizeTargets(args.targets),
 		model: typeof args.model === "string" ? args.model.trim() : null,

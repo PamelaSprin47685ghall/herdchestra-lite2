@@ -123,7 +123,7 @@ describe("tool contracts map to their documents", () => {
 	test("schemas carry the mapped text", () => {
 		const doc = loadDoc("tools/fork-join");
 		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual(["scopeId", "blocked", "budget", "targets"]);
+		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
 		expect(item.required).not.toContain("intent");
 		expect(item.properties.intent.description).toBe(scopeTools.FORK_INTENT_DESCRIPTION);
 		expect(item.properties.budget.description).toBe(scopeTools.FORK_BUDGET_DESCRIPTION);
@@ -355,7 +355,7 @@ describe("fork item schema", () => {
 
 	test("a reused scopeId amends, and intent may be omitted", () => {
 		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual(["scopeId", "blocked", "budget", "targets"]);
+		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
 		expect(item.required).not.toContain("intent");
 		expect(item.properties.intent.description).toMatch(/next turn boundary/i);
 		expect(item.properties.scopeId.description).toMatch(/ready.*supersedes/i);

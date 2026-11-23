@@ -141,6 +141,10 @@ export function registerFork(ledger, spec, options = {}) {
     ownerId: s.ownerId,
     levelKey,
     intent: s.intent.trim(),
+    // The identity statement handed to the child at spawn time. A record
+    // without one is legal here only because older snapshots predate the
+    // field; every tool-created fork validates it before registration.
+    profession: typeof s.profession === "string" ? s.profession.trim() : "",
     depth: s.depth,
     childDepth: s.depth + 1,
     // Reuse identity: a later generation continues the same public scope.
@@ -255,6 +259,11 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
   if (intent !== "") {
     if (!Array.isArray(record.requirements)) record.requirements = [];
     record.requirements.push(intent);
+  }
+  const profession =
+    typeof source.profession === "string" ? source.profession.trim() : "";
+  if (profession !== "" && profession.startsWith("You are ")) {
+    record.profession = profession;
   }
   if (Array.isArray(source.targets) && source.targets.length > 0) {
     if (!Array.isArray(record.targets)) record.targets = [];

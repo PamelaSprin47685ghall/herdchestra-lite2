@@ -46,6 +46,10 @@ Use a short ASCII `scopeId` other than `root`.
 
 Give the child a non-empty `intent`.
 
+## invalid-profession
+
+Start `profession` with "You are " and name the child's role, for example "You are a precise reviewer who rejects a claim without evidence".
+
 ## invalid-budget
 
 `budget` maps tool names to non-negative integers. Free tools need no entry; neither does a `read` or `write` of a built-in protocol URI, which spends no point at any level.

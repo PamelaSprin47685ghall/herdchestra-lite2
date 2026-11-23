@@ -6,6 +6,10 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — a fork item carries the child's profession
+
+- `scope_fork` now requires `profession` on every fork item: the child's identity statement, injected under the receipt marker.
+
 ### Fixed — standalone omp web bridge
 
 - Repair the UI fence imports for the compiled omp host, browser asset bundling,

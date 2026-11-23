@@ -156,7 +156,7 @@ const COMPLETION_THROTTLE_MS = 80;
  * autocomplete item, not on the SelectItem that pickerView exposes. The web
  * still forwards Enter to the TUI, so the host applies the real decision.
  */
-export function captureCompletionState(editor) {
+function captureCompletionState(editor) {
 	if (!editor) return null;
 	const open = typeof editor.isShowingAutocomplete === "function"
 		? editor.isShowingAutocomplete() === true

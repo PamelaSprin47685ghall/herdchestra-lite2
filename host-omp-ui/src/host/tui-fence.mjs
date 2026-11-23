@@ -17,7 +17,6 @@ export {
 	setRealCustomEditor,
 	getRealCustomEditor,
 	createBridgeEditorClass,
-	captureCompletionState,
 	captureHostFromEditorSlot,
 } from "./fence/editor.mjs";
 export {

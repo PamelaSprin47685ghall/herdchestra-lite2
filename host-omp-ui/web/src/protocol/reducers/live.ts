@@ -1,4 +1,4 @@
-import type { UiMessage, WebState } from "../types";
+import type { LiveHistory, UiMessage, WebState } from "../types";
 import {
   stableModel,
   stableModels,
@@ -41,10 +41,7 @@ function computeRenderIndexes(messages: UiMessage[]): RenderIndexes {
   return indexes;
 }
 
-export type LiveHistory = {
-  hasMore: boolean;
-  oldestId?: string | null;
-};
+export type { LiveHistory };
 export type LiveSessionWithHistory = WebState["liveSession"] & {
   history?: LiveHistory;
 };
@@ -67,7 +64,7 @@ export function liveCommit(
         ? live.history
         : (state.liveSession as LiveSessionWithHistory).history,
   } as LiveSessionWithHistory;
-  computeRenderIndexes(liveSession.messages);
+  if (live.messages) computeRenderIndexes(liveSession.messages);
   const safePatch: Partial<WebState> = {
     ...patch,
     models: stableModels(patch.models, state.models),

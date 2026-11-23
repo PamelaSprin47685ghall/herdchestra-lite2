@@ -41,3 +41,16 @@ export function parseClientCommand(raw) {
 export function encodeServerFrame(type, payload, seq) {
   return { type, payload, seq };
 }
+
+// Station events share one outbound shape; interaction.open nests its request.
+export function toServerFrame(event) {
+  if (event.type === "interaction.open") {
+    const { id, requestId, kind, payload } = event.payload ?? {};
+    return { type: event.type, request: { id: id ?? requestId, kind, payload } };
+  }
+  const payload = event.payload ?? {};
+  if (event.type === "transcript.delta") {
+    return { ...payload, type: event.type, kind: payload.type ?? payload.kind };
+  }
+  return { ...payload, type: event.type };
+}

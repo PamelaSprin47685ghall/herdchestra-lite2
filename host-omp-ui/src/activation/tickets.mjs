@@ -1,3 +1,5 @@
+import { toServerFrame } from "../station/domain/protocol-codec.mjs";
+
 // Fire-and-forget safety shell and the single-hop capability bag. Every ticket
 // invocation leaves through detach, so a rejected promise can never surface as
 // an unhandled rejection inside omp's extension host.
@@ -49,18 +51,6 @@ const SERVER_FRAMES = new Set([
 	"surface.frame",
 	"session.switched",
 ]);
-
-function toServerFrame(event) {
-	if (event.type === "interaction.open") {
-		const { id, requestId, kind, payload } = event.payload ?? {};
-		return { type: event.type, request: { id: id ?? requestId, kind, payload } };
-	}
-	const payload = event.payload ?? {};
-	if (event.type === "transcript.delta") {
-		return { ...payload, type: event.type, kind: payload.type ?? payload.kind };
-	}
-	return { ...payload, type: event.type };
-}
 
 export function buildBridgeCapabilities({ tickets, diagnostics, onReported } = {}) {
 	const dispatch = (event) => {

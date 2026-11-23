@@ -1,20 +1,19 @@
 // Composition root. It instantiates the station, adapter, fence, tickets and
 // server, then binds them with mechanical wiring only. No business branching.
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { scanMachineSessions } from "../manager/machine-catalog.mjs";
-import { createSessionService } from "../manager/session-service.mjs";
-import { buildNewLaunch, buildResumeLaunch } from "../manager/domain/session-catalog.mjs";
 import { createHostTickets, createUiBridge } from "../host/bridge-tickets.mjs";
+import { createClientCommandHandler } from "../host/client-command.mjs";
 import { record } from "../host/diagnostics.mjs";
-import { createManagerClient, sharedManagerToken } from "../host/manager-client.mjs";
-import { createLaunchContext, consumeLaunchContext, removeLaunchContext, pruneLaunchContexts } from "../host/launch-context.mjs";
-import { executeTmuxLaunch } from "../host/tmux-launch.mjs";
+import { createManagerClient } from "../host/manager-client.mjs";
 import { createSessionAdapter } from "../host/session-adapter.mjs";
 import {
-	attachSurfaceWatcher,
+	createBootstrapSnapshot,
+	createSessionHost,
+	createShutdownHandler,
+	ensureSurfaceWatcher,
+	hydrateStation,
+} from "../host/session-launch.mjs";
+import {
 	captureHostFromEditorSlot,
-	FallbackReconciler,
 	createBridgeEditorClass,
 	decorateUiContext,
 	getLastCapture,
@@ -40,161 +39,43 @@ function status() {
 	return { url: null, reason: runtime?.reason ?? "no active main session" };
 }
 
-async function hydrate(runtimeRef, adapter, ctx) {
-	const station = runtimeRef.station;
-	station.onSessionHydrate?.(adapter.sessionInfo(), adapter.branch());
-	station.onUsageUpdate?.(adapter.contextUsage() ?? adapter.usage());
-	station.onMetaUpdate?.({
-		model: adapter.currentModel(),
-		thinkingLevel: adapter.thinkingLevel(),
-		thinkingLevels: adapter.thinkingLevels(),
-		modes: adapter.modes(),
-	});
-	station.onModelsUpdate?.(adapter.models());
-	station.onSessionsUpdate?.(await adapter.listProjectSessions(ctx.cwd));
-}
-
 async function startRuntime(runtimeRef, env, adapter, ctx) {
 	try {
-		const contextPath = process.env.OMP_UI_LAUNCH_CONTEXT;
-		delete process.env.OMP_UI_LAUNCH_CONTEXT;
-		const launchContext = contextPath ? await consumeLaunchContext(contextPath) : null;
-		const token = launchContext?.token ?? env.token ?? process.env.HERD_OMP_UI_TOKEN ?? process.env.OMP_UI_TOKEN ?? await sharedManagerToken();
-		const port = launchContext?.port ?? env.port ?? Number(process.env.HERD_OMP_UI_PORT ?? process.env.OMP_UI_PORT ?? 37421);
-		const staticDir = env.staticDir ?? new URL("../../web/dist/", import.meta.url).pathname;
-		const launchDirectory = join(process.env.XDG_RUNTIME_DIR || join(homedir(), ".omp", "run"), "herd-omp-ui", "launch");
-		try {
-			const { diagnostics: cleanupErrors } = await pruneLaunchContexts({ directory: launchDirectory });
-			for (const error of cleanupErrors) record("launch-context-cleanup", error);
-		} catch (error) {
-			record("launch-context-cleanup", error);
-		}
-		const listSessions = async ({ extraDirs = [] } = {}) => {
-			const sessionDir = ctx.sessionManager?.getSessionDir?.();
-			const { sessions, diagnostics: errors } = await scanMachineSessions({
-				roots: [join(homedir(), ".omp", "agent", "sessions")],
-				extraDirs: [...extraDirs, ...(sessionDir ? [sessionDir] : [])],
-			});
-			for (const error of errors) record("session-catalog", error);
-			return sessions;
-		};
-		await hydrate(runtimeRef, adapter, ctx);
+		const host = await createSessionHost({ env, ctx, record });
+		await hydrateStation(runtimeRef.station, adapter, ctx);
 		if (runtimeRef.disposed) return;
-		const sessionService = createSessionService({
-			loadSessions: listSessions,
-			buildNewPlan: ({ cwd }) => {
-				const ompPath = env.ompPath ?? Bun.which("omp");
-				if (!ompPath) throw new Error("Cannot find the omp executable in PATH");
-				return buildNewLaunch({ cwd, ompPath });
-			},
-			buildPlan: (session) => {
-				const ompPath = env.ompPath ?? Bun.which("omp");
-				if (!ompPath) throw new Error("Cannot find the omp executable in PATH");
-				return buildResumeLaunch({ session, ompPath });
-			},
-			launch: async (plan, session) => {
-				const directory = join(process.env.XDG_RUNTIME_DIR || join(homedir(), ".omp", "run"), "herd-omp-ui", "launch");
-				const path = await createLaunchContext({ directory, port, token });
-				const cleanup = () => { void removeLaunchContext(path).catch((error) => record("launch-context-cleanup", error)); };
-				try {
-					const ompPath = env.ompPath ?? Bun.which("omp");
-					if (!ompPath) throw new Error("Cannot find the omp executable in PATH");
-					const spec = session
-						? buildResumeLaunch({ session, ompPath, launchId: plan.launchId, contextPath: path })
-						: buildNewLaunch({ cwd: plan.cwd, ompPath, launchId: plan.launchId, contextPath: path });
-					const run = async (command, args) => {
-						const child = Bun.spawn([command, ...args], { stdout: "pipe", stderr: "pipe" });
-						const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-						return { code, stdout, stderr };
-					};
-					const hasSession = async (name) => {
-						const result = await run("tmux", ["list-sessions", "-F", "#{session_name}"]);
-						return result.code === 0 && result.stdout.split("\n").includes(name);
-					};
-					if (await hasSession(spec.tmuxSession)) throw new Error(`tmux session already exists: ${spec.tmuxSession}`);
-					const result = await executeTmuxLaunch({ spec, contextPath: path, run, hasSession, removeContext: removeLaunchContext, record });
-					if (!result.ok) throw new Error(result.message || "tmux launch failed");
-					const timer = setTimeout(cleanup, 60_000);
-					timer.unref?.();
-					return { tmuxSession: spec.tmuxSession };
-				} catch (error) {
-					cleanup();
-					throw error;
-				}
-			},
-		});
 		const isTui = ctx.mode === "tui" && ctx.hasUI;
 		const server = await createManagerClient({
 			mode: ctx.mode,
 			instanceCapabilities: { canCompose: isTui || typeof runtimeRef.pi?.sendUserMessage === "function", canUseTuiSurface: isTui, canAttachments: isTui, canSlashCommands: isTui },
 			host: env.host ?? "127.0.0.1",
-			preferredPort: port,
-			token,
-			staticDir,
-			onBootstrap: async () => {
-				const snap = runtimeRef.station.snapshot();
-				const sessionDir = ctx.sessionManager?.getSessionDir?.();
-				snap.session = { ...snap.session, cwd: snap.session?.cwd ?? ctx.cwd, sessionDir };
-				if (!snap.sessions?.length) snap.sessions = await adapter.listProjectSessions(ctx.cwd);
-				return snap;
-			},
+			preferredPort: host.port,
+			token: host.token,
+			staticDir: host.staticDir,
+			onBootstrap: createBootstrapSnapshot({ station: runtimeRef.station, adapter, ctx }),
 			onStatus: (state, reason) => {
 				if (runtimeRef.disposed) return;
 				if (state === "connected") {
-					runtimeRef.url = `http://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
+					runtimeRef.url = `http://127.0.0.1:${host.port}/?token=${encodeURIComponent(host.token)}`;
 					runtimeRef.reason = null;
 				} else {
 					runtimeRef.url = null;
 					runtimeRef.reason = reason ? String(reason.message ?? reason) : `manager ${state}`;
 				}
 			},
-			onListSessions: listSessions,
-			ensureSession: sessionService.ensureSession,
-			newSession: (input, waitForLaunch) => sessionService.newSession(input, waitForLaunch),
+			onListSessions: host.listSessions,
+			ensureSession: host.sessionService.ensureSession,
+			newSession: (input, waitForLaunch) => host.sessionService.newSession(input, waitForLaunch),
 			onClientConnect: (clientId) => runtimeRef.station.onClientConnected?.(clientId),
 			onClientDisconnect: (clientId) => runtimeRef.station.onClientDisconnected?.(clientId),
-			onShutdown: () => {
-				const stop = ctx?.shutdown ?? runtimeRef.pi?.shutdown;
-				if (typeof stop === "function") {
-					try {
-						return stop.call(ctx ?? runtimeRef.pi);
-					} catch (error) {
-						record("shutdown", error);
-					}
-				}
-				const exit = () => process.kill(process.pid, "SIGTERM");
-				const schedule = typeof ctx?.setTimeout === "function" ? ctx.setTimeout.bind(ctx) : setTimeout;
-				schedule(exit, 50);
-			},
-			onClientCommand: async (command, clientId) => {
-				if (command?.type === "interaction.respond") {
-					const payload = command.payload ?? {};
-					let result;
-					try {
-						const pending = runtimeRef.station.snapshot().pendingInteractions.find((item) => item.id === payload.requestId);
-						if (pending?.kind === "plan_review") {
-							result = await runtimeRef.tickets.resolvePlanReviewTicket({
-								reviewId: payload.requestId, choice: payload.choice ?? payload.value, input: payload.input,
-							});
-						} else {
-							result = runtimeRef.bridge.resolve(payload.requestId, payload);
-							if (result.ok) runtimeRef.station.resolveInteraction(payload.requestId, "web", payload);
-						}
-					} catch (error) {
-						record("interaction-response", error);
-						result = { ok: false, code: "failed" };
-					}
-					if (payload.commandId) server.sendToClient(clientId, {
-						type: "command.result", requestId: payload.commandId, ok: Boolean(result?.ok),
-						...(!result?.ok ? { code: result?.code ?? "failed", errors: result?.errors ?? null } : {}),
-					});
-					if (!result?.ok) server.sendToClient(clientId, {
-						type: "interaction.error", requestId: payload.requestId, code: result?.code ?? "failed", errors: result?.errors ?? null,
-					});
-					return;
-				}
-				runtimeRef.station.onClientCommand?.(clientId, command);
-			},
+			onShutdown: createShutdownHandler({ ctx, pi: runtimeRef.pi, record }),
+			onClientCommand: createClientCommandHandler({
+				getStation: () => runtimeRef.station,
+				getTickets: () => runtimeRef.tickets,
+				getBridge: () => runtimeRef.bridge,
+				getServer: () => runtimeRef.server,
+				record,
+			}),
 			diagnostics: diagnostics(),
 		});
 		if (runtimeRef.disposed) {
@@ -202,36 +83,13 @@ async function startRuntime(runtimeRef, env, adapter, ctx) {
 			return;
 		}
 		runtimeRef.server = server;
-		await hydrate(runtimeRef, adapter, ctx);
+		await hydrateStation(runtimeRef.station, adapter, ctx);
 		if (runtimeRef.disposed) return;
 		server.broadcast({ type: "snapshot", ...runtimeRef.station.snapshot() });
-		if (isTui) await attachWatcherIfReady(runtimeRef);
+		if (isTui) await ensureSurfaceWatcher(runtimeRef);
 	} catch (error) {
 		record("start-runtime", error);
 		if (runtimeRef) runtimeRef.reason = error instanceof Error ? error.message : String(error);
-	}
-}
-
-async function attachWatcherIfReady(runtimeRef) {
-	if (!runtimeRef || runtimeRef.disposed || runtimeRef.watcher) return;
-	const capture = runtimeRef.capture ?? getLastCapture();
-	if (!capture?.tui) return;
-	const modules = runtimeRef.modules ?? (await loadTuiModules(runtimeRef.pi));
-	// Loading modules yields: shutdown or another capture may have won meanwhile.
-	if (runtimeRef.disposed || runtimeRef.watcher) return;
-	const ReconcilerClass = modules?.Reconciler ?? FallbackReconciler;
-	if (!ReconcilerClass) return;
-	const watcher = attachSurfaceWatcher({
-		tui: capture.tui,
-		composer: capture.composer,
-		ReconcilerClass,
-		onFrame: (frame) => runtimeRef.station.onSurfaceFrame?.(frame),
-	});
-	runtimeRef.reconciler = watcher.reconciler;
-	runtimeRef.watcher = watcher;
-	if (runtimeRef.fence) {
-		runtimeRef.fence.surfaceWatcherActive = true;
-		runtimeRef.station?.onMetaUpdate?.({ fence: runtimeRef.fence });
 	}
 }
 
@@ -305,7 +163,7 @@ export function wireUiExtension(pi, env = {}) {
 					runtimeRef.fence.tuiCaptured = Boolean(capture?.tui);
 					runtimeRef.station?.onMetaUpdate?.({ fence: runtimeRef.fence });
 				}
-				void attachWatcherIfReady(runtimeRef).then(() => {
+				void ensureSurfaceWatcher(runtimeRef).then(() => {
 					if (runtime !== runtimeRef || runtimeRef.disposed || !runtimeRef.fence) return;
 					runtimeRef.fence.surfaceWatcherActive = Boolean(runtimeRef.watcher);
 					runtimeRef.station?.onMetaUpdate?.({ fence: runtimeRef.fence });
@@ -404,7 +262,7 @@ export function wireUiExtension(pi, env = {}) {
 		onSessionChange: (ctx) => {
 			const current = runtime;
 			if (!current?.adapter) return;
-			void hydrate(current, current.adapter, ctx ?? current.ctx).then(() => {
+			void hydrateStation(current.station, current.adapter, ctx ?? current.ctx).then(() => {
 				if (runtime === current && !current.disposed) {
 					const session = current.adapter.sessionInfo();
 					current.server?.update?.({ ...session, cwd: session?.cwd ?? (ctx ?? current.ctx).cwd, sessionDir: (ctx ?? current.ctx).sessionManager?.getSessionDir?.() }, current.station.snapshot());

@@ -1,13 +1,10 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   ArrowUpIcon,
   CircleStopIcon,
-  CornerDownRightIcon,
-  GitBranchIcon,
   Loader2Icon,
   SendIcon,
   SparklesIcon,
-  ZapIcon,
 } from "lucide-react";
 import {
   PromptInput,
@@ -18,7 +15,6 @@ import {
   PromptInputTools,
   usePromptInputController,
 } from "@herd/deer-flow-ui/ai-elements/prompt-input";
-import { Badge } from "@herd/deer-flow-ui/ui/badge";
 import { Button } from "@herd/deer-flow-ui/ui/button";
 import {
   Tooltip,
@@ -26,8 +22,8 @@ import {
   TooltipTrigger,
 } from "@herd/deer-flow-ui/ui/tooltip";
 import { selectModeStatus, selectModelKey } from "../protocol/store";
-import { formatThinkingLabel, groupModelsByProvider } from "../lib/model-display";
-import { ModelPickerDialog } from "./ModelPickerDialog";
+import { ModelControlsBar } from "./composer/model-controls";
+import { CompletionMenu, QueueChips } from "./composer/overlays";
 import type { CompletionState, DraftState, ModelRef, WebState } from "../protocol/types";
 import type { InstanceCapabilities } from "../lib/instance-capabilities";
 
@@ -60,164 +56,6 @@ type ComposerProps = {
   onThinking: (level: string) => void;
   onMode: (mode: "plan" | "vibe", action: "enter" | "exit") => void;
 };
-
-function ModeToggle({
-  label,
-  icon,
-  active,
-  onClick,
-}: {
-  label: string;
-  icon: ReactNode;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant={active ? "secondary" : "ghost"}
-      className="h-7 shrink-0 gap-1 px-1.5 text-xs sm:px-2"
-      aria-label={label}
-      onClick={onClick}
-    >
-      {icon}
-      <span className="hidden sm:inline">{label}</span>
-    </Button>
-  );
-}
-
-type ModelControlsProps = {
-  modelKey: string;
-  models: ModelRef[];
-  thinkingLevel: string | null;
-  thinkingLevels: string[];
-  modes: WebState["modes"];
-  disabled: boolean;
-  onModel: (provider: string, modelId: string) => void;
-  onThinking: (level: string) => void;
-  onMode: (mode: "plan" | "vibe", action: "enter" | "exit") => void;
-};
-
-function sameModels(a: ModelRef[], b: ModelRef[]) {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  return a.every((model, index) => {
-    const other = b[index]!;
-    return model.provider === other.provider && model.id === other.id && model.name === other.name;
-  });
-}
-
-function modelControlsEqual(a: ModelControlsProps, b: ModelControlsProps) {
-  return (
-    a.modelKey === b.modelKey &&
-    a.thinkingLevel === b.thinkingLevel &&
-    a.disabled === b.disabled &&
-    sameModels(a.models, b.models) &&
-    a.thinkingLevels.length === b.thinkingLevels.length &&
-    a.thinkingLevels.every((level, index) => level === b.thinkingLevels[index]) &&
-    JSON.stringify(a.modes) === JSON.stringify(b.modes) &&
-    a.onModel === b.onModel &&
-    a.onThinking === b.onThinking &&
-    a.onMode === b.onMode
-  );
-}
-
-const ModelControlsBar = memo(function ModelControlsBar({
-  modelKey,
-  models,
-  thinkingLevel,
-  thinkingLevels,
-  modes,
-  disabled,
-  onModel,
-  onThinking,
-  onMode,
-}: ModelControlsProps) {
-  const selectedKey = modelKey || "";
-  const selectedModel =
-    models.find((model) => selectModelKey(model) === selectedKey) ??
-    (selectedKey
-      ? ({
-          provider: selectedKey.split("/")[0] ?? "",
-          id: selectedKey.split("/").slice(1).join("/") || selectedKey,
-          name: selectedKey.split("/").pop() ?? selectedKey,
-        } as ModelRef)
-      : null);
-  const modelOptions =
-    selectedModel && !models.some((model) => selectModelKey(model) === selectedKey)
-      ? [...models, selectedModel]
-      : models;
-  const levels = thinkingLevels.length
-    ? thinkingLevels
-    : thinkingLevel
-      ? [thinkingLevel]
-      : [];
-  const levelIndex = thinkingLevel ? Math.max(0, levels.indexOf(thinkingLevel)) : 0;
-  const plan = selectModeStatus(modes, "plan");
-  const vibe = selectModeStatus(modes, "vibe");
-  const thinkingControl =
-    levels.length === 0 ? null : levels.length === 1 ? (
-      <span
-        className="text-muted-foreground flex h-7 shrink-0 items-center px-2 text-xs whitespace-nowrap"
-        title={`思考强度：${formatThinkingLabel(levels[0])}`}
-      >
-        {formatThinkingLabel(levels[0])}
-      </span>
-    ) : (
-      <div
-        className="flex h-7 min-w-[52px] flex-1 shrink-0 items-center gap-1 px-1 sm:gap-2 sm:px-2"
-        title={`思考强度：${levels.map(formatThinkingLabel).join(" / ")}`}
-      >
-        <input
-          type="range"
-          min={0}
-          max={levels.length - 1}
-          step={1}
-          value={Math.min(levelIndex, levels.length - 1)}
-          onChange={(event) => {
-            const next = levels[Number(event.target.value)];
-            if (next) onThinking(next);
-          }}
-          disabled={disabled}
-          aria-label="思考强度"
-          className="h-1.5 min-w-[44px] flex-1 cursor-pointer accent-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40 sm:max-w-[28vw]"
-        />
-        <span className="text-muted-foreground hidden text-xs whitespace-nowrap sm:inline sm:min-w-[3.5rem]">
-          {formatThinkingLabel(thinkingLevel ?? levels[levelIndex] ?? levels[0])}
-        </span>
-      </div>
-    );
-  return (
-    <>
-      <div className="shrink-0 [order:-2]">
-        <ModeToggle
-          label="Plan"
-          icon={<GitBranchIcon className="size-3.5" />}
-          active={plan === "active"}
-          onClick={() => onMode("plan", plan === "active" ? "exit" : "enter")}
-        />
-      </div>
-      <div className="shrink-0 [order:-1]">
-        <ModeToggle
-          label="Vibe"
-          icon={<ZapIcon className="size-3.5" />}
-          active={vibe === "active"}
-          onClick={() => onMode("vibe", vibe === "active" ? "exit" : "enter")}
-        />
-      </div>
-      <div className="flex min-w-0 w-full items-center [order:1] sm:w-auto sm:flex-1">
-        <ModelPickerDialog
-          modelKey={selectedKey}
-          models={modelOptions}
-          disabled={disabled}
-          onModel={onModel}
-        />
-        {thinkingControl}
-      </div>
-    </>
-  );
-}, modelControlsEqual);
 
 function ComposerForm({
   draft,
@@ -353,7 +191,6 @@ function ComposerForm({
 
   const plan = selectModeStatus(modes, "plan");
   const vibe = selectModeStatus(modes, "vibe");
-  const queueCount = queue.steering.length + queue.followUp.length;
   const levels =
     thinkingLevel && !thinkingLevels.includes(thinkingLevel)
       ? [thinkingLevel, ...thinkingLevels]
@@ -367,71 +204,8 @@ function ComposerForm({
           <span className="truncate">{working}</span>
         </div>
       )}
-      {queueCount > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1">
-          {queue.steering.map((item, index) => (
-            <Badge
-              key={`steer-${index}`}
-              variant="secondary"
-              className="max-w-[18rem] gap-1 text-[10px]"
-              title={item}
-            >
-              <CornerDownRightIcon className="size-3" />
-              <span className="truncate">steer: {item.slice(0, 48)}</span>
-            </Badge>
-          ))}
-          {queue.followUp.map((item, index) => (
-            <Badge
-              key={`follow-${index}`}
-              variant="outline"
-              className="max-w-[18rem] gap-1 text-[10px]"
-              title={item}
-            >
-              <span className="truncate">follow-up: {item.slice(0, 48)}</span>
-            </Badge>
-          ))}
-        </div>
-      )}
-      {completion.open && completion.items.length > 0 && text.startsWith("/") && (
-        <div className="mb-1.5 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-          <div className="text-muted-foreground flex items-center justify-between border-b px-3 py-1 text-[10px]">
-            <span>斜杠补全 · TUI 状态镜像</span>
-            <span className="font-mono">{completion.prefix}</span>
-          </div>
-          <div className="max-h-[13rem] overflow-y-auto py-1">
-            {completion.items.map((item, index) => (
-              <button
-                key={`${item.value}-${index}`}
-                type="button"
-                disabled={item.disabled}
-                className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-xs disabled:opacity-40 ${
-                  index === completion.selectedIndex
-                    ? "bg-accent text-accent-foreground"
-                    : "text-foreground hover:bg-accent/50"
-                }`}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  const current = completion.selectedIndex;
-                  const delta = current < 0 ? index : index - current;
-                  const key = delta > 0 ? "\u001b[B" : "\u001b[A";
-                  for (let i = 0; i < Math.abs(delta); i += 1) onKeys(key);
-                  onKeys("\r");
-                }}
-              >
-                <span className="font-mono text-[11px] whitespace-nowrap">{item.label}</span>
-                {item.description && (
-                  <span className="text-muted-foreground truncate">{item.description}</span>
-                )}
-                {item.hint && (
-                  <span className="text-muted-foreground ml-auto shrink-0 text-[10px]">
-                    {item.hint}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <QueueChips queue={queue} />
+      <CompletionMenu completion={completion} text={text} onKeys={onKeys} />
       <PromptInput
         onSubmit={({ text: submitted }) => sendWithAttachments(submitted, "default")}
         onCompositionStart={() => setComposing(true)}

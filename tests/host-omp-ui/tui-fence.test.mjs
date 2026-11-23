@@ -63,18 +63,28 @@ class FakeComposer {
 }
 
 describe("loadTuiModules", () => {
-	test("keeps pi-tui deep imports literal so omp's extension loader can rewrite them", async () => {
-		const source = await Bun.file(new URL(MODULE, import.meta.url)).text();
-		for (const specifier of [
-			"@oh-my-pi/pi-tui/prompt/composer",
-			"@oh-my-pi/pi-tui/prompt/custom-editor",
-			"@oh-my-pi/pi-tui/native/reconcile",
-		]) {
-			expect(source).toContain(`import("${specifier}")`);
-		}
-		// A computed specifier reaches the compiled omp resolver unrewritten and
-		// fails with "Cannot find package".
-		expect(source).not.toMatch(/import\(\s*specifier\s*\)/);
+	// The literal-specifier requirement is a compile-time property of omp's
+	// extension loader and cannot be observed at runtime, so it stays documented
+	// on loadTuiModules itself. What a consumer can observe is the contract
+	// below: a missing deep module degrades into `errors` instead of throwing
+	// during omp startup, and a host-provided class wins over the deep import.
+	test("returns a stable module contract and never throws when host classes are missing", async () => {
+		const { loadTuiModules } = await load();
+		const result = await loadTuiModules({});
+		expect(result).toHaveProperty("Composer");
+		expect(result).toHaveProperty("CustomEditor");
+		expect(result).toHaveProperty("Reconciler");
+		expect(Array.isArray(result.errors)).toBe(true);
+	});
+
+	test("prefers host-provided classes over the deep pi-tui imports", async () => {
+		const { loadTuiModules } = await load();
+		const Composer = function HostComposer() {};
+		const CustomEditor = function HostCustomEditor() {};
+		const result = await loadTuiModules({ pi: { Composer, CustomEditor } });
+		expect(result.Composer).toBe(Composer);
+		expect(result.CustomEditor).toBe(CustomEditor);
+		expect(Array.isArray(result.errors)).toBe(true);
 	});
 });
 

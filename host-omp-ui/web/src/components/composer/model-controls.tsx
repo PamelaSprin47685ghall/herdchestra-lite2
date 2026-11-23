@@ -61,7 +61,7 @@ function modelControlsEqual(a: ModelControlsProps, b: ModelControlsProps) {
     sameModels(a.models, b.models) &&
     a.thinkingLevels.length === b.thinkingLevels.length &&
     a.thinkingLevels.every((level, index) => level === b.thinkingLevels[index]) &&
-    JSON.stringify(a.modes) === JSON.stringify(b.modes) &&
+    (a.modes === b.modes || JSON.stringify(a.modes) === JSON.stringify(b.modes)) &&
     a.onModel === b.onModel &&
     a.onThinking === b.onThinking &&
     a.onMode === b.onMode

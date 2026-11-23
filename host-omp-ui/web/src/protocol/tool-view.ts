@@ -411,17 +411,13 @@ function titleOf(name: string, args: Record<string, unknown>, fallback: string):
   return description || path || command || fallback || name;
 }
 
-function statusOf(tool: ToolExecution): ToolStatus {
-  return tool.isError ? "failed" : tool.status;
-}
-
 export function describeTool(tool: ToolExecution): ToolView {
   const name = tool.name || "tool";
   const args = argsOf(tool);
   const output = truncate(resultText(tool.result ?? tool.partialResult));
   const path = typeof args.path === "string" ? args.path : undefined;
   const isError = Boolean(tool.isError) || tool.status === "error";
-  const status = isError ? "failed" : statusOf(tool);
+  const status = isError ? "failed" : tool.status;
   const base: ToolViewBase = {
     id: tool.id,
     name,

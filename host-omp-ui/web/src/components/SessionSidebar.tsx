@@ -96,7 +96,6 @@ export function SessionSidebarContent({
 }) {
   const [query, setQuery] = useState("");
   const liveId = state.liveSession.session?.id ?? null;
-  const activeId = liveId;
   const sessions = useMemo(() => {
     const seen = new Set<string>();
     const list: SessionSummary[] = [];
@@ -112,11 +111,10 @@ export function SessionSidebarContent({
     }
     return list;
   }, [state.liveSession.session, state.sessions]);
-  const filtered = sessions.filter((session) =>
-    `${session.title ?? ""} ${session.id} ${session.cwd ?? ""}`
-      .toLowerCase()
-      .includes(query.trim().toLowerCase()),
-  );
+  const q = query.trim().toLowerCase();
+  const matches = (title?: string | null, id?: string, cwd?: string | null) =>
+    `${title ?? ""} ${id ?? ""} ${cwd ?? ""}`.toLowerCase().includes(q);
+  const filtered = sessions.filter((session) => matches(session.title, session.id, session.cwd));
 
   return (
     <div className="bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col">
@@ -180,20 +178,18 @@ export function SessionSidebarContent({
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-4 [scrollbar-gutter:stable]">
         {(() => {
-          const q = query.trim().toLowerCase();
-          const matches = (title?: string | null, id?: string, cwd?: string | null) =>
-            `${title ?? ""} ${id ?? ""} ${cwd ?? ""}`.toLowerCase().includes(q);
           const starting = startingInstances.filter((instance) => matches(instance.title, instance.instanceId, instance.cwd));
           const liveSessions = filtered.filter((session) => session.id === liveId || liveIds.includes(session.id));
           const recentSessions = filtered.filter((session) => !(session.id === liveId || liveIds.includes(session.id)));
 
           const renderSession = (session: SessionSummary, isLive: boolean) => {
-            const active = session.id === activeId;
+            const active = session.id === liveId;
             const activeModel = state.model ?? state.meta.model;
             const modelLabel = active
               ? modelNickname(activeModel, state.models)
               : "";
-            const day = formatStamp(session.modified).split(" ").slice(0, 2).join(" ");
+            const stamp = formatStamp(session.modified);
+            const day = stamp.split(" ").slice(0, 2).join(" ");
             const meta = [day, dirLabel(session.cwd)].filter(Boolean).join(" · ");
             return (
               <div
@@ -206,7 +202,7 @@ export function SessionSidebarContent({
                   event.preventDefault();
                   onOpen(session.id);
                 }}
-                title={`${session.title || "未命名会话"}\n${formatStamp(session.modified)}${session.cwd ? ` · ${session.cwd}` : ""}`}
+                title={`${session.title || "未命名会话"}\n${stamp}${session.cwd ? ` · ${session.cwd}` : ""}`}
                 className={
                   active
                     ? "group border-brand bg-sidebar-accent text-sidebar-accent-foreground flex w-full cursor-pointer items-start gap-2 rounded-lg border-l-2 px-3 py-2 text-left transition-colors"

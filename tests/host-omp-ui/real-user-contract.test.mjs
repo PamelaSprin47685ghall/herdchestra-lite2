@@ -161,3 +161,24 @@ describe("web turn groups use the same boundary", () => {
     expect(built.steps[0].text).toBe("injected");
   });
 });
+
+describe("history cursor", () => {
+  test("prefers the server oldest id over the first rendered message", async () => {
+    const { resolveHistoryCursor } = await import(
+      "../../host-omp-ui/web/src/lib/build-steps.ts"
+    );
+    expect(
+      resolveHistoryCursor("server-oldest", [{ id: "rendered-first" }]),
+    ).toBe("server-oldest");
+  });
+
+  test("falls back to the first rendered message when history has no cursor", async () => {
+    const { resolveHistoryCursor } = await import(
+      "../../host-omp-ui/web/src/lib/build-steps.ts"
+    );
+    expect(resolveHistoryCursor(null, [{ id: "rendered-first" }])).toBe(
+      "rendered-first",
+    );
+    expect(resolveHistoryCursor(undefined, [])).toBeNull();
+  });
+});

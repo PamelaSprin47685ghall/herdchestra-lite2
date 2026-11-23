@@ -53,6 +53,13 @@ export function isRealUser(message: UiMessage): boolean {
   return message.role === "user" && message.attribution === "user";
 }
 
+export function resolveHistoryCursor(
+  oldestId: string | null | undefined,
+  messages: readonly { id: string }[],
+): string | null {
+  return oldestId ?? messages[0]?.id ?? null;
+}
+
 export interface StepSegment {
   id: string;
   steps: readonly StepEntry[];

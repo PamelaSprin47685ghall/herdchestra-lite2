@@ -556,6 +556,59 @@ test("history.page advances hasMore until history is exhausted", async () => {
 	expect(state.liveSession.history).toEqual({ hasMore: false, oldestId: "m70" });
 });
 
+test("a refused history page leaves hasMore and the loaded messages untouched", async () => {
+	const api = await load();
+	let state = api.createInitialWebState();
+	state = api.reduceWebState(
+		state,
+		snapshot({
+			session: { id: "s1" },
+			messages: [
+				{ id: "m80", role: "assistant", blocks: [{ type: "text", text: "tail" }] },
+			],
+			history: { hasMore: true, oldestId: "m80" },
+		}),
+	);
+
+	state = api.reduceWebState(state, {
+		type: "history.page",
+		requestId: "r1",
+		ok: false,
+		code: "invalid_limit",
+	});
+
+	expect(state.messages.map((message) => message.id)).toEqual(["m80"]);
+	expect(state.liveSession.history).toEqual({ hasMore: true, oldestId: "m80" });
+});
+
+test("a successful nested history page advances hasMore", async () => {
+	const api = await load();
+	let state = api.createInitialWebState();
+	state = api.reduceWebState(
+		state,
+		snapshot({
+			session: { id: "s1" },
+			messages: [
+				{ id: "m80", role: "assistant", blocks: [{ type: "text", text: "tail" }] },
+			],
+			history: { hasMore: true, oldestId: "m80" },
+		}),
+	);
+
+	state = api.reduceWebState(state, {
+		type: "history.page",
+		requestId: "r1",
+		ok: true,
+		messages: [
+			{ id: "m70", role: "user", attribution: "user", blocks: [{ type: "text", text: "older" }] },
+		],
+		history: { hasMore: true, oldestId: "m70" },
+	});
+
+	expect(state.messages.map((message) => message.id)).toEqual(["m70", "m80"]);
+	expect(state.liveSession.history).toEqual({ hasMore: true, oldestId: "m70" });
+});
+
 test("message-only frames preserve model and thinking selections by reference", async () => {
 	const api = await load();
 	let state = api.createInitialWebState();

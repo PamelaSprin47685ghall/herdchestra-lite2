@@ -1192,6 +1192,8 @@ function reduceWebStateInner(state: WebState, rawFrame: ServerFrame): WebState {
         notifications: frame.ok ? state.notifications : appendNotification(state, "error", `${code ?? "failed"}${message ? `: ${message}` : ""}`) };
     }
     case "history.page": {
+      if (frame.ok === false || !Array.isArray(frame.messages)) return state;
+      const page = isRecord(frame.history) ? frame.history : frame;
       const incoming = normalizeMessages(frame.messages);
       const seen = new Set(state.liveSession.messages.map((message) => message.id));
       const older = incoming.filter((message) => {
@@ -1200,7 +1202,7 @@ function reduceWebStateInner(state: WebState, rawFrame: ServerFrame): WebState {
         return true;
       });
       const nextHistory = {
-        hasMore: frame.hasMore === true && incoming.length > 0,
+        hasMore: page.hasMore === true && incoming.length > 0,
         oldestId:
           older[0]?.id ?? state.liveSession.messages[0]?.id ?? null,
       };

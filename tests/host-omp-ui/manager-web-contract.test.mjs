@@ -134,6 +134,11 @@ describe("history request lifecycle", () => {
       const frames = [];
       const unsubscribe = client.subscribe((frame) => { if (frame) frames.push(frame); });
       const pending = client.requestHistory("before-1");
+      expect(socket.sent.at(-1).type).toBe("manager.history");
+      expect(socket.sent.at(-1).payload).toMatchObject({
+        before: "before-1",
+        limit: 50,
+      });
       const id = socket.sent.at(-1).payload.requestId;
       await expect(client.requestHistory("before-2")).rejects.toThrow();
       socket.receive({ type: "history.page", requestId: "wrong", messages: [] });

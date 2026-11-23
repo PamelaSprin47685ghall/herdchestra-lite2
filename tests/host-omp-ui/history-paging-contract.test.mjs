@@ -84,6 +84,33 @@ describe("turn-aligned paging", () => {
 	});
 });
 
+test("a long transcript keeps the current turn's user message in the snapshot", () => {
+	const longTurn = Array.from({ length: 325 }, (_, index) => ({
+		type: "message",
+		id: `m${index}`,
+		message: {
+			role: index === 1 || index === 264 ? "user" : "assistant",
+			content: [{ type: "text", text: `message ${index}` }],
+			timestamp: index,
+			...(index === 1 || index === 264 ? { attribution: "user" } : {}),
+		},
+	}));
+	const station = createUiBridgeStation({
+		capabilities: { dispatch: () => {} },
+	});
+	station.onSessionHydrate({ id: "long", cwd: "/tmp" }, longTurn);
+
+	const snapshot = station.snapshot();
+	expect(snapshot.messages[0].id).toBe("m1");
+	expect(snapshot.messages.some((message) => message.id === "m264")).toBe(true);
+	expect(snapshot.history).toEqual({ hasMore: true, oldestId: "m1" });
+
+	const page = station.historyPage({ before: snapshot.history.oldestId, limit: 50 });
+	expect(page.ok).toBe(true);
+	expect(page.messages.map((message) => message.id)).toEqual(["m0"]);
+	expect(page.history).toEqual({ hasMore: false, oldestId: "m0" });
+});
+
 describe("snapshot carries a tail window", () => {
 	test("default snapshot exposes only the newest window and its cursor", () => {
 		const { station } = makeStation(200);
@@ -157,6 +184,16 @@ describe("historyPage walks backwards by message id", () => {
 	test("a non-positive limit is refused instead of dumping the transcript", () => {
 		const { station } = makeStation(200);
 		expect(station.historyPage({ before: "m120", limit: 0 }).ok).toBe(false);
+	});
+
+	test("a missing limit falls back to a page large enough to leave the bottom", () => {
+		const { station } = makeStation(200);
+		const page = station.historyPage({ before: "m120" });
+
+		expect(page.ok).toBe(true);
+		expect(page.messages).toHaveLength(50);
+		expect(page.messages[0].id).toBe("m70");
+		expect(page.history.hasMore).toBe(true);
 	});
 });
 

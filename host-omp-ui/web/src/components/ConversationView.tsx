@@ -47,6 +47,7 @@ import {
   buildSteps,
   buildTurnGroups,
   isStepGroupActive,
+  resolveHistoryCursor,
   type StepEntry,
   type TurnGroup,
 } from "../lib/build-steps";
@@ -493,14 +494,23 @@ function ConversationViewInner({
   
   onLoadHistory,
   hasMoreHistory = false,
+  historyOldestId = null,
 }: {
   messages: WebState["messages"];
   toolExecutions: WebState["toolExecutions"];
   streaming: boolean;
   onLoadHistory?: (before: string) => Promise<boolean>;
   hasMoreHistory?: boolean;
+  historyOldestId?: string | null;
 }) {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [earlierNotice, setEarlierNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!earlierNotice) return;
+    const timer = window.setTimeout(() => setEarlierNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [earlierNotice]);
 
   const { attachedToolIds } = renderIndexes(messages);
   const groups = useMemo(() => buildTurnGroups(messages), [messages]);
@@ -630,10 +640,19 @@ function ConversationViewInner({
           </div>
         ) : undefined
       }
-      onNeedEarlier={() => {
-        const first = messages[0]?.id;
-        if (!first || !onLoadHistory) return false;
-        return onLoadHistory(first);
+      footer={
+        earlierNotice ? (
+          <div className="text-muted-foreground border-t px-4 py-1.5 text-center text-xs">
+            {earlierNotice}
+          </div>
+        ) : null
+      }
+      onNeedEarlier={async () => {
+        const before = resolveHistoryCursor(historyOldestId, messages);
+        if (!before || !onLoadHistory) return false;
+        const loaded = await onLoadHistory(before);
+        if (loaded) setEarlierNotice("已加载更早消息，继续上滚查看");
+        return loaded;
       }}
     />
   );
@@ -646,5 +665,6 @@ export const ConversationView = memo(
     previous.toolExecutions === next.toolExecutions &&
     previous.streaming === next.streaming &&
     previous.onLoadHistory === next.onLoadHistory &&
-    previous.hasMoreHistory === next.hasMoreHistory,
+    previous.hasMoreHistory === next.hasMoreHistory &&
+    previous.historyOldestId === next.historyOldestId,
 );

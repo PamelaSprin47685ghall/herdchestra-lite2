@@ -21,6 +21,22 @@ export function finishRestore(previous: ScrollIntent): ScrollIntent {
   return previous === "restoring" ? "following" : previous;
 }
 
+export function intentFromPosition(
+  intent: ScrollIntent,
+  distance: number,
+  bottomPx = 4,
+  nearBottomPx = 120,
+): ScrollIntent {
+  if (intent === "restoring") return intent;
+  if (distance <= bottomPx) return "following";
+  if (distance > nearBottomPx) return "paused";
+  return intent;
+}
+
+export function restoreIntentForLoad(intent: ScrollIntent): ScrollIntent {
+  return intent === "following" ? "paused" : intent;
+}
+
 export interface TailWindowOptions {
   running?: boolean;
   open?: boolean;

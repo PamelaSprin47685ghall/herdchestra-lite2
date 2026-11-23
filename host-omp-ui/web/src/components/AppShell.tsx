@@ -472,6 +472,7 @@ export function AppShell() {
           <ConversationView
             key={`conversation:${composerKey}`}
             hasMoreHistory={Boolean(state.liveSession.history?.hasMore)}
+            historyOldestId={state.liveSession.history?.oldestId ?? null}
             messages={state.messages}
             toolExecutions={state.toolExecutions}
             streaming={state.streaming}

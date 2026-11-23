@@ -303,7 +303,7 @@ export function createBridgeClient(): BridgeClient {
     requestHistory(before) {
       if (!socket || socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error("未连接，未发送"));
       if (historyRequest) return Promise.reject(new Error("历史请求正在进行"));
-      const { requestId, frame } = createCommandRequest("manager.history", { before });
+      const { requestId, frame } = createCommandRequest("manager.history", { before, limit: 50 });
       return new Promise((resolve, reject) => {
         const timer = window.setTimeout(() => {
           if (historyRequest?.id === requestId) historyRequest = null;

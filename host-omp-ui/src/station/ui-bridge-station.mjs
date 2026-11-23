@@ -334,10 +334,13 @@ export function createUiBridgeStation(options) {
   }
 
   function snapshot(limit = 80) {
-    const size = Math.min(Number.isInteger(limit) && limit > 0 ? limit : 80, 64);
+    const requested = Number.isInteger(limit) && limit > 0 ? limit : 80;
+    const size = Math.min(requested, state.messages.length);
     const rawStart = Math.max(0, state.messages.length - size);
     const start = alignToTurnStart(state.messages, rawStart);
-    const messages = state.messages.slice(start).slice(-64).map(capMessage);
+    // Keep the whole turn-aligned window. A trailing slice here would undo the
+    // alignment and can push the current turn's user message out of the window.
+    const messages = state.messages.slice(start).map(capMessage);
     const tools = Object.values(state.toolExecutions).slice(-32).map(capTool);
     const doc = {
       seq: state.seq ?? 0,
@@ -402,8 +405,11 @@ export function createUiBridgeStation(options) {
     snapshot,
 
     historyPage(input) {
-      const limit = Math.min(Number(input?.limit), MAX_HISTORY_LIMIT);
-      if (!Number.isInteger(limit) || limit <= 0) {
+      const requested = input?.limit === undefined ? 50 : Number(input.limit);
+      const limit = Number.isInteger(requested) && requested > 0
+        ? Math.min(requested, MAX_HISTORY_LIMIT)
+        : null;
+      if (limit === null) {
         return { ok: false, code: "invalid_limit" };
       }
       const before = String(input?.before ?? "");

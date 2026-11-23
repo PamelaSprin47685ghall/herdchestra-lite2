@@ -8,7 +8,9 @@ import {
 } from "react";
 import {
   finishRestore,
+  intentFromPosition,
   reachBottom,
+  restoreIntentForLoad,
   startRestore,
   tailWindow,
   userScrollUp,
@@ -132,7 +134,7 @@ export function useWindowedScroll({
     const el = scrollRef.current;
     if (el) {
       pending.current = { height: el.scrollHeight, top: el.scrollTop };
-      restoreIntent.current = intent.current;
+      restoreIntent.current = restoreIntentForLoad(intent.current);
       intent.current = startRestore(intent.current);
     }
     setVisible((value) => value + page);
@@ -154,7 +156,7 @@ export function useWindowedScroll({
     topRequested.current = true;
     setLoading(true);
     pending.current = { height: el.scrollHeight, top: el.scrollTop };
-    restoreIntent.current = intent.current;
+    restoreIntent.current = restoreIntentForLoad(intent.current);
     intent.current = startRestore(intent.current);
     const generation = ++requestGeneration.current;
     Promise.resolve()
@@ -186,7 +188,12 @@ export function useWindowedScroll({
     if (programmatic.current) return;
 
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distance <= BOTTOM_PX) intent.current = reachBottom(intent.current);
+    intent.current = intentFromPosition(
+      intent.current,
+      distance,
+      BOTTOM_PX,
+      NEAR_BOTTOM_PX,
+    );
     const showButton =
       distance > NEAR_BOTTOM_PX && intent.current !== "following";
     setAtBottom((value) => (value === !showButton ? value : !showButton));

@@ -1,6 +1,6 @@
 ## tool
 
-Free at every level. Keep a ledger the next holder can act on: user requirement, evidence of completion, unresolved risk, and next step. A child can update the ledger but cannot evaluate the relay. At the root, follow the returned relay action when autopilot is on; with autopilot off the native ledger stands alone and an empty submission waits while child results are unreceived.
+Free at every level. Keep a ledger the next holder can act on: user requirement, evidence of completion, unresolved risk, and next step. A worker in a forked scope can update the ledger but cannot evaluate the relay. At the root, follow the returned relay action when autopilot is on; with autopilot off the native ledger stands alone and an empty submission waits while results from forked scopes are unreceived.
 
 ## op
 

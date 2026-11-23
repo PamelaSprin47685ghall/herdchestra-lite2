@@ -73,7 +73,7 @@ describe("machine session catalog", () => {
 				type: "message",
 				message: {
 					role: "user",
-					content: [{ type: "text", text: "You are the child of fork x" }],
+					content: [{ type: "text", text: "You are now in the scope x" }],
 					attribution: "agent",
 					synthetic: true,
 				},
@@ -81,7 +81,7 @@ describe("machine session catalog", () => {
 		]);
 
 		const { sessions } = await (await load()).scanMachineSessions({ roots: [root] });
-		expect(byId(sessions, id)?.title).not.toBe("You are the child of fork x");
+		expect(byId(sessions, id)?.title).not.toBe("You are now in the scope x");
 	});
 
 	test("reads a standalone title entry when the session header has none", async () => {
@@ -106,7 +106,7 @@ describe("machine session catalog", () => {
 		await mkdir(dirname(path), { recursive: true });
 		const lines = [
 			sessionHeader({ id: "44444444-4444-4444-8444-444444444444", cwd: "/home/u/project-d" }),
-			{ type: "message", message: { role: "user", attribution: "agent", content: "You are the child of fork x" } },
+			{ type: "message", message: { role: "user", attribution: "agent", content: "You are now in the scope x" } },
 			{
 				type: "message",
 				message: { role: "user", attribution: "user", content: [{ type: "text", text: "  Fix the   sidebar  " }] },

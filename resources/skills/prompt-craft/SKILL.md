@@ -25,8 +25,8 @@ One fact, one owner. If a rule appears in two layers, decide which layer can enf
 
 System-guaranteed facts need only simple use. Do not teach the model why the gate exists; teach what to do at the gate. The model does not need to understand the lock to walk through the door.
 
-No: "The return tool is child-only."
-Yes: "A child finishes by returning its record; the parent receives it."
+No: "The return tool is forked-scope-only."
+Yes: "The worker in a forked scope finishes by returning the scope's record; the scope that forked it receives it."
 
 Judgment needs the principle. The principle can come from economics, decision-framing, systems, or the author's own logic. Do not import a mechanism the model cannot use, and do not mistake a mechanism for a reason.
 

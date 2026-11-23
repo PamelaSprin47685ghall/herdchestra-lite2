@@ -325,17 +325,17 @@ export async function waitForReady(registry, ledger, options = {}) {
       });
     }
     if (signal?.aborted) {
-      return failure("JOIN_INTERRUPTED", "The join was interrupted; the children keep running.");
+      return failure("JOIN_INTERRUPTED", "The join was interrupted; the forked scopes keep running.");
     }
     if (unreceivedChildren(ledger, ownerId).length === 0) {
-      return failure("NO_UNRECEIVED_WORK", "No unreceived child remains.");
+      return failure("NO_UNRECEIVED_WORK", "No unreceived result remains.");
     }
     if (openChildren(ledger, ownerId).length === 0) {
-      return failure("LEDGER_PAIRING_BROKEN", "Ready child is missing from its queue.");
+      return failure("LEDGER_PAIRING_BROKEN", "Ready scope is missing from its queue.");
     }
     const woke = await park(registry, signal);
     if (woke?.ok === false) {
-      return failure("JOIN_INTERRUPTED", "The join was interrupted; the children keep running.");
+      return failure("JOIN_INTERRUPTED", "The join was interrupted; the forked scopes keep running.");
     }
   }
 }

@@ -49,7 +49,7 @@ describe("a root's natural stop with unreceived work", () => {
 		const out = onSessionStop(station, {});
 
 		expect(out?.continue).toBe(true);
-		expect(out.additionalContext).toContain("1 unreceived child result");
+		expect(out.additionalContext).toContain("1 unreceived result(s) from forked scopes");
 		expect(out.additionalContext).toContain("scope_join");
 		expect(station.recorded).toEqual([]);
 	});
@@ -102,7 +102,7 @@ describe("a child's natural stop", () => {
 		const out = onSessionStop(station, {});
 
 		expect(out?.continue).toBe(true);
-		expect(out.additionalContext).toContain("1 unreceived child result");
+		expect(out.additionalContext).toContain("1 unreceived result(s) from forked scopes");
 		expect(station.recorded).toEqual([]);
 	});
 });
@@ -208,8 +208,8 @@ describe("a child's model-facing prompt", () => {
 		test(`does not advertise the root relay when autopilot is ${autopilot}`, () => {
 			const text = promptText(promptStation("fork_a", autopilot));
 
-			expect(text).toContain("### Child duties");
-			expect(text).toContain("Fork child duty");
+			expect(text).toContain("### Scope duties");
+			expect(text).toContain("Forked scope duty");
 			expect(text).toContain("scope_return");
 			expect(text).not.toContain("### Close the work");
 			expect(text).not.toContain("Only the user toggles autopilot");
@@ -226,7 +226,7 @@ describe("a child's model-facing prompt", () => {
 		expect(text).toContain("### Close the work");
 		expect(text).toContain("Only the user toggles autopilot");
 		expect(text).toContain("Any successful `todo` write");
-		expect(text).not.toContain("### Child duties");
+		expect(text).not.toContain("### Scope duties");
 	});
 });
 
@@ -282,7 +282,7 @@ describe("a child's skill receipt", () => {
 		);
 
 		expect(text).toContain("Scope budget:");
-		expect(text).not.toContain("Fork child duty");
+		expect(text).not.toContain("Forked scope duty");
 		expect(text).not.toContain("scope_return");
 		expect(text).not.toContain("Autopilot on");
 		expect(text).not.toContain("Autopilot off");
@@ -301,7 +301,7 @@ describe("a child's skill receipt", () => {
 
 		expect(message.herdSkill).toBe(true);
 		expect(text).toContain("Scope budget:");
-		expect(text).not.toContain("Fork child duty");
+		expect(text).not.toContain("Forked scope duty");
 		expect(text).not.toContain("Autopilot on");
 	});
 
@@ -316,7 +316,7 @@ describe("a child's skill receipt", () => {
 
 		expect(text).toContain("Autopilot on");
 		expect(text).toContain("Evaluate the ledger before forking.");
-		expect(text).not.toContain("Fork child duty");
+		expect(text).not.toContain("Forked scope duty");
 	});
 });
 

@@ -377,7 +377,7 @@ describe("recommended tree depth guidance", () => {
 			targets: ["a.mjs"],
 		});
 		const firstLine = text.split("\n")[0];
-		expect(firstLine.startsWith("You are the child of fork w1,")).toBe(true);
+		expect(firstLine.startsWith("You are now in the scope w1,")).toBe(true);
 		expect(firstLine).toContain("depth 1");
 		expect(firstLine).toContain("2");
 		expect(firstLine).toContain("3");

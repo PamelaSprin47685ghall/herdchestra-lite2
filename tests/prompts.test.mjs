@@ -53,7 +53,7 @@ describe("prompt documents", () => {
 describe("tool contracts map to their documents", () => {
 	test("a nested fork is funded by its item, not the caller's balance", () => {
 		const budget = loadDoc("tools/fork-join")["fork.budget"];
-		expect(budget).toContain("each item funds its own child at any depth");
+		expect(budget).toContain("each item funds its own forked scope at any depth");
 		expect(budget).toContain("never charged");
 		expect(budget).not.toContain("draws from that flow's remaining balance");
 	});
@@ -402,7 +402,7 @@ describe("scope size stays O(1) at every depth", () => {
 		// The panhandle stays a third of the scope.
 		expect(budget).toMatch(/\b(?:6|six)\b/i);
 		expect(budget).toMatch(/\b(?:9|nine)\b/i);
-		expect(budget).toContain("each item funds its own child at any depth");
+		expect(budget).toContain("each item funds its own forked scope at any depth");
 		expect(budget).toContain("never charged");
 		expect(budget).toContain("is free at any depth, so it needs no entry either");
 	});

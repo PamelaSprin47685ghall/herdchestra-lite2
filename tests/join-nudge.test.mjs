@@ -45,7 +45,7 @@ describe("nudgeDecision", () => {
 				ledger: ledgerWith(status),
 			});
 			expect(decision.kind).toBe("steer");
-			expect(decision.text).toContain("1 unreceived child result");
+			expect(decision.text).toContain("1 unreceived result(s) from forked scopes");
 			expect(decision.text).toContain("scope_join");
 		}
 	});

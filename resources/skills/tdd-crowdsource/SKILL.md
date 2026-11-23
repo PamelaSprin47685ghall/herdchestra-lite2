@@ -33,20 +33,20 @@ A batch of one names the overlap or dependency that made it one. If you cannot n
 
 The design record states module boundaries, consumer contracts, and failure isolation. Each slice builds against that record, not a private design; if the boundary is unknown, the slice is not ready.
 
-In the next message, dispatch all Green slices in the pin with scope_fork. Give every worker the contract path, ownership, acceptance goal, and verification assignment. When new work becomes ready, pin the updated plan and dispatch it without waiting for unrelated work. A subtree lead follows the same sequence within its time limit and keeps the parent contract intact. Escalate a needed contract change before implementing it.
+In the next message, dispatch all Green slices in the pin with scope_fork. Give every worker the contract path, ownership, acceptance goal, and verification assignment. When new work becomes ready, pin the updated plan and dispatch it without waiting for unrelated work. A subtree lead follows the same sequence within its time limit and keeps the contract it received intact. Escalate a needed contract change before implementing it.
 
 ## Green, acceptance, and record
 
-Run a focused check when its marginal value is positive and the required inputs are ready. If the check needs sibling changes, a shared environment, or an integration point, hand it to the parent or integrator instead of waiting or duplicating the run. A child that verifies everything has priced nothing.
+Run a focused check when its marginal value is positive and the required inputs are ready. If the check needs changes in peer slices, a shared environment, or an integration point, hand it to the calling scope or integrator instead of waiting or duplicating the run. A worker in a forked scope who verifies everything has priced nothing.
 
-A child may return completed work without running tests. Pin "not tested yet" with the check to run, the condition it needs, and the owner who will run it. The receiving lead carries that check to the next integration point; the next holder can accept it, assign it, or explicitly pass it upward. No level may let it disappear.
+A worker in a forked scope may return completed work without running tests. Pin "not tested yet" with the check to run, the condition it needs, and the owner who will run it. The receiving lead carries that check to the next integration point; the next holder can accept it, assign it, or explicitly pass it upward. No level may let it disappear.
 
-Verification belongs to the level with context and authority, not to every child by default. The parent, grandparent, or next holder may own it. Report only observed results; a verification handoff is useful, not a failure, and it does not turn an unrun check into a pass.
+Verification belongs to the level with context and authority, not to every forked scope by default. The calling scope, the scope that forked the calling scope, or the next holder may own it. Report only observed results; a verification handoff is useful, not a failure, and it does not turn an unrun check into a pass.
 
-Manual acceptance is for the part automation cannot carry. Use that entry and its surface sibling; pin the run-specific difference. No rubric, no score. A rubric with a hundred points and no user in the room is a spreadsheet, not acceptance. The goal is a user-side experience, not a parent's review of a child. If the goal is met, say so and move. If not, name the residual and its owner. Do not turn acceptance into a second implementation review.
+Manual acceptance is for the part automation cannot carry. Use that entry and its surface sibling; pin the run-specific difference. No rubric, no score. A rubric with a hundred points and no user in the room is a spreadsheet, not acceptance. The goal is a user-side experience, not one worker reviewing another's scope. If the goal is met, say so and move. If not, name the residual and its owner. Do not turn acceptance into a second implementation review.
 
 Keep the design record under .agent/skills/<name>/SKILL.md: boundaries, consumer contracts, test paths, dependency and ownership decisions, dispatch pins, open verification, and the acceptance skill path. Pin the record's path so the next lead can find it. Run-specific results belong in pins and the ledger, not in the skill.
 
 ## Test rituals to refuse
 
-The defaults to refuse here are test ritual: everyone tests everything; run Red to prove failure; the child must verify; one giant batch; coverage is quality. Each has a cost: duplicated verification, wasted turns, moral hazard, hidden failure, Goodhart. Name the default and the cost before choosing the smaller move. Coverage is a map of what you touched, not a measure of what works.
+The defaults to refuse here are test ritual: everyone tests everything; run Red to prove failure; the worker in a forked scope must verify; one giant batch; coverage is quality. Each has a cost: duplicated verification, wasted turns, moral hazard, hidden failure, Goodhart. Name the default and the cost before choosing the smaller move. Coverage is a map of what you touched, not a measure of what works.

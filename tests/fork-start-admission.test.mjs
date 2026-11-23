@@ -100,7 +100,7 @@ describe("a fork start with room", () => {
     expect(out.isError).toBeUndefined();
     expect(spawned).toHaveLength(1);
     expect(spawned[0].forkId).toBe("f1");
-    expect(spawned[0].receipt.startsWith("You are the child of fork f1,")).toBe(true);
+    expect(spawned[0].receipt.startsWith("You are now in the scope f1,")).toBe(true);
     expect(ledger.order).toEqual(["f1"]);
   });
 });

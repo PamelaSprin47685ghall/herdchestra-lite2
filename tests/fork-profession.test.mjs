@@ -58,7 +58,7 @@ describe("scope_fork profession", () => {
     });
     assert.equal(spawned.length, 1);
     const lines = spawned[0].receipt.split("\n");
-    assert.ok(lines[0].startsWith("You are the child of fork"));
+    assert.ok(lines[0].startsWith("You are now in the scope"));
     assert.equal(lines[1], base.profession);
   });
 

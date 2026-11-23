@@ -47,12 +47,12 @@ describe("requirement delivery", () => {
     const record = forkOf(ledger, "f1");
     record.requirements.push("also check the second file");
     const result = await spawnChildTicket(
-      { forkId: "f1", scopeId: "worker", receipt: "You are the child of fork worker", childDepth: 1 },
+      { forkId: "f1", scopeId: "worker", receipt: "You are now in the scope worker", childDepth: 1 },
       ports,
     );
     expect(result.ok).toBe(true);
     expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain("Additional requirements from your parent:");
+    expect(prompts[1]).toContain("Additional requirements from the scope that forked this one:");
     expect(prompts[1]).toContain("also check the second file");
     expect(record.requirementsDelivered).toBe(1);
   });

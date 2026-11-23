@@ -347,14 +347,14 @@ describe("owner queries", () => {
     expect(forkOut.content[0].text).toContain("Started (1):\n- cache-probe: probe the cache");
     expect(spawned).toHaveLength(1);
     expect(spawned[0].childDepth).toBe(1);
-    expect(spawned[0].receipt).toContain("You are the child of fork cache-probe");
+    expect(spawned[0].receipt).toContain("You are now in the scope cache-probe");
 
     const early = handleJoinCall(station, {
       id: "call-j1",
       arguments: {},
     });
     expect(early.isError).toBe(true);
-    expect(early.content[0].text).toContain("No child has returned yet");
+    expect(early.content[0].text).toContain("No forked scope has returned yet");
 
     const child = {
       state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
@@ -375,7 +375,7 @@ describe("owner queries", () => {
       arguments: {},
     });
     expect(joined.isError).toBeUndefined();
-    expect(joined.content[0].text).toContain("[Child record — fork cache-probe]");
+    expect(joined.content[0].text).toContain("[Record from forked scope — fork cache-probe]");
     expect(joined.content[0].text).toContain("Unreceived: 0.");
   });
 
@@ -400,7 +400,7 @@ describe("owner queries", () => {
       },
     });
     expect(out.isError).toBe(true);
-    expect(out.content[0].text).toContain("No child spawner is attached");
+    expect(out.content[0].text).toContain("No scope spawner is attached");
   });
 
   test("rejects a malformed fork before any state change", async () => {
@@ -499,7 +499,7 @@ describe("owner queries", () => {
       arguments: {},
     });
     expect(taken.details.joined).toBe(true);
-    expect(taken.content[0].text).toContain("[Child record — fork scope-1]");
+    expect(taken.content[0].text).toContain("[Record from forked scope — fork scope-1]");
     expect(taken.content[0].text).toContain("Unreceived: 1 (scope-2).");
     expect(taken.content[0].text).toContain("Call scope_join again to take the next one.");
   });

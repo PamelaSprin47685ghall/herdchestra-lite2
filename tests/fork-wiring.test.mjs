@@ -37,7 +37,7 @@ function specFor(forkId) {
     forkId,
     childDepth: 1,
     intent: "probe",
-    receipt: "You are the child of fork " + forkId,
+    receipt: "You are now in the scope " + forkId,
     parentOwnerId: "root",
   };
 }
@@ -1077,7 +1077,7 @@ describe("spawnChildTicket directly", () => {
     // assertion above pass vacuously. Pin the contract's words too.
     expect(prompts[1]).toContain("scope_return");
     expect(prompts[1]).toContain("still unpublished");
-    expect(prompts[1]).toContain("hand it to the parent");
+    expect(prompts[1]).toContain("hand it to the scope that forked this one");
     expect(result.failed).toBe(false);
     expect(ledger.forks.n1.status).toBe("ready");
     expect(outcomeOf(wiring.registry, "n1").record).toBe("the child's own record");

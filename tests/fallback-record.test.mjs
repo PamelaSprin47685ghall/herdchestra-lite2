@@ -15,7 +15,9 @@ function specFor(forkId) {
 		forkId,
 		childDepth: 1,
 		intent: "probe",
-		receipt: "You are the child of fork " + forkId,
+		// A host can rewrite the receipt. Keep it non-matching so the
+		// timestamp fallback is the only way to find the boundary.
+		receipt: "host rewrote the receipt",
 		parentOwnerId: "root",
 	};
 }

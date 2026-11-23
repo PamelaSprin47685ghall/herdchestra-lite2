@@ -375,7 +375,7 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 		const refused = outs.find((o) => o?.isError === true);
 
 		expect(joined?.details?.joined).toBe(true);
-		expect(joined?.content?.[0]?.text ?? "").toContain("[Child record — fork scope-1]");
+		expect(joined?.content?.[0]?.text ?? "").toContain("[Record from forked scope — fork scope-1]");
 		expect(refused?.details?.code).toBe("NO_UNRECEIVED_WORK");
 		expect(rootWaits).toBe(0);
 		expect(clockPauseBalance).toBe(0);

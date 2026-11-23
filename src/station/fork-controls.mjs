@@ -212,9 +212,9 @@ export function admitJoin(station, record, options = {}) {
   });
 }
 
-/** The first line of a child receipt, as the child's context carries it. */
-function childReceiptMarker(forkId) {
-  return `You are the child of fork ${forkId},`;
+/** The first line of a forked scope's receipt, as its context carries it. */
+function scopeReceiptMarker(scopeId) {
+  return `You are now in the scope ${scopeId},`;
 }
 
 function textOfUser(message) {
@@ -243,20 +243,26 @@ function epochOf(value) {
  * A child session is seeded with the parent's context, so the branch manager
  * returns the whole inherited transcript. Replaying it into the record would
  * hand the parent its own conversation back and defeat join admission. The
- * receipt the child reads at its start is the exact boundary: the first user
- * message that opens with {@link childReceiptMarker}. When that message is
+ * receipt the scope reads at its start is the exact boundary: the first user
+ * message that opens with {@link scopeReceiptMarker}. When that message is
  * absent (a host that rewrites it), the bracket's start time is the fallback;
  * a message without a parseable timestamp cannot prove it belongs to the
- * child, so the walk skips it. With neither marker nor timestamp the whole
+ * scope, so the walk skips it. With neither marker nor timestamp the whole
  * context is returned: the old behaviour is never worse than a wrong cut.
+ *
+ * Receipts written by earlier builds still open with the legacy marker, so the
+ * scan accepts both. Only the current marker is ever generated.
  */
 export function childRecordStart(messages, fork) {
   const source = Array.isArray(messages) ? messages : [];
   const forkId = fork && typeof fork.forkId === "string" ? fork.forkId : "";
   if (forkId !== "") {
-    const marker = childReceiptMarker(fork.scopeId ?? forkId);
+    const scopeId = fork.scopeId ?? forkId;
+    const marker = scopeReceiptMarker(scopeId);
+    const legacyMarker = `You are the child of fork ${scopeId},`;
     for (let index = 0; index < source.length; index += 1) {
-      if (textOfUser(source[index]).trimStart().startsWith(marker)) return index;
+      const text = textOfUser(source[index]).trimStart();
+      if (text.startsWith(marker) || text.startsWith(legacyMarker)) return index;
     }
   }
   const startedAt = fork ? epochOf(fork.startedAt) : null;
@@ -273,7 +279,7 @@ export function childRecordStart(messages, fork) {
 export function childReceiptText(spec) {
   return [
     render(S["fork.child-status"], {
-      marker: childReceiptMarker(spec.scopeId ?? spec.forkId),
+      marker: scopeReceiptMarker(spec.scopeId ?? spec.forkId),
       depth: spec.childDepth,
       defaultDepth: FORK_DEFAULT_DEPTH,
       recommendedDepth: FORK_RECOMMENDED_DEPTH,
@@ -341,7 +347,7 @@ function priorRecordText(record) {
 function generationReceiptText({ scopeId, childDepth, generation, standing, intent, budget, targets, prior }) {
   return [
     render(S["fork.child-status"], {
-      marker: childReceiptMarker(scopeId),
+      marker: scopeReceiptMarker(scopeId),
       depth: childDepth,
       defaultDepth: FORK_DEFAULT_DEPTH,
       recommendedDepth: FORK_RECOMMENDED_DEPTH,
@@ -634,7 +640,7 @@ export function handleForkCall(station, call, options = {}) {
       };
       if (target.status === "blocked" && item.blocked !== true) {
         if (typeof spawner !== "function") {
-          noteFailure(target.forkId, item, E["child-spawner-unavailable"] || "No child spawner is wired.");
+          noteFailure(target.forkId, item, E["child-spawner-unavailable"] || "No scope spawner is wired.");
           continue;
         }
         const startedAt = Date.now();
@@ -953,7 +959,7 @@ export function handleJoinCall(station, call, options = {}) {
       const first = taken.blocked?.[0] ?? null;
       const detail = first
         ? `Fork ${publicScopeId(forkOf(ledger, first.forkId))} cannot be delivered: ${first.reason ?? "the next request would exceed the model window"}.`
-        : "No ready child fits the model window.";
+        : "No ready scope fits the model window.";
       return errorResult(
         "JOIN_CONTEXT_EXCEEDED",
         render(E["join-context-exceeded"], { detail }),
@@ -1174,8 +1180,8 @@ export function handleReturnCall(station, call) {
     });
   }
   // The receipt names the receiver in the prose the model reads. A root
-  // receiver stays "the parent"; an adopted branch also shows its identity,
-  // so a child that moved between branches can name where it went.
+  // receiver is "Root"; an adopted branch shows its own identity,
+  // so a worker that moved between branches can name where it went.
   const receiverText = receiverId === "root" ? "Root" : publicScopeId(forkOf(ledger, receiverId));
 
   // The record is queued, not accepted. The ticket waits for the parent's

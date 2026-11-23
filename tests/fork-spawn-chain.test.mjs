@@ -214,7 +214,7 @@ describe("scope_fork through a real branch session", () => {
     // The child's first request is the receipt, exactly once: no nudge, no
     // empty prompt, and the facts the child needs to know who it is.
     expect(prompted).toHaveLength(1);
-    expect(prompted[0].startsWith("You are the child of fork parser,")).toBe(true);
+    expect(prompted[0].startsWith("You are now in the scope parser,")).toBe(true);
     expect(prompted[0]).toContain("read the parser");
     expect(prompted[0]).toContain("read 1");
     expect(prompted[0]).toContain("Targets: src/parser.mjs");

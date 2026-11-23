@@ -72,4 +72,26 @@ describe("childRecordStart", () => {
 		expect(childRecordStart(messages, { forkId: FORK_ID })).toBe(0);
 		expect(childRecordStart([], { forkId: FORK_ID })).toBe(0);
 	});
+
+	test("the receipt opens with the scope marker, not a family relation", () => {
+		const text = childReceiptText({
+			forkId: FORK_ID,
+			intent: "read the version",
+			budget: { read: 2 },
+			targets: ["src/parser.mjs"],
+			childDepth: 1,
+		});
+		expect(text.startsWith(`You are now in the scope ${FORK_ID},`)).toBe(true);
+		expect(text).not.toContain("child of fork");
+	});
+
+	test("a receipt written by an earlier build still marks the boundary", () => {
+		const messages = [
+			user("parent prompt", 100),
+			assistant("parent reply", 200),
+			{ role: "user", content: `You are the child of fork ${FORK_ID}, depth 1`, timestamp: 300 },
+			assistant("child did it", 400),
+		];
+		expect(childRecordStart(messages, { forkId: FORK_ID, startedAt: 250 })).toBe(2);
+	});
 });

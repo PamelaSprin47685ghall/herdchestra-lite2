@@ -94,7 +94,7 @@ export function resolveModelSelector(query, selector) {
     return {
       ok: false,
       code: "MODEL_UNKNOWN",
-      message: `this host exposes no model query, so "${value}" cannot be resolved; omit model to inherit the parent's`,
+      message: `this host exposes no model query, so "${value}" cannot be resolved; omit model to inherit the calling scope's`,
       available: [],
       availableTotal: 0,
     };

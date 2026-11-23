@@ -44,11 +44,11 @@ Use a short ASCII `scopeId` other than `root`.
 
 ## invalid-fsm
 
-Give the child a non-empty `fsm`.
+Give the new scope a non-empty `fsm`.
 
 ## invalid-profession
 
-Start `profession` with "You are " and name the child's role, for example "You are a precise reviewer who rejects a claim without evidence".
+Start `profession` with "You are " and name the role of the LLM in the new scope, for example "You are a precise reviewer who rejects a claim without evidence".
 
 ## invalid-budget
 
@@ -92,16 +92,16 @@ This scope cannot be reused in its current state. Fork a new scope instead.
 
 ## child-spawner-unavailable
 
-No child spawner is attached; this session cannot start child scopes. Continue in the current scope, or report the configuration.
+No scope spawner is attached; this session cannot start new scopes. Continue in the current scope, or report the configuration.
 
 ## fork-context-exceeded
 
 forks[{{index}}]: {{reason}}
-The batch did not start. Reduce the parent context or use a model with a larger window, then fork again.
+The batch did not start. Reduce the calling scope's context or use a model with a larger window, then fork again.
 
 ## no-ready-child
 
-No child has returned yet. Keep working, or wait for one with `scope_join`.
+No forked scope has returned yet. Keep working, or wait for one with `scope_join`.
 
 ## join-context-exceeded
 
@@ -110,11 +110,11 @@ The record stays ready; use a model with a larger window or shorten the record, 
 
 ## not-a-child
 
-`scope_return` ends a child scope. The parent receives work with `scope_join`.
+`scope_return` ends a forked scope. The scope that forked it receives the work with `scope_join`.
 
 ## unknown-fork
 
-This scope is not registered. Use the `scopeId` from the fork receipt, or fork a new child scope.
+This scope is not registered. Use the `scopeId` from the fork receipt, or fork a new scope.
 
 ## fork-not-running
 
@@ -122,7 +122,7 @@ Fork {{scopeId}} is {{status}}. Use `scope_join` for a ready record; otherwise c
 
 ## orphans-without-receiver
 
-No receiving scope owns this fork. Join its children first.
+No receiving scope owns this fork. Join the scopes it forked first.
 
 ## root-has-no-budget
 
@@ -154,11 +154,11 @@ The native todo call returned no result object. The ledger is unchanged.
 
 ## no-unreceived-work
 
-This scope owns no unreceived work. This call created no receipt. Fork a child, or continue your own scope.
+This scope owns no unreceived work. This call created no receipt. Fork a new scope, or continue your own.
 
 ## tool-budget-exhausted
 
-Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}, budget {{budget}}). The cheap exit is `scope_fork` (free) for whatever another scope can own. Failing that: another tool, `scope_return`, or `scope_panhandle` when only this scope can finish.
+Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}/{{budget}}). The cheap exit is `scope_fork` (free) for whatever another scope can own. Failing that: another tool, `scope_return`, or `scope_panhandle` when only this scope can finish.
 
 ## panhandle-no-budget
 
@@ -186,7 +186,7 @@ The panhandle failed before it could change the record. Treat the budget as unch
 
 ## model-unknown
 
-forks[{{index}}]: model `{{selector}}` is not available. Available: {{available}}. Omit `model` to inherit the parent's model.
+forks[{{index}}]: model `{{selector}}` is not available. Available: {{available}}. Omit `model` to inherit the calling scope's model.
 
 ## fork-register-failed
 

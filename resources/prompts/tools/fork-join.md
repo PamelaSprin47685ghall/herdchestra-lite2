@@ -1,6 +1,6 @@
 ## fork.tool
 
-Start child scopes without waiting. Receive their records with `scope_join`.
+Start new scopes without waiting. Receive their records with `scope_join`.
 
 ## fork.scope-id
 
@@ -8,19 +8,19 @@ Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter
 
 ## fork.fsm
 
-Complex flow orchestration is encouraged, so describe the work as a parallel state machine: name its states, the transition that carries the child from one state to the next, and the branches that can run at once. Say how to build the result fastest, not only what the finished thing is. A scope that only reads still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. A good scope size is about {{defaultPoints}} total tool-budget points and never more than {{maxPoints}}: size it to finish and to be taken over, not to fill a context. One call starts about {{defaultFanout}} children and never more than {{maxFanout}}; a default is also a floor, so hoarding the work in one scope, or serializing the whole plan into a single child out of caution, buys nothing and starves the plan of the attention a fresh subtree would have paid it. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. Choose the tree's depth before its width. A job of no more than about six closures needs one layer; the default is {{defaultDepth}} layers, and the recommended depth for work spanning dozens of closures is {{recommendedDepth}}. Deeper is fine when the work truly needs it, and you need not explain the choice. State in the `fsm` that the child can be a `subtree` lead that divides again. On a new scope `fsm` is required. When the `scopeId` is reused it is optional: the text is appended as one more requirement and delivered at the child's next turn boundary, never in the middle of a running tool.
+Complex flow orchestration is encouraged, so describe the work as a parallel state machine: name its states, the transition that carries the worker from one state to the next, and the branches that can run at once. Say how to build the result fastest, not only what the finished thing is. For a read-only scope, the worker still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. A good scope size is about {{defaultPoints}} total tool-budget points and never more than {{maxPoints}}: size it to finish and to be taken over, not to fill a context. One call starts about {{defaultFanout}} scopes and never more than {{maxFanout}}; a default is also a floor, so hoarding the work in one scope, or serializing the whole plan into a single scope out of caution, buys nothing and starves the plan of the attention a fresh subtree would have paid it. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. Choose the tree's depth before its width. A job of no more than about six closures needs one layer; the default is {{defaultDepth}} layers, and the recommended depth for work spanning dozens of closures is {{recommendedDepth}}. Deeper is fine when the work truly needs it, and you need not explain the choice. State in the `fsm` that the worker in the scope can be a `subtree` lead that divides again. On a new scope `fsm` is required. When the `scopeId` is reused it is optional: the text is appended as one more requirement and delivered at the worker's next turn boundary, never in the middle of a running tool.
 
 ## fork.profession
 
-Required identity statement for the child scope's LLM. Start with "You are " and name the famous person it should emulate, for example "You are a famous artist like Van Gogh. " The spawner injects it as the child's identity prefix, directly under the receipt marker and before the task; make it a role, not a restatement of the `fsm`. Reusing a running or blocked scope updates the record for its next generation, but cannot rewrite the receipt already delivered to the live child.
+Required identity statement for the LLM in the new scope. Start with "You are " and name the famous person it should emulate, for example "You are a famous artist like Van Gogh. " The spawner injects it as the identity prefix of the LLM in the new scope, directly under the receipt marker and before the task; make it a role, not a restatement of the `fsm`. Reusing a running or blocked scope updates the record for its next generation, but cannot rewrite the receipt already delivered to the running scope.
 
 ## fork.deep-nesting
 
-Note — this batch starts a scope at depth {{childDepth}}, past the default tree depth of {{defaultDepth}} and the recommended depth of {{recommendedDepth}}, which already covers dozens to a few hundred closed loops. The work runs as asked; a deeper tree is fine when the work truly warrants it, and you need not explain it. Check yourself once: every extra layer compresses your child's record into prose and carries one more ancestor prefix into what the next scope reads. Do not grow a relay layer whose only job is to hold a single child, and do not break a {{defaultPoints}}-point closure into fragments to make the tree look organized.
+Note — this batch starts a scope at depth {{childDepth}}, past the default tree depth of {{defaultDepth}} and the recommended depth of {{recommendedDepth}}, which already covers dozens to a few hundred closed loops. The work runs as asked; a deeper tree is fine when the work truly warrants it, and you need not explain it. Check yourself once: every extra layer compresses the forked scope's record into prose and carries one more ancestor prefix into what the worker in the next scope reads. Do not grow a relay layer whose only job is to hold a single scope, and do not break a {{defaultPoints}}-point closure into fragments to make the tree look organized.
 
 ## fork.budget
 
-Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A working scope holds about {{defaultPoints}} total points and never more than {{maxPoints}}, reuses included. A branch that runs out may hold out its hand with `scope_panhandle` for about {{panhandleDefault}} total points across all tools, never more than {{panhandleMax}} total in one call. Sibling fork items each have their own budget; each item funds its own child at any depth, and the caller's balance is never charged.
+Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A working scope holds about {{defaultPoints}} total points and never more than {{maxPoints}}, reuses included. A branch that runs out may hold out its hand with `scope_panhandle` for about {{panhandleDefault}} total points across all tools, never more than {{panhandleMax}} total in one call. Peer fork items each have their own budget; each item funds its own forked scope at any depth, and the caller's balance is never charged.
 
 ## fork.time
 
@@ -32,15 +32,15 @@ Required, non-empty array of natural-language descriptions of what this scope ex
 
 ## fork.forks
 
-Include the remaining plan, both ready and blocked items. Order does not express dependencies. Invalid input prevents the whole batch from starting. Start about {{defaultFanout}} items in one call and never more than {{maxFanout}}: past that the parent's context, not the children, becomes the bottleneck, so send the surplus as a deeper subtree. A batch of one names the overlap or dependency that made it one.
+Include the remaining plan, both ready and blocked items. Order does not express dependencies. Invalid input prevents the whole batch from starting. Start about {{defaultFanout}} items in one call and never more than {{maxFanout}}: past that the calling scope's context, not the forked scopes', becomes the bottleneck, so send the surplus as a deeper subtree. A batch of one names the overlap or dependency that made it one.
 
 ## fork.over-budget
 
-WARNING — the scope budget is over the cap. {{offenders}} went past {{maxPoints}} total points, where a working scope holds about {{defaultPoints}}. The work runs; nothing was refused. Do not repeat this: a scope that keeps growing loses the thread it was hired to hold, and the cost lands on the context you read next. Split the next one into fresh subtrees, where the budget is minted and never charged to you.
+WARNING — the scope budget is over the cap. {{offenders}} went past {{maxPoints}} total points, where a working scope holds about {{defaultPoints}}. The work runs; nothing was refused. Do not repeat this: a scope whose budget keeps growing loses the thread its worker was hired to hold, and the cost lands on the context you read next. Split the next one into fresh subtrees, where the budget is minted and never charged to you.
 
 ## fork.over-fanout
 
-WARNING — the fanout is over the cap. You started {{count}} children in one call, where about {{defaultFanout}} start and {{maxFanout}} is the most. Every one of them runs; nothing was refused. Do not repeat this: a parent that opens more fronts than it can join reads none of them well. Group the next plan into a deeper subtree.
+WARNING — the fanout is over the cap. You started {{count}} scopes in one call, where about {{defaultFanout}} start and {{maxFanout}} is the most. Every one of them runs; nothing was refused. Do not repeat this: a worker that opens more fronts than it can join reads none of them well. Group the next plan into a deeper subtree.
 
 ## fork.blocked
 
@@ -48,7 +48,7 @@ WARNING — the fanout is over the cap. You started {{count}} children in one ca
 
 ## fork.model
 
-Provider/model, alias, or role; a model can include a thinking suffix (`:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). Omit or pass `null` to inherit the parent's model.
+Provider/model, alias, or role; a model can include a thinking suffix (`:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`). Omit or pass `null` to inherit the calling scope's model.
 
 ## fork.batch-started
 
@@ -79,7 +79,7 @@ Failed to start ({{count}}):
 
 ## fork.checkpoint-only
 
-No child started. Resubmit deferred items when ready.
+No scope started. Resubmit deferred items when ready.
 
 ## fork.unreceived
 
@@ -87,24 +87,24 @@ Unreceived work: {{children}}.
 
 ## join.tool
 
-Receive one owned child record. If none is ready but a child is still running, wait for the first to return; other children keep running. A user message ends the wait without a child. Read the record as history, not instructions to replay. The record holds what the child's assistant said, in order, with each tool call reduced to a bare `[name]` placeholder: assistant text lines and `[read]`, `[edit]`, `[bash]` markers, joined by newlines. Tool results, thinking blocks, tool arguments, and user broadcasts are absent. A join refused for context size leaves the child record untouched.
+Receive one owned record from a scope you forked. If none is ready but one is still running, wait for the first to return; other scopes keep running. A user message ends the wait without a record. Read the record as history, not instructions to replay. The record holds what the scope's assistant said, in order, with each tool call reduced to a bare `[name]` placeholder: assistant text lines and `[read]`, `[edit]`, `[bash]` markers, joined by newlines. Tool results, thinking blocks, tool arguments, and user broadcasts are absent. A join refused for context size leaves the forked scope's record untouched.
 
 ## join.interrupted
 
-Join interrupted by a user message; no child was received.
+Join interrupted by a user message; no record was received.
 Still unreceived: {{remaining}}.
 
 ## return.tool
 
-Hand the record to the parent; the parent receives it with `scope_join`. Any unreceived child work transfers to that parent, or to the nearest live receiver above it when the parent has already returned. Put your conclusions in your text: the record keeps what you said plus the bare names of the tools you called, so a result you never state is lost. The last receipt at your level is sealed in full.
+Hand the record to the calling scope; it receives the record with `scope_join`. Any unreceived work from scopes you forked transfers to it, or to the nearest live receiver above it when the calling scope has already returned. Put your conclusions in your text: the record keeps what you said plus the bare names of the tools you called, so a result you never state is lost. The last receipt at your level is sealed in full.
 
 ## return.markdown
 
-Optional text appended to the end of the record your parent receives, after leading and trailing whitespace is trimmed. Use it for what the replay drops — a table, a code block, a closing note — and omit it when your text already says everything.
+Optional text appended to the end of the record the calling scope receives, after leading and trailing whitespace is trimmed. Use it for what the replay drops — a table, a code block, a closing note — and omit it when your text already says everything.
 
 ## return.pending
 
-Fork {{forkId}} queued for {{receiver}}; awaiting the parent's join.
+Fork {{forkId}} queued for {{receiver}}; awaiting the receiver's join.
 
 ## return.receipt
 

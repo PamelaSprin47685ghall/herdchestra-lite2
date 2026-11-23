@@ -10,6 +10,7 @@ import { deadlineInfo } from "./clock.mjs";
 import { emptyTotals, normalizeTotals, sumBudgetPoints } from "./turn-stats.mjs";
 import { publicScopeId } from "./scope-id.mjs";
 import { grantBudget } from "./panhandle.mjs";
+import { formatAmount } from "./budget.mjs";
 
 const listeners = Symbol("ledger listeners");
 
@@ -388,11 +389,11 @@ export function takeReady(ledger, options = {}) {
   if (blocked.length > 0) {
     return failure(
       "NO_ADMISSIBLE_CHILD",
-      "No ready child can be delivered into this context.",
+      "No ready scope can be delivered into this context.",
       { blocked },
     );
   }
-  return failure("NO_READY_CHILD", "No child has returned yet.");
+  return failure("NO_READY_CHILD", "No forked scope has returned yet.");
 }
 
 /**
@@ -488,13 +489,13 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
     return failure("INVALID_OWNER", "toOwnerId must be a non-empty string.");
   }
   if (fromOwnerId === toOwnerId) {
-    return failure("SAME_OWNER", "A fork cannot be reparented to its own owner.");
+    return failure("SAME_OWNER", "A fork cannot be moved under its own owner.");
   }
   // The named receiver may itself have returned by now. Hand the work to the
   // nearest live branch instead of a queue that no join will ever drain.
   const receiverId = liveReceiverOf(ledger, toOwnerId);
   if (receiverId === fromOwnerId) {
-    return failure("SAME_OWNER", "A fork cannot be reparented to its own owner.");
+    return failure("SAME_OWNER", "A fork cannot be moved under its own owner.");
   }
   let moved = 0;
   for (const forkId of ledger.order) {
@@ -932,10 +933,6 @@ function round2(value) {
   return Math.round(value * 100) / 100;
 }
 
-function format2(value) {
-  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
-}
-
 function formatClock(ms) {
   // Remaining time floors: ceil made 57.1s render as 0:58, so the first frame
   // showed remaining equal to the budget and looked like a stopped clock.
@@ -990,7 +987,7 @@ export function applyCharge(ledger, forkId, charge = {}) {
     return {
       ok: false,
       code: "BUDGET_EXHAUSTED",
-      reason: `Tool "${tool}" has no work budget left on this branch (remaining ${left}, budget ${budget}).`,
+      reason: `Tool "${tool}" has no work budget left on this branch (remaining ${formatAmount(left)}/${formatAmount(budget)}).`,
       tool,
       remaining: left,
       budget,
@@ -1035,7 +1032,7 @@ export function forkBudgetText(record, now = Date.now(), clock = null) {
   for (const tool of Object.keys(record.remaining).sort()) {
     const budget = record.budget?.[tool];
     if (budget === undefined) continue;
-    entries.push(`${tool} ${format2(record.remaining[tool])}/${format2(budget)}`);
+    entries.push(`${tool} remaining ${formatAmount(record.remaining[tool])}/${formatAmount(budget)}`);
   }
   const info = clock && typeof clock.info === "function"
     ? clock.info(record, now)
@@ -1045,7 +1042,7 @@ export function forkBudgetText(record, now = Date.now(), clock = null) {
     parts.push(
       info.overtime
         ? "time OVERTIME (1s per tool)"
-        : `time left ${formatClock(info.leftMs)} / total ${formatClock(record.timeBudgetMs)}`,
+        : `time remaining ${formatClock(info.leftMs)}/${formatClock(record.timeBudgetMs)}`,
     );
   }
   const panhandled = Array.isArray(record.panhandles) ? record.panhandles.length : 0;

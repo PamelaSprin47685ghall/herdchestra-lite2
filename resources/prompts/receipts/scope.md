@@ -12,11 +12,11 @@ OK. Update the `todo` ledger now with any change this note makes: the next step,
 
 ## scope.unreceived
 
-Unreceived child results: {{count}}. Receive them with `scope_join`.
+Unreceived results from forked scopes: {{count}}. Receive them with `scope_join`.
 
 ## scope.stop-blocked
 
-{{count}} unreceived child result(s). Call `scope_join` before stopping.
+{{count}} unreceived result(s) from forked scopes. Call `scope_join` before stopping.
 
 ## receipt.branch
 
@@ -66,8 +66,8 @@ Report your findings. Only scope_return submits your full record.
 
 ## fork.child-return-nudge
 
-Your record is still unpublished. Call `scope_return` to hand it to the parent.
+Your record is still unpublished. Call `scope_return` to hand it to the scope that forked this one.
 
 ## fork.child-routing
 
-User messages go to the stable root. Tool approvals appear there under this fork.
+User messages go to the stable root. Tool approvals appear there under this scope.

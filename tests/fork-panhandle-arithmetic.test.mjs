@@ -62,7 +62,7 @@ describe("a panhandle lands on the branch's own account", () => {
     applyPanhandle(ledger, "f1", { tools: { grep: 2 } }, { now: 2_000 });
     expect(record.budget.grep).toBe(2);
     expect(record.remaining.grep).toBe(2);
-    expect(forkBudgetText(record, 2_000, clock)).toContain("grep 2.00/2.00");
+    expect(forkBudgetText(record, 2_000, clock)).toContain("grep remaining 2.00/2.00");
   });
 
   test("the parent's account does not shrink", () => {

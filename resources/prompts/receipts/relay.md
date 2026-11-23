@@ -44,7 +44,7 @@ Scope level {{level}} ledger updated; this call did not advance the root relay.
 
 ## next.held-children
 
-Empty ledger held: {{open}} unreceived child result(s). Receive them with scope_join, then resubmit.
+Empty ledger held: {{open}} unreceived result(s) from forked scopes. Receive them with scope_join, then resubmit.
 
 ## next.none
 

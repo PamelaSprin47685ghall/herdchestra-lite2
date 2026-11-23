@@ -95,7 +95,7 @@ export async function spawnChildTicket(spec, ports) {
 			const base =
 				typeof created?.reason === "string" && created.reason !== ""
 					? created.reason
-					: "the child session could not be created";
+					: "the forked scope's session could not be created";
 			// A factory refusal carries the original error and the refusal's
 			// explanation. Keep the code in the reason the parent sees, append
 			// whichever evidence exists, and put the cause in the diagnostics
@@ -162,7 +162,7 @@ export async function spawnChildTicket(spec, ports) {
 					: null;
 		if (typeof prompt !== "function") {
 			failed = true;
-			reason = "the child session exposes no prompt()";
+			reason = "the forked scope's session exposes no prompt()";
 			writeOutcome({ record: "", failed: true, reason });
 			return finish();
 		}
@@ -180,7 +180,7 @@ export async function spawnChildTicket(spec, ports) {
 			if (pending.length === 0) return false;
 			record.requirementsDelivered = record.requirements.length;
 			await prompt(
-				["Additional requirements from your parent:", ...pending.map((text) => `- ${text}`)].join("\n"),
+				["Additional requirements from the scope that forked this one:", ...pending.map((text) => `- ${text}`)].join("\n"),
 			);
 			return true;
 		};
@@ -201,12 +201,12 @@ export async function spawnChildTicket(spec, ports) {
 			const stop = stopReasonOf(session);
 			if (stop !== null && stop !== "stop" && stop !== "end") {
 				failed = true;
-				reason = `the child stopped with reason "${stop}"`;
+				reason = `the worker in the forked scope stopped with reason "${stop}"`;
 				break;
 			}
 			if (nudges >= MAX_RETURN_NUDGES) {
 				failed = true;
-				reason = "the child stopped without calling scope_return; its record stays unpublished";
+				reason = "the worker in the forked scope stopped without calling scope_return; its record stays unpublished";
 				unpublished = true;
 				break;
 			}
@@ -224,7 +224,7 @@ export async function spawnChildTicket(spec, ports) {
 		const frozen = outcomeOf(registry, spec.forkId);
 		if (text.trim() === "" && !failed && !unpublished && !frozen?.record) {
 			failed = true;
-			reason = "the child produced no messages; the host accepted the prompt but recorded no child turn";
+			reason = "the worker in the forked scope produced no messages; the host accepted the prompt but recorded no turn";
 		}
 		writeOutcome({ record: text, failed, reason });
 		return finish();

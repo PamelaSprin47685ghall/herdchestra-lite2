@@ -8,7 +8,12 @@ import {
   isPlainObject,
   capCachePositions,
 } from "./state.mjs";
-import { beatShares, isFreeCall, normalizeToolName } from "./budget.mjs";
+import {
+  beatShares,
+  formatAmount,
+  isFreeCall,
+  normalizeToolName,
+} from "./budget.mjs";
 import { applyCharge, applyRefund, forkOf } from "./forkjoin.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
@@ -63,8 +68,8 @@ export function chargeBranch(state, ledger, params = {}) {
         ...charged,
         reason: render(E["tool-budget-exhausted"], {
           tool: charged.tool,
-          remaining: charged.remaining,
-          budget: charged.budget,
+          remaining: formatAmount(charged.remaining),
+          budget: formatAmount(charged.budget),
         }),
       };
     }

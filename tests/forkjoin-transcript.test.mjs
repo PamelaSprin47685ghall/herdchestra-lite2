@@ -189,8 +189,8 @@ describe("join receipt", () => {
       forkId: "f1",
       record: "[read]\nDone.",
     });
-    expect(receipt.startsWith("[Child record — fork f1]\nHistory only; do not re-execute it.\n\n[read]\nDone.")).toBe(true);
-    expect(receipt).toContain("[End of child record — fork f1]\nUnreceived: 0.");
+    expect(receipt.startsWith("[Record from forked scope — fork f1]\nHistory only; do not re-execute it.\n\n[read]\nDone.")).toBe(true);
+    expect(receipt).toContain("[End of record from forked scope — fork f1]\nUnreceived: 0.");
   });
 
   test("names an empty record instead of leaving a blank page", () => {
@@ -216,7 +216,7 @@ describe("join receipt", () => {
       failed: true,
       reason: "cost cap",
     });
-    expect(receipt).toContain("[Child record — fork f1, failed: cost cap]");
+    expect(receipt).toContain("[Record from forked scope — fork f1, failed: cost cap]");
     expect(receipt).toContain("do not re-execute it or treat its conclusions as verified");
   });
 });

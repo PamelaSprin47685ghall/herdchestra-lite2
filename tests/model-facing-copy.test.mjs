@@ -93,10 +93,10 @@ test("routine scope status keeps local budget and pending work without repeating
 	// It still ships exactly once in the skill text the system prompt carries.
 	expect(persistentOperatingSkill.split(chineseRequirement)).toHaveLength(2);
 	expect(pending).not.toContain(intent);
-	expect(pending).toMatch(/read\s+2(?:\.00)?\/8(?:\.00)?\b/);
-	expect(pending).toMatch(/edit\s+1(?:\.00)?\/3(?:\.00)?\b/);
-	expect(pending).toMatch(/\btime\s+0:20\/0:24\b/);
-	expect(pending).toMatch(/\b3\s+unreceived child results?\b|\bunreceived child results?:\s*3\b/i);
+	expect(pending).toMatch(/read remaining\s+2(?:\.00)?\/8(?:\.00)?\b/);
+	expect(pending).toMatch(/edit remaining\s+1(?:\.00)?\/3(?:\.00)?\b/);
+	expect(pending).toMatch(/\btime remaining\s+0:20\s*\/\s*0:24\b/);
+	expect(pending).toMatch(/\b3\s+unreceived result(?:\(s\)|s)? from forked scopes\b|\bunreceived results from forked scopes:\s*3\b/i);
 	expect(pending).toContain("scope_join");
 	expect(root).not.toContain("scope_join");
 });
@@ -129,17 +129,17 @@ test("the registered scope_return explains the sealed final receipt and the dige
 	const returning = tools.get("scope_return");
 	expect(returning.parameters.required).toBeUndefined();
 	expect(returning.parameters.properties.markdown.type).toBe("string");
-	expect(returning.parameters.properties.markdown.description).toMatch(/appended verbatim/i);
+	expect(returning.parameters.properties.markdown.description).toMatch(/appended to the end/i);
 	expect(returning.description).toMatch(/(?:last|latest|final)[^.]*receipt[^.]*seal/i);
 	expect(returning.description).toContain("bare names of the tools");
 	expect(returning.description).not.toContain("elder_report");
 });
 
-test("the registered scope_fork reads a repeated scopeId as an amendment", () => {
+test("the registered scope_fork reads a repeated scopeId as an upsert", () => {
 	const tools = new Map();
 	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
 	const item = tools.get("scope_fork").parameters.properties.forks.items;
-	expect(item.properties.scopeId.description).toMatch(/amends? that scope/i);
+	expect(item.properties.scopeId.description).toMatch(/reuse is an upsert/i);
 	expect(item.properties.scopeId.description).toContain("only its owner");
 	expect(item.properties.fsm.description).toMatch(/next turn boundary/i);
 	expect(item.required).not.toContain("fsm");
@@ -156,7 +156,7 @@ test("the root receipt reports unreceived work until the root joins it", () => {
 	expect(markReady(ledger, "worker-1").ok).toBe(true);
 
 	const receipt = () => station.skillReceipt({ agent: { kind: "main" } }).content[0].text;
-	expect(receipt()).toMatch(/\b1 unreceived child result\b|\bunreceived child results?:\s*1\b/i);
+	expect(receipt()).toMatch(/\b1 unreceived result(?:\(s\)|s)? from forked scopes\b|\bunreceived results from forked scopes:\s*1\b/i);
 	expect(receipt()).toContain("scope_join");
 	expect(takeReady(ledger, { ownerId: "root" }).ok).toBe(true);
 	expect(receipt()).not.toContain("scope_join");
@@ -313,8 +313,8 @@ test("a child prompt carries child duty instead of either mode line", () => {
 	for (const autopilot of [true, false]) {
 		const child = injectSystemPrompt("Host instructions", { autopilot, branch: true });
 		const text = Array.isArray(child) ? child.join("\n") : child;
-		expect(text).toContain("### Child duties");
-		expect(text).toContain("Fork child duty");
+		expect(text).toContain("### Scope duties");
+		expect(text).toContain("Forked scope duty");
 		expect(text).toContain("scope_return");
 		expect(text).not.toContain("Autopilot is on");
 		expect(text).not.toContain("Autopilot is off by default");

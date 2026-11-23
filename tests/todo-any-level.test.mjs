@@ -331,7 +331,7 @@ describe("todo on the root branch", () => {
 		expect(relayOf(ctx).handoffPending).toBe(false);
 		expect(relayOf(ctx).lastLedger).toBeNull();
 		expect(textOf(written)).toContain("RELAY STATE");
-		expect(textOf(written)).toContain("unreceived child result");
+		expect(textOf(written)).toContain("unreceived result(s) from forked scopes");
 	});
 });
 

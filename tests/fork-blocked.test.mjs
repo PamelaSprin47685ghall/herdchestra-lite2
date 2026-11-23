@@ -147,7 +147,7 @@ describe("batch fork with a checkpoint", () => {
       arguments: { forks: [item("run"), item("later", true)] },
     });
     expect(out.isError).toBe(true);
-    expect(out.content[0].text).toContain("No child spawner is attached");
+    expect(out.content[0].text).toContain("No scope spawner is attached");
   });
 
   test("one malformed item rejects the whole batch", () => {
@@ -176,7 +176,7 @@ describe("batch fork with a checkpoint", () => {
     markReady(ledger, "call-pair:0");
     const joined = handleJoinCall(station, { id: "call-j" });
     expect(joined.isError).toBeUndefined();
-    expect(joined.content[0].text).toContain("[Child record — fork run]");
+    expect(joined.content[0].text).toContain("[Record from forked scope — fork run]");
     expect(joined.content[0].text).toContain("Unreceived: 0.");
     expect(forkOf(ledger, "call-pair:0").status).toBe(JOINED);
     expect(forkOf(ledger, "call-pair:1").status).toBe(BLOCKED);

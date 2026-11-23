@@ -16,7 +16,7 @@ What the next step needs from this beat: what it established, and why the path i
 
 ## pin.tool
 
-Save a durable note for parents and relay successors. Pin artifact paths, evidence, or conclusions they will need after replay is shortened.
+Save a durable note for the calling scope and relay successors. Pin artifact paths, evidence, or conclusions they will need after replay is shortened.
 
 ## pin.assumption
 

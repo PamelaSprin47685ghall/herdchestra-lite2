@@ -64,12 +64,12 @@ export function joinReceipt({
 	remaining = [],
 }) {
 	const header = failed
-		? `[Child record — fork ${forkId}, failed: ${reason ?? "unknown reason"}]`
-		: `[Child record — fork ${forkId}]`;
+		? `[Record from forked scope — fork ${forkId}, failed: ${reason ?? "unknown reason"}]`
+		: `[Record from forked scope — fork ${forkId}]`;
 	const preamble = failed
 		? "History only; do not re-execute it or treat its conclusions as verified."
 		: "History only; do not re-execute it.";
-	const tail = `[End of child record — fork ${forkId}]`;
+	const tail = `[End of record from forked scope — fork ${forkId}]`;
 	const count = remaining.length;
 	const note =
 		count > 0

@@ -214,6 +214,14 @@ function writeRemoteText(editor, text) {
 		for (const char of text) editor.handleInput(char);
 		return;
 	}
+	// An empty remote draft must also leave slash mode. `setText` is silent and
+	// never refreshes autocomplete, so the popup would stay open after the web
+	// user deletes "/". Dismiss it through the same input path a TUI user uses.
+	if (text === "" && typeof editor.handleInput === "function"
+		&& typeof editor.isShowingAutocomplete === "function"
+		&& editor.isShowingAutocomplete()) {
+		editor.handleInput("\u001b");
+	}
 	editor.setText?.(text);
 }
 
@@ -290,17 +298,16 @@ export function createBridgeEditorClass(BaseCustomEditor = class {}) {
 
 		applyRemoteDraft({ text } = {}) {
 			if (typeof text !== "string") return false;
-			const write =
-				typeof super.setText === "function"
-					? super.setText
-					: typeof super.setDraft === "function"
-						? super.setDraft
-						: null;
-			if (!write) return false;
+			const canSetText = typeof super.setText === "function";
+			const canSetDraft = typeof super.setDraft === "function";
+			if (!canSetText && !canSetDraft) return false;
 			this.__remote = true;
 			try {
-				if (typeof this.handleInput === "function") writeRemoteText(this, text);
-				else write.call(this, text);
+				// `this.handleInput` always exists on BridgeEditor, so the writer must
+				// follow the base editor's actual capability, not the wrapper's shape.
+				if (canSetText && typeof this.handleInput === "function") writeRemoteText(this, text);
+				else if (canSetDraft) super.setDraft.call(this, text);
+				else super.setText.call(this, text);
 			} finally {
 				this.__remote = false;
 			}

@@ -77,11 +77,12 @@ function ModeToggle({
       type="button"
       size="sm"
       variant={active ? "secondary" : "ghost"}
-      className="h-7 gap-1 px-2 text-xs"
+      className="h-7 shrink-0 gap-1 px-1.5 text-xs sm:px-2"
+      aria-label={label}
       onClick={onClick}
     >
       {icon}
-      {label}
+      <span className="hidden sm:inline">{label}</span>
     </Button>
   );
 }
@@ -165,7 +166,7 @@ const ModelControlsBar = memo(function ModelControlsBar({
       </span>
     ) : (
       <div
-        className="flex h-7 shrink-0 items-center gap-2 px-2"
+        className="flex h-7 min-w-[52px] flex-1 shrink-0 items-center gap-1 px-1 sm:gap-2 sm:px-2"
         title={`思考强度：${levels.map(formatThinkingLabel).join(" / ")}`}
       >
         <input
@@ -180,16 +181,16 @@ const ModelControlsBar = memo(function ModelControlsBar({
           }}
           disabled={disabled}
           aria-label="思考强度"
-          className="h-1.5 w-20 cursor-pointer accent-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40"
+          className="h-1.5 min-w-[44px] flex-1 cursor-pointer accent-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40 sm:max-w-[28vw]"
         />
-        <span className="text-muted-foreground min-w-[3.5rem] text-xs whitespace-nowrap">
+        <span className="text-muted-foreground hidden text-xs whitespace-nowrap sm:inline sm:min-w-[3.5rem]">
           {formatThinkingLabel(thinkingLevel ?? levels[levelIndex] ?? levels[0])}
         </span>
       </div>
     );
   return (
     <>
-      <div className="[order:-2]">
+      <div className="shrink-0 [order:-2]">
         <ModeToggle
           label="Plan"
           icon={<GitBranchIcon className="size-3.5" />}
@@ -197,7 +198,7 @@ const ModelControlsBar = memo(function ModelControlsBar({
           onClick={() => onMode("plan", plan === "active" ? "exit" : "enter")}
         />
       </div>
-      <div className="[order:-1]">
+      <div className="shrink-0 [order:-1]">
         <ModeToggle
           label="Vibe"
           icon={<ZapIcon className="size-3.5" />}
@@ -205,15 +206,15 @@ const ModelControlsBar = memo(function ModelControlsBar({
           onClick={() => onMode("vibe", vibe === "active" ? "exit" : "enter")}
         />
       </div>
-      <div className="[order:1]">
+      <div className="flex min-w-0 w-full items-center [order:1] sm:w-auto sm:flex-1">
         <ModelPickerDialog
           modelKey={selectedKey}
           models={modelOptions}
           disabled={disabled}
           onModel={onModel}
         />
+        {thinkingControl}
       </div>
-      <div className="[order:2]">{thinkingControl}</div>
     </>
   );
 }, modelControlsEqual);
@@ -244,10 +245,10 @@ function ComposerForm({
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const syncedRev = useRef<number | null>(null);
-  // A remote draft is data, not typing. Mark the exact value we wrote into the
-  // composer so the next draft effect does not report it back as user input.
-  // Without this, a remote `/` and the host's slash-mode rewrite bounce forever.
-  const suppressedDraft = useRef<string | null>(null);
+  // A remote draft is data, not typing. Only a real change event may report the
+  // composer back to the host; deriving that from `text` treats the host's own
+  // slash-mode rewrite as user input and bounces "" and "/" between the sides.
+  const userEdited = useRef(false);
   const onDraftRef = useRef(onDraft);
   onDraftRef.current = onDraft;
   const text = controller.textInput.value;
@@ -286,22 +287,28 @@ function ComposerForm({
     if (draft.rev === syncedRev.current) return;
     syncedRev.current = draft.rev;
     if (draft.origin === "web") return;
+    // Slash mode can leave the host buffer empty while the web composer still
+    // holds the token. Keep the token so deleting it can close both menus.
+    if (draft.text === "" && controller.textInput.value.startsWith("/")) return;
     if (controller.textInput.value !== draft.text) {
-      suppressedDraft.current = draft.text;
+      userEdited.current = false;
       controller.textInput.setInput(draft.text);
     }
   }, [controller, draft.rev, draft.origin, draft.text]);
 
   useEffect(() => {
-    // A marker here means this render belongs to the remote write, not to
-    // typing: consume it and never report the pre-write text back. Leaving it
-    // behind would swallow a later legitimate keystroke equal to that text.
-    if (suppressedDraft.current !== null) {
-      suppressedDraft.current = null;
-      return;
-    }
-    if (composing || text === draft.text) return;
-    const timer = setTimeout(() => onDraftRef.current(text), 80);
+    // Only report a render the user caused. The remote write above also changes
+    // `text`; reporting that render sends the host its own value back and lets
+    // the slash-mode rewrite alternate "" and "/" forever.
+    if (!userEdited.current) return;
+    // Deleting "/" must reach the host even when its empty rewrite already
+    // landed; otherwise both autocomplete popups stay open.
+    const closingSlash = completionRef.current.open && text === "";
+    if (composing || (!closingSlash && text === draft.text)) return;
+    const timer = setTimeout(() => {
+      userEdited.current = false;
+      onDraftRef.current(text);
+    }, 80);
     return () => clearTimeout(timer);
   }, [composing, text, draft.text]);
 
@@ -385,7 +392,7 @@ function ComposerForm({
           ))}
         </div>
       )}
-      {completion.open && completion.items.length > 0 && (
+      {completion.open && completion.items.length > 0 && text.startsWith("/") && (
         <div className="mb-1.5 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
           <div className="text-muted-foreground flex items-center justify-between border-b px-3 py-1 text-[10px]">
             <span>斜杠补全 · TUI 状态镜像</span>
@@ -457,6 +464,9 @@ function ComposerForm({
           <PromptInputTextarea
             data-omp-completion="1"
             placeholder="写给 omp…  Enter 发送，Shift+Enter 换行"
+            onChange={() => {
+              userEdited.current = true;
+            }}
             className="min-h-16 px-4 pt-3 text-sm"
             disabled={blocked}
             onKeyDown={(event) => {
@@ -474,17 +484,17 @@ function ComposerForm({
             }}
           />
         </PromptInputBody>
-        <PromptInputFooter className="flex-wrap gap-1.5 px-2 pb-2">
-          <PromptInputTools className="min-w-0 flex-wrap">
+        <PromptInputFooter className="flex-nowrap gap-1.5 px-2 pb-2">
+          <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-y-1 sm:flex-nowrap sm:gap-y-0">
             <label
-              className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-xs hover:bg-accent/60 ${blocked || capabilities?.canAttachments === false ? "pointer-events-none opacity-50" : ""}`}
+              className={`inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs hover:bg-accent/60 sm:px-2 ${blocked || capabilities?.canAttachments === false ? "pointer-events-none opacity-50" : ""}`}
               aria-label="添加附件"
               title={capabilities?.canAttachments === false ? "此实例不支持附件" : "添加附件"}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="size-3.5" aria-hidden="true">
                 <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
-              Attach
+              <span className="hidden sm:inline">Attach</span>
               <input
                 type="file"
                 className="hidden"

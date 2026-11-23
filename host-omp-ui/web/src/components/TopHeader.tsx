@@ -1,12 +1,4 @@
-import {
-  BoxesIcon,
-  CircleDotIcon,
-  MoonIcon,
-  PanelLeftIcon,
-  SunIcon,
-  TerminalSquareIcon,
-  WifiOffIcon,
-} from "lucide-react";
+import { MoonIcon, PanelLeftIcon, SunIcon } from "lucide-react";
 import { Badge } from "@herd/deer-flow-ui/ui/badge";
 import { Button } from "@herd/deer-flow-ui/ui/button";
 import {
@@ -15,7 +7,6 @@ import {
   TooltipTrigger,
 } from "@herd/deer-flow-ui/ui/tooltip";
 import type { ConnectionState } from "../protocol/client";
-import { modelNickname } from "../lib/model-display";
 import { selectModeStatus, selectUsage } from "../protocol/store";
 import type { WebState } from "../protocol/types";
 
@@ -26,21 +17,6 @@ const CONNECTION_LABEL: Record<ConnectionState, string> = {
   unauthorized: "未解锁",
   offline: "离线",
 };
-
-function ConnectionBadge({ state }: { state: ConnectionState }) {
-  const tone =
-    state === "connected"
-      ? "bg-emerald-500"
-      : state === "connecting" || state === "reconnecting"
-        ? "bg-amber-500 animate-pulse"
-        : "bg-rose-500";
-  return (
-    <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
-      <span className={`size-2 rounded-full ${tone}`} />
-      {CONNECTION_LABEL[state]}
-    </span>
-  );
-}
 
 export function TopHeader({
   state,
@@ -60,19 +36,24 @@ export function TopHeader({
   onToggleWide: () => void;
 }) {
   const usage = selectUsage(state);
-  const model = state.model;
-  const rawTitle =
-    state.session?.title ??
-    state.meta.title ??
-    "omp";
-  const title = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(rawTitle)
-    ? "未命名会话"
-    : rawTitle;
-  const plan = selectModeStatus(state.modes, "plan");
-  const vibe = selectModeStatus(state.modes, "vibe");
   const goal = selectModeStatus(state.modes, "goal");
   const loop = selectModeStatus(state.modes, "loop");
   const busy = state.streaming || Boolean(state.meta.busy);
+  const cwd = state.session?.cwd ?? state.liveSession.session?.cwd ?? "";
+  const split = cwd.lastIndexOf("/");
+  const dir = split > 0 ? cwd.slice(0, split) : "";
+  const base = split >= 0 ? cwd.slice(split + 1) : cwd;
+  const breathing =
+    busy || connection === "connecting" || connection === "reconnecting";
+  const tone =
+    connection === "connected"
+      ? "bg-emerald-500"
+      : connection === "connecting" || connection === "reconnecting"
+        ? "bg-amber-500"
+        : "bg-rose-500";
+  const fill = Math.max(2, usage.percent);
+  // Past half the label sits inside the fill, right-aligned against the edge.
+  const percentOnFill = fill > 50;
   return (
     <header className="bg-background/80 flex shrink-0 items-center gap-2 border-b px-3 py-2 backdrop-blur md:px-4">
       <Button
@@ -84,74 +65,78 @@ export function TopHeader({
       >
         <PanelLeftIcon className="size-4" />
       </Button>
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-medium">{title}</span>
-          {busy && (
-            <span className="flex items-center gap-1 text-xs text-brand">
-              <CircleDotIcon className="size-3 animate-pulse" /> 工作中
-            </span>
-          )}
-        </div>
-        <div className="mt-0.5 flex min-w-0 items-center gap-2">
-          <ConnectionBadge state={connection} />
-          {connection === "offline" && (
-            <WifiOffIcon className="text-muted-foreground size-3" />
-          )}
-          {model && (
-            <span className="text-muted-foreground max-w-[min(26rem,45vw)] truncate text-xs">
-              {modelNickname(model, state.models)}
-            </span>
-          )}
-          {state.thinkingLevel && (
-            <Badge variant="outline" className="text-[10px]">
-              {state.thinkingLevel.charAt(0).toUpperCase() + state.thinkingLevel.slice(1)}
-            </Badge>
-          )}
-          {plan === "active" && (
-            <Badge className="bg-violet-500/15 text-[10px] text-violet-600 dark:text-violet-300">
-              plan
-            </Badge>
-          )}
-          {vibe === "active" && (
-            <Badge className="bg-emerald-500/15 text-[10px] text-emerald-600 dark:text-emerald-300">
-              vibe
-            </Badge>
-          )}
-          {goal !== "inactive" && (
-            <Badge variant="secondary" className="text-[10px]">
-              goal · {goal}
-            </Badge>
-          )}
-          {loop !== "inactive" && (
-            <Badge variant="secondary" className="text-[10px]">
-              loop · {loop}
-            </Badge>
-          )}
-        </div>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className="flex shrink-0 items-center outline-none"
+            tabIndex={0}
+            aria-label={CONNECTION_LABEL[connection]}
+          >
+            <span
+              className={`size-2 rounded-full ${tone} ${breathing ? "animate-pulse" : ""}`}
+            />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {CONNECTION_LABEL[connection]}
+          {busy ? " · 工作中" : ""}
+        </TooltipContent>
+      </Tooltip>
+      <div
+        className="flex min-w-0 flex-1 items-center gap-1.5"
+        title={cwd || undefined}
+      >
+        {dir && (
+          <span className="text-muted-foreground/60 min-w-0 truncate font-mono text-[11px]">
+            {dir}
+          </span>
+        )}
+        {base && (
+          <span className="max-w-[60%] shrink-0 truncate font-mono text-xs font-medium">
+            {base}
+          </span>
+        )}
+        {goal !== "inactive" && (
+          <Badge variant="secondary" className="shrink-0 text-[10px]">
+            goal · {goal}
+          </Badge>
+        )}
+        {loop !== "inactive" && (
+          <Badge variant="secondary" className="shrink-0 text-[10px]">
+            loop · {loop}
+          </Badge>
+        )}
       </div>
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="hidden w-28 cursor-default flex-col gap-1 sm:flex md:w-32">
-            <div className="text-muted-foreground flex justify-between text-[10px]">
-              <span>上下文</span>
-              <span>
-                {usage.percent}%
-                {usage.tokens !== null ? ` · ${usage.tokens.toLocaleString()} tok` : ""}
-              </span>
-            </div>
-            <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+          <div className="hidden cursor-default items-center gap-2 sm:flex">
+            <span className="text-muted-foreground shrink-0 text-[10px]">
+              上下文
+            </span>
+            <div className="bg-muted relative h-4 w-24 overflow-hidden rounded-full md:w-28">
               <div
-                className={`h-full transition-all ${
+                className={`h-full rounded-full transition-all ${
                   usage.percent > 85
                     ? "bg-destructive"
                     : usage.percent > 65
                       ? "bg-amber-500"
                       : "bg-primary"
                 }`}
-                style={{ width: `${Math.max(2, usage.percent)}%` }}
+                style={{ width: `${fill}%` }}
               />
+              <span
+                className={`absolute top-1/2 -translate-y-1/2 text-[10px] font-medium tabular-nums ${
+                  percentOnFill ? "text-primary-foreground" : "text-muted-foreground"
+                }`}
+                style={
+                  percentOnFill
+                    ? { right: `calc(${100 - Math.min(fill, 100)}% + 5px)` }
+                    : { left: `min(calc(${fill}% + 5px), calc(100% - 1.5rem))` }
+                }
+              >
+                {usage.percent}%
+              </span>
             </div>
           </div>
         </TooltipTrigger>

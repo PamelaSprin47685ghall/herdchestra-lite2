@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Loader2Icon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { Loader2Icon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { Button } from "@herd/deer-flow-ui/ui/button";
 import { Input } from "@herd/deer-flow-ui/ui/input";
 import {
@@ -86,6 +86,7 @@ export function SessionSidebarContent({
   onRefresh,
   onNew,
   onSwitch,
+  onClose,
   refreshing,
   catalogStale,
   liveIds = [],
@@ -98,6 +99,7 @@ export function SessionSidebarContent({
   onNew?: () => void;
   onSwitch?: (id: string) => void;
   onRefresh?: () => void;
+  onClose?: () => void;
   refreshing?: boolean;
   catalogStale?: boolean;
 }) {
@@ -149,6 +151,17 @@ export function SessionSidebarContent({
             ) : (
               <RefreshCwIcon className="size-3.5" />
             )}
+          </Button>
+        )}
+        {onClose && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            onClick={onClose}
+            aria-label="关闭会话列表"
+          >
+            <XIcon className="size-4" />
           </Button>
         )}
       </div>
@@ -298,7 +311,7 @@ export function SessionSidebarSheet({
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="left" className="bg-sidebar w-72 p-0 sm:max-w-[288px]">
+      <SheetContent side="left" showClose={false} className="bg-sidebar w-72 p-0 sm:max-w-[288px]">
         <SheetTitle className="sr-only">会话列表</SheetTitle>
         <SheetDescription className="sr-only">
           本机运行中的实例与历史会话
@@ -310,6 +323,7 @@ export function SessionSidebarSheet({
             onOpenChange(false);
           }}
           onRefresh={props.onRefresh}
+          onClose={() => onOpenChange(false)}
           onNew={props.onNew}
           onSwitch={props.onSwitch}
           refreshing={props.refreshing}

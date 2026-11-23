@@ -88,9 +88,9 @@ export function ModelPickerDialog({ modelKey, models, disabled, onModel }: Props
           disabled={disabled}
           aria-label="选择模型"
           title={modelNickname(selected, allModels) || undefined}
-          className="hover:bg-accent/60 flex h-7 max-w-[min(26rem,45vw)] items-center gap-1 rounded-md px-2 text-xs disabled:pointer-events-none disabled:opacity-50"
+          className="hover:bg-accent/60 flex h-7 min-w-0 max-w-full items-center gap-1 rounded-md px-2 text-xs disabled:pointer-events-none disabled:opacity-50"
         >
-          <span className="truncate">{modelNickname(selected, allModels) || "模型"}</span>
+          <span className="min-w-0 truncate">{modelNickname(selected, allModels) || "模型"}</span>
           <ChevronDownIcon className="text-muted-foreground size-3 shrink-0" />
         </button>
       </DialogTrigger>

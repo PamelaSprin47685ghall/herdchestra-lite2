@@ -421,6 +421,33 @@ describe("createBridgeEditorClass", () => {
 		expect(bridge.draft.called()).toBe(false);
 	});
 
+	test("an empty remote draft dismisses an open autocomplete before clearing", async () => {
+		const { createBridgeEditorClass } = await load();
+		const typed = [];
+		class AutocompleteEditor extends FakeBaseEditor {
+			isShowingAutocomplete() {
+				return this.autoOpen === true;
+			}
+			handleInput(data) {
+				typed.push(data);
+				if (data === "\u001b") this.autoOpen = false;
+				super.handleInput(data);
+			}
+		}
+		const BridgeEditor = createBridgeEditorClass(AutocompleteEditor);
+		const bridge = { draft: spy() };
+		const editor = new BridgeEditor(bridge, {}, {}, {});
+		editor.autoOpen = true;
+		editor.text = "/";
+
+		editor.applyRemoteDraft({ text: "" });
+
+		expect(typed).toEqual(["\u001b"]);
+		expect(editor.getText()).toBe("");
+		expect(editor.autoOpen).toBe(false);
+		expect(bridge.draft.called()).toBe(false);
+	});
+
 	test("publishes the TUI handed to the editor factory", async () => {
 		const { createBridgeEditorClass, getLastCapture } = await load();
 		class TuiAwareEditor extends FakeBaseEditor {

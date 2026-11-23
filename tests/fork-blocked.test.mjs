@@ -28,7 +28,6 @@ function item(intent, blocked = false) {
     intent,
     blocked,
     budget: { read: 1 },
-    time: 30,
     targets: ["src/blocked.mjs"],
   };
 }

@@ -1036,7 +1036,7 @@ export function forkBudgetText(record, now = Date.now(), clock = null) {
     parts.push(
       info.overtime
         ? "time OVERTIME (1s per tool)"
-        : `time ${formatClock(info.leftMs)}/${formatClock(record.timeBudgetMs)}`,
+        : `time left ${formatClock(info.leftMs)} / total ${formatClock(record.timeBudgetMs)}`,
     );
   }
   const panhandled = Array.isArray(record.panhandles) ? record.panhandles.length : 0;

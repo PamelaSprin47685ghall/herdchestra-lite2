@@ -31,7 +31,6 @@ function forkOne(station, overrides = {}) {
 					intent: "read the parser",
 					blocked: false,
 					budget: { read: 2, bash: 1 },
-					time: 60,
 					targets: ["src/parser.mjs"],
 					...overrides,
 				},

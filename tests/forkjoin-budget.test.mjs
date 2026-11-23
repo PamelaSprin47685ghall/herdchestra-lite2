@@ -255,7 +255,7 @@ describe("fork budget text", () => {
     fork(ledger, { budget: { read: 4, bash: 2 }, time: 120, startedAt: 0 });
     applyCharge(ledger, "f1", { toolCallId: "c1", tool: "read", amount: 1 });
     const text = forkBudgetText(forkOf(ledger, "f1"), 30000);
-    expect(text).toBe("bash 2.00/2.00, read 3.00/4.00, time 1:30/2:00");
+    expect(text).toBe("bash 2.00/2.00, read 3.00/4.00, time left 1:30 / total 2:00");
   });
 
   test("an unbudgeted fork renders nothing", () => {

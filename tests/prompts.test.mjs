@@ -114,7 +114,7 @@ describe("tool contracts map to their documents", () => {
 		const item = tools.get("scope_fork").parameters.properties.forks.items;
 		const { description } = item.properties.scopeId;
 		expect(description).toMatch(/\broot`? is reserved\b[^.]*\b(?:any capitalization|regardless of case|case-insensitive)\b/i);
-		expect(description).toMatch(/amends? that scope/i);
+		expect(description).toMatch(/is reused instead of starting a new one/i);
 		expect(description).toContain("only its owner");
 		expect(description).toMatch(/case-insensitive/i);
 		expect(description).not.toMatch(/must be unique/i);

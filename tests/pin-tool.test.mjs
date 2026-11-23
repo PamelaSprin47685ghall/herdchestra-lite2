@@ -1,5 +1,10 @@
 // Pin delivery: the call succeeds only when a field has content, the port
 // accepts it, and the write lands. A failed write leaves no in-memory note.
+//
+// LEGACY TRANSCRIPT SCAN: `handlePinCall` is not registered in the tool
+// catalog. The live `scope_context` tool goes through `scopeContextTicket`.
+// The handler survives only to replay old transcripts, so the cases below
+// cover a frozen path; do not read them as coverage of a live tool.
 
 import { describe, expect, test } from "bun:test";
 
@@ -24,7 +29,7 @@ function pinCall(fields) {
   return { id: "pin-call", name: "pin", arguments: fields };
 }
 
-describe("pin arguments", () => {
+describe("pin arguments (legacy transcript scan)", () => {
   test("a call with no field is refused", () => {
     const station = stationWith();
     const out = handlePinCall(station, pinCall({}));
@@ -60,7 +65,7 @@ describe("pin arguments", () => {
   });
 });
 
-describe("pin persistence", () => {
+describe("pin persistence (legacy transcript scan)", () => {
   test("a successful write keeps exactly one note", () => {
     const station = stationWith();
     const out = handlePinCall(station, pinCall({ finding: "the parser leaves the lexer open" }));

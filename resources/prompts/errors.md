@@ -68,15 +68,15 @@ No bracket ledger is attached; fork/join is unavailable in this session. Continu
 
 ## missing-intent
 
-A new scope needs a non-empty `intent`. Only an amendment of an existing `scopeId` may omit it.
+A new scope needs a non-empty `intent`. Only a reuse of an existing `scopeId` may omit it.
 
 ## foreign-scope-id
 
-Scope {{scopeId}} belongs to another owner. Only its owner may amend it.
+Scope {{scopeId}} belongs to another owner. Only its owner may reuse it.
 
 ## scope-running-blocked
 
-Scope {{scopeId}} is running, so it cannot be marked blocked. Amend its budget or requirements instead.
+Scope {{scopeId}} is running, so it cannot be marked blocked. Reuse it with a budget or requirement instead.
 
 ## scope-reuse-empty
 
@@ -84,7 +84,7 @@ Reusing `{{scopeId}}` changed nothing. Add budget, intent, or targets.
 
 ## scope-not-amendable
 
-This scope cannot be amended in its current state. Fork a new scope instead.
+This scope cannot be reused in its current state. Fork a new scope instead.
 
 ## child-spawner-unavailable
 

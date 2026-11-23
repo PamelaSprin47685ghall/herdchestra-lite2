@@ -4,7 +4,7 @@ Start child scopes without waiting. Receive their records with `scope_join`.
 
 ## fork.scope-id
 
-Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name that already exists in this session — including a finished one — amends that scope instead of starting a new one; only its owner may amend it, and the match is case-insensitive. Reuse is an upsert: `running` and `blocked` scopes take the budget as an increment, the intent as one more requirement, and the targets merged into the existing list; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history.
+Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name that already exists in this session — including a finished one — is reused instead of starting a new one; only its owner may reuse it, and the match is case-insensitive. Reuse is an upsert: `running` and `blocked` scopes take the budget as an increment, the intent as one more requirement, and the targets merged into the existing list; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history.
 
 ## fork.intent
 
@@ -16,11 +16,11 @@ Note — this batch starts a scope at depth {{childDepth}}, past the default tre
 
 ## fork.budget
 
-Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A working scope holds about {{defaultPoints}} total points and never more than {{maxPoints}}, amendments included. A branch that runs out may hold out its hand with `scope_panhandle` for about {{panhandleDefault}} total points across all tools, never more than {{panhandleMax}} total in one call. Sibling fork items each have their own budget; each item funds its own child at any depth, and the caller's balance is never charged.
+Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance is below its share blocks only itself while the rest of the message runs. Budget by the turns the work needs, not by individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A working scope holds about {{defaultPoints}} total points and never more than {{maxPoints}}, reuses included. A branch that runs out may hold out its hand with `scope_panhandle` for about {{panhandleDefault}} total points across all tools, never more than {{panhandleMax}} total in one call. Sibling fork items each have their own budget; each item funds its own child at any depth, and the caller's balance is never charged.
 
 ## fork.time
 
-The system derives the wall-clock budget. Do not pass `time`. One turn is one LLM request. The budget is the session's mean request duration times the sum of this item's tool-budget points, at least one second. With no measured requests yet, the mean is one minute. Ordinary tools get at most the remaining time plus one second; waiting in `scope_join` or `scope_return` pauses that scope's clock. When the deadline passes, each later tool gets one second, and a tool that overruns is killed and its result is gone. `scope_panhandle` buys more seconds, at most 300 per call.
+The system derives the wall-clock budget. Do not pass `time`. One turn is one LLM request. The budget is the session's mean request duration times the sum of this item's tool-budget points, at least one second. The clock covers tool execution too: a bash or test run spends wall time without spending points, so an I/O-heavy scope can reach its deadline first — reserve `scope_panhandle` seconds for it. With no measured requests yet, the mean is one minute. Ordinary tools get at most the remaining time plus one second; waiting in `scope_join` or `scope_return` pauses that scope's clock. When the deadline passes, each later tool gets one second, and a tool that overruns is killed and its result is gone. `scope_panhandle` buys more seconds, at most 300 per call.
 
 ## fork.targets
 
@@ -40,7 +40,7 @@ WARNING — the fanout is over the cap. You started {{count}} children in one ca
 
 ## fork.blocked
 
-`false` starts now. `true` records an unmet prerequisite without queuing the item. Resubmit with `false` when ready. Reusing a `running` scope with `true` is refused with `SCOPE_RUNNING_BLOCKED`; amend its budget or requirements instead.
+`false` starts now. `true` records an unmet prerequisite without queuing the item. Resubmit with `false` when ready. Reusing a `running` scope with `true` is refused with `SCOPE_RUNNING_BLOCKED`; reuse it with a budget or requirement instead.
 
 ## fork.model
 
@@ -96,7 +96,7 @@ Hand the record to the parent; the parent receives it with `scope_join`. Any unr
 
 ## return.markdown
 
-Optional text appended verbatim to the end of the record your parent receives. Use it for what the replay drops — a table, a code block, a closing note — and omit it when your text already says everything.
+Optional text appended to the end of the record your parent receives, after leading and trailing whitespace is trimmed. Use it for what the replay drops — a table, a code block, a closing note — and omit it when your text already says everything.
 
 ## return.pending
 

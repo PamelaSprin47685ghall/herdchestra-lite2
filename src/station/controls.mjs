@@ -1,6 +1,8 @@
 // Station control handlers: amend and pin arguments.
-// Plain synchronous functions. The station owns the state; this module owns
-// the argument validation and the resulting text.
+// `handleAmendCall` and `handlePinCall` are legacy transcript-scan paths.
+// The tool catalog does not register them; live pinning goes through
+// `scope_context`. Plain synchronous functions. The station owns the state;
+// this module owns the argument validation and the resulting text.
 
 import { applyAmend } from "../scope/index.mjs";
 import { filterAmends } from "../transcript/index.mjs";

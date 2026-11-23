@@ -50,6 +50,7 @@ function ConversationViewInner({
   if (groups.length > 0) groupsRef.current = groups;
   const displayGroups = groups.length > 0 ? groups : groupsRef.current;
   const lastGroupId = displayGroups[displayGroups.length - 1]?.id;
+  const isEmpty = messages.length === 0;
 
   const renderOther = (message: UiMessage) => {
     if (message.role === "toolResult") {
@@ -147,7 +148,7 @@ function ConversationViewInner({
       renderItem={renderGroup}
       className="min-h-0 flex-1"
       contentClassName={
-        messages.length === 0
+        isEmpty
           ? "mx-auto w-full max-w-[var(--chat-max-w)] px-4"
           : "mx-auto w-full max-w-[var(--chat-max-w)] space-y-5 px-4 pb-12 pt-3"
       }
@@ -157,7 +158,7 @@ function ConversationViewInner({
       autoFollow
       canLoadEarlier={Boolean(hasMoreHistory)}
       empty={
-        messages.length === 0 ? (
+        isEmpty ? (
           <ConversationEmptyState
             icon={
               <span aria-hidden className="text-3xl leading-none">

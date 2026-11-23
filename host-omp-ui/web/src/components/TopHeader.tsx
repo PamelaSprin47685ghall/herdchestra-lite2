@@ -43,12 +43,13 @@ export function TopHeader({
   const split = cwd.lastIndexOf("/");
   const dir = split > 0 ? cwd.slice(0, split) : "";
   const base = split >= 0 ? cwd.slice(split + 1) : cwd;
-  const breathing =
-    busy || connection === "connecting" || connection === "reconnecting";
+  const linking =
+    connection === "connecting" || connection === "reconnecting";
+  const breathing = busy || linking;
   const tone =
     connection === "connected"
       ? "bg-emerald-500"
-      : connection === "connecting" || connection === "reconnecting"
+      : linking
         ? "bg-amber-500"
         : "bg-rose-500";
   const fill = Math.max(2, usage.percent);

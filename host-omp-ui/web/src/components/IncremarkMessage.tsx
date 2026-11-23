@@ -115,13 +115,10 @@ const darkTheme = {
 
 const darkListeners = new Set<() => void>();
 let darkObserver: MutationObserver | null = null;
-let darkSnapshot = false;
 
 function readDark() {
   if (typeof document === "undefined") return false;
-  const next = document.documentElement.classList.contains("dark");
-  darkSnapshot = next;
-  return next;
+  return document.documentElement.classList.contains("dark");
 }
 
 function subscribeDark(callback: () => void) {

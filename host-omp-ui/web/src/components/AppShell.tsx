@@ -18,6 +18,7 @@ import {
   frameToast,
   frameType,
   reduceWebState,
+  selectModelKey,
   selectWidgetList,
   selectWorkingText,
 } from "../protocol/store";
@@ -162,7 +163,7 @@ export function AppShell() {
           else toast.message(notice.message);
         }
       }
-      const type = frameType(serverFrame);
+      const type = earlyType;
       if (type === "manager.instances" && Array.isArray(serverFrame.instances)) {
         setInstances(serverFrame.instances.map(normalizeManagerInstance).filter((item): item is ManagerInstance => item !== null));
       }
@@ -493,9 +494,7 @@ export function AppShell() {
             key={`composer:${composerKey}`}
             draft={state.draft}
             models={state.models}
-            modelKey={
-              state.model ? `${state.model.provider}/${state.model.id}` : ""
-            }
+            modelKey={selectModelKey(state.model)}
             thinkingLevel={state.thinkingLevel}
             thinkingLevels={state.thinkingLevels}
             modes={state.modes}

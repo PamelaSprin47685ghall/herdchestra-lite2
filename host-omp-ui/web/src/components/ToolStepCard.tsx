@@ -17,16 +17,16 @@ import {
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
-import { CodeBlock, CodeBlockCopyButton } from "@/components/ai-elements/code-block";
-import { Task, TaskContent, TaskTrigger } from "@/components/ai-elements/task";
-import { Badge } from "@/components/ui/badge";
+import { CodeBlock, CodeBlockCopyButton } from "@herd/deer-flow-ui/ai-elements/code-block";
+import { Task, TaskContent, TaskTrigger } from "@herd/deer-flow-ui/ai-elements/task";
+import { Badge } from "@herd/deer-flow-ui/ui/badge";
 import { externalLinkAttributes } from "../lib/safe-links";
-import { Button } from "@/components/ui/button";
+import { Button } from "@herd/deer-flow-ui/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+} from "@herd/deer-flow-ui/ui/collapsible";
 import type { ToolExecution } from "../protocol/types";
 import {
   describeTool,

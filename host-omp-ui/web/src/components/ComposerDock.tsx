@@ -17,14 +17,14 @@ import {
   PromptInputTextarea,
   PromptInputTools,
   usePromptInputController,
-} from "@/components/ai-elements/prompt-input";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from "@herd/deer-flow-ui/ai-elements/prompt-input";
+import { Badge } from "@herd/deer-flow-ui/ui/badge";
+import { Button } from "@herd/deer-flow-ui/ui/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@herd/deer-flow-ui/ui/tooltip";
 import { selectModeStatus, selectModelKey } from "../protocol/store";
 import { formatThinkingLabel, groupModelsByProvider, modelNickname } from "../lib/model-display";
 import { ModelPickerDialog } from "./ModelPickerDialog";

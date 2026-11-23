@@ -70,3 +70,28 @@ messages. The bridge validates supported image formats and file-size limits.
 The TUI surface panel provides structured controls and a keyboard passthrough
 for other screens. Some terminal-only rendering, cursor behavior and arbitrary
 custom components may not have an identical Web presentation.
+
+## Prerequisites (submodule + formal dependency)
+
+DeerFlow is pinned as a Git submodule at the repository root:
+
+```bash
+git submodule update --init --recursive
+```
+
+`host-omp-ui/web/vendor/deer-flow-ui` is a thin package named
+`@herd/deer-flow-ui`. Its explicit `exports` re-export only the DeerFlow UI
+components this SPA uses, and `host-omp-ui/web/package.json` declares it as
+`"@herd/deer-flow-ui": "file:./vendor/deer-flow-ui"`. The submodule commit
+locks the upstream DeerFlow version; no DeerFlow source file is modified.
+
+Then install and build:
+
+```bash
+cd host-omp-ui/web
+bun install
+bun run build
+```
+
+If the submodule is missing, `scripts/build.mjs` exits non-zero with:
+`deer-flow submodule missing; run: git submodule update --init --recursive`.

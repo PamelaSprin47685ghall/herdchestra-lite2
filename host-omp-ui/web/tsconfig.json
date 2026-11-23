@@ -16,7 +16,8 @@
       "@/core/uploads": ["./shims/core/uploads.ts"],
       "@/core/streamdown/plugins": ["./shims/core/streamdown/plugins.ts"],
       "@/core/streamdown/preprocess": ["./shims/core/streamdown/preprocess.ts"],
-      "@/*": ["../../../deer-flow/frontend/src/*"]
+      "@herd/deer-flow-ui/*": ["../../deer-flow/frontend/src/components/*"],
+      "@/*": ["../../deer-flow/frontend/src/*"]
     }
   },
   "include": ["src", "shims", "scripts"]

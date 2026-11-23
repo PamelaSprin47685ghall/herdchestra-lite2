@@ -10,18 +10,18 @@ import {
   SparklesIcon,
   TextCursorInputIcon,
 } from "lucide-react";
-import { MessageResponse } from "@/components/ai-elements/message";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { MessageResponse } from "@herd/deer-flow-ui/ai-elements/message";
+import { Badge } from "@herd/deer-flow-ui/ui/badge";
+import { Button } from "@herd/deer-flow-ui/ui/button";
+import { Input } from "@herd/deer-flow-ui/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+} from "@herd/deer-flow-ui/ui/select";
+import { Textarea } from "@herd/deer-flow-ui/ui/textarea";
 import { asNumber, asString, isRecord } from "../protocol/guards";
 import { stripAnsi } from "../protocol/tool-view";
 import type { InteractionError, InteractionRequest } from "../protocol/types";

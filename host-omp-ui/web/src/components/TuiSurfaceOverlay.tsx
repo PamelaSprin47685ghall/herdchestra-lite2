@@ -13,21 +13,21 @@ import {
   PanelLeftIcon,
   TerminalSquareIcon,
 } from "lucide-react";
-import { CodeBlock } from "@/components/ai-elements/code-block";
-import { MessageResponse } from "@/components/ai-elements/message";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { CodeBlock } from "@herd/deer-flow-ui/ai-elements/code-block";
+import { MessageResponse } from "@herd/deer-flow-ui/ai-elements/message";
+import { Badge } from "@herd/deer-flow-ui/ui/badge";
+import { Button } from "@herd/deer-flow-ui/ui/button";
+import { Input } from "@herd/deer-flow-ui/ui/input";
+import { ScrollArea } from "@herd/deer-flow-ui/ui/scroll-area";
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@/components/ui/sheet";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
+} from "@herd/deer-flow-ui/ui/sheet";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@herd/deer-flow-ui/ui/tabs";
+import { Textarea } from "@herd/deer-flow-ui/ui/textarea";
 import { isRecord } from "../protocol/guards";
 import { findRegion } from "../protocol/surface";
 import { ansiSegments } from "../protocol/tool-view";

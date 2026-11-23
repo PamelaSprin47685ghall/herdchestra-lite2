@@ -12,24 +12,24 @@ import {
 import {
   Conversation,
   ConversationEmptyState,
-} from "@/components/ai-elements/conversation";
+} from "@herd/deer-flow-ui/ai-elements/conversation";
 import {
   Message,
   MessageContent,
-} from "@/components/ai-elements/message";
+} from "@herd/deer-flow-ui/ai-elements/message";
 import { IncremarkMessage } from "./IncremarkMessage";
 import {
   ChainOfThought,
   ChainOfThoughtContent,
   ChainOfThoughtHeader,
-} from "@/components/ai-elements/chain-of-thought";
-import { CodeBlock, CodeBlockCopyButton } from "@/components/ai-elements/code-block";
-import { Badge } from "@/components/ui/badge";
+} from "@herd/deer-flow-ui/ai-elements/chain-of-thought";
+import { CodeBlock, CodeBlockCopyButton } from "@herd/deer-flow-ui/ai-elements/code-block";
+import { Badge } from "@herd/deer-flow-ui/ui/badge";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+} from "@herd/deer-flow-ui/ui/collapsible";
 import type { BundledLanguage } from "shiki";
 import type {
   MessageBlock,

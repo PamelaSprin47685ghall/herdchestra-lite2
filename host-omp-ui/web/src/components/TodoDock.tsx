@@ -8,12 +8,12 @@ import {
   ListTodoIcon,
   Loader2Icon,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@herd/deer-flow-ui/ui/badge";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+} from "@herd/deer-flow-ui/ui/collapsible";
 import type { TodoItem, TodoPhase } from "../protocol/types";
 
 function statusIcon(status: string | undefined) {

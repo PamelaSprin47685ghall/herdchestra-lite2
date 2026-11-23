@@ -1,6 +1,6 @@
 import { memo, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { IncremarkContent, ThemeProvider, type DesignTokens } from "@incremark/react";
-import { highlightCode } from "@/components/ai-elements/shiki-highlight";
+import { highlightCode } from "@herd/deer-flow-ui/ai-elements/shiki-highlight";
 
 const INCREMARK_OPTIONS = {
   gfm: true,

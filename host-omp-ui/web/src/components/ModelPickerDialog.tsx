@@ -6,7 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
+} from "@herd/deer-flow-ui/ui/dialog";
 import { selectModelKey } from "../protocol/store";
 import {
   groupModelsByProvider,

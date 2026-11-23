@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Loader2Icon, WifiOffIcon } from "lucide-react";
 import { toast, Toaster } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@herd/deer-flow-ui/ui/button";
+import { Input } from "@herd/deer-flow-ui/ui/input";
+import { TooltipProvider } from "@herd/deer-flow-ui/ui/tooltip";
 import {
   createBridgeClient,
   type ConnectionState,

@@ -3,7 +3,13 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const WEB_ROOT = path.resolve(import.meta.dir, "..");
-const SRC = path.resolve(WEB_ROOT, "../../../deer-flow/frontend/src");
+const SRC = path.resolve(WEB_ROOT, "../../deer-flow/frontend/src");
+if (!existsSync(SRC)) {
+  console.error(
+    "deer-flow submodule missing; run: git submodule update --init --recursive",
+  );
+  process.exit(1);
+}
 const SHIM = path.join(WEB_ROOT, "shims");
 const DIST = path.join(WEB_ROOT, "dist");
 mkdirSync(DIST, { recursive: true });
@@ -34,6 +40,10 @@ const resolver = {
     build.onResolve({ filter: /.*/ }, (args) => {
       const p = args.path;
       if (p.startsWith("node:")) return { path: p, external: true };
+      if (p.startsWith("@herd/deer-flow-ui/")) {
+        const key = "components/" + p.slice("@herd/deer-flow-ui/".length);
+        return { path: resolveSource(key) };
+      }
       if (p.startsWith("@/")) {
         const key = p.slice(2);
         if (shimMap[key]) return { path: path.join(SHIM, shimMap[key]) };

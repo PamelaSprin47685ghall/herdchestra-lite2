@@ -7,13 +7,13 @@ import {
   TerminalSquareIcon,
   WifiOffIcon,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@herd/deer-flow-ui/ui/badge";
+import { Button } from "@herd/deer-flow-ui/ui/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@herd/deer-flow-ui/ui/tooltip";
 import type { ConnectionState } from "../protocol/client";
 import { selectModeStatus, selectUsage } from "../protocol/store";
 import type { WebState } from "../protocol/types";

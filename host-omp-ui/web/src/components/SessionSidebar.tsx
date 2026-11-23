@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { Loader2Icon, RefreshCwIcon, SearchIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@herd/deer-flow-ui/ui/button";
+import { Input } from "@herd/deer-flow-ui/ui/input";
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetTitle,
-} from "@/components/ui/sheet";
+} from "@herd/deer-flow-ui/ui/sheet";
 import type { SessionSummary, WebState } from "../protocol/types";
 
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"] as const;

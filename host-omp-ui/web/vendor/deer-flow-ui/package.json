@@ -1,0 +1,26 @@
+{
+  "name": "@herd/deer-flow-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./ai-elements/message": "./src/ai-message.ts",
+    "./ai-elements/code-block": "./src/ai-code-block.ts",
+    "./ai-elements/task": "./src/ai-task.ts",
+    "./ai-elements/shiki-highlight": "./src/ai-shiki-highlight.ts",
+    "./ai-elements/prompt-input": "./src/ai-prompt-input.ts",
+    "./ai-elements/conversation": "./src/ai-conversation.ts",
+    "./ai-elements/chain-of-thought": "./src/ai-chain-of-thought.ts",
+    "./ui/button": "./src/ui-button.ts",
+    "./ui/badge": "./src/ui-badge.ts",
+    "./ui/input": "./src/ui-input.ts",
+    "./ui/tooltip": "./src/ui-tooltip.ts",
+    "./ui/collapsible": "./src/ui-collapsible.ts",
+    "./ui/textarea": "./src/ui-textarea.ts",
+    "./ui/sheet": "./src/ui-sheet.ts",
+    "./ui/tabs": "./src/ui-tabs.ts",
+    "./ui/select": "./src/ui-select.ts",
+    "./ui/scroll-area": "./src/ui-scroll-area.ts",
+    "./ui/dialog": "./src/ui-dialog.ts"
+  }
+}

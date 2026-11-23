@@ -1,14 +1,10 @@
 // Composition root. It instantiates the station, adapter, fence, tickets and
 // server, then binds them with mechanical wiring only. No business branching.
 import { createHostTickets, createUiBridge } from "../host/bridge-tickets.mjs";
-import { createClientCommandHandler } from "../host/client-command.mjs";
 import { record } from "../host/diagnostics.mjs";
-import { createManagerClient } from "../host/manager-client.mjs";
 import { createSessionAdapter } from "../host/session-adapter.mjs";
 import {
-	createBootstrapSnapshot,
-	createSessionHost,
-	createShutdownHandler,
+	createStartRuntimeTicket,
 	ensureSurfaceWatcher,
 	hydrateStation,
 } from "../host/session-launch.mjs";
@@ -39,59 +35,7 @@ function status() {
 	return { url: null, reason: runtime?.reason ?? "no active main session" };
 }
 
-async function startRuntime(runtimeRef, env, adapter, ctx) {
-	try {
-		const host = await createSessionHost({ env, ctx, record });
-		await hydrateStation(runtimeRef.station, adapter, ctx);
-		if (runtimeRef.disposed) return;
-		const isTui = ctx.mode === "tui" && ctx.hasUI;
-		const server = await createManagerClient({
-			mode: ctx.mode,
-			instanceCapabilities: { canCompose: isTui || typeof runtimeRef.pi?.sendUserMessage === "function", canUseTuiSurface: isTui, canAttachments: isTui, canSlashCommands: isTui },
-			host: env.host ?? "127.0.0.1",
-			preferredPort: host.port,
-			token: host.token,
-			staticDir: host.staticDir,
-			onBootstrap: createBootstrapSnapshot({ station: runtimeRef.station, adapter, ctx }),
-			onStatus: (state, reason) => {
-				if (runtimeRef.disposed) return;
-				if (state === "connected") {
-					runtimeRef.url = `http://127.0.0.1:${host.port}/?token=${encodeURIComponent(host.token)}`;
-					runtimeRef.reason = null;
-				} else {
-					runtimeRef.url = null;
-					runtimeRef.reason = reason ? String(reason.message ?? reason) : `manager ${state}`;
-				}
-			},
-			onListSessions: host.listSessions,
-			ensureSession: host.sessionService.ensureSession,
-			newSession: (input, waitForLaunch) => host.sessionService.newSession(input, waitForLaunch),
-			onClientConnect: (clientId) => runtimeRef.station.onClientConnected?.(clientId),
-			onClientDisconnect: (clientId) => runtimeRef.station.onClientDisconnected?.(clientId),
-			onShutdown: createShutdownHandler({ ctx, pi: runtimeRef.pi, record }),
-			onClientCommand: createClientCommandHandler({
-				getStation: () => runtimeRef.station,
-				getTickets: () => runtimeRef.tickets,
-				getBridge: () => runtimeRef.bridge,
-				getServer: () => runtimeRef.server,
-				record,
-			}),
-			diagnostics: diagnostics(),
-		});
-		if (runtimeRef.disposed) {
-			await server.close();
-			return;
-		}
-		runtimeRef.server = server;
-		await hydrateStation(runtimeRef.station, adapter, ctx);
-		if (runtimeRef.disposed) return;
-		server.broadcast({ type: "snapshot", ...runtimeRef.station.snapshot() });
-		if (isTui) await ensureSurfaceWatcher(runtimeRef);
-	} catch (error) {
-		record("start-runtime", error);
-		if (runtimeRef) runtimeRef.reason = error instanceof Error ? error.message : String(error);
-	}
-}
+const startRuntime = createStartRuntimeTicket({ record });
 
 export function wireUiExtension(pi, env = {}) {
 	const onSessionStart = async (_event, ctx) => {

@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { scanMachineSessions } from "../manager/machine-catalog.mjs";
 import { createSessionService } from "../manager/session-service.mjs";
 import { buildNewLaunch, buildResumeLaunch } from "../manager/domain/session-catalog.mjs";
-import { sharedManagerToken } from "./manager-client.mjs";
+import { createClientCommandHandler } from "./client-command.mjs";
+import { createManagerClient, sharedManagerToken } from "./manager-client.mjs";
 import {
 	consumeLaunchContext,
 	createLaunchContext,
@@ -178,4 +179,60 @@ export async function ensureSurfaceWatcher(runtimeRef) {
 		runtimeRef.fence.surfaceWatcherActive = true;
 		runtimeRef.station?.onMetaUpdate?.({ fence: runtimeRef.fence });
 	}
+}
+
+export function createStartRuntimeTicket({ record }) {
+	return async function startRuntime(runtimeRef, env, adapter, ctx) {
+		try {
+			const host = await createSessionHost({ env, ctx, record });
+			await hydrateStation(runtimeRef.station, adapter, ctx);
+			if (runtimeRef.disposed) return;
+			const isTui = ctx.mode === "tui" && ctx.hasUI;
+			const server = await createManagerClient({
+				mode: ctx.mode,
+				instanceCapabilities: { canCompose: isTui || typeof runtimeRef.pi?.sendUserMessage === "function", canUseTuiSurface: isTui, canAttachments: isTui, canSlashCommands: isTui },
+				host: env.host ?? "127.0.0.1",
+				preferredPort: host.port,
+				token: host.token,
+				staticDir: host.staticDir,
+				onBootstrap: createBootstrapSnapshot({ station: runtimeRef.station, adapter, ctx }),
+				onStatus: (state, reason) => {
+					if (runtimeRef.disposed) return;
+					if (state === "connected") {
+						runtimeRef.url = `http://127.0.0.1:${host.port}/?token=${encodeURIComponent(host.token)}`;
+						runtimeRef.reason = null;
+					} else {
+						runtimeRef.url = null;
+						runtimeRef.reason = reason ? String(reason.message ?? reason) : `manager ${state}`;
+					}
+				},
+				onListSessions: host.listSessions,
+				ensureSession: host.sessionService.ensureSession,
+				newSession: (input, waitForLaunch) => host.sessionService.newSession(input, waitForLaunch),
+				onClientConnect: (clientId) => runtimeRef.station.onClientConnected?.(clientId),
+				onClientDisconnect: (clientId) => runtimeRef.station.onClientDisconnected?.(clientId),
+				onShutdown: createShutdownHandler({ ctx, pi: runtimeRef.pi, record }),
+				onClientCommand: createClientCommandHandler({
+					getStation: () => runtimeRef.station,
+					getTickets: () => runtimeRef.tickets,
+					getBridge: () => runtimeRef.bridge,
+					getServer: () => runtimeRef.server,
+					record,
+				}),
+				diagnostics: { record },
+			});
+			if (runtimeRef.disposed) {
+				await server.close();
+				return;
+			}
+			runtimeRef.server = server;
+			await hydrateStation(runtimeRef.station, adapter, ctx);
+			if (runtimeRef.disposed) return;
+			server.broadcast({ type: "snapshot", ...runtimeRef.station.snapshot() });
+			if (isTui) await ensureSurfaceWatcher(runtimeRef);
+		} catch (error) {
+			record("start-runtime", error);
+			if (runtimeRef) runtimeRef.reason = error instanceof Error ? error.message : String(error);
+		}
+	};
 }

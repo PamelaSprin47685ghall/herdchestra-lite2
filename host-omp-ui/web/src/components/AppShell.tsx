@@ -10,6 +10,7 @@ import {
   type ConnectionState,
 } from "../protocol/client";
 import { isRecord } from "../protocol/guards";
+import { stripAnsi } from "../protocol/tool-view";
 import { createStreamBatcher } from "../protocol/stream-batcher";
 import { createCatalogRefresh, type CatalogRefresh } from "../protocol/catalog-refresh";
 import {
@@ -52,20 +53,13 @@ function toastLevel(level: string): "info" | "success" | "warning" | "error" {
   return "info";
 }
 
-function stripWidgetAnsi(text: string): string {
-  return text
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "");
-}
-
 function WidgetStrip({ entries }: { entries: WidgetEntry[] }) {
   if (!entries.length) return null;
   return (
     <div className="mx-auto w-full max-w-[var(--chat-max-w)] px-4">
       <div className="text-muted-foreground mb-1 space-y-0.5 rounded-lg border bg-card/50 px-3 py-1.5 font-mono text-[10px]">
         {entries.map(({ key, lines }) => {
-          const line = stripWidgetAnsi(lines.join("  "));
+          const line = stripAnsi(lines.join("  "));
           return (
             <div key={key} className="min-w-0 truncate" title={line}>
               <span className="text-muted-foreground/60 mr-2">[{key}]</span>
@@ -418,6 +412,8 @@ export function AppShell() {
     return { ...state, sessions: merged };
   })();
   const startingInstances = instances.filter((item) => instanceSessionState(item) === "starting").map((item) => ({ instanceId: item.instanceId, title: item.session?.title, cwd: item.session?.cwd }));
+  const liveIds = instances.flatMap((item) => item.session?.id ? [item.session.id] : []);
+  const overlayKey = state.overlays.map((item) => item.id ?? item.title ?? "").join("|");
   return (
     <TooltipProvider>
       <div
@@ -429,7 +425,7 @@ export function AppShell() {
           onOpen={(id) => void openSession(id)}
           onRefresh={() => void refreshSessions()}
           onNew={newSession}
-          liveIds={instances.flatMap((item) => item.session?.id ? [item.session.id] : [])}
+          liveIds={liveIds}
           startingInstances={startingInstances}
           refreshing={refreshing}
           catalogStale={catalogStale}
@@ -441,7 +437,7 @@ export function AppShell() {
           onOpen={(id) => void openSession(id)}
           onRefresh={() => void refreshSessions()}
           onNew={newSession}
-          liveIds={instances.flatMap((item) => item.session?.id ? [item.session.id] : [])}
+          liveIds={liveIds}
           startingInstances={startingInstances}
           refreshing={refreshing}
           catalogStale={catalogStale}
@@ -522,14 +518,11 @@ export function AppShell() {
           open={
             state.overlays.length > 0 &&
             capabilities?.canUseTuiSurface !== false &&
-            state.overlays.map((item) => item.id ?? item.title ?? "").join("|") !==
-              dismissedOverlayKey
+            overlayKey !== dismissedOverlayKey
           }
           onOpenChange={(next) => {
             if (!next) {
-              setDismissedOverlayKey(
-                state.overlays.map((item) => item.id ?? item.title ?? "").join("|"),
-              );
+              setDismissedOverlayKey(overlayKey);
             }
           }}
           surface={state.surface}

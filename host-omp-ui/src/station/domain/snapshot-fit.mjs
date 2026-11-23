@@ -27,6 +27,16 @@ function capValue(value, limit) {
   return value;
 }
 
+function capArgs(entry) {
+  if (entry.args && typeof entry.args === "object") {
+    const args = JSON.stringify(entry.args);
+    if (args.length > MAX_ARGS_CHARS) {
+      entry.args = { truncated: true, preview: args.slice(0, MAX_ARGS_CHARS) };
+      entry.truncated = true;
+    }
+  }
+}
+
 function capBlock(block) {
   if (!block || typeof block !== "object") return block;
   const next = { ...block };
@@ -37,13 +47,7 @@ function capBlock(block) {
   }
   if (Array.isArray(next.result)) next.result = next.result.map(capBlock);
   if (typeof next.resultText === "string") next.resultText = capValue(next.resultText, MAX_TOOL_CHARS);
-  if (next.args && typeof next.args === "object") {
-    const args = JSON.stringify(next.args);
-    if (args.length > MAX_ARGS_CHARS) {
-      next.args = { truncated: true, preview: args.slice(0, MAX_ARGS_CHARS) };
-      next.truncated = true;
-    }
-  }
+  capArgs(next);
   return next;
 }
 
@@ -74,13 +78,7 @@ export function capTool(entry) {
       next[key] = capValue(next[key], MAX_TOOL_CHARS);
     }
   }
-  if (next.args && typeof next.args === "object") {
-    const args = JSON.stringify(next.args);
-    if (args.length > MAX_ARGS_CHARS) {
-      next.args = { truncated: true, preview: args.slice(0, MAX_ARGS_CHARS) };
-      next.truncated = true;
-    }
-  }
+  capArgs(next);
   return next;
 }
 

@@ -437,6 +437,34 @@ All notable changes to this extension. The format follows
   them. `tests/tool-schema-visibility.test.mjs` pins the top-level
   presentation for every registered tool, including future additions.
 
+### Known issues — standalone web bridge
+
+- **History paging can report more than it returned.** The station builds a
+  snapshot with `limit = 80` but computes `history.hasMore` against a
+  64-message threshold. With 65–80 messages and the first page requested, the
+  snapshot contains every message while `hasMore` is `true`, so the web client
+  offers a page that does not exist.
+- **The backend never sets `activeArtifactId`.** The station initializes it to
+  `null` and no command writes it. The web snapshot reducer treats `undefined`
+  as "keep the local selection" but a non-string value as "clear", so each
+  snapshot drops the artifact the user opened locally. `fenceStatus` takes the
+  opposite fallback.
+- **`stableMeta` compares seven keys.** Only `busy`, `title`, `fence`, `model`,
+  `thinkingLevel`, `thinkingLevels`, and `modes` decide whether a meta update
+  is new. A patch that changes only another meta field returns the previous
+  state.
+- **Delta merging schedules on the global timer.** `createDeltaMerger`
+  defaults to `setTimeout(..., 16)` and caches one merger per `dispatch` in a
+  module-level `WeakMap`. The schedule is injectable, but no caller injects
+  one and there is no shutdown flush.
+- **Streamed text can bypass the 1 MB cap.** The in-place append caps the
+  joined text, but the "same kind at the tail" branch does `last.text += delta`
+  without the cap when the block index jumps past the end.
+  `host-omp-ui/web/src/protocol/reducers/transcript.ts:60`.
+- **Read ranges treat `limit` as the end line.** `describeToolCall` builds
+  `${offset}-${limit}`, but `limit` is a count, so the card shows a range that
+  ends too early. `host-omp-ui/src/station/domain/tool-artistry.mjs:99`.
+
 ## [3.0.0] — 2026-11-21
 
 ### Added — the spawn chain is pinned end to end

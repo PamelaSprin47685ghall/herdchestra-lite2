@@ -26,28 +26,30 @@ The three tools exist in every supported configuration. There is no `scope` tool
 
 ## Running from source
 
-The repository holds two packages. `herdchestra-host-omp` in `host-omp/` is the plugin: it declares the host extension entry and carries the host wiring. Its only dependency, `herdchestra-lite2` at the repository root, is the host-agnostic engine — ledgers, stations, tickets, prompts — and imports nothing from the host. Install once with `cd host-omp && bun install`; the core then resolves through `host-omp/node_modules/herdchestra-lite2`.
+The repository holds three packages. `herdchestra-host-omp` in `host-omp/` is the plugin: it declares the host extension entry and carries the host wiring. Its only dependency, `herdchestra-lite2` at the repository root, is the host-agnostic engine — ledgers, stations, tickets, prompts — and imports nothing from the host. Install once with `cd host-omp && bun install`; the core then resolves through `host-omp/node_modules/herdchestra-lite2`.
+
+`herdchestra-host-omp-ui` in `host-omp-ui/` is the second plugin and the standalone web bridge: one loopback manager that lists the machine's `omp` sessions and reuses DeerFlow's UI components. It does not depend on `herdchestra-host-omp`, and the two plugins never import each other. Build its static assets with `cd host-omp-ui && bun run build:web`; the TUI plus browser acceptance loop is `.agent/skills/manual-acceptance/web-tui.md`.
 
 The boundary is one function in each direction. The core exports exactly `createEngine`; the host imports exactly that. The host hands `createEngine` its facts (five frozen groups: `session`, `model`, `accounting`, `fork`, `report`) and its verbs (the eight `tickets` capabilities), and receives one engine carrying the stations, the ready-to-register tool catalog, the scope read model, the text renderer, the resolved ports, and the fork wiring. Port assembly, the fork wiring, and the six tool bindings stay inside the core; the host never builds a table or an `execute`. The contract is code (`HOST_CONTRACT`, `TICKET_CONTRACT`, `ENGINE_ONLY_HOST_KEYS` in `src/engine.mjs`), and `tests/architecture/core-host-free.test.mjs` fails when a core file reaches outside it, when the core gains a second export, or when the host imports anything but `createEngine`.
 
 The host loads the installed plugin at `~/.omp/plugins/node_modules/herdchestra-host-omp`. Three shapes are possible, and only one of them belongs to `sync:plugin`:
 
 ```sh
-omp plugins link host-omp              # dev: the working tree IS the install
-omp plugins install <git-url>          # host-owned copy, resolved by the host
+omp plugin link host-omp              # dev: the working tree IS the install
+omp plugin install <git-url>          # host-owned copy, resolved by the host
 bun run sync:plugin                    # report the shape; write only for a vendor target
 bun scripts/sync-plugin.mjs --vendor   # fill a real directory from this tree
 bun scripts/sync-plugin.mjs --check    # report drift without copying
 bun run smoke:relay                    # check relay behavior in this working tree
 ```
 
-With `omp plugins link`, `~/.omp/plugins/node_modules/herdchestra-host-omp` is a symlink at `host-omp/`, so every edit here is live after a restart — no sync step. `sync:plugin` detects that shape, prints `link install` and writes nothing; it also refuses to touch a link that points outside this repository. The six skills live in the core's `resources/skills/` and are inlined into the system prompt; the host package ships no `skills/` directory.
+With `omp plugin link`, `~/.omp/plugins/node_modules/herdchestra-host-omp` is a symlink at `host-omp/`, so every edit here is live after a restart — no sync step. `sync:plugin` detects that shape, prints `link install` and writes nothing; it also refuses to touch a link that points outside this repository. The six skills live in the core's `resources/skills/` and are inlined into the system prompt; the host package ships no `skills/` directory.
 
-With `omp plugins install <git-url>`, the host installs and resolves a copy under its own plugin directory. That directory is the host's, not this tree's, so `sync:plugin` classifies it as `installed copy` and writes nothing; refresh it by installing again. A `--vendor` run is the separate case: only an explicit `--vendor` (or `HERDCHESTRA_SYNC=vendor`) lets the script write a real directory — the host package at the target root, and the core under the target's `node_modules/herdchestra-lite2` (including `resources/skills/`). In that mode an edit here does not reach a running session until you sync again. `sync:plugin` never writes through a link, so it can no longer rewrite this repository's own `package.json`.
+With `omp plugin install <git-url>`, the host installs and resolves a copy under its own plugin directory. That directory is the host's, not this tree's, so `sync:plugin` classifies it as `installed copy` and writes nothing; refresh it by installing again. A `--vendor` run is the separate case: only an explicit `--vendor` (or `HERDCHESTRA_SYNC=vendor`) lets the script write a real directory — the host package at the target root, and the core under the target's `node_modules/herdchestra-lite2` (including `resources/skills/`). In that mode an edit here does not reach a running session until you sync again. `sync:plugin` never writes through a link, so it can no longer rewrite this repository's own `package.json`.
 
 Restart the session afterwards; modules load at process start. A `todo` result that shows a `Flow:` line comes from the current build, so a missing `Flow:` line means the session is still running an older copy.
 
-Tests stay in the repository root and cover both packages: `bun test tests` runs the core domain, the host wiring, and the architecture ratchets that hold the boundary. `bun run smoke:relay` tests the working tree against a fake host. It checks fork/join registration and refusals, the `todo` status, and the relay transitions into and out of full flow. It does not test the installed copy.
+Tests stay in the repository root and cover all three packages: `bun test tests` runs the core domain, both host wirings, and the architecture ratchets that hold the boundaries. `bun run smoke:relay` tests the working tree against a fake host. It checks fork/join registration and refusals, the `todo` status, and the relay transitions into and out of full flow. It does not test the installed copy.
 
 ## Skills
 

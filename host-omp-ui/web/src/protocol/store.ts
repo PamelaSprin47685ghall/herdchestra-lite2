@@ -8,9 +8,7 @@ import {
 import { asNumber, asString, isRecord } from "./guards";
 export {
   selectDisplayGroups,
-  selectArtifacts,
   selectActiveArtifact,
-  selectArtifactById,
   selectUsage,
   selectModelKey,
   selectModeStatus,

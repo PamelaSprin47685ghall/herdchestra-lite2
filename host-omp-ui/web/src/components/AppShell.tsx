@@ -17,7 +17,6 @@ import {
   frameToast,
   frameType,
   reduceWebState,
-  selectArtifacts,
   selectWidgetList,
   selectWorkingText,
 } from "../protocol/store";

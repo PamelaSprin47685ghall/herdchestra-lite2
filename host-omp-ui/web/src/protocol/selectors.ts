@@ -51,7 +51,7 @@ export function selectDisplayGroups(state: WebState): DisplayGroup[] {
  * they are stale, so merge file tools from the transcript with the snapshot
  * list. Path is the stable identity the tool cards already use.
  */
-export function selectArtifacts(state: WebState): ArtifactItem[] {
+function selectArtifacts(state: WebState): ArtifactItem[] {
   const byPath = new Map<string, ArtifactItem>();
   for (const artifact of state.artifacts) {
     byPath.set(artifact.path ?? artifact.id, artifact);
@@ -113,16 +113,10 @@ export function selectArtifacts(state: WebState): ArtifactItem[] {
 }
 
 export function selectActiveArtifact(state: WebState): ArtifactItem | null {
-  if (!state.activeArtifactId) return null;
-  const artifacts = selectArtifacts(state);
-  return (
-    artifacts.find((item) => item.id === state.activeArtifactId) ??
-    artifacts.find((item) => item.path === state.activeArtifactId) ??
-    null
-  );
+  return selectArtifactById(state, state.activeArtifactId);
 }
 
-export function selectArtifactById(
+function selectArtifactById(
   state: WebState,
   id: string | null,
 ): ArtifactItem | null {

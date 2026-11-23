@@ -629,9 +629,14 @@ function ConversationViewInner({
       empty={
         messages.length === 0 ? (
           <ConversationEmptyState
-            icon={<SparklesIcon className="size-8" />}
-            title={streaming ? "omp 正在准备回复" : "会话是空的"}
-            description="在下方输入。Enter 发送，Shift+Enter 换行。"
+            icon={
+              <span
+                aria-hidden
+                className="inline-block h-8 w-[26px] bg-current [mask-image:url(/dist/deerflow-mark.svg)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
+              />
+            }
+            title={streaming ? "Herdchestra 正在准备回复" : "会话是空的"}
+            description="基于 DeerFlow 的集成工作台。在下方输入，Enter 发送，Shift+Enter 换行。"
           />
         ) : displayGroups.length === 0 ? (
           <div className="text-muted-foreground flex items-center gap-2 px-1 py-6 text-sm">

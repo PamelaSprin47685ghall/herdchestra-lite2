@@ -1,6 +1,7 @@
 {
   "name": "herdchestra-host-omp-ui-web",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "install:safe": "mkdir -p ${TMPDIR:-/tmp}/omp-ui-web/node_modules && ln -sfn ${TMPDIR:-/tmp}/omp-ui-web/node_modules node_modules && BUN_INSTALL_CACHE_DIR=${TMPDIR:-/tmp}/omp-ui-bun-cache bun install",

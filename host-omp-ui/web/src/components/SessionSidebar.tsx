@@ -27,8 +27,8 @@ function CloseInstanceButton({ sessionId }: { sessionId: string }) {
     <span
       role="button"
       tabIndex={0}
-      aria-label="关闭此 OMP 实例"
-      title="退出此 OMP 实例（关闭最后一个时会自动在桌面开启空白实例保活）"
+      aria-label="关闭此 Herdchestra 实例"
+      title="退出此 Herdchestra 实例（关闭最后一个时会自动在桌面开启空白实例保活）"
       onClick={(event) => {
         event.stopPropagation();
         close();
@@ -130,8 +130,12 @@ export function SessionSidebarContent({
   return (
     <div className="bg-sidebar text-sidebar-foreground flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-1.5 px-3 pt-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="truncate text-sm font-semibold">omp</span>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span
+            aria-hidden
+            className="inline-block h-4 w-[13px] shrink-0 bg-current [mask-image:url(/dist/deerflow-mark.svg)] [mask-position:center] [mask-repeat:no-repeat] [mask-size:contain]"
+          />
+          <span className="truncate text-sm font-semibold">Herdchestra</span>
           {state.streaming && (
             <Loader2Icon className="text-brand size-3 animate-spin" />
           )}

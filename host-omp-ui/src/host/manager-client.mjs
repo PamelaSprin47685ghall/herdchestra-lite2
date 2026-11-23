@@ -99,13 +99,13 @@ export async function createManagerClient(options = {}) {
 					} catch { /* Preserve the original bind error. */ }
 					if (!identity) {
 						if (listenerResponded || error?.code === "EADDRINUSE" || String(error).includes("EADDRINUSE")) {
-							throw new Error(`固定端口 ${preferredPort} 已被其他服务占用；如有旧版 OMP 正在运行，请退出占用端口的旧 OMP 后重启。`);
+							throw new Error(`固定端口 ${preferredPort} 已被其他服务占用；如有旧版 DeerFlow 正在运行，请退出占用端口的旧实例后重启。`);
 						}
 						throw error;
 					}
 				}
 			}
-			if (identity && identity.name !== "herd-omp-ui-manager") throw new Error(`固定端口 ${preferredPort} 已被其他服务占用；如有旧版 OMP 正在运行，请退出占用端口的旧 OMP 后重启。`);
+			if (identity && identity.name !== "herd-omp-ui-manager") throw new Error(`固定端口 ${preferredPort} 已被其他服务占用；如有旧版 DeerFlow 正在运行，请退出占用端口的旧实例后重启。`);
 			if (closed) { await leader?.close(); return; }
 			const ws = new WebSocket(`${url.replace(/^http/, "ws")}/agent?token=${encodeURIComponent(token)}`);
 			socket = ws;

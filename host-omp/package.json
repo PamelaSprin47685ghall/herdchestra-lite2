@@ -1,9 +1,9 @@
 {
 	"name": "herdchestra-host-omp",
 	"version": "3.0.0",
-	"description": "omp host binding for herdchestra-lite2: wiring, host stations, and the plugin entry point",
+	"description": "Host binding for Herdchestra, an integration workbench built on DeerFlow: wiring, host stations, and the plugin entry point",
 	"type": "module",
-	"license": "MIT",
+	"license": "SEE LICENSE IN LICENSE",
 	"private": true,
 	"exports": {
 		".": "./src/main.mjs",

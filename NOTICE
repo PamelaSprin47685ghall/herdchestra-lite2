@@ -1,0 +1,15 @@
+DeerFlow
+Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+Copyright (c) 2025-2026 DeerFlow Authors
+
+This product includes UI components and brand assets from DeerFlow
+(https://github.com/bytedance/deer-flow), licensed under the MIT License.
+
+This project is an independent secondary development. It is not affiliated
+with, sponsored by, or endorsed by the DeerFlow project or its authors.
+
+Herdchestra is the product name of an integration workbench built on DeerFlow.
+It reuses DeerFlow's UI components and brand assets under the MIT License.
+
+License scope: Herdchestra's own code is governed by the root LICENSE (EULA).
+Third-party components are governed by THIRD_PARTY_NOTICES.

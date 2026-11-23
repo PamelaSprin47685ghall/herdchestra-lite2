@@ -67,7 +67,7 @@ try:
         values = {'Category': ('s', 'ApplicationStatus'), 'Id': ('s', 'herd-omp-ui'),
           'Title': ('s', tooltip), 'Status': ('s', 'Active'),
           'IconName': ('s', ''), 'IconPixmap': ('a(iiay)', pixmaps),
-          'ToolTip': ('(sa(iiay)ss)', ('', [], tooltip, 'Open OMP Web')),
+          'ToolTip': ('(sa(iiay)ss)', ('', [], tooltip, 'Open DeerFlow Web')),
           'ItemIsMenu': ('b', False)}
         sig, val = values[name]
         return GLib.Variant(sig, val)
@@ -126,7 +126,7 @@ if let path = ProcessInfo.processInfo.environment["OMP_TRAY_ICON"], let image = 
   image.isTemplate = true
   item.button?.image = image
 }
-item.button?.toolTip = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "OMP Web"
+item.button?.toolTip = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "DeerFlow Web"
 item.button?.target = handler
 item.button?.action = #selector(Handler.click)
 DispatchQueue.global(qos: .utility).async { while readLine(strippingNewline: true) != nil {}; DispatchQueue.main.async { app.terminate(nil) } }

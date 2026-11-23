@@ -463,7 +463,7 @@ function ComposerForm({
         <PromptInputBody>
           <PromptInputTextarea
             data-omp-completion="1"
-            placeholder="写给 omp…  Enter 发送，Shift+Enter 换行"
+            placeholder="写给 Herdchestra…  Enter 发送，Shift+Enter 换行"
             onChange={() => {
               userEdited.current = true;
             }}

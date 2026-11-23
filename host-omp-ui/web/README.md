@@ -1,8 +1,8 @@
-# host-omp-ui web
+# Herdchestra Web UI
 
-This directory hosts the same-origin SPA that reuses DeerFlow's UI library
+This directory (`host-omp-ui/web`) hosts the same-origin SPA of Herdchestra. It reuses DeerFlow's UI library
 (`../deer-flow/frontend/src/components/ui` and `ai-elements`) without modifying
-any DeerFlow file.
+any DeerFlow file. Herdchestra is an integration workbench built on DeerFlow.
 
 ## Install
 
@@ -34,18 +34,18 @@ protocol; it does not require the DeerFlow backend or a Next.js server.
 
 ## Run
 
-Install or link `host-omp-ui` as an independent omp extension using omp's
-plugin manager, then start an interactive omp session. Use `/web` to display
+Install or link `host-omp-ui` as an independent extension using the host's
+plugin manager, then start an interactive session. Use `/web` to display
 the local URL and its access token. `host-omp` is not required. The server
 binds to loopback; treat the URL and token as credentials, because a connected
 browser can control the session and answer prompts.
 
-The Web manager uses one fixed local port for all running omp instances. It
+The Web manager uses one fixed local port for all running instances. It
 lists machine-wide sessions and routes each browser to the selected instance.
-Opening a historical session without a running instance starts a real omp in
+Opening a historical session without a running instance starts a real session in
 tmux at the original working directory; `tmux a` can attach to it. A startup or
 command failure is reported instead of presenting a read-only conversation.
-The manager starts with the first omp and exits after the last instance leaves.
+The manager starts with the first instance and exits after the last instance leaves.
 While it runs, a system-tray icon opens the Web UI in the default browser on a
 left click; the icon lives exactly as long as the manager. Tray support uses
 the desktop already present: Linux needs Python 3 with PyGObject and a
@@ -55,12 +55,12 @@ recorded as a diagnostic and the Web UI itself still works. Linux is the only
 platform exercised here; macOS and Windows tray behavior is implemented but
 not yet verified on those systems.
 
-Every omp main session that loads this plugin registers with the manager,
+Every main session that loads this plugin registers with the manager,
 whether it runs in the TUI, over RPC, or in print mode. An RPC session has no
 TUI, but can still receive plain text through the host; attachments, slash
 commands and the TUI surface are unavailable there and the Web UI says so
 instead of pretending the action worked. Print sessions are short-lived, so
-they normally appear only while the run lasts. omp processes started with
+they normally appear only while the run lasts. Processes started with
 `--no-extensions`, or otherwise without this plugin, cannot be controlled by
 the plugin; they are not scanned or adopted.
 

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "exports": { ".": "./src/main.mjs", "./package.json": "./package.json" },
   "omp": { "extensions": ["./src/main.mjs"] },
   "pi": { "extensions": ["./src/main.mjs"] },

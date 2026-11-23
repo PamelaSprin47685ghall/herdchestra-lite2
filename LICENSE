@@ -1,21 +1,26 @@
-MIT License
+HERDCHESTRA END USER LICENSE AGREEMENT
 
-Copyright (c) 2026 Kunwei Zhang
+Copyright (c) 2026 Kunwei Zhang. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This End User License Agreement ("Agreement") governs use of the Herdchestra software, including its documentation and updates (the "Software").
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. LICENSE GRANT
+Subject to this Agreement, you are granted a non-exclusive, non-transferable, revocable license to install and use the Software for your internal personal or business purposes.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. RESTRICTIONS
+You may not: (a) redistribute, sublicense, sell, or otherwise make the Software available to third parties; (b) reverse engineer, decompile, or disassemble the Software, except as permitted by applicable law; (c) remove or alter any copyright, license, or attribution notice; or (d) use the Software to develop a competing product.
+
+3. THIRD-PARTY COMPONENTS
+The Software includes or links to third-party components licensed under the MIT License. Those components, and any portions derived from them, remain governed by the MIT License, and nothing in this Agreement limits your rights under it. Copyright notices and license texts are provided in THIRD_PARTY_NOTICES, which must be distributed with the Software.
+
+4. NO WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+5. LIMITATION OF LIABILITY
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+6. TERMINATION
+This Agreement terminates automatically if you breach it. On termination you must stop using the Software and destroy all copies.
+
+7. GOVERNING LAW
+This Agreement is governed by the laws of the People's Republic of China, without regard to conflict-of-law rules.

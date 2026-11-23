@@ -993,7 +993,7 @@ function ApproveCard({
       </div>
       {Array.isArray(payload.grants) && payload.grants.length > 0 && (
         <p className="text-muted-foreground text-[10px]">
-          带记忆的选项会写入 omp 的审批缓存；TUI 端会立即关闭。
+          带记忆的选项会写入 Herdchestra 的审批缓存；TUI 端会立即关闭。
         </p>
       )}
       <DialogFooter item={item} onRespond={onRespond} />
@@ -1325,7 +1325,7 @@ function PlanReviewCard({
             autoFocus
             value={feedback}
             onChange={(event) => setFeedback(event.target.value)}
-            placeholder="告诉 omp 如何修改计划…"
+            placeholder="告诉 Herdchestra 如何修改计划…"
             className="min-h-24 text-sm"
           />
           {error && <p className="text-destructive text-xs">{error}</p>}

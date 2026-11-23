@@ -260,7 +260,7 @@ export function AppShell() {
     const instance = instances.find((item) => item.session?.id === previousId);
     const cwd = instance?.session?.cwd;
     if (!cwd) {
-      toast.error("当前会话没有可用的工作目录；请先在 omp 中打开一个项目");
+      toast.error("当前会话没有可用的工作目录；请先在 Herdchestra 中打开一个项目");
       return;
     }
     openingRef.current = { id: "", previousId, previousInstanceId: instance?.instanceId };
@@ -338,7 +338,7 @@ export function AppShell() {
       const sessionId = (event as CustomEvent<string>).detail;
       const instance = instances.find((item) => item.session?.id === sessionId);
       if (!instance) {
-        toast.error("找不到该会话对应的 OMP 实例");
+        toast.error("找不到该会话对应的 Herdchestra 实例");
         return;
       }
       send("manager.close_instance", { instanceId: instance.instanceId });
@@ -494,7 +494,7 @@ export function AppShell() {
           {connection === "connecting" && !state.messages.length && (
             <div className="text-muted-foreground flex items-center gap-2 px-4 py-1 text-xs">
               <Loader2Icon className="size-3.5 animate-spin" />
-              正在连接 omp…
+              正在连接 Herdchestra…
             </div>
           )}
           <ComposerDock

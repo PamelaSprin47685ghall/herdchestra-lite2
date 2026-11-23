@@ -1,6 +1,10 @@
 # Herdchestra Lite 2
 
-Herdchestra Lite 2 gives omp parallel work that returns to the scope that asked for it. A parent calls `scope_fork` with one item per child; each child works in its own scope with its own budget, time and model, then `scope_return` submits its record. The parent calls `scope_join` to receive one finished child as a tool receipt. The parent keeps its own model, context and message line; it never becomes the child and the child never becomes the parent.
+Herdchestra 是基于 DeerFlow 的集成工作台：内核与视觉素材来自 DeerFlow，产品层由 Herdchestra 独立开发。
+
+Herdchestra is an integration workbench built on DeerFlow: the kernel and visual assets come from DeerFlow, while the product layer is independently developed by Herdchestra.
+
+Herdchestra Lite 2 gives an agent session parallel work that returns to the scope that asked for it. A parent calls `scope_fork` with one item per child; each child works in its own scope with its own budget, time and model, then `scope_return` submits its record. The parent calls `scope_join` to receive one finished child as a tool receipt. The parent keeps its own model, context and message line; it never becomes the child and the child never becomes the parent.
 
 A `scopeId` that already exists — including a finished one — is reused instead of duplicated. `running` and `blocked` scopes take the budget as an increment, the `intent` as one more requirement, and merged `targets`; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history. Only the owner may reuse it; another caller gets `FOREIGN_SCOPE_ID`. A requirement enters at the child's next turn boundary, never in the middle of a running tool. A new scope still needs `intent`; a reuse may carry budget, targets, or a requirement alone. A superseded generation stays frozen in the ledger, but the tool surface resolves a `scopeId` to its latest generation only.
 
@@ -22,11 +26,11 @@ The three tools exist in every supported configuration. There is no `scope` tool
 
 ## Running from source
 
-The repository holds two packages. `herdchestra-host-omp` in `host-omp/` is the plugin: it declares `omp.extensions` and carries the omp wiring. Its only dependency, `herdchestra-lite2` at the repository root, is the host-agnostic core — ledgers, stations, tickets, prompts — and imports nothing from omp. Install once with `cd host-omp && bun install`; the core then resolves through `host-omp/node_modules/herdchestra-lite2`.
+The repository holds two packages. `herdchestra-host-omp` in `host-omp/` is the plugin: it declares the host extension entry and carries the host wiring. Its only dependency, `herdchestra-lite2` at the repository root, is the host-agnostic engine — ledgers, stations, tickets, prompts — and imports nothing from the host. Install once with `cd host-omp && bun install`; the core then resolves through `host-omp/node_modules/herdchestra-lite2`.
 
 The boundary is one function in each direction. The core exports exactly `createEngine`; the host imports exactly that. The host hands `createEngine` its facts (five frozen groups: `session`, `model`, `accounting`, `fork`, `report`) and its verbs (the eight `tickets` capabilities), and receives one engine carrying the stations, the ready-to-register tool catalog, the scope read model, the text renderer, the resolved ports, and the fork wiring. Port assembly, the fork wiring, and the six tool bindings stay inside the core; the host never builds a table or an `execute`. The contract is code (`HOST_CONTRACT`, `TICKET_CONTRACT`, `ENGINE_ONLY_HOST_KEYS` in `src/engine.mjs`), and `tests/architecture/core-host-free.test.mjs` fails when a core file reaches outside it, when the core gains a second export, or when the host imports anything but `createEngine`.
 
-omp loads the installed plugin at `~/.omp/plugins/node_modules/herdchestra-host-omp`. Three shapes are possible, and only one of them belongs to `sync:plugin`:
+The host loads the installed plugin at `~/.omp/plugins/node_modules/herdchestra-host-omp`. Three shapes are possible, and only one of them belongs to `sync:plugin`:
 
 ```sh
 omp plugins link host-omp              # dev: the working tree IS the install
@@ -145,7 +149,7 @@ comes from the provider's reported token usage.
 
 ## Host smoke
 
-`bun scripts/smoke-omp.mjs` loads the real omp `AgentSession` from a local
+`bun scripts/smoke-omp.mjs` loads the real host `AgentSession` from a local
 checkout (`OMP_HOST`, default `~/Desktop/vibe/oh-my-pi`) and checks the two
 prototype seams this extension patches, the six registered tools, the host
 events it binds, and the append-only state log.
@@ -171,7 +175,7 @@ reusing an older addon.
 
 ## Model selection
 
-Set a fork item's `model` to an omp `/switch` selector to use a different model for that child:
+Set a fork item's `model` to a host `/switch` selector to use a different model for that child:
 
 ```js
 scope_fork({ forks: [{
@@ -187,3 +191,5 @@ scope_fork({ forks: [{
 Omit `model` or use `null` to inherit the model of the parent that opens the fork, or the session model at the root. The fork resolves and records the child's model once; it never changes the parent's model, and a join never adopts the child's model. The parent's model changes only through an explicit user switch. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.
 
 Scope admission is its own check. `scope_fork` does not check whether the child record will fit; `scope_join` estimates the parent's context size before accepting a record. A context-size refusal leaves the child record ready and unchanged. There is no receipt folding: a record is already a digest, so nothing is archived or shortened.
+
+Third-party notices: see THIRD_PARTY_NOTICES.

@@ -51,7 +51,7 @@ export function createManagerTray({ url, token, adapter, openUrl = defaultOpenUr
 		const currentGeneration = generation;
 		starting = (async () => {
 			try {
-				const created = await adapter.create({ tooltip: "OMP Web", onClick: open });
+				const created = await adapter.create({ tooltip: "DeerFlow Web", onClick: open });
 				if (generation !== currentGeneration) {
 					await adapter.destroy(created);
 				} else {

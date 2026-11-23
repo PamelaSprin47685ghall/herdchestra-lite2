@@ -1,16 +1,16 @@
 {
 	"name": "herdchestra-lite2",
 	"version": "3.0.0",
-	"description": "Budgeted work scopes, an autopilot mode, and a handoff relay for omp",
+	"description": "Herdchestra: budgeted work scopes, autopilot, and a handoff relay — an integration workbench built on DeerFlow",
 	"type": "module",
-	"license": "MIT",
+	"license": "SEE LICENSE IN LICENSE",
 	"private": true,
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/PamelaSprin47685ghall/herdchestra-lite2.git"
 	},
 	"keywords": [
-		"omp",
+		"deerflow",
 		"extension",
 		"agent",
 		"workflow",

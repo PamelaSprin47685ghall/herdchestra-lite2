@@ -56,14 +56,18 @@ host-omp-ui/
     main.mjs                          # 唯一入口 activate(pi, env)（纯启动排序，零业务）
     station/
       ui-bridge-station.mjs           # 充血聚合根 UiBridgeStation（严禁 async/await；三段式 Compute→Commit→Dispatch）
-      domain/                         # 6 个纯无状态领域核（零 I/O、零 @oh-my-pi/* 依赖）
+      domain/                         # 10 个纯无状态领域核（零 I/O、零 @oh-my-pi/* 依赖）
         protocol-codec.mjs            # 同层 WS 上/下行帧与 HTTP payload 的 schema、校验、构造；token 提取与路径穿越校验
         transcript-model.mjs          # SessionEntry/AgentMessage/AssistantMessageEvent/tool_execution_* 归约、toolCall 配对与显示分组
         tool-artistry.mjs             # 工具卡片艺术映射（read/write/edit diff/bash/search/web/todo/task/ask/generic）、artifact 提取、ANSI strip 与行级 diff
         html-form-parser.mjs          # 安全 HTML <form> 解析（含 Other 自动选项规则）、表单约束强校验与 FormAnswer 构造
         interaction-race.mjs          # TUI ↔ Web 双路竞速账本（先答者胜、晚到幂等拒绝、关闭后不可再答）
         surface-fence.mjs             # TspOp[] 文档归约、overlay 摘要提取与 TspEvent 路由校验
-      # 注：双向草稿防回环（draft rev/origin）归 ui-bridge-station.mjs 的 applyDraft；ANSI 解析归 tool-artistry.mjs 的 stripAnsi。
+        draft-arbiter.mjs             # 双向草稿仲裁（跨源回环检测、rev 推进）；Station 只提交
+        history-page.mjs              # 历史分页窗口与回合起点对齐的纯决策
+        meta-normalize.mjs            # meta 补丁归一化（model 字符串/对象、thinkingLevel/level 折叠）
+        snapshot-fit.mjs              # 快照整形：按字符上限截断文本并收缩历史直到装满一帧
+      # 注：双向草稿仲裁归 domain/draft-arbiter.mjs，ui-bridge-station.mjs 的 applyDraft 只提交状态；ANSI 解析归 tool-artistry.mjs 的 stripAnsi。
     host/
       tui-fence.mjs                   # TUI 篱笆：Composer.prototype.renderFrame/setEditor 捕获、Object.defineProperty 装饰 ctx.ui、BridgeEditor、Reconciler + overlayStack + injectDebugInput
       session-adapter.mjs             # omp 宿主会话、模型、上下文用量与模式适配；历史只读扫描，不打开会话争锁
@@ -73,7 +77,11 @@ host-omp-ui/
       launch-context.mjs              # 一次性 0600 启动凭据（port/token）与陈旧文件清理
       tmux-launch.mjs                 # tmux 启动结果判定：会话存活时不因后续命令失败误删凭据
       diagnostics.mjs                 # 宿主诊断记录
-      bridge-tickets.mjs              # 瘦异步工单协程（dialog 双路竞速、提交、模型/模式切换、广播），外层 catch-all 兜底
+      bridge-tickets.mjs              # 公开出口：转出 ./tickets/ 的 createHostTickets 与 createUiBridge，保持组装与测试 seam 稳定
+      tickets/
+        host-tickets.mjs              # 宿主工单协程（提交、模型/模式切换、广播、计划评审等），每个方法至多跨一次 await，失败不外抛
+        interaction-bridge.mjs        # Web ↔ TUI 对话桥：待决交互账本、双路竞速与幂等中止
+        dialog-protocol.mjs           # 纯对话协议映射：TUI 位置参数 → Web typed payload，Web 答案 → 原生 TUI 结果
     manager/                          # 全机管理器
       server.mjs                      # 固定端口 loopback、浏览器/实例 WS 路由、鉴权、静态托管与生命周期
       machine-catalog.mjs             # 只读扫描全机 JSONL 会话头，跨项目、续写链与自定义 session-dir

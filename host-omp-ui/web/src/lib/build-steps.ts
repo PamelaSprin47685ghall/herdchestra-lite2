@@ -45,10 +45,6 @@ function hasVisibleText(text: unknown): text is string {
   return typeof text === "string" && text.trim().length > 0;
 }
 
-export function stripAnsi(text: string): string {
-  return text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
 export function isRealUser(message: UiMessage): boolean {
   return message.role === "user" && message.attribution === "user";
 }
@@ -261,10 +257,6 @@ export function flattenStepWindow(
   return result;
 }
 
-export function flattenAllSteps(group: Extract<TurnGroup, { kind: "processing" }>): StepEntry[] {
-  return group.segments.flatMap((segment) => segment.steps as StepEntry[]);
-}
-
 const stepCache = new WeakMap<
   UiMessage,
   {
@@ -280,18 +272,6 @@ const stepCache = new WeakMap<
 
 function stepSignature(message: UiMessage): string {
   return JSON.stringify([message.id, message.role, message.attribution, message.streaming, message.blocks]);
-}
-
-export function stepWindow(
-  total: number,
-  running: boolean,
-  open: boolean,
-  visible: number,
-): { start: number; count: number } {
-  if (!open || total === 0) return { start: total, count: 0 };
-  const size = running ? 12 : Math.max(30, visible);
-  const start = Math.max(0, total - size);
-  return { start, count: total - start };
 }
 
 export function buildSteps(message: UiMessage): {

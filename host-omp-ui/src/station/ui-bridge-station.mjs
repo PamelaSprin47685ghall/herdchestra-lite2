@@ -164,6 +164,14 @@ export function createUiBridgeStation(options) {
     usage: { tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: { total: 0 }, context: null },
     meta: { model: null, thinkingLevel: null, modes: null, busy: false, title: null, setStatus: null, setWorkingMessage: null, fence: null },
     draft: { rev: 0, origin: "tui", text: "", cursor: { line: 0, col: 0 }, images: [], texts: [], composer: {} },
+    // Cross-origin draft trail. A remote write echoed back by the editor is
+    // indistinguishable from typing once it reaches this layer; an A->B->A
+    // alternation is the one shape real editing does not produce.
+    draftTrail: [],
+    // Latest autocomplete projection from the TUI editor. The TUI owns the
+    // slash state machine; this is a mirror, never a second engine.
+    completion: { open: false, prefix: "", items: [], selectedIndex: -1, enterAccepts: false },
+    completionSig: "",
     streaming: null,
     toolExecutions: {},
     widgets: {},
@@ -206,6 +214,7 @@ export function createUiBridgeStation(options) {
       usage: state.usage,
       meta: state.meta,
       draft: state.draft,
+      completion: state.completion,
       pendingInteractions: pendingInteractions(),
       widgets: Object.entries(state.widgets).map(([key, lines]) => ({ key, lines })),
       surface: state.surface,
@@ -268,6 +277,31 @@ export function createUiBridgeStation(options) {
       return { ok: closed };
     },
 
+    onTuiCompletionChanged(input) {
+      const items = Array.isArray(input?.items)
+        ? input.items.slice(0, 50).map((item) => ({
+            value: String(item?.value ?? ""),
+            label: String(item?.label ?? item?.value ?? ""),
+            description: typeof item?.description === "string" ? item.description : undefined,
+            hint: typeof item?.hint === "string" ? item.hint : undefined,
+            disabled: item?.disabled === true,
+          }))
+        : [];
+      const completion = {
+        open: input?.open === true,
+        prefix: String(input?.prefix ?? ""),
+        items,
+        selectedIndex: Number.isInteger(input?.selectedIndex) ? input.selectedIndex : -1,
+        enterAccepts: input?.enterAccepts === true,
+      };
+      const sig = JSON.stringify(completion);
+      if (sig === state.completionSig) return { open: completion.open };
+      state.completionSig = sig;
+      state.completion = completion;
+      dispatch({ type: "completion.state", payload: completion });
+      return { open: completion.open };
+    },
+
     applyDraft(input) {
       const text = String(input?.text ?? "");
       const origin = input?.source === "web" ? "web" : "tui";
@@ -282,6 +316,23 @@ export function createUiBridgeStation(options) {
         }
         return { rev: state.draft.rev };
       }
+      const trail = state.draftTrail;
+      const last = trail.at(-1);
+      const beforeLast = trail.at(-2);
+      if (
+        last && beforeLast &&
+        last.origin !== origin &&
+        beforeLast.origin === origin &&
+        beforeLast.text === text &&
+        last.text !== text
+      ) {
+        // A -> B -> A across origins is an echo, not an edit. Drop it before it
+        // becomes a new revision the other side will mirror back again.
+        trail.length = 0;
+        return { rev: state.draft.rev };
+      }
+      trail.push({ text, origin });
+      if (trail.length > 8) trail.shift();
       const rev = state.draft.rev + 1;
       state.draft = {
         ...state.draft,

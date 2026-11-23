@@ -38,7 +38,6 @@ export function ModelPickerDialog({ modelKey, models, disabled, onModel }: Props
       ? ({
           provider: modelKey.split("/")[0] ?? "",
           id: modelKey.split("/").slice(1).join("/") || modelKey,
-          name: modelKey.split("/").pop() ?? modelKey,
         } as ModelRef)
       : null);
   const allModels = useMemo(
@@ -89,7 +88,7 @@ export function ModelPickerDialog({ modelKey, models, disabled, onModel }: Props
           disabled={disabled}
           aria-label="选择模型"
           title={modelNickname(selected, allModels) || undefined}
-          className="hover:bg-accent/60 flex h-7 max-w-[240px] items-center gap-1 rounded-md px-2 text-xs disabled:pointer-events-none disabled:opacity-50"
+          className="hover:bg-accent/60 flex h-7 max-w-[min(26rem,45vw)] items-center gap-1 rounded-md px-2 text-xs disabled:pointer-events-none disabled:opacity-50"
         >
           <span className="truncate">{modelNickname(selected, allModels) || "模型"}</span>
           <ChevronDownIcon className="text-muted-foreground size-3 shrink-0" />

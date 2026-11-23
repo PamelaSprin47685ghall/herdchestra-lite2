@@ -10,6 +10,26 @@ function providerKey(model: ModelRef): string {
   return raw.split("/")[0] || raw || "other";
 }
 
+function tailOf(value: string): string {
+  return value.split("/").filter(Boolean).pop() ?? value;
+}
+
+function providersMatch(a: string, b: string): boolean {
+  if (!a || !b) return true;
+  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+}
+
+function sameModel(candidate: ModelRef, model: ModelRef): boolean {
+  const candidateId = typeof candidate.id === "string" ? candidate.id : "";
+  const id = typeof model.id === "string" ? model.id : "";
+  if (!candidateId || !id) return false;
+  const candidateProvider =
+    typeof candidate.provider === "string" ? candidate.provider : "";
+  const provider = typeof model.provider === "string" ? model.provider : "";
+  if (!providersMatch(candidateProvider, provider)) return false;
+  return candidateId === id || tailOf(candidateId) === tailOf(id);
+}
+
 /** Display name for a model: never fall back to a raw provider/id when a nickname exists. */
 export function modelNickname(
   model: ModelRef | null | undefined,
@@ -18,14 +38,13 @@ export function modelNickname(
   if (!model) return "";
   const id = typeof model.id === "string" ? model.id : "";
   const provider = typeof model.provider === "string" ? model.provider : "";
-  const match = models.find(
-    (candidate) =>
-      candidate.id === id &&
-      (!provider || !candidate.provider || candidate.provider === provider),
-  );
-  const name = (match?.name ?? model.name ?? "").trim();
+  const match = models.find((candidate) => sameModel(candidate, model));
+  const fullKey = provider && id ? `${provider}/${id}` : id;
+  const name = [match?.name, match?.displayName, match?.label, model.name, model.displayName, model.label]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .find((value) => value && value !== id && value !== fullKey);
   if (name) return name;
-  const tail = id.split("/").filter(Boolean).pop() ?? id;
+  const tail = tailOf(id);
   return tail || provider || "模型";
 }
 

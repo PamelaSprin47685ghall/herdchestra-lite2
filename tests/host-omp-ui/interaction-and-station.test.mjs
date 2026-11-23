@@ -343,6 +343,40 @@ test("the station commits before dispatch and stays synchronous", async () => {
 	expect(station.resolveInteraction("r1", "tui", {})).toMatchObject({ ok: false, code: "already_settled" });
 });
 
+test("draft sync drops an A->B->A echo across origins", async () => {
+	const { createUiBridgeStation } = await load(STATION);
+	const events = [];
+	const station = createUiBridgeStation({
+		cwd: "/tmp/project",
+		capabilities: { dispatch: (event) => events.push(event) },
+	});
+
+	station.applyDraft({ source: "tui", text: "/" });
+	const synced = station.applyDraft({ source: "web", text: "/x" });
+	expect(synced.rev).toBe(2);
+	// The host rewrites the draft while reacting to `/`; the editor then echoes
+	// the previous value back. That echo must not open a new revision.
+	const echo = station.applyDraft({ source: "tui", text: "/" });
+	expect(echo.rev).toBe(2);
+	expect(events.filter((event) => event.type === "draft.sync")).toHaveLength(1);
+});
+
+test("draft sync still accepts a real edit after the same cross-origin pair", async () => {
+	const { createUiBridgeStation } = await load(STATION);
+	const events = [];
+	const station = createUiBridgeStation({
+		cwd: "/tmp/project",
+		capabilities: { dispatch: (event) => events.push(event) },
+	});
+
+	station.applyDraft({ source: "tui", text: "/" });
+	station.applyDraft({ source: "web", text: "/x" });
+	station.applyDraft({ source: "tui", text: "/" });
+	station.applyDraft({ source: "tui", text: "/h" });
+	expect(station.applyDraft({ source: "web", text: "/he" }).rev).toBe(4);
+	expect(events.some((event) => event.type === "syncEditorDraft" && event.payload.text === "/he")).toBe(true);
+});
+
 test("draft sync is revisioned, anti-echo, and submits through the composer path", async () => {
 	const { createUiBridgeStation } = await load(STATION);
 	const events = [];

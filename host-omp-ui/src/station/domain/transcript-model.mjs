@@ -50,6 +50,7 @@ function messageFromEntry(entry) {
     id: entry.id,
     role,
     attribution: message.attribution ?? null,
+    synthetic: message.synthetic === true,
     timestamp: message.timestamp ?? entry.timestamp,
   };
   if (role === "user" || role === "assistant" || role === "developer") {
@@ -172,6 +173,7 @@ export function applyAgentEvent(state, event) {
       id: event.message?.id,
       role: event.message?.role ?? "assistant",
       attribution: event.message?.attribution ?? null,
+      synthetic: event.message?.synthetic === true,
       blocks: [],
       timestamp: event.message?.timestamp,
     };
@@ -184,6 +186,7 @@ export function applyAgentEvent(state, event) {
         id: event.message?.id,
         role: event.message?.role ?? "assistant",
         attribution: event.message?.attribution ?? null,
+        synthetic: event.message?.synthetic === true,
         blocks: [],
         timestamp: event.message?.timestamp,
       };
@@ -297,7 +300,7 @@ function hasVisibleText(text) {
 }
 
 export function isRealUser(item) {
-  return item?.role === "user" && item.attribution === "user";
+  return item?.role === "user" && item.attribution === "user" && item.synthetic !== true;
 }
 
 function stepFromBlock(block, message) {

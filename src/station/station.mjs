@@ -36,6 +36,7 @@ import {
 	serializeState,
 	unreceivedChildren,
 } from "../scope/index.mjs";
+import { recordTurnSample } from "../scope/turn-stats.mjs";
 import {
 	adoptLedger as adoptLedgerDefault,
 	conversationKeyOf,
@@ -171,6 +172,22 @@ function mergeHost(fromRegistry, fromConstructor) {
  * `accounting`, `fork`, `report`); a double written against the older flat bag
  * is widened here so no station carries a second convention.
  */
+/** Stable identity of the model that produced one assistant message. */
+function modelKeyOf(message) {
+	const raw =
+		message?.modelKey ??
+		message?.modelId ??
+		message?.model ??
+		message?.metadata?.model;
+	if (typeof raw === "string" && raw !== "") return raw;
+	if (raw && typeof raw === "object") {
+		const provider = raw.provider ?? raw.providerId ?? "";
+		const id = raw.id ?? raw.model ?? raw.name ?? "";
+		if (id) return provider ? `${provider}/${id}` : String(id);
+	}
+	return "";
+}
+
 export function shapeHost(host) {
 	const source = host && typeof host === "object" ? host : {};
 	const session = source.session ?? {};
@@ -302,6 +319,7 @@ export class SessionStation {
 		// Request windows are process-local. A reload keeps the two totals on the
 		// ledger and starts the next request from an empty clock.
 		this.turnClock = createTurnClock();
+		this.turnModelKey = "";
 		// assistant_message and message_end can both deliver the same object.
 		// Identity, not startedAt, is what stops a late copy from closing the
 		// next request.
@@ -406,6 +424,11 @@ export class SessionStation {
 		if (!totals) return null;
 		const delta = finishRequest(this.turnClock, totals, now);
 		if (delta == null) return null;
+		const key = modelKeyOf(message);
+		if (key !== "") {
+			this.turnModelKey = key;
+			recordTurnSample(this.brackets, key, delta);
+		}
 		this.countedRequests?.add(message);
 		return delta;
 	}

@@ -149,11 +149,16 @@ export async function spawnChildTicket(spec, ports) {
 			report?.("fork", error, { forkId: spec.forkId, phase: "child-context" });
 		}
 		const before = messagesOf(session).length;
+		// Every prompt from this point on is agent-authored: the receipt, added
+		// requirements, and the return nudge. The host marks a message
+		// `synthetic` when the agent wrote it; `role` stays "user" so the model
+		// still reads it as instructions from its parent.
+		const syntheticOptions = { synthetic: true, attribution: "agent", userInitiated: false };
 		const prompt =
 			typeof session.prompt === "function"
-				? (text) => session.prompt(text)
+				? (text, options) => session.prompt(text, { ...syntheticOptions, ...options })
 				: typeof session.agent?.prompt === "function"
-					? (text) => session.agent.prompt(text)
+					? (text, options) => session.agent.prompt(text, { ...syntheticOptions, ...options })
 					: null;
 		if (typeof prompt !== "function") {
 			failed = true;

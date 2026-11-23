@@ -23,7 +23,7 @@ import {
 } from "../scope/forkjoin.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { createClockOn } from "../scope/clock.mjs";
-import { deriveTimeBudgetSeconds, sumBudgetPoints } from "../scope/turn-stats.mjs";
+import { deriveTimeBudgetSeconds, modelSamples, sumBudgetPoints } from "../scope/turn-stats.mjs";
 import {
   FORK_DEFAULT_DEPTH,
   FORK_DEFAULT_FANOUT,
@@ -464,7 +464,15 @@ export function handleForkCall(station, call, options = {}) {
   const parentOwnerId = ownerIdOf(station);
   const clock = typeof station.clockPort === "function" ? station.clockPort() : createClockOn();
   const totals = ledger.totals;
-  const timeOf = (budget) => deriveTimeBudgetSeconds({ totals, budget });
+  // A model switch updates baseModelKey immediately; turnModelKey only moves
+  // after the next request finishes. Prefer the live selection so a fork made
+  // right after switching cannot borrow the previous model's speed.
+  const budgetModelKey = station.state?.baseModelKey ?? station.turnModelKey;
+  const timeOf = (budget) =>
+    deriveTimeBudgetSeconds({
+      samples: modelSamples(ledger, budgetModelKey),
+      budget,
+    });
   const baseId = typeof call.id === "string" && call.id !== "" ? call.id : `fork-${Date.now()}`;
   const started = [];
   const amended = [];

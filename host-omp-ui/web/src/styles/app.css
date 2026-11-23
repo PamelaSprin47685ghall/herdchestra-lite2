@@ -24,6 +24,12 @@
 }
 
 @source "../../node_modules/streamdown/dist/index.js";
+/* Classes used only by the reused deer-flow components are invisible to
+   automatic detection, which scans host-omp-ui/web only. Without these
+   sources arbitrary variants such as has-[>[data-align=block-end]] are
+   never generated and the composer collapses into a row. */
+@source "../../../../deer-flow/frontend/src/components/ui";
+@source "../../../../deer-flow/frontend/src/components/ai-elements";
 
 /* Heading */
 @source inline("text-{xs,sm,base,lg,xl,2xl,3xl,4xl,5xl,6xl}");

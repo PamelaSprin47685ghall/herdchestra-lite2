@@ -73,6 +73,7 @@ export function firstTurnMessage(message) {
 		content: firstTurnContent("user", message?.content),
 		timestamp: FIRST_TURN_TIMESTAMP,
 		attribution: "user",
+		synthetic: true,
 	};
 }
 

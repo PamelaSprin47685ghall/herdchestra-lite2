@@ -176,7 +176,7 @@ async function readSessionHeader(path) {
 			if (linesAfterHeader > HEADER_LOOKAHEAD_LINES) break;
 
 			// Last resort: a real user message, never an agent-injected one.
-			if (entry?.type === "message" && entry.message?.role === "user" && entry.message?.attribution === "user") {
+			if (entry?.type === "message" && entry.message?.role === "user" && entry.message?.attribution === "user" && entry.message?.synthetic !== true) {
 				const title = cleanTitle(messageText(entry.message.content));
 				if (title) return { ...header, title };
 			}

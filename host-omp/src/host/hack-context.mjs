@@ -37,6 +37,7 @@ function branchMessages(manager, options) {
 				customType: entry.customType,
 				content: entry.content,
 				attribution: entry.attribution,
+				synthetic: entry.synthetic,
 				excludeFromContext: entry.excludeFromContext,
 				timestamp: typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : entry.timestamp,
 			});

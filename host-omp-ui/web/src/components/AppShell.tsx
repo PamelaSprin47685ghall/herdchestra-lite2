@@ -317,6 +317,7 @@ export function AppShell() {
   );
 
   const handleDraft = useCallback((text: string) => send("composer.draft", { text }), [send]);
+  const handleKeys = useCallback((data: string) => send("surface.keys", { data }), [send]);
   const handleAbort = useCallback(() => send("session.abort", {}), [send]);
   const handleModel = useCallback(
     (provider: string, modelId: string) => send("session.set_model", { provider, modelId }),
@@ -510,6 +511,8 @@ export function AppShell() {
             disabled={disabled}
             capabilities={capabilities}
             queue={state.queue}
+            completion={state.completion}
+            onKeys={handleKeys}
             onDraft={handleDraft}
             onSubmit={submit}
             onAbort={handleAbort}

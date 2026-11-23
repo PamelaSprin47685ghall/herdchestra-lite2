@@ -76,11 +76,20 @@ export function WindowedScroll<T>({
         }}
         onKeyDownCapture={state.onKeyDown}
       >
-        <div ref={state.contentRef} className={contentClassName}>
+        <div
+          ref={state.contentRef}
+          className={
+            items.length === 0 && empty
+              ? `${contentClassName} flex min-h-full flex-col`
+              : contentClassName
+          }
+        >
           {visibleItems.map((item) => (
             <div key={getKey(item)}>{renderItem(item)}</div>
           ))}
-          {items.length === 0 ? empty : null}
+          {items.length === 0 && empty ? (
+            <div className="flex flex-1 items-center justify-center">{empty}</div>
+          ) : null}
         </div>
       </div>
       {showJump || showLoad ? (

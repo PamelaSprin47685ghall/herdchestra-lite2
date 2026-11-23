@@ -401,6 +401,26 @@ describe("createBridgeEditorClass", () => {
 		expect(bridge.draft.called()).toBe(false);
 	});
 
+	test("a remote slash token is retyped through handleInput so autocomplete can trigger", async () => {
+		const { createBridgeEditorClass } = await load();
+		const typed = [];
+		class RecordingEditor extends FakeBaseEditor {
+			handleInput(data) {
+				typed.push(data);
+				super.handleInput(data);
+			}
+		}
+		const BridgeEditor = createBridgeEditorClass(RecordingEditor);
+		const bridge = { draft: spy() };
+		const editor = new BridgeEditor(bridge, {}, {}, {});
+
+		editor.applyRemoteDraft({ text: "/mo", rev: 3 });
+
+		expect(editor.getText()).toBe("/mo");
+		expect(typed).toEqual(["/", "m", "o"]);
+		expect(bridge.draft.called()).toBe(false);
+	});
+
 	test("publishes the TUI handed to the editor factory", async () => {
 		const { createBridgeEditorClass, getLastCapture } = await load();
 		class TuiAwareEditor extends FakeBaseEditor {

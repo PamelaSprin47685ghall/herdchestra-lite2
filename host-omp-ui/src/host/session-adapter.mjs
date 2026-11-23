@@ -43,10 +43,23 @@ export function createSessionAdapter({ ctx, pi } = {}) {
 			if (typeof raw !== "object") return null;
 			const source = raw.id ?? raw.modelId ?? raw.model ?? raw.name ?? null;
 			if (typeof source !== "string" || !source) return null;
+			const declared = raw.provider ?? raw.providerId ?? null;
+			if (typeof declared === "string" && declared) {
+				// A declared provider wins: the id is the catalog id (which may itself
+				// contain slashes). Splitting it again would flatten
+				// `mistral/deepseek-v4-1-flash-1017` into provider `mistral`, a model
+				// the catalog never lists.
+				const prefix = `${declared}/`;
+				return {
+					provider: declared,
+					id: source.startsWith(prefix) ? source.slice(prefix.length) : source,
+				};
+			}
 			const [embeddedProvider, ...rest] = source.split("/");
-			const provider = raw.provider ?? raw.providerId ?? (rest.length ? embeddedProvider : null);
-			const id = rest.length ? rest.join("/") : source;
-			return { provider: typeof provider === "string" ? provider : "", id };
+			return {
+				provider: rest.length ? embeddedProvider : "",
+				id: rest.length ? rest.join("/") : source,
+			};
 		},
 		contextUsage() {
 			return safe(() => ctx?.getContextUsage?.(), null);
@@ -67,7 +80,9 @@ export function createSessionAdapter({ ctx, pi } = {}) {
 					ctx?.getAvailableEffortSelectors?.(),
 				undefined,
 			);
-			if (Array.isArray(selectors)) {
+			// An empty selector list means "unknown for this model", not "no levels":
+			// fall through so the concrete/declared lists can still supply the slider.
+			if (Array.isArray(selectors) && selectors.length > 0) {
 				return selectors.filter((level) => typeof level === "string");
 			}
 			const concrete = safe(
@@ -82,8 +97,16 @@ export function createSessionAdapter({ ctx, pi } = {}) {
 			}
 			const model = safe(() => ctx?.models?.current?.(), null);
 			if (model && typeof model === "object" && model.reasoning === false) return [];
-			const levels = model && typeof model === "object" ? model.thinking?.levels : undefined;
-			if (Array.isArray(levels)) return levels.filter((level) => typeof level === "string");
+			// The catalog schema declares `thinking.efforts`; `levels` is the legacy
+			// key. Either one can supply the slider when the host selectors are empty.
+			const declared =
+				model && typeof model === "object"
+					? (model.thinking?.efforts ?? model.thinking?.levels)
+					: undefined;
+			if (Array.isArray(declared)) {
+				const filtered = declared.filter((level) => typeof level === "string");
+				return filtered.length > 0 ? ["off", ...filtered] : [];
+			}
 			// Unknown: keep the previous station value rather than clearing it.
 			return undefined;
 		},

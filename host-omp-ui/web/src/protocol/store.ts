@@ -53,6 +53,7 @@ export function createInitialWebState(): WebState {
     meta: {},
     usage: null,
     draft: { rev: 0, text: "", origin: "tui" },
+    completion: { open: false, prefix: "", items: [], selectedIndex: -1, enterAccepts: false },
     openInteractions: [],
     resolvedInteractions: {},
     interactionErrors: {},
@@ -592,9 +593,15 @@ function sameModel(
   a: ModelRef | null | undefined,
   b: ModelRef | null | undefined,
 ): boolean {
-  return Boolean(
-    a && b && a.provider === b.provider && a.id === b.id,
-  );
+  if (!a || !b || a.provider !== b.provider) return false;
+  if (a.id === b.id) return true;
+  // The host reports the current model with a flattened id while the catalog
+  // keeps the full id (`kw92/deepseek-…` vs `kw92/mistral/deepseek-…`). They
+  // are the same model; treating them as different lets a one-model snapshot
+  // clobber the full catalog and lose every nickname.
+  const aTail = a.id.split("/").filter(Boolean).pop() ?? a.id;
+  const bTail = b.id.split("/").filter(Boolean).pop() ?? b.id;
+  return Boolean(a.id && b.id && aTail === bTail);
 }
 
 function sameStringArray(
@@ -1313,6 +1320,33 @@ export function reduceWebState(state: WebState, rawFrame: ServerFrame): WebState
     case "transcript.delta":
       return applyDelta(state, frame);
 
+    case "completion.state": {
+      const raw = isRecord(frame) ? frame : {};
+      const items = Array.isArray(raw.items)
+        ? raw.items.filter(isRecord).slice(0, 50).map((item) => ({
+            value: asString(item.value),
+            label: asString(item.label ?? item.value),
+            description: typeof item.description === "string" ? item.description : undefined,
+            hint: typeof item.hint === "string" ? item.hint : undefined,
+            disabled: item.disabled === true,
+          }))
+        : [];
+      const selectedIndex = asNumber(raw.selectedIndex);
+      return {
+        ...state,
+        completion: {
+          open: raw.open === true,
+          prefix: asString(raw.prefix),
+          items,
+          selectedIndex:
+            typeof selectedIndex === "number" && selectedIndex >= 0 && selectedIndex < items.length
+              ? selectedIndex
+              : -1,
+          enterAccepts: raw.enterAccepts === true,
+        },
+      };
+    }
+
     case "draft.sync": {
       const rev = asNumber(frame.rev) ?? 0;
       if (rev <= state.draft.rev) return state;
@@ -1415,9 +1449,7 @@ export function reduceWebState(state: WebState, rawFrame: ServerFrame): WebState
         ? normalizeModels(raw.models)
         : state.models;
       const mergedModels =
-        model && !models.some(
-          (entry) => entry.provider === model.provider && entry.id === model.id,
-        )
+        model && !models.some((entry) => sameModel(entry, model))
           ? [model, ...models]
           : models;
       const title =

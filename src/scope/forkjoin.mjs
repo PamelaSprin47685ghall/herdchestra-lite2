@@ -27,6 +27,13 @@ export function reviveBlockedFork(ledger, forkId, startedAt = Date.now()) {
   if (!record || record.status !== BLOCKED) return failure("FORK_NOT_BLOCKED", "Fork is not blocked.");
   record.status = RUNNING;
   record.startedAt = startedAt;
+  // A blocked fork never ran: its queue time is not its work time. Restart the
+  // clock at the revival edge so the branch receives the full granted budget.
+  if (Number.isFinite(record.deadlineAt) && Number.isFinite(record.timeBudgetMs)) {
+    record.deadlineAt = startedAt + record.timeBudgetMs;
+    record.overtimeAt = null;
+    record.clockPausedAt = null;
+  }
   changed(ledger);
   return { ok: true, record };
 }
@@ -921,7 +928,9 @@ function format2(value) {
 }
 
 function formatClock(ms) {
-  const total = Math.max(0, Math.ceil(ms / 1000));
+  // Remaining time floors: ceil made 57.1s render as 0:58, so the first frame
+  // showed remaining equal to the budget and looked like a stopped clock.
+  const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 

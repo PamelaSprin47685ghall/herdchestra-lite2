@@ -71,6 +71,17 @@ describe("real user attribution", () => {
     expect(groups[2].message.id).toBe("a2");
   });
 
+  test("synthetic user text is an input step even when attribution says user", () => {
+    const groups = groupTranscriptForDisplay([
+      { ...user("u1", "injected by a child", "user"), synthetic: true },
+      assistant("a1", text("final")),
+    ]);
+
+    expect(kinds(groups)).toEqual(["step_group", "assistant_message"]);
+    expect(stepKinds(groups[0])).toEqual(["input"]);
+    expect(groups[0].steps[0].text).toBe("injected by a child");
+  });
+
   test("missing attribution is not a real user boundary", () => {
     const groups = groupTranscriptForDisplay([
       user("u1", "legacy typed message"),

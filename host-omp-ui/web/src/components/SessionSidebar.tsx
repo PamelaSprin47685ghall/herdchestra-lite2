@@ -8,6 +8,7 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@herd/deer-flow-ui/ui/sheet";
+import { modelNickname } from "../lib/model-display";
 import type { SessionSummary, WebState } from "../protocol/types";
 
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"] as const;
@@ -182,14 +183,9 @@ export function SessionSidebarContent({
           const renderSession = (session: SessionSummary, isLive: boolean) => {
             const active = session.id === activeId;
             const activeModel = state.model ?? state.meta.model;
-            const matchedModel = activeModel
-              ? state.models.find(
-                  (candidate) =>
-                    candidate.provider === activeModel.provider &&
-                    candidate.id === activeModel.id,
-                )
-              : null;
-            const modelLabel = active ? shortModel(matchedModel ?? activeModel) : "";
+            const modelLabel = active
+              ? modelNickname(activeModel, state.models)
+              : "";
             const day = formatStamp(session.modified).split(" ").slice(0, 2).join(" ");
             const meta = [day, dirLabel(session.cwd)].filter(Boolean).join(" · ");
             return (
@@ -221,8 +217,8 @@ export function SessionSidebarContent({
                   <span className="text-muted-foreground/70 mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px]">
                     <span className="min-w-0 flex-1 truncate">{meta || "无日期"}</span>
                     {modelLabel && (
-                      <span className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-px font-mono text-[9px] ${modelTone(modelLabel)}`}>
-                        {modelLabel}
+                      <span className={`inline-flex max-w-full shrink-0 items-center rounded-full border px-1.5 py-px font-mono text-[9px] ${modelTone(modelLabel)}`}>
+                        <span className="truncate">{modelLabel}</span>
                       </span>
                     )}
                   </span>

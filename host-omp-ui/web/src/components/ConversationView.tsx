@@ -606,7 +606,11 @@ function ConversationViewInner({
       getKey={(group) => group.id}
       renderItem={renderGroup}
       className="min-h-0 flex-1"
-      contentClassName="mx-auto w-full max-w-[var(--chat-max-w)] space-y-5 px-4 pb-12 pt-3"
+      contentClassName={
+        messages.length === 0
+          ? "mx-auto w-full max-w-[var(--chat-max-w)] px-4"
+          : "mx-auto w-full max-w-[var(--chat-max-w)] space-y-5 px-4 pb-12 pt-3"
+      }
       running={streaming}
       runningTail={100000}
       page={100000}

@@ -21,6 +21,16 @@ describe("model display", () => {
     expect(modelNickname({ provider: "kw92", id: "kw92/unknown/model" }, models)).toBe("model");
   });
 
+  test("matches a flattened current id to the full catalog id", () => {
+    const flat = { provider: "kw92", id: "deepseek-v4-1-flash-1017" };
+    expect(modelNickname(flat, models)).toBe("DeepSeek V4 Flash");
+  });
+
+  test("ignores a name that is only the raw id", () => {
+    const fake = { provider: "zzz", id: "bar/baz", name: "zzz/bar/baz" };
+    expect(modelNickname(fake, models)).toBe("baz");
+  });
+
   test("groupModelsByProvider puts the current provider first and keeps every model", () => {
     const groups = groupModelsByProvider(models, models[1]);
     expect(groups[0].provider).toBe("kw92");

@@ -1,14 +1,45 @@
 // Sufficient statistics for one LLM request's wall time.
 //
-// One turn is one provider request. The ledger stores only the two numbers
-// that determine the mean: summed request duration and request count. k
-// concurrent scopes write the same totals, so concurrent time counts k times
-// and concurrent requests each count. In-flight clocks are not persisted.
+// Lifetime totals (turnMs/turns) are persisted with the ledger. Budget
+// estimates must not use them: samples live in memory for this session only,
+// keyed by ledger identity, and are grouped by model. A restored ledger is a
+// new object, so a reload starts with no samples; another model's samples are
+// never borrowed.
 
 export const DEFAULT_TURN_MS = 60000;
 
+/** Rolling window of recent request durations per session and model. */
+export const SAMPLE_LIMIT = 20;
+
+/** One slow request must not inflate every later budget. */
+export const MAX_SAMPLE_MS = 120000;
+
+/** A sub-second sample says nothing useful about request cost. */
+export const MIN_SAMPLE_MS = 1000;
+
+/** ledger object -> { byModel: Map<string, number[]>, lastModel: string } */
+const SESSION_SAMPLES = new WeakMap();
+
+function samplesOf(ledger) {
+	let store = SESSION_SAMPLES.get(ledger);
+	if (!store) {
+		store = { byModel: new Map(), lastModel: "" };
+		SESSION_SAMPLES.set(ledger, store);
+	}
+	return store;
+}
+
 export function emptyTotals() {
 	return { turnMs: 0, turns: 0 };
+}
+
+/**
+ * Clamp one request duration into the range a budget estimate may use. The
+ * lifetime totals keep the raw span; only the rolling window is bounded.
+ */
+export function clampSampleMs(value) {
+	if (!Number.isFinite(value) || value < MIN_SAMPLE_MS) return null;
+	return Math.min(MAX_SAMPLE_MS, value);
 }
 
 function finiteNonNegative(value) {
@@ -67,6 +98,49 @@ export function averageTurnMs(totals) {
 	return turnMs / turns;
 }
 
+/**
+ * Record one finished request for this session and model. The ledger object
+ * is shared by every scope in the session, so their samples merge; a restored
+ * ledger is a different object and therefore starts empty.
+ */
+export function recordTurnSample(ledger, modelKey, durationMs) {
+	if (!ledger || typeof ledger !== "object") return false;
+	if (typeof modelKey !== "string" || modelKey === "") return false;
+	const sample = clampSampleMs(durationMs);
+	if (sample == null) return false;
+	const store = samplesOf(ledger);
+	const samples = store.byModel.get(modelKey) ?? [];
+	samples.push(sample);
+	if (samples.length > SAMPLE_LIMIT) {
+		samples.splice(0, samples.length - SAMPLE_LIMIT);
+	}
+	store.byModel.set(modelKey, samples);
+	store.lastModel = modelKey;
+	return true;
+}
+
+/** Samples recorded in this session for one model; never another model's. */
+export function modelSamples(ledger, modelKey) {
+	if (!ledger || typeof ledger !== "object") return [];
+	if (typeof modelKey !== "string" || modelKey === "") return [];
+	const store = samplesOf(ledger);
+	return store.byModel.get(modelKey) ?? [];
+}
+
+/** Mean of one sample array, or null when it holds no usable number. */
+export function recentAverageTurnMs(samples) {
+	if (!Array.isArray(samples)) return null;
+	let sum = 0;
+	let count = 0;
+	for (const value of samples) {
+		if (typeof value === "number" && Number.isFinite(value)) {
+			sum += value;
+			count += 1;
+		}
+	}
+	return count > 0 ? sum / count : null;
+}
+
 /** Sum the fork item's own enumerable budget points. Inherited keys do not count. */
 export function sumBudgetPoints(budget) {
 	if (!budget || typeof budget !== "object") return 0;
@@ -82,16 +156,18 @@ export function sumBudgetPoints(budget) {
 }
 
 /**
- * Seconds for one fork: mean request time times its budget points, at least
- * one second. No samples fall back to one minute times the points.
+ * Seconds for one fork: mean of this session's and this model's recent
+ * samples times its budget points, at least one second. No usable sample
+ * falls back to one minute per point; another session or another model is
+ * never used as a substitute.
  */
 export function deriveTimeBudgetSeconds({
-	totals,
+	samples,
 	budget,
 	fallbackMs = DEFAULT_TURN_MS,
 } = {}) {
 	const points = sumBudgetPoints(budget);
-	const measured = averageTurnMs(totals);
+	const measured = recentAverageTurnMs(samples);
 	const avg =
 		measured == null
 			? finiteNonNegative(fallbackMs) || DEFAULT_TURN_MS

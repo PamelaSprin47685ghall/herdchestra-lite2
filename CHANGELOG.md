@@ -15,6 +15,15 @@ All notable changes to this extension. The format follows
   steer and follow-up), and keyboard access to the TUI surface. The bridge
   remains a loopback service protected by an access token; terminal-specific
   presentation may differ in the browser.
+- Fix the composer collapsing into a single row (32px textarea beside a
+  1011px action bar): Tailwind scanned only `host-omp-ui/web`, so arbitrary
+  variants used solely by reused DeerFlow components were never generated.
+  `app.css` now declares the DeerFlow `components/ui` and `ai-elements`
+  sources.
+- Remove the "进入/退出 Plan 模式" and "进入/退出 Vibe 模式" tooltips; the
+  mode buttons stand on their own.
+- Center the empty-conversation state in the viewport instead of anchoring it
+  near the top.
 
 ### Changed — scope size is a constant, enforced by rebuke
 

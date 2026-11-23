@@ -15,6 +15,7 @@ import {
   TooltipTrigger,
 } from "@herd/deer-flow-ui/ui/tooltip";
 import type { ConnectionState } from "../protocol/client";
+import { modelNickname } from "../lib/model-display";
 import { selectModeStatus, selectUsage } from "../protocol/store";
 import type { WebState } from "../protocol/types";
 
@@ -98,11 +99,8 @@ export function TopHeader({
             <WifiOffIcon className="text-muted-foreground size-3" />
           )}
           {model && (
-            <span className="text-muted-foreground truncate text-xs">
-              {state.models.find((candidate) => candidate.provider === model.provider && candidate.id === model.id)?.name ??
-                model.name ??
-                model.id.split("/").filter(Boolean).pop() ??
-                model.id}
+            <span className="text-muted-foreground max-w-[min(26rem,45vw)] truncate text-xs">
+              {modelNickname(model, state.models)}
             </span>
           )}
           {state.thinkingLevel && (

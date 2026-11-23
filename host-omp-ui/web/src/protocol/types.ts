@@ -147,6 +147,27 @@ export type DraftState = {
   composer?: Record<string, unknown>;
 };
 
+export type CompletionItem = {
+  value: string;
+  label: string;
+  description?: string;
+  hint?: string;
+  disabled?: boolean;
+};
+
+/**
+ * The TUI editor's live slash-completion projection. The TUI owns the
+ * matching and selection state machine; the web renders this mirror and
+ * forwards navigation keys, never computing candidates itself.
+ */
+export type CompletionState = {
+  open: boolean;
+  prefix: string;
+  items: CompletionItem[];
+  selectedIndex: number;
+  enterAccepts: boolean;
+};
+
 export type InteractionRequest = {
   id: string;
   kind: string;
@@ -270,6 +291,7 @@ export type WebState = {
   meta: MetaState;
   usage: UsageState | null;
   draft: DraftState;
+  completion: CompletionState;
   openInteractions: InteractionRequest[];
   resolvedInteractions: Record<string, string>;
   interactionErrors: Record<string, InteractionError>;

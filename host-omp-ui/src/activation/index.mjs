@@ -313,6 +313,10 @@ export function wireUiExtension(pi, env = {}) {
 			});
 
 			if (isTui) try {
+				// Observe the slot before installing our own editor: omp invokes the
+				// factory synchronously, so a wrapper installed afterwards never sees
+				// BridgeEditor and never attaches the completion observer.
+				if (isTui) captureHostFromEditorSlot(ctx.ui, bridge);
 				const Base = modules?.CustomEditor ?? getRealCustomEditor();
 				if (Base) {
 					// Never steal an editor another extension already installed.

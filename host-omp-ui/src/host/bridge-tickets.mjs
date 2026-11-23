@@ -387,6 +387,13 @@ export function createUiBridge({ station, getServer } = {}) {
 				// Draft mirroring is best-effort.
 			}
 		},
+		completion(input) {
+			try {
+				station?.onTuiCompletionChanged?.(input);
+			} catch {
+				// Completion mirroring is best-effort.
+			}
+		},
 		mirror(name, args) {
 			try {
 				if (name === "notify") station?.onNotify?.(args?.[0], args?.[1]);
@@ -703,8 +710,13 @@ export function createHostTickets({
 					return { ok: false, code: "invalid_keys" };
 				}
 				if (typeof getTui()?.injectDebugInput !== "function") return { ok: false, code: "unsupported" };
-				getTui().injectDebugInput(data);
-				return { ok: true };
+				// Reuse the routed path so the completion mirror is refreshed
+				// after arrow keys move the TUI autocomplete selection.
+				return routeSurfaceEvent({
+					reconciler: getReconciler(),
+					tui: getTui(),
+					event: { ev: "keys", data },
+				});
 			} catch (error) {
 				return fail("surface-keys", error);
 			}

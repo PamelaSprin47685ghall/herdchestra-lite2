@@ -26,9 +26,9 @@ import {
   TooltipTrigger,
 } from "@herd/deer-flow-ui/ui/tooltip";
 import { selectModeStatus, selectModelKey } from "../protocol/store";
-import { formatThinkingLabel, groupModelsByProvider, modelNickname } from "../lib/model-display";
+import { formatThinkingLabel, groupModelsByProvider } from "../lib/model-display";
 import { ModelPickerDialog } from "./ModelPickerDialog";
-import type { DraftState, ModelRef, WebState } from "../protocol/types";
+import type { CompletionState, DraftState, ModelRef, WebState } from "../protocol/types";
 import type { InstanceCapabilities } from "../lib/instance-capabilities";
 
 export type SubmitMode = "default" | "steer" | "followUp";
@@ -51,6 +51,8 @@ type ComposerProps = {
   disabled: boolean;
   capabilities: InstanceCapabilities | null;
   queue: { steering: string[]; followUp: string[] };
+  completion: CompletionState;
+  onKeys: (data: string) => void;
   onDraft: (text: string) => void;
   onSubmit: (text: string, mode?: SubmitMode, attachments?: { name: string; mimeType: string; data: string }[]) => Promise<void>;
   onAbort: () => void;
@@ -71,23 +73,16 @@ function ModeToggle({
   onClick: () => void;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="sm"
-          variant={active ? "secondary" : "ghost"}
-          className="h-7 gap-1 px-2 text-xs"
-          onClick={onClick}
-        >
-          {icon}
-          {label}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>
-        {active ? `退出 ${label} 模式` : `进入 ${label} 模式`}
-      </TooltipContent>
-    </Tooltip>
+    <Button
+      type="button"
+      size="sm"
+      variant={active ? "secondary" : "ghost"}
+      className="h-7 gap-1 px-2 text-xs"
+      onClick={onClick}
+    >
+      {icon}
+      {label}
+    </Button>
   );
 }
 
@@ -235,6 +230,8 @@ function ComposerForm({
   capabilities,
   queue,
   blocked,
+  completion,
+  onKeys,
   onDraft,
   onSubmit,
   onAbort,
@@ -247,20 +244,62 @@ function ComposerForm({
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const syncedRev = useRef<number | null>(null);
+  // A remote draft is data, not typing. Mark the exact value we wrote into the
+  // composer so the next draft effect does not report it back as user input.
+  // Without this, a remote `/` and the host's slash-mode rewrite bounce forever.
+  const suppressedDraft = useRef<string | null>(null);
   const onDraftRef = useRef(onDraft);
   onDraftRef.current = onDraft;
   const text = controller.textInput.value;
+  const completionRef = useRef(completion);
+  completionRef.current = completion;
+  const onKeysRef = useRef(onKeys);
+  onKeysRef.current = onKeys;
+
+  useEffect(() => {
+    // Native listener, not React's synthetic one: the shared PromptInputTextarea
+    // is bundled from DeerFlow and does not reliably forward our onKeyDown.
+    // The ref keeps the newest completion state without rebinding per render.
+    const el = document.querySelector<HTMLTextAreaElement>('[data-omp-completion="1"]');
+    if (!el) return;
+    const handler = (event: KeyboardEvent) => {
+      const current = completionRef.current;
+      if (!current.open || current.items.length === 0 || event.isComposing) return;
+      const arrows: Record<string, string> = {
+        ArrowUp: "\u001b[A",
+        ArrowDown: "\u001b[B",
+      };
+      let key: string | null = arrows[event.key] ?? null;
+      if (key === null && event.key === "Tab") key = "\t";
+      if (key === null && event.key === "Escape") key = "\u001b";
+      if (key === null && event.key === "Enter" && !event.shiftKey) key = "\r";
+      if (key === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onKeysRef.current(key);
+    };
+    el.addEventListener("keydown", handler);
+    return () => el.removeEventListener("keydown", handler);
+  });
 
   useEffect(() => {
     if (draft.rev === syncedRev.current) return;
     syncedRev.current = draft.rev;
     if (draft.origin === "web") return;
     if (controller.textInput.value !== draft.text) {
+      suppressedDraft.current = draft.text;
       controller.textInput.setInput(draft.text);
     }
   }, [controller, draft.rev, draft.origin, draft.text]);
 
   useEffect(() => {
+    // A marker here means this render belongs to the remote write, not to
+    // typing: consume it and never report the pre-write text back. Leaving it
+    // behind would swallow a later legitimate keystroke equal to that text.
+    if (suppressedDraft.current !== null) {
+      suppressedDraft.current = null;
+      return;
+    }
     if (composing || text === draft.text) return;
     const timer = setTimeout(() => onDraftRef.current(text), 80);
     return () => clearTimeout(timer);
@@ -346,6 +385,46 @@ function ComposerForm({
           ))}
         </div>
       )}
+      {completion.open && completion.items.length > 0 && (
+        <div className="mb-1.5 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="text-muted-foreground flex items-center justify-between border-b px-3 py-1 text-[10px]">
+            <span>斜杠补全 · TUI 状态镜像</span>
+            <span className="font-mono">{completion.prefix}</span>
+          </div>
+          <div className="max-h-[13rem] overflow-y-auto py-1">
+            {completion.items.map((item, index) => (
+              <button
+                key={`${item.value}-${index}`}
+                type="button"
+                disabled={item.disabled}
+                className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-xs disabled:opacity-40 ${
+                  index === completion.selectedIndex
+                    ? "bg-accent text-accent-foreground"
+                    : "text-foreground hover:bg-accent/50"
+                }`}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  const current = completion.selectedIndex;
+                  const delta = current < 0 ? index : index - current;
+                  const key = delta > 0 ? "\u001b[B" : "\u001b[A";
+                  for (let i = 0; i < Math.abs(delta); i += 1) onKeys(key);
+                  onKeys("\r");
+                }}
+              >
+                <span className="font-mono text-[11px] whitespace-nowrap">{item.label}</span>
+                {item.description && (
+                  <span className="text-muted-foreground truncate">{item.description}</span>
+                )}
+                {item.hint && (
+                  <span className="text-muted-foreground ml-auto shrink-0 text-[10px]">
+                    {item.hint}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <PromptInput
         onSubmit={({ text: submitted }) => sendWithAttachments(submitted, "default")}
         onCompositionStart={() => setComposing(true)}
@@ -376,6 +455,7 @@ function ComposerForm({
         )}
         <PromptInputBody>
           <PromptInputTextarea
+            data-omp-completion="1"
             placeholder="写给 omp…  Enter 发送，Shift+Enter 换行"
             className="min-h-16 px-4 pt-3 text-sm"
             disabled={blocked}
@@ -426,7 +506,7 @@ function ComposerForm({
               modelKey={modelKey}
               models={models}
               thinkingLevel={thinkingLevel}
-              thinkingLevels={thinkingLevels}
+              thinkingLevels={levels}
               modes={modes}
               disabled={blocked}
               onModel={onModel}
@@ -521,6 +601,8 @@ function composerPropsEqual(a: ComposerProps, b: ComposerProps) {
     a.disabled === b.disabled &&
     a.capabilities === b.capabilities &&
     a.queue === b.queue &&
+    a.completion === b.completion &&
+    a.onKeys === b.onKeys &&
     a.onDraft === b.onDraft &&
     a.onSubmit === b.onSubmit &&
     a.onAbort === b.onAbort &&

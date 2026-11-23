@@ -40,6 +40,7 @@ const SERVER_FRAMES = new Set([
 	"usage.update",
 	"meta.update",
 	"draft.sync",
+	"completion.state",
 	"interaction.open",
 	"interaction.close",
 	"interaction.error",

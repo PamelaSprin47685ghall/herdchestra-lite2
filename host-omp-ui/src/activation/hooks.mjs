@@ -4,7 +4,15 @@
 function availableThinkingLevels(ctx) {
 	try {
 		const levels = ctx?.session?.getAvailableEffortSelectors?.();
-		return Array.isArray(levels) ? levels.filter((level) => typeof level === "string") : undefined;
+		if (Array.isArray(levels) && levels.length > 0) {
+			return levels.filter((level) => typeof level === "string");
+		}
+		// Empty is authoritative only when the current model explicitly declares
+		// reasoning: false. Otherwise leave thinkingLevels untouched so the
+		// adapter's hydrated multi-level list keeps the slider.
+		const model = ctx?.models?.current?.();
+		if (model && typeof model === "object" && model.reasoning === false) return [];
+		return undefined;
 	} catch {
 		return undefined;
 	}

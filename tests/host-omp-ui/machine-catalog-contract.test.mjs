@@ -64,6 +64,26 @@ function byId(sessions, id) {
 }
 
 describe("machine session catalog", () => {
+	test("agent-injected user text never becomes a session title", async () => {
+		const root = await tempRoot();
+		const id = "55555555-5555-4555-8555-555555555555";
+		const path = join(root, "bucket", `${id}.jsonl`);
+		await writeSession(path, sessionHeader({ id, title: undefined }), [
+			{
+				type: "message",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "You are the child of fork x" }],
+					attribution: "agent",
+					synthetic: true,
+				},
+			},
+		]);
+
+		const { sessions } = await (await load()).scanMachineSessions({ roots: [root] });
+		expect(byId(sessions, id)?.title).not.toBe("You are the child of fork x");
+	});
+
 	test("reads a standalone title entry when the session header has none", async () => {
 		const root = await tempRoot();
 		const path = join(root, "-home-u-project-c", "c.jsonl");

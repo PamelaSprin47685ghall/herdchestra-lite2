@@ -36,6 +36,21 @@ export function createUiBridge({ station, getServer } = {}) {
 			// Detaching a finished abort listener is best-effort.
 		}
 	};
+	// Every path that settles or rejects an entry first takes it out of the
+	// ledger and releases its abort listener.
+	const releaseEntry = (id, entry) => {
+		pending.delete(id);
+		detachQuietly(entry);
+	};
+	// Abort is always the same sequence: leave the ledger, close the host
+	// interaction, reject the entry. An entry already gone is a no-op.
+	const abortPending = (id) => {
+		const entry = pending.get(id);
+		if (!entry) return;
+		pending.delete(id);
+		closeQuietly(id);
+		entry.reject(new Error("interaction aborted"));
+	};
 	return {
 		hasClient() {
 			return (getServer()?.clientCount ?? 0) > 0;
@@ -89,19 +104,11 @@ export function createUiBridge({ station, getServer } = {}) {
 					return;
 				}
 				if (signal?.aborted) {
-					pending.delete(requestId);
-					closeQuietly(requestId);
-					reject(new Error("interaction aborted"));
+					abortPending(requestId);
 					return;
 				}
 				if (signal?.addEventListener) {
-					const onAbort = () => {
-						const current = pending.get(requestId);
-						if (!current) return;
-						pending.delete(requestId);
-						closeQuietly(requestId);
-						current.reject(new Error("interaction aborted"));
-					};
+					const onAbort = () => abortPending(requestId);
 					signal.addEventListener("abort", onAbort, { once: true });
 					entry.detachAbort = () => signal.removeEventListener?.("abort", onAbort);
 				}
@@ -115,8 +122,7 @@ export function createUiBridge({ station, getServer } = {}) {
 			if (!entry) return { ok: false, code: "not_found" };
 			const input = recordOf(payload) ?? {};
 			const settle = (value) => {
-				pending.delete(requestId);
-				detachQuietly(entry);
+				releaseEntry(requestId, entry);
 				entry.resolve(value);
 				return { ok: true, kind: entry.kind, value };
 			};
@@ -178,8 +184,7 @@ export function createUiBridge({ station, getServer } = {}) {
 		reject(requestId, error) {
 			const entry = pending.get(requestId);
 			if (!entry) return false;
-			pending.delete(requestId);
-			detachQuietly(entry);
+			releaseEntry(requestId, entry);
 			entry.reject(error ?? new Error("interaction cancelled"));
 			return true;
 		},

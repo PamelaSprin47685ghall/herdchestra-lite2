@@ -6,9 +6,9 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
-### Changed — a fork item carries a Dafny-style contract
+### Changed — a fork item carries a parallel state machine
 
-- `scope_fork` item field `intent` is now `dafny_pseudo_code`: write `requires` (precondition) and `ensures` (postcondition), with optional `invariant`/`decreases`. The ledger record keeps the internal name `intent`, so existing snapshots still restore. Error codes, receipts, and documentation follow the model-facing name.
+- The `scope_fork` item contract field is now `fsm`: describe the work as a parallel state machine — the states, the transition that advances each one, and the branches that can run at once — and say how to build the result fastest, not only what the finished thing is. The ledger record keeps the internal name `intent`, so existing snapshots still restore. Error codes (`INVALID_FSM`, `MISSING_FSM`), receipts, and documentation follow the model-facing name.
 
 ### Changed — a fork item carries the child's profession
 

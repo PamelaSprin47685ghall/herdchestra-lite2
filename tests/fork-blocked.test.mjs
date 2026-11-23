@@ -22,10 +22,10 @@ const STATE = () => ({
   relay: { generation: 0, fullFlow: false },
 });
 
-function item(dafnyPseudoCode, blocked = false) {
+function item(fsmText, blocked = false) {
   return {
-    scopeId: dafnyPseudoCode.replaceAll(" ", "-"),
-    dafny_pseudo_code: dafnyPseudoCode,
+    scopeId: fsmText.replaceAll(" ", "-"),
+    fsm: fsmText,
     blocked,
     budget: { read: 1 },
     targets: ["src/blocked.mjs"],

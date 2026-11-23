@@ -35,7 +35,7 @@ function stationFor(ledger, options = {}) {
 function forkArgs(overrides = {}) {
   return {
     scopeId: "one",
-    dafny_pseudo_code: "audit the first seam",
+    fsm: "audit the first seam",
     budget: {},
     time: 60,
     targets: ["src/parser.mjs"],
@@ -62,7 +62,7 @@ describe("a batch whose first spawner throws", () => {
 
     const out = handleForkCall(station, {
       id: "batch",
-      arguments: { forks: [forkArgs(), forkArgs({ scopeId: "two", dafny_pseudo_code: "audit the second seam" })] },
+      arguments: { forks: [forkArgs(), forkArgs({ scopeId: "two", fsm: "audit the second seam" })] },
     });
 
     expect(out.isError).toBeUndefined();

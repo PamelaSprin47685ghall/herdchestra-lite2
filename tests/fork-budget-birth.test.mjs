@@ -28,7 +28,7 @@ function forkOne(station, overrides = {}) {
 			forks: [
 				{
 					scopeId: "parser",
-					dafny_pseudo_code: "read the parser",
+					fsm: "read the parser",
 					blocked: false,
 					budget: { read: 2, bash: 1 },
 					targets: ["src/parser.mjs"],

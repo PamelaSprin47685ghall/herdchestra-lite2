@@ -207,7 +207,7 @@ describe("the outbound projection keeps a plain record", () => {
 		const state = createState();
 		const messages = [
 			assistantWith("f1", "scope_fork", { forks: [] }),
-			toolResult("f1", "scope_fork", "[fork f1] Dafny pseudo-code: \"probe\""),
+			toolResult("f1", "scope_fork", "[fork f1] State machine: \"probe\""),
 			assistantWith("j1", "scope_join", {}),
 			toolResult("j1", "scope_join", "full child record for f1"),
 		];

@@ -96,7 +96,7 @@ function depthOf(station) {
 
 const REFUSAL_KEY = {
   INVALID_SCOPE_ID: "invalid-scope-id",
-  INVALID_DAFNY_PSEUDO_CODE: "invalid-dafny-pseudo-code",
+  INVALID_FSM: "invalid-fsm",
   INVALID_PROFESSION: "invalid-profession",
   INVALID_BUDGET: "invalid-budget",
   INVALID_ARGUMENT: "invalid-argument",
@@ -287,8 +287,8 @@ export function childReceiptText(spec) {
 }
 
 // The receipt's marker, return note and routing note are fixed lines above the
-// rendered dafny_pseudo_code. Pricing them keeps a fork start from looking as
-// small as its pseudo-code alone.
+// rendered fsm. Pricing them keeps a fork start from looking as small as its
+// state machine alone.
 const FORK_RECEIPT_PREFIX_CHARS = 600;
 
 /** Add two tool-count maps, dropping zeros. */
@@ -459,8 +459,8 @@ export function handleForkCall(station, call, options = {}) {
   );
   if (blankIntent) {
     return errorResult(
-      "MISSING_DAFNY_PSEUDO_CODE",
-      render(E["missing-dafny-pseudo-code"] || "A new scope needs a dafny_pseudo_code.", { scopeId: blankIntent.scopeId }),
+      "MISSING_FSM",
+      render(E["missing-fsm"] || "A new scope needs an fsm.", { scopeId: blankIntent.scopeId }),
       { scopeId: blankIntent.scopeId },
     );
   }

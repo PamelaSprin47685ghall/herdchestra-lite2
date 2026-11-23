@@ -80,15 +80,15 @@ describe("admission decisions", () => {
 describe("fork validation and register", () => {
 	const item = {
 		scopeId: "probe",
-		dafny_pseudo_code: "x",
+		fsm: "x",
 		budget: { read: 1 },
 		time: 30,
 		targets: ["src/parser.mjs"],
 	};
 
-	test("validateFork normalizes targets and leaves the pseudo-code to the decision", () => {
+	test("validateFork normalizes targets and leaves the fsm to the decision", () => {
 		expect(validateFork(item).ok).toBe(true);
-		expect(validateFork({ ...item, dafny_pseudo_code: "  " })).toMatchObject({ ok: true, intent: "" });
+		expect(validateFork({ ...item, fsm: "  " })).toMatchObject({ ok: true, intent: "" });
 		expect(validateFork({ ...item, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
 		expect(validateFork({ ...item, targets: [] }).code).toBe("INVALID_TARGETS");
 		expect(

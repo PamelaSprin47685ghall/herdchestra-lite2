@@ -37,7 +37,7 @@ export const PIN_CONCLUSION_DESCRIPTION = notes["pin.conclusion"];
 const forkJoin = loadDoc("tools/fork-join");
 
 export const FORK_DESCRIPTION = forkJoin["fork.tool"];
-export const FORK_DAFNY_PSEUDO_CODE_DESCRIPTION = render(forkJoin["fork.dafny-pseudo-code"], {
+export const FORK_FSM_DESCRIPTION = render(forkJoin["fork.fsm"], {
 	defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
 	maxPoints: SCOPE_MAX_BUDGET_POINTS,
 	defaultFanout: FORK_DEFAULT_FANOUT,
@@ -84,13 +84,13 @@ export const PANHANDLE_BECAUSE_DESCRIPTION = panhandle["panhandle.because"];
 const forkItem = {
 	type: "object",
 	additionalProperties: false,
-	// `dafny_pseudo_code` is optional here because a reused `scopeId` may carry
-	// only a budget increment, merged targets, or one more requirement. A new
-	// scope still needs it: the station refuses with MISSING_DAFNY_PSEUDO_CODE.
+	// `fsm` is optional here because a reused `scopeId` may carry only a budget
+	// increment, merged targets, or one more requirement. A new scope still
+	// needs it: the station refuses with MISSING_FSM.
 	required: ["scopeId", "profession", "blocked", "budget", "targets"],
 	properties: {
 		scopeId: { type: "string", pattern: SCOPE_ID_PATTERN, maxLength: MAX_SCOPE_ID_LENGTH, description: forkJoin["fork.scope-id"] },
-		dafny_pseudo_code: { type: "string", minLength: 1, description: FORK_DAFNY_PSEUDO_CODE_DESCRIPTION },
+		fsm: { type: "string", minLength: 1, description: FORK_FSM_DESCRIPTION },
 		profession: {
 			type: "string",
 			minLength: 9,

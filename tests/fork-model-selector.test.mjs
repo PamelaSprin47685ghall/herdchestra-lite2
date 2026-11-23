@@ -58,7 +58,7 @@ function forkOne(station, ctx, overrides = {}) {
         forks: [
           {
             scopeId: "parser",
-            dafny_pseudo_code: "read the parser",
+            fsm: "read the parser",
             blocked: false,
             budget: { read: 1 },
             targets: ["src/parser.mjs"],
@@ -196,8 +196,8 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
         id: "fork-batch",
         arguments: {
           forks: [
-            { scopeId: "one", dafny_pseudo_code: "first", blocked: false, budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
-            { scopeId: "two", dafny_pseudo_code: "second", blocked: false, budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
+            { scopeId: "one", fsm: "first", blocked: false, budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
+            { scopeId: "two", fsm: "second", blocked: false, budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
           ],
         },
       },

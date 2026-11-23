@@ -25,7 +25,7 @@ function stationFor(ledger, options = {}) {
 function forkArgs(overrides = {}) {
   return {
     scopeId: "f1",
-    dafny_pseudo_code: "audit one seam",
+    fsm: "audit one seam",
     budget: {},
     time: 60,
     targets: ["src/parser.mjs"],
@@ -73,7 +73,7 @@ describe("a fork start that a known window cannot hold", () => {
       station,
       callWith(
         forkArgs({ scopeId: "small" }),
-        forkArgs({ scopeId: "huge", dafny_pseudo_code: "x".repeat(20_000) }),
+        forkArgs({ scopeId: "huge", fsm: "x".repeat(20_000) }),
       ),
     );
 

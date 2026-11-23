@@ -110,21 +110,21 @@ describe("a batch projects one item into each child", () => {
       id: "fb",
       arguments: {
         forks: [
-          { scopeId: "one", dafny_pseudo_code: "one", budget: { read: 1 }, time: 60, targets: ["one.mjs"], blocked: false },
-          { scopeId: "two", dafny_pseudo_code: "two", budget: { read: 1 }, time: 60, targets: ["two.mjs"], blocked: false },
+          { scopeId: "one", fsm: "one", budget: { read: 1 }, time: 60, targets: ["one.mjs"], blocked: false },
+          { scopeId: "two", fsm: "two", budget: { read: 1 }, time: 60, targets: ["two.mjs"], blocked: false },
         ],
       },
     });
     expect(out.isError).toBeUndefined();
     expect(specs.map((spec) => spec.forkId)).toEqual(["fb:0", "fb:1"]);
     expect(specs[0].receipt).toContain("You are the child of fork one");
-    expect(specs[0].receipt).toContain("Dafny pseudo-code: one");
+    expect(specs[0].receipt).toContain("State machine: one");
     expect(specs[0].receipt).toContain("User messages go to the stable root");
     expect(specs[0].receipt).toContain("Only scope_return submits your full record");
-    expect(specs[0].receipt).not.toContain("Dafny pseudo-code: two");
+    expect(specs[0].receipt).not.toContain("State machine: two");
     expect(specs[1].receipt).toContain("You are the child of fork two");
-    expect(specs[1].receipt).toContain("Dafny pseudo-code: two");
-    expect(specs[1].receipt).not.toContain("Dafny pseudo-code: one");
+    expect(specs[1].receipt).toContain("State machine: two");
+    expect(specs[1].receipt).not.toContain("State machine: one");
   });
 });
 

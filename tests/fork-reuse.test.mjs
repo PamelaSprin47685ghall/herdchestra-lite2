@@ -26,7 +26,7 @@ const STATE = () => ({
 function item(overrides = {}) {
   return {
     scopeId: "worker",
-    dafny_pseudo_code: "first",
+    fsm: "first",
     blocked: false,
     budget: { read: 2 },
     targets: ["src/worker.mjs"],
@@ -56,7 +56,7 @@ describe("reuse while running", () => {
     expect(first.details.started).toHaveLength(1);
     const record = forkOf(ledger, "call-1");
 
-    const second = fork({ dafny_pseudo_code: "more", budget: { read: 1 } }, "call-2");
+    const second = fork({ fsm: "more", budget: { read: 1 } }, "call-2");
     expect(spawned).toHaveLength(1);
     expect(second.content[0].text).toContain("Amended");
     expect(second.details.amended).toEqual(["call-1"]);
@@ -70,7 +70,7 @@ describe("reuse while running", () => {
     fork({}, "call-1");
     const record = forkOf(ledger, "call-1");
     const before = record.requirements.length;
-    const second = fork({ dafny_pseudo_code: undefined, budget: { read: 1 } }, "call-2");
+    const second = fork({ fsm: undefined, budget: { read: 1 } }, "call-2");
     expect(second.content[0].text).not.toContain("needs a non-empty");
     expect(record.budget.read).toBe(3);
     expect(record.requirements.length).toBe(before);
@@ -79,7 +79,7 @@ describe("reuse while running", () => {
   test("refuses blocked:true on a running scope", () => {
     const { fork } = harness();
     fork({}, "call-1");
-    const second = fork({ blocked: true, dafny_pseudo_code: "stop" }, "call-2");
+    const second = fork({ blocked: true, fsm: "stop" }, "call-2");
     expect(second.details.failed).toEqual(["call-1"]);
     expect(second.content[0].text).toContain("cannot be marked blocked");
   });
@@ -92,7 +92,7 @@ describe("reuse while blocked", () => {
     expect(spawned).toHaveLength(0);
     const record = forkOf(ledger, "call-1");
 
-    const second = fork({ blocked: false, dafny_pseudo_code: "go" }, "call-2");
+    const second = fork({ blocked: false, fsm: "go" }, "call-2");
     expect(record.status).toBe("running");
     expect(spawned).toHaveLength(1);
     expect(second.details.revived).toEqual(["call-1"]);
@@ -104,7 +104,7 @@ describe("reuse while blocked", () => {
     const { ledger, spawned, fork } = harness();
     fork({ blocked: true }, "call-1");
     const record = forkOf(ledger, "call-1");
-    const second = fork({ blocked: true, dafny_pseudo_code: "later" }, "call-2");
+    const second = fork({ blocked: true, fsm: "later" }, "call-2");
     expect(record.status).toBe("blocked");
     expect(spawned).toHaveLength(0);
     expect(second.details.amended).toEqual(["call-1"]);
@@ -119,7 +119,7 @@ describe("reuse after the child closed", () => {
     markReady(ledger, "call-1", { record: "first" });
     expect(readyChildren(ledger, "root")).toEqual(["call-1"]);
 
-    const second = fork({ dafny_pseudo_code: "again", budget: { read: 1 } }, "call-2");
+    const second = fork({ fsm: "again", budget: { read: 1 } }, "call-2");
     const old = forkOf(ledger, "call-1");
     expect(old.supersededAt).not.toBeNull();
     expect(readyChildren(ledger, "root")).toEqual([]);
@@ -141,7 +141,7 @@ describe("reuse after the child closed", () => {
     expect(taken.ok).toBe(true);
     expect(taken.fork.status).toBe("joined");
 
-    fork({ dafny_pseudo_code: "continue", budget: { read: 1 } }, "call-2");
+    fork({ fsm: "continue", budget: { read: 1 } }, "call-2");
     const next = forkOf(ledger, "call-2");
     expect(next.generation).toBe(2);
     expect(next.continuesForkId).toBe("call-1");
@@ -152,7 +152,7 @@ describe("reuse after the child closed", () => {
     const { ledger, spawned, fork } = harness();
     fork({}, "call-1");
     markReady(ledger, "call-1", { ok: false, reason: "boom" });
-    fork({ dafny_pseudo_code: "retry", budget: { read: 1 } }, "call-2");
+    fork({ fsm: "retry", budget: { read: 1 } }, "call-2");
     const next = forkOf(ledger, "call-2");
     expect(next.generation).toBe(2);
     expect(spawned).toHaveLength(2);
@@ -167,8 +167,8 @@ describe("reuse inside one batch", () => {
       id: "call-batch",
       arguments: {
         forks: [
-          item({ scopeId: "worker", dafny_pseudo_code: "first", budget: { read: 2 } }),
-          item({ scopeId: "worker", dafny_pseudo_code: "second", budget: { read: 1 } }),
+          item({ scopeId: "worker", fsm: "first", budget: { read: 2 } }),
+          item({ scopeId: "worker", fsm: "second", budget: { read: 1 } }),
         ],
       },
     });
@@ -182,11 +182,11 @@ describe("reuse inside one batch", () => {
 });
 
 describe("reuse refusal", () => {
-  test("a new scope without a dafny_pseudo_code is refused", () => {
+  test("a new scope without a fsm is refused", () => {
     const { ledger, spawned, fork } = harness();
-    const out = fork({ scopeId: "fresh", dafny_pseudo_code: "   " }, "call-blank");
+    const out = fork({ scopeId: "fresh", fsm: "   " }, "call-blank");
     expect(out.isError).toBe(true);
-    expect(out.details.code).toBe("MISSING_DAFNY_PSEUDO_CODE");
+    expect(out.details.code).toBe("MISSING_FSM");
     expect(spawned).toHaveLength(0);
     expect(ledger.order).toHaveLength(0);
   });
@@ -215,7 +215,7 @@ describe("reuse refusal", () => {
     markReady(ledger, "call-1", { record: "done" });
     const record = forkOf(ledger, "call-1");
     record.remaining = {};
-    const out = fork({ budget: {}, dafny_pseudo_code: "more" }, "call-2");
+    const out = fork({ budget: {}, fsm: "more" }, "call-2");
     expect(out.details.failed).toEqual(["call-1"]);
     expect(out.content[0].text).toContain("changed nothing");
   });

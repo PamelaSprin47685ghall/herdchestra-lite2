@@ -53,7 +53,7 @@ function forkStation(ledger) {
 function forkItem(scopeId, overrides = {}) {
 	return {
 		scopeId,
-		dafny_pseudo_code: `work on ${scopeId}`,
+		fsm: `work on ${scopeId}`,
 		blocked: false,
 		budget: { read: 6 },
 		targets: [`src/${scopeId}.mjs`],
@@ -201,7 +201,7 @@ describe("adding points to a live scope is a soft cap too", () => {
 		const intentOnly = handleForkCall(station, {
 			id: "call-note",
 			arguments: {
-				forks: [forkItem("grow", { dafny_pseudo_code: "one more slice", budget: {} })],
+				forks: [forkItem("grow", { fsm: "one more slice", budget: {} })],
 			},
 		});
 		expect(intentOnly.isError).toBeUndefined();

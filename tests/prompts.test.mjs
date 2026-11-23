@@ -69,7 +69,7 @@ describe("tool contracts map to their documents", () => {
 		// The size caps arrive through render(), so the exported text is the
 		// filled sentence, not the raw template.
 		for (const text of [
-			scopeTools.FORK_DAFNY_PSEUDO_CODE_DESCRIPTION,
+			scopeTools.FORK_FSM_DESCRIPTION,
 			scopeTools.FORK_BUDGET_DESCRIPTION,
 		]) {
 			expect(text).not.toContain("{{");
@@ -124,8 +124,8 @@ describe("tool contracts map to their documents", () => {
 		const doc = loadDoc("tools/fork-join");
 		const item = scopeTools.forkParameters.properties.forks.items;
 		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
-		expect(item.required).not.toContain("dafny_pseudo_code");
-		expect(item.properties.dafny_pseudo_code.description).toBe(scopeTools.FORK_DAFNY_PSEUDO_CODE_DESCRIPTION);
+		expect(item.required).not.toContain("fsm");
+		expect(item.properties.fsm.description).toBe(scopeTools.FORK_FSM_DESCRIPTION);
 		expect(item.properties.budget.description).toBe(scopeTools.FORK_BUDGET_DESCRIPTION);
 		expect(item.properties.time).toBeUndefined();
 		expect(item.properties.targets.description).toBe(doc["fork.targets"]);
@@ -356,8 +356,8 @@ describe("fork item schema", () => {
 	test("a reused scopeId amends, and intent may be omitted", () => {
 		const item = scopeTools.forkParameters.properties.forks.items;
 		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
-		expect(item.required).not.toContain("dafny_pseudo_code");
-		expect(item.properties.dafny_pseudo_code.description).toMatch(/next turn boundary/i);
+		expect(item.required).not.toContain("fsm");
+		expect(item.properties.fsm.description).toMatch(/next turn boundary/i);
 		expect(item.properties.scopeId.description).toMatch(/ready.*supersedes/i);
 		expect(item.properties.scopeId.description).toMatch(/joined.*failed.*new generation/i);
 	});
@@ -366,7 +366,7 @@ describe("fork item schema", () => {
 		const errors = loadDoc("errors");
 		expect(errors["duplicate-scope-id"]).toBeUndefined();
 		for (const key of [
-			"missing-dafny-pseudo-code",
+			"missing-fsm",
 			"foreign-scope-id",
 			"scope-running-blocked",
 			"scope-reuse-empty",
@@ -386,8 +386,8 @@ describe("scope size stays O(1) at every depth", () => {
 		expect(leaked).toEqual([]);
 	});
 
-	test("the fork pseudo-code asks for a small scope, not sqrt(n)", () => {
-		const intent = scopeTools.FORK_DAFNY_PSEUDO_CODE_DESCRIPTION;
+	test("the fork fsm asks for a small scope, not sqrt(n)", () => {
+		const intent = scopeTools.FORK_FSM_DESCRIPTION;
 		expect(intent).not.toContain("sqrt");
 		expect(intent).toMatch(/\b(?:18|eighteen)\b/i);
 		expect(intent).toMatch(/\b(?:27|twenty-seven)\b/i);
@@ -501,8 +501,8 @@ describe("tree depth methodology is default and recommended, not a max", () => {
 	// a small job must not grow a relay layer just to look organized.
 	const noCeiling = /\bmax\b|\bmaximum\b|\bceiling\b/i;
 
-	test("the fork pseudo-code states the default depth and the roles that use it", () => {
-		const intent = scopeTools.FORK_DAFNY_PSEUDO_CODE_DESCRIPTION;
+	test("the fork fsm states the default depth and the roles that use it", () => {
+		const intent = scopeTools.FORK_FSM_DESCRIPTION;
 		expect(intent).not.toContain("{{");
 		expect(intent).toMatch(/2/);
 		expect(intent).toMatch(/3/);

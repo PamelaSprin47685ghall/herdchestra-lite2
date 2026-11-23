@@ -77,9 +77,9 @@ export function decideForkAdmission({
  */
 export function validateFork(args) {
 	// Empty is valid here: a repeated scope id may carry only budget or
-	// targets. A *new* scope still needs a dafny_pseudo_code, and the handler
-	// enforces that after it knows whether the name already exists.
-	const intent = trimText(args?.dafny_pseudo_code);
+	// targets. A *new* scope still needs an fsm, and the handler enforces that
+	// after it knows whether the name already exists.
+	const intent = trimText(args?.fsm);
 	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}

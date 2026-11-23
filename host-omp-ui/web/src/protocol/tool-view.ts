@@ -5,7 +5,7 @@
  */
 
 import type { MessageBlock, ToolExecution, ToolStatus } from "./types";
-import { isRecord } from "./guards";
+import { asRecord } from "./guards";
 
 const MAX_OUTPUT = 12_000;
 
@@ -129,15 +129,13 @@ export function ansiSegments(text: string): AnsiSegment[] {
   return result;
 }
 
-const record = (value: unknown) => (isRecord(value) ? value : undefined);
-
 export function resultText(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return stripAnsi(value);
   if (Array.isArray(value)) {
     return value.map((item) => resultText(item)).filter(Boolean).join("\n");
   }
-  const entry = record(value);
+  const entry = asRecord(value);
   if (!entry) return stripAnsi(String(value));
   if (entry.content !== undefined) return resultText(entry.content);
   if (typeof entry.text === "string") return stripAnsi(entry.text);
@@ -149,7 +147,7 @@ export function resultText(value: unknown): string {
       .join("\n");
   }
   if (entry.details !== undefined) {
-    const details = record(entry.details);
+    const details = asRecord(entry.details);
     if (details?.output && typeof details.output === "string") {
       return stripAnsi(details.output);
     }
@@ -162,18 +160,18 @@ export function resultText(value: unknown): string {
 }
 
 export function argsOf(tool: { args?: unknown; argsText?: string }): Record<string, unknown> {
-  const direct = record(tool.args);
+  const direct = asRecord(tool.args);
   if (direct) return direct;
   if (typeof tool.args === "string") {
     try {
-      return record(JSON.parse(tool.args)) ?? {};
+      return asRecord(JSON.parse(tool.args)) ?? {};
     } catch {
       return {};
     }
   }
   if (tool.argsText) {
     try {
-      return record(JSON.parse(tool.argsText)) ?? {};
+      return asRecord(JSON.parse(tool.argsText)) ?? {};
     } catch {
       // A tool call still streaming has half-written JSON arguments.
     }
@@ -522,7 +520,7 @@ export function describeTool(tool: ToolExecution): ToolView {
     const summary = phases.length
       ? phases
           .map((phase) => {
-            const entry = record(phase);
+            const entry = asRecord(phase);
             const tasks = Array.isArray(entry?.tasks) ? entry.tasks.length : 0;
             return `${String(entry?.name ?? "todo")} (${tasks})`;
           })
@@ -561,11 +559,11 @@ export function describeTool(tool: ToolExecution): ToolView {
 }
 
 function pickExitCode(result: unknown): number | undefined {
-  const entry = record(result);
+  const entry = asRecord(result);
   if (!entry) return undefined;
   const direct = entry.exitCode ?? entry.exit_code;
   if (typeof direct === "number") return direct;
-  const details = record(entry.details);
+  const details = asRecord(entry.details);
   const nested = details?.exitCode ?? details?.exit_code;
   return typeof nested === "number" ? nested : undefined;
 }

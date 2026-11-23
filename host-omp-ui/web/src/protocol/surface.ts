@@ -8,7 +8,7 @@
  * accepted here; the renderer only ever sees `SurfaceNode` trees.
  */
 import type { OverlaySummary, SurfaceDocument, SurfaceNode, TspNode } from "./types";
-import { capText, isRecord } from "./guards";
+import { asRecord, capText } from "./guards";
 
 export function createSurfaceDocument(): SurfaceDocument {
   return {
@@ -20,15 +20,13 @@ export function createSurfaceDocument(): SurfaceDocument {
   };
 }
 
-const record = (value: unknown) => (isRecord(value) ? value : undefined);
-
 function textOf(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
 export function normalizeSurfaceNode(raw: unknown, fallbackId = "node"): SurfaceNode {
-  const value = record(raw) ?? {};
-  const props = record(value.p) ?? record(value.props) ?? {};
+  const value = asRecord(raw) ?? {};
+  const props = asRecord(value.p) ?? asRecord(value.props) ?? {};
   const id = textOf(value.id) ?? textOf(value.key) ?? fallbackId;
   const kind =
     textOf(value.k) ??
@@ -57,7 +55,7 @@ export function normalizeSurfaceNode(raw: unknown, fallbackId = "node"): Surface
 }
 
 export function normalizeSurfaceDocument(raw: unknown): SurfaceDocument {
-  const value = record(raw);
+  const value = asRecord(raw);
   if (!value) return createSurfaceDocument();
   const root = value.root ? normalizeSurfaceNode(value.root, "root") : undefined;
   if (!root) return createSurfaceDocument();
@@ -138,7 +136,7 @@ function insertNode(
 }
 
 function nodeFromObjectOp(op: Record<string, unknown>): SurfaceNode {
-  const source = record(op.node) ?? op;
+  const source = asRecord(op.node) ?? op;
   return normalizeSurfaceNode(source, textOf(op.id) ?? "node");
 }
 
@@ -152,7 +150,7 @@ function parentIdOf(op: Record<string, unknown>, node: SurfaceNode): string {
 }
 
 function applyObjectOp(document: SurfaceDocument, raw: unknown): void {
-  const op = record(raw);
+  const op = asRecord(raw);
   if (!op) return;
   const name = textOf(op.op) ?? textOf(op.type);
   if (!name) return;
@@ -180,7 +178,7 @@ function applyObjectOp(document: SurfaceDocument, raw: unknown): void {
 
   if (name === "set") {
     const node = findSurfaceNode(document, id);
-    const props = record(op.props);
+    const props = asRecord(op.props);
     if (node && props) node.props = { ...(node.props ?? {}), ...props };
     return;
   }
@@ -250,7 +248,7 @@ function applyTupleOp(document: SurfaceDocument, raw: readonly unknown[]): void 
   }
   if (name === "set") {
     const node = findSurfaceNode(document, id);
-    const props = record(a);
+    const props = asRecord(a);
     if (node && props) node.props = { ...(node.props ?? {}), ...props };
     return;
   }
@@ -360,9 +358,9 @@ export function normalizeOverlays(raw: unknown): OverlaySummary[] {
   return raw
     .map((entry, index): OverlaySummary | null => {
       if (typeof entry === "string") return { id: entry };
-      const value = record(entry);
+      const value = asRecord(entry);
       if (!value) return null;
-      const component = record(value.component);
+      const component = asRecord(value.component);
       const id =
         textOf(value.id) ??
         textOf(value.key) ??

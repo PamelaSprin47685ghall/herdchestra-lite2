@@ -103,6 +103,16 @@ export function mergeSessions(
   return [...merged.values()];
 }
 
+function statusFromRaw(raw: Record<string, unknown>): ToolStatus {
+  return raw.isError
+    ? "failed"
+    : raw.status
+      ? normalizeToolStatus(raw.status)
+      : raw.result !== undefined
+        ? "completed"
+        : "running";
+}
+
 export function normalizeBlock(raw: unknown): MessageBlock | null {
   if (!isRecord(raw)) return null;
   const type = asString(raw.type);
@@ -126,13 +136,7 @@ export function normalizeBlock(raw: unknown): MessageBlock | null {
       resultText:
         typeof raw.resultText === "string" ? raw.resultText : undefined,
       isError: Boolean(raw.isError),
-      status: raw.isError
-        ? "failed"
-        : raw.status
-          ? normalizeToolStatus(raw.status)
-          : raw.result !== undefined
-            ? "completed"
-            : "running",
+      status: statusFromRaw(raw),
     };
   }
   if (type === "tool") {
@@ -142,13 +146,7 @@ export function normalizeBlock(raw: unknown): MessageBlock | null {
       type: "tool",
       toolCallId: id,
       name: asString(raw.name ?? raw.toolName, "tool"),
-      status: raw.isError
-        ? "failed"
-        : raw.status
-          ? normalizeToolStatus(raw.status)
-          : raw.result !== undefined
-            ? "completed"
-            : "running",
+      status: statusFromRaw(raw),
       args: raw.args,
       result: raw.result,
     };
@@ -218,7 +216,6 @@ export function normalizeToolStatus(
 ): ToolStatus {
   if (isError) return "failed";
   if (raw === "completed" || raw === "failed" || raw === "error") return raw;
-  if (raw === "running") return "running";
   return "running";
 }
 

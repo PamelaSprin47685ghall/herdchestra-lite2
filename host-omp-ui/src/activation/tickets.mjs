@@ -53,17 +53,15 @@ const SERVER_FRAMES = new Set([
 ]);
 
 export function buildBridgeCapabilities({ tickets, diagnostics, onReported } = {}) {
+	const broadcast = (label, frame) =>
+		detach(tickets?.broadcastFrameTicket?.(frame), (error) => diagnostics?.record?.(label, error));
 	const dispatch = (event) => {
 		if (!event || typeof event.type !== "string") return;
 		if (event.type === "syncEditorDraft") {
-			detach(tickets?.broadcastFrameTicket?.({ type: "draft.sync", ...event.payload }), (error) =>
-				diagnostics?.record?.("broadcast:draft.sync", error),
-			);
+			broadcast("broadcast:draft.sync", { type: "draft.sync", ...event.payload });
 		}
 		if (SERVER_FRAMES.has(event.type)) {
-			detach(tickets?.broadcastFrameTicket?.(toServerFrame(event)), (error) =>
-				diagnostics?.record?.(`broadcast:${event.type}`, error),
-			);
+			broadcast(`broadcast:${event.type}`, toServerFrame(event));
 		}
 		const ticketName = TICKET_BY_EVENT[event.type];
 		if (!ticketName) return;
@@ -71,8 +69,7 @@ export function buildBridgeCapabilities({ tickets, diagnostics, onReported } = {
 		if (typeof ticket !== "function") return;
 		const report = (code) => {
 			if (typeof tickets?.broadcastFrameTicket !== "function") return;
-			detach(tickets.broadcastFrameTicket({ type: "toast", level: "error", message: `${event.type}: ${code}` }),
-				(error) => diagnostics?.record?.("broadcast:ticket-error", error));
+			broadcast("broadcast:ticket-error", { type: "toast", level: "error", message: `${event.type}: ${code}` });
 		};
 		const receipt = (result) => {
 			const { clientId, requestId } = event.payload ?? {};
@@ -85,7 +82,7 @@ export function buildBridgeCapabilities({ tickets, diagnostics, onReported } = {
 				if (result?.ok !== false && result?.reported) {
 					if (typeof onReported === "function") onReported(result.reported);
 					else if (typeof tickets?.broadcastFrameTicket === "function") {
-						detach(tickets.broadcastFrameTicket({ type: "meta.update", ...result.reported }), (error) => diagnostics?.record?.("broadcast:reported", error));
+						broadcast("broadcast:reported", { type: "meta.update", ...result.reported });
 					}
 				}
 				receipt(result);

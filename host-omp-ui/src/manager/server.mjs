@@ -14,14 +14,17 @@ export async function createManagerServer({ preferredPort = 37421, token, static
  const catalogOptions = () => ({ extraDirs: [...knownSessionDirs] });
  let nextClient = 0, timer, closed = false, hadAgent = false;
  const pending = new Map(), opening = new Map(), launchPending = new Map();
- function waitForLaunch(id, timeout = 15000) {
-  const found = [...agents.values()].find((a) => a.launchId === id);
+ function waitForAgent(predicate, table, id, timeout = 15000) {
+  const found = [...agents.values()].find(predicate);
   if (found) return Promise.resolve(found);
   return new Promise((done) => {
-   let waiters = launchPending.get(id); if (!waiters) launchPending.set(id, waiters = new Set());
-   const finish = (agent) => { clearTimeout(deadline); waiters.delete(finish); if (!waiters.size) launchPending.delete(id); done(agent); };
+   let waiters = table.get(id); if (!waiters) table.set(id, waiters = new Set());
+   const finish = (agent) => { clearTimeout(deadline); waiters.delete(finish); if (!waiters.size) table.delete(id); done(agent); };
    const deadline = setTimeout(() => finish(null), timeout); waiters.add(finish);
   });
+ }
+ function waitForLaunch(id, timeout = 15000) {
+  return waitForAgent((a) => a.launchId === id, launchPending, id, timeout);
  }
  const report = (where, error) => { try { diagnostics?.record?.(where, error); } catch {} };
  const send = (ws, value) => { try { ws.send(JSON.stringify(value)); return true; } catch { return false; } };
@@ -98,15 +101,7 @@ export async function createManagerServer({ preferredPort = 37421, token, static
   await server.stop(true);
  };
  function waitForSession(id, timeout = 15000) {
-  const found = [...agents.values()].find((a) => a.session?.id === id);
-  if (found) return Promise.resolve(found);
-  return new Promise((done) => {
-   let waiters = pending.get(id);
-   if (!waiters) pending.set(id, waiters = new Set());
-   const finish = (agent) => { clearTimeout(deadline); waiters.delete(finish); if (!waiters.size) pending.delete(id); done(agent); };
-   const deadline = setTimeout(() => finish(null), timeout);
-   waiters.add(finish);
-  });
+  return waitForAgent((a) => a.session?.id === id, pending, id, timeout);
  }
  async function openSession(client, command) {
   const id = command.sessionId ?? command.payload?.sessionId;

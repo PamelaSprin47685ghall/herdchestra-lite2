@@ -19,19 +19,4 @@ export function record(domain, error, context) {
 	return entry;
 }
 
-export function listDiagnostics(limit = MAX_ENTRIES) {
-	return entries.slice(-limit);
-}
 
-export function clearDiagnostics() {
-	entries.length = 0;
-}
-
-export function guard(domain, fn) {
-	try {
-		return fn();
-	} catch (error) {
-		record(domain, error);
-		return undefined;
-	}
-}

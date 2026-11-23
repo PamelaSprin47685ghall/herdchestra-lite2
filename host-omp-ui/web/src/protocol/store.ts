@@ -69,12 +69,6 @@ export function createInitialWebState(): WebState {
   };
 }
 
-
-
-
-
-
-
 export function reduceWebState(state: WebState, rawFrame: ServerFrame): WebState {
   const frame = normalizeFrame(rawFrame);
   const next = reduceWebStateInner(state, frame);
@@ -85,8 +79,7 @@ export function reduceWebState(state: WebState, rawFrame: ServerFrame): WebState
   return next;
 }
 
-function reduceWebStateInner(state: WebState, rawFrame: ServerFrame): WebState {
-  const frame = normalizeFrame(rawFrame);
+function reduceWebStateInner(state: WebState, frame: ServerFrame): WebState {
   const activeId = state.liveSession.session?.id;
   if (frame.type !== "session.select" && typeof frame.sessionId === "string" && activeId && frame.sessionId !== activeId) return state;
   const pure = reduceFrame(state, frame);

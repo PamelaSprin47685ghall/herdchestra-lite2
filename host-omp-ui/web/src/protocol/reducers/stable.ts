@@ -21,7 +21,7 @@ export function sameModel(
   return Boolean(a.id && b.id && aTail === bTail);
 }
 
-export function sameStringArray(
+function sameStringArray(
   a: readonly string[] | undefined,
   b: readonly string[] | undefined,
 ): boolean {
@@ -30,7 +30,7 @@ export function sameStringArray(
   return a.every((value, index) => value === b[index]);
 }
 
-export function sameModes(
+function sameModes(
   a: Record<string, string> | undefined,
   b: Record<string, string> | undefined,
 ): boolean {

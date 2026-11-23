@@ -19,7 +19,7 @@ import type {
   UiMessage,
   UsageState,
 } from "../types";
-import { asNumber, asString, isRecord } from "../guards";
+import { asNumber, asString, asStringArray, isRecord } from "../guards";
 import { basename } from "../tool-view";
 
 export function cloneMessages(messages: UiMessage[]): UiMessage[] {
@@ -275,13 +275,9 @@ export function normalizeQueue(raw: unknown): {
   followUp: string[];
 } {
   const value = isRecord(raw) ? raw : {};
-  const strings = (input: unknown) =>
-    Array.isArray(input)
-      ? input.map((item) => String(item)).filter((item) => item.length > 0)
-      : [];
   return {
-    steering: strings(value.steering),
-    followUp: strings(value.followUp),
+    steering: asStringArray(value.steering),
+    followUp: asStringArray(value.followUp),
   };
 }
 

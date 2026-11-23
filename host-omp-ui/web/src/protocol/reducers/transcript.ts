@@ -5,7 +5,8 @@ import type {
   UiMessage,
   WebState,
 } from "../types";
-import { asNumber, asString, isRecord } from "../guards";
+import { asNumber, asString, capText, isRecord } from "../guards";
+import { toolBlockId } from "../tool-view";
 import { cloneMessages, normalizeMessage } from "./normalize";
 import { liveCommit } from "./live";
 
@@ -40,13 +41,6 @@ function ensureAssistant(
   return created;
 }
 
-const MAX_BLOCK_CHARS = 1_000_000;
-function capBlockText(value: string): string {
-  return value.length > MAX_BLOCK_CHARS
-    ? `${value.slice(0, MAX_BLOCK_CHARS)}\n… [truncated]`
-    : value;
-}
-
 function appendTextBlock(
   message: UiMessage,
   index: number,
@@ -56,7 +50,7 @@ function appendTextBlock(
   message.blocks ??= [];
   const current = message.blocks[index];
   if (current && current.type === type) {
-    current.text = capBlockText(current.text + delta);
+    current.text = capText(current.text + delta);
     return;
   }
   // A reconciler may reuse blockIndex after finishing a tool call. Appending
@@ -96,13 +90,7 @@ function attachToolBlock(
 function findToolMessage(messages: UiMessage[], id: string): UiMessage | undefined {
   for (const message of messages) {
     if (
-      message.blocks?.some((block) =>
-        block.type === "toolCall"
-          ? block.id === id
-          : block.type === "tool"
-            ? block.toolCallId === id
-            : false,
-      )
+      message.blocks?.some((block) => toolBlockId(block) === id)
     ) {
       return message;
     }

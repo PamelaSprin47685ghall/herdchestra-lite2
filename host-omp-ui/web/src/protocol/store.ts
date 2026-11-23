@@ -26,7 +26,6 @@ import { liveCommit } from "./reducers/live";
 import { applyDelta } from "./reducers/transcript";
 import { reduceSnapshot, surfacePatch } from "./reducers/snapshot";
 import { reduceFrame } from "./reducers/frames";
-export { normalizeInteraction } from "./reducers/normalize";
 export { renderIndexes } from "./reducers/live";
 export type { RenderIndexes } from "./reducers/live";
 

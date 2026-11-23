@@ -8,7 +8,7 @@
  * accepted here; the renderer only ever sees `SurfaceNode` trees.
  */
 import type { OverlaySummary, SurfaceDocument, SurfaceNode, TspNode } from "./types";
-import { isRecord } from "./guards";
+import { capText, isRecord } from "./guards";
 
 export function createSurfaceDocument(): SurfaceDocument {
   return {
@@ -24,13 +24,6 @@ const record = (value: unknown) => (isRecord(value) ? value : undefined);
 
 function textOf(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-const MAX_TEXT_CHARS = 1_000_000;
-function capText(value: string): string {
-  return value.length > MAX_TEXT_CHARS
-    ? `${value.slice(0, MAX_TEXT_CHARS)}\n… [truncated]`
-    : value;
 }
 
 export function normalizeSurfaceNode(raw: unknown, fallbackId = "node"): SurfaceNode {

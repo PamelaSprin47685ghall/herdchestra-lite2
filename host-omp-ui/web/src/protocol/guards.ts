@@ -22,3 +22,9 @@ export function asStringArray(value: unknown): string[] {
     ? value.map((item) => String(item)).filter((item) => item.length > 0)
     : [];
 }
+
+export function capText(value: string, limit = 1_000_000): string {
+  return value.length > limit
+    ? `${value.slice(0, limit)}\n… [truncated]`
+    : value;
+}

@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import {
   ChainOfThought,
   ChainOfThoughtContent,
   ChainOfThoughtHeader,
 } from "@herd/deer-flow-ui/ai-elements/chain-of-thought";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@herd/deer-flow-ui/ui/collapsible";
 import { IncremarkMessage } from "../IncremarkMessage";
 import { useWindowedScroll } from "../../hooks/use-windowed-scroll";
 import { ToolStepCard } from "../ToolStepCard";
@@ -17,48 +11,7 @@ import { mergeToolBlock } from "../../protocol/tool-view";
 import type { ToolExecution } from "../../protocol/types";
 import type { StepEntry, StepSegment } from "../../lib/build-steps";
 
-export function ThinkingPanel({
-  text,
-  streaming,
-}: {
-  text: string;
-  streaming: boolean;
-}) {
-  const [open, setOpen] = useState(streaming);
-  useEffect(() => {
-    setOpen(streaming);
-  }, [streaming]);
-  if (!text.trim()) return null;
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="text-muted-foreground w-full"
-    >
-      <CollapsibleTrigger asChild>
-        <button
-          type="button"
-          className="hover:text-foreground flex items-center gap-2 text-sm transition-colors"
-        >
-          <BrainIcon
-            className={streaming ? "size-4 animate-pulse text-violet-400" : "size-4"}
-          />
-          <span>{streaming ? "思考中…" : "思考过程"}</span>
-          <ChevronDownIcon
-            className={`size-4 transition-transform ${open ? "rotate-180" : ""}`}
-          />
-        </button>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="text-sm">
-          <IncremarkMessage streaming={streaming}>{text}</IncremarkMessage>
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
-export function StepMarkdown({
+function StepMarkdown({
   text,
   streaming = false,
 }: {

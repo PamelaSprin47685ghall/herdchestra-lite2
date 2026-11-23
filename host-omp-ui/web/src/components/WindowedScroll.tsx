@@ -3,7 +3,7 @@ import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { useWindowedScroll } from "../hooks/use-windowed-scroll";
 import { sliceWindow } from "../lib/windowed-range";
 
-export interface WindowedScrollProps<T> {
+interface WindowedScrollProps<T> {
   items: readonly T[];
   getKey: (item: T) => string;
   renderItem: (item: T) => ReactNode;

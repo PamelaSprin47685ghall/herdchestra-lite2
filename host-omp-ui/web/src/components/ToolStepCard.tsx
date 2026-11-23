@@ -129,13 +129,7 @@ function Diff({ view }: { view: Extract<ToolView, { kind: "edit" }> }) {
   );
 }
 
-function ToolBody({
-  view,
-  onArtifact,
-}: {
-  view: ToolView;
-  onArtifact?: (id: string) => void;
-}) {
+function ToolBody({ view }: { view: ToolView }) {
   switch (view.kind) {
     case "read":
       return (
@@ -341,10 +335,8 @@ function ToolBody({
 
 export const ToolStepCard = memo(function ToolStepCard({
   tool,
-  onArtifact,
 }: {
   tool: ToolExecution;
-  onArtifact?: (id: string) => void;
 }) {
   const view = describeTool(tool);
   const [open, setOpen] = useState(
@@ -410,6 +402,5 @@ export const ToolStepCard = memo(function ToolStepCard({
   previous.tool.args === next.tool.args &&
   previous.tool.argsText === next.tool.argsText &&
   previous.tool.result === next.tool.result &&
-  previous.tool.partialResult === next.tool.partialResult &&
-  previous.onArtifact === next.onArtifact,
+  previous.tool.partialResult === next.tool.partialResult,
 );

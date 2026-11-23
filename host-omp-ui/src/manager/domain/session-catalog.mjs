@@ -85,7 +85,7 @@ export function resolveSessionTarget(sessions, sessionId) {
 }
 
 /** Stable eight-character tmux name, derived from the session id only. */
-export function tmuxSessionName(sessionId) {
+function tmuxSessionName(sessionId) {
 	// FNV-1a 64-bit, base36, last eight characters: stable across processes and
 	// free of characters tmux treats specially.
 	let hash = 0xcbf29ce484222325n;
@@ -99,7 +99,7 @@ export function tmuxSessionName(sessionId) {
 }
 
 /** POSIX single-quote quoting: legal for any byte except NUL. */
-export function shellQuote(value) {
+function shellQuote(value) {
 	return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 

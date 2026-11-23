@@ -8,7 +8,6 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@/lib/utils": ["./shims/lib/utils.ts"],
       "@/lib/ime": ["./shims/lib/ime.ts"],

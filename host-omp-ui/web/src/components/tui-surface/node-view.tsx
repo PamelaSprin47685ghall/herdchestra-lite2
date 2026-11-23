@@ -167,6 +167,32 @@ function NodeInput({
   );
 }
 
+function ChildNodes({
+  children,
+  sf,
+  depth,
+  onEvent,
+}: {
+  children: SurfaceNode[];
+  sf: string;
+  depth: number;
+  onEvent: SurfaceAction;
+}) {
+  return (
+    <>
+      {children.map((child) => (
+        <SurfaceNodeView
+          key={child.id}
+          node={child}
+          sf={sf}
+          depth={depth + 1}
+          onEvent={onEvent}
+        />
+      ))}
+    </>
+  );
+}
+
 export function SurfaceNodeView({
   node,
   sf,
@@ -302,15 +328,7 @@ export function SurfaceNodeView({
     }
     return (
       <div className="flex flex-wrap gap-1.5">
-        {children.map((child) => (
-          <SurfaceNodeView
-            key={child.id}
-            node={child}
-            sf={sf}
-            depth={depth + 1}
-            onEvent={onEvent}
-          />
-        ))}
+        <ChildNodes children={children} sf={sf} depth={depth} onEvent={onEvent} />
       </div>
     );
   }
@@ -343,15 +361,7 @@ export function SurfaceNodeView({
           )}
           {children.length > 0 && (
             <span className="mt-1 block space-y-1">
-              {children.map((child) => (
-                <SurfaceNodeView
-                  key={child.id}
-                  node={child}
-                  sf={sf}
-                  depth={depth + 1}
-                  onEvent={onEvent}
-                />
-              ))}
+              <ChildNodes children={children} sf={sf} depth={depth} onEvent={onEvent} />
             </span>
           )}
         </span>
@@ -502,15 +512,7 @@ export function SurfaceNodeView({
           </div>
         )}
         <Spans value={node.props?.text} />
-        {children.map((child) => (
-          <SurfaceNodeView
-            key={child.id}
-            node={child}
-            sf={sf}
-            depth={depth + 1}
-            onEvent={onEvent}
-          />
-        ))}
+        <ChildNodes children={children} sf={sf} depth={depth} onEvent={onEvent} />
       </div>
     );
   }
@@ -518,15 +520,7 @@ export function SurfaceNodeView({
   return (
     <div className="text-sm">
       {label && <div className="mb-1">{label}</div>}
-      {children.map((child) => (
-        <SurfaceNodeView
-          key={child.id}
-          node={child}
-          sf={sf}
-          depth={depth + 1}
-          onEvent={onEvent}
-        />
-      ))}
+      <ChildNodes children={children} sf={sf} depth={depth} onEvent={onEvent} />
     </div>
   );
 }

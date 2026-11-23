@@ -26,7 +26,6 @@ function modelPatch(event, ctx) {
 }
 
 const EVENT_MAP = {
-	before_agent_start: (event, ctx, station) => station.onBeforeAgentStart?.(event, ctx),
 	agent_start: (event, _ctx, station) => station.onAgentEvent?.(event),
 	agent_end: (event, _ctx, station) => station.onAgentEvent?.(event),
 	message_start: (event, _ctx, station) => station.onAgentEvent?.(event),

@@ -35,6 +35,19 @@ function removeNode(doc, id) {
   parent.children = parent.children.filter((child) => child.id !== id);
 }
 
+function insertNode(doc, node, op) {
+  const parent = findNode(doc.root, op.parent) ?? doc.root;
+  parent.children = [...(parent.children ?? [])];
+  let index = parent.children.length;
+  if (typeof op.before === "string") {
+    const at = parent.children.findIndex((child) => child.id === op.before);
+    if (at >= 0) index = at;
+  } else if (!op.before && typeof op.index === "number") {
+    index = Math.max(0, Math.min(Math.trunc(op.index), parent.children.length));
+  }
+  parent.children.splice(index, 0, node);
+}
+
 const TEXT_KINDS = new Set(["text", "md", "code", "ansi", "math", "editor", "input", "shimmer", "doc"]);
 
 function normalizeNode(raw) {
@@ -100,16 +113,7 @@ function applyOp(doc, raw) {
       const node = normalizeNode(op.node ?? op);
       if (!node) return;
       removeNode(doc, node.id);
-      const parent = findNode(doc.root, op.parent) ?? doc.root;
-      parent.children = [...(parent.children ?? [])];
-      let index = parent.children.length;
-      if (typeof op.before === "string") {
-        const at = parent.children.findIndex((child) => child.id === op.before);
-        if (at >= 0) index = at;
-      } else if (!op.before && typeof op.index === "number") {
-        index = Math.max(0, Math.min(Math.trunc(op.index), parent.children.length));
-      }
-      parent.children.splice(index, 0, node);
+      insertNode(doc, node, op);
       return;
     }
     case "set": {
@@ -152,16 +156,7 @@ function applyOp(doc, raw) {
       const node = findNode(doc.root, op.id);
       if (!node) return;
       removeNode(doc, op.id);
-      const parent = findNode(doc.root, op.parent) ?? doc.root;
-      parent.children = [...(parent.children ?? [])];
-      let index = parent.children.length;
-      if (typeof op.before === "string") {
-        const at = parent.children.findIndex((child) => child.id === op.before);
-        if (at >= 0) index = at;
-      } else if (!op.before && typeof op.index === "number") {
-        index = Math.max(0, Math.min(Math.trunc(op.index), parent.children.length));
-      }
-      parent.children.splice(index, 0, node);
+      insertNode(doc, node, op);
       return;
     }
     case "del":

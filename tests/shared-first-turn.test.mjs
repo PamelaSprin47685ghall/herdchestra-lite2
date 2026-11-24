@@ -17,12 +17,9 @@ describe("shared first turn", () => {
 			"toolResult",
 		]);
 		expect(head[0].content.map((part) => part.type)).toEqual(["text"]);
-		expect(head[1].content.map((part) => part.type)).toEqual([
-			"text",
-			"toolCall",
-		]);
+		expect(head[1].content.map((part) => part.type)).toEqual(["toolCall"]);
 		expect(head[2].content.map((part) => part.type)).toEqual(["text"]);
-		expect(head[1].content[1]).toMatchObject({
+		expect(head[1].content[0]).toMatchObject({
 			id: "chatcmpl-tool-b1498fbcafbb9475",
 			name: "bash",
 		});
@@ -47,10 +44,7 @@ describe("shared first turn", () => {
 			"toolResult",
 			"user",
 		]);
-		expect(messages[1].content.map((part) => part.type)).toEqual([
-			"text",
-			"toolCall",
-		]);
+		expect(messages[1].content.map((part) => part.type)).toEqual(["toolCall"]);
 		expect(messages[2].toolCallId).toBe(head[2].toolCallId);
 		expect(messages[3]).toBe(user);
 	});
@@ -65,7 +59,7 @@ describe("shared first turn", () => {
 		expect(JSON.stringify(head)).not.toContain("partialArgs");
 		expect(JSON.stringify(head)).not.toContain("streamIndex");
 		expect(assistant.stopReason).toBe("toolUse");
-		expect(head[1].content[1].arguments).toEqual({ command: "pwd" });
+		expect(head[1].content[0].arguments).toEqual({ command: "pwd" });
 	});
 
 	test("carries no stale model choice", () => {

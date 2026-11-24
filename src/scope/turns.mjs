@@ -84,7 +84,7 @@ export function isFreeCall(toolName, input) {
   return isFreeTool(toolName) || isInternalUriCall(toolName, input);
 }
 
-function validTurns(turns) {
+function validBudget(turns) {
   if (!isPlainObject(turns)) return false;
   for (const tool of Reflect.ownKeys(turns)) {
     if (typeof tool !== "string" || !isNonEmptyString(tool)) return false;
@@ -95,7 +95,7 @@ function validTurns(turns) {
 }
 
 /** Normalize tool names: apply_patch → edit. */
-function normalizeTurns(turns) {
+function normalizeBudget(turns) {
   if (!isPlainObject(turns)) return turns;
   const normalized = {};
   for (const key of Reflect.ownKeys(turns)) {
@@ -166,4 +166,4 @@ export function beatShares(items) {
   return shares;
 }
 
-export { CHARGE_SCALE, validTurns, normalizeTurns };
+export { CHARGE_SCALE, validBudget, normalizeBudget };

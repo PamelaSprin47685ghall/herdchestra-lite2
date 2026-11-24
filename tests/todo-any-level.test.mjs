@@ -472,7 +472,7 @@ describe("skill read at every level", () => {
 			assistant([call("r1", "read", { path: "notes.txt" })]),
 		);
 		expect(read.blocked).toBe(true);
-		expect(textOf(read)).toContain("no ordinary turns");
+		expect(textOf(read)).toContain("no ordinary tool budget");
 		expect(textOf(read)).toContain("scope_fork");
 		// The refusal is a turn decision, not a relay evaluation.
 		expect(relayOf(ctx).firstEvaluation).toBe(null);

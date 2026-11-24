@@ -478,7 +478,7 @@ export class SessionStation {
 	}
 
 	policy(ctx) {
-		// A fork scope is a writable subagent by construction: it owns turns
+		// A fork scope is a writable subagent by construction: it owns a budget
 		// and a bracket. The host may classify the spawned session as a plain
 		// main identity (a branch has no `session_init`, and its extension
 		// context can still say `kind: "main"`), so the bound fork identity is
@@ -647,7 +647,7 @@ export class SessionStation {
 			// normally follows an admission and this cache check is a hit. If
 			// the bounded gate cache evicted the id, or a host uses only this
 			// seam, admit now instead of letting a result skip the branch's
-			// turns. Charging is idempotent through `state.charges`.
+			// budget. Charging is idempotent through `state.charges`.
 			//
 			// A call that ends past the deadline keeps its result: the overrun
 			// is a debt in the same count as a spent turn, never a kill.

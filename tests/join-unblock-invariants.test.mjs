@@ -366,7 +366,7 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 		expect((await settleRace(j2, 5)).state).toBe("waiting");
 
 		// Child returns through the synchronous station handler directly (no manual ticket notify).
-		const ret = handleReturnCall(child, { id: "call-ret-1", arguments: {} });
+		const ret = handleReturnCall(child, { id: "call-ret-1", arguments: { dafny: "the child returns before the join settles" } });
 		expect(ret.details?.awaitingReceipt).toBe(true);
 
 		const [o1, o2] = await settledWithin(Promise.all([j1, j2]));

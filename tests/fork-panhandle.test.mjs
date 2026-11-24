@@ -12,7 +12,7 @@ import { createState } from "../src/scope/state.mjs";
 import {
 	createBracketLedger,
 	createClockOn,
-	forkTurnsText,
+	forkBudgetText,
 	forkOf,
 	registerFork,
 } from "../src/scope/index.mjs";
@@ -75,7 +75,7 @@ describe("a call that outruns its turns still runs", () => {
 		expect(record.panhandles).toHaveLength(1);
 		expect(record.panhandles[0].tool).toBe("read");
 		// The overrun is what the caller reads, not a silent free call.
-		expect(forkTurnsText(record, NOW)).toContain("panhandled 1x");
+		expect(forkBudgetText(record, NOW)).toContain("panhandled 1x");
 	});
 
 	test("a tool the fork never granted turns panhandles the same way", () => {

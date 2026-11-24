@@ -95,7 +95,7 @@ describe("scope_return after the receiver returned", () => {
 		const out = handleReturnCall(returnStation(ledger, "fork_b"), {
 			id: "call-return-b",
 			name: "scope_return",
-			arguments: {},
+			arguments: { dafny: "adoption probe: child b returns after the receiver moved" },
 		});
 
 		expect(out.details.awaitingReceipt).toBe(true);

@@ -283,7 +283,7 @@ describe("a child's skill receipt", () => {
 			false,
 		);
 
-		expect(text).toContain("Scope turns:");
+		expect(text).toContain("Scope budget:");
 		expect(text).not.toContain("Forked scope duty");
 		expect(text).not.toContain("scope_return");
 		expect(text).not.toContain("Autopilot on");
@@ -302,7 +302,7 @@ describe("a child's skill receipt", () => {
 		const text = message.content.map((part) => part.text ?? "").join("\n");
 
 		expect(message.herdSkill).toBe(true);
-		expect(text).toContain("Scope turns:");
+		expect(text).toContain("Scope budget:");
 		expect(text).not.toContain("Forked scope duty");
 		expect(text).not.toContain("Autopilot on");
 	});

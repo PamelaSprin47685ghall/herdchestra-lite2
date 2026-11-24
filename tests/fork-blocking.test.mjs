@@ -139,7 +139,7 @@ describe("scope_return as a ticket", () => {
     opened(ledger, "c1", "root");
 
     let settled = false;
-    const pending = returnTicket(station, "call-r1", {}, {}).then((result) => {
+    const pending = returnTicket(station, "call-r1", { dafny: "the child returns its record" }, {}).then((result) => {
       settled = true;
       return result;
     });
@@ -169,7 +169,7 @@ describe("scope_return as a ticket", () => {
     opened(ledger, "c2", "root");
 
     const controller = new AbortController();
-    const pending = returnTicket(station, "call-r2", {}, {}, controller.signal);
+    const pending = returnTicket(station, "call-r2", { dafny: "the child returns before the wait is cancelled" }, {}, controller.signal);
     await tick();
     controller.abort();
 

@@ -17,7 +17,7 @@ import {
 	supersedeFork,
 	takeReady,
 } from "../src/scope/forkjoin.mjs";
-import { grantTurns } from "../src/scope/panhandle.mjs";
+import { grantBudget } from "../src/scope/panhandle.mjs";
 
 const NOW = 1_700_000_000_000;
 
@@ -120,12 +120,12 @@ describe("supersede and live lookup", () => {
 	});
 });
 
-describe("grantTurns", () => {
+describe("grantBudget", () => {
 	test("refuses free tools and empty grants", () => {
 		const { record } = open();
-		expect(grantTurns(record, { tools: { scope_fork: 1 } }).code).toBe(
+		expect(grantBudget(record, { tools: { scope_fork: 1 } }).code).toBe(
 			"GRANT_FREE_TOOL",
 		);
-		expect(grantTurns(record, {}).code).toBe("GRANT_EMPTY");
+		expect(grantBudget(record, {}).code).toBe("GRANT_EMPTY");
 	});
 });

@@ -90,7 +90,7 @@ const REFUSAL_KEY = {
   INVALID_TARGETS: "invalid-targets",
 };
 
-function turnsText(turns) {
+function budgetText(turns) {
   const parts = [];
   for (const key of Object.keys(turns ?? {})) parts.push(`${key} ${turns[key]}`);
   return parts.length > 0 ? parts.join(", ") : "none";
@@ -299,7 +299,7 @@ export function childReceiptText(spec) {
       marker: scopeReceiptMarker(spec.scopeId ?? spec.forkId),
       depth: spec.childDepth,
       fsm: spec.fsm,
-      budget: turnsText(spec.budget),
+      budget: budgetText(spec.budget),
       targets: targetsText(spec.targets),
     }),
     S["fork.child-return"],
@@ -334,18 +334,18 @@ function unionTargets(first, second) {
 
 /** One amended or revived line; both sections share this shape. */
 function amendmentLine(entry) {
-  return `- ${entry.scopeId}: ${turnsDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`;
+  return `- ${entry.scopeId}: ${budgetDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`;
 }
 
 /** Human-readable turn delta for a fork result line. */
-function turnsDelta(added) {
+function budgetDelta(added) {
   const granted = Object.entries(added?.tools ?? {})
     .map(([tool, amount]) => `${amount} ${tool}`)
     .join(", ");
   const seconds = Number.isInteger(added?.seconds) && added.seconds > 0
     ? `${added.seconds}s`
     : "";
-  return [granted, seconds].filter(Boolean).join(" + ") || "no turns";
+  return [granted, seconds].filter(Boolean).join(" + ") || "no budget";
 }
 
 /** The text a later generation reads as its predecessor's history. */
@@ -365,7 +365,7 @@ function generationReceiptText({ scopeId, childDepth, generation, standing, fsm,
       marker: scopeReceiptMarker(scopeId),
       depth: childDepth,
       fsm: standing,
-      budget: turnsText(budget),
+      budget: budgetText(budget),
       targets: targetsText(targets),
     }),
     `[Continuing scope ${scopeId} — generation ${generation}]`,
@@ -421,7 +421,7 @@ export function handleForkCall(station, call, options = {}) {
     return trimmed === "" ? 0 : trimmed.length + 1;
   };
   // A generation is priced by the receipt it sends, whether or not the item
-  // names turns: an empty turn map still renders a receipt.
+  // names budget: an empty budget still renders a receipt.
   const generationChars = (item, target, identityChars) => {
     if (!target) return 0;
     if (
@@ -453,7 +453,7 @@ export function handleForkCall(station, call, options = {}) {
     const earlier = firstItemByScope.get(key) ?? null;
     if (earlier === null) firstItemByScope.set(key, item);
     // A repeated name inside one batch targets the fork the earlier item
-    // creates, so the receipt it sends carries that item's fsm, turns and
+    // creates, so the receipt it sends carries that item's fsm, budget and
     // targets.
     const target = earlier === null ? (liveByName.get(key) ?? null) : null;
     const sent = target ?? earlier;
@@ -656,7 +656,7 @@ export function handleForkCall(station, call, options = {}) {
         continue;
       }
       const fork = registered.fork;
-      // `registerFork` is the only place turns are born, and it copies the
+      // `registerFork` is the only place a budget is born, and it copies the
       // input into both `budget` and `remaining`. The remaining fields go
       // through the ledger's annotate entry, which is also what wakes parked
       // joins: a bare field write would skip the change notification.
@@ -747,13 +747,13 @@ export function handleForkCall(station, call, options = {}) {
       continue;
     }
 
-    // Decide the reuse turns before touching the old record. A reuse that can
+    // Decide the reuse budget before touching the old record. A reuse that can
     // never start must leave a ready generation deliverable: superseding first
     // and failing after would park the old scope in scope_return against a take
     // that no longer exists.
     const budget = addTurns(target.remaining, item.budget);
     if (Object.keys(budget).length === 0) {
-      noteFailure(target.forkId, item, render(E["scope-reuse-empty"] || "This reuse adds no turns and the previous generation has none left.", {
+      noteFailure(target.forkId, item, render(E["scope-reuse-empty"] || "This reuse adds no budget and the previous generation has none left.", {
         scopeId: item.scopeId,
       }));
       continue;
@@ -890,7 +890,7 @@ export function handleForkCall(station, call, options = {}) {
     sections.push([
       `Continued ${continued.length} finished scope${continued.length === 1 ? "" : "s"}:`,
       ...continued.map((entry) =>
-        `- ${entry.scopeId}: generation ${entry.generation}, after ${entry.priorForkId}, ${turnsDelta(entry.added)} added.`,
+        `- ${entry.scopeId}: generation ${entry.generation}, after ${entry.priorForkId}, ${budgetDelta(entry.added)} added.`,
       ),
     ].join("\n"));
   }
@@ -1135,6 +1135,13 @@ export function handleReturnCall(station, call) {
     }
     return errorResult("ORPHANS_WITHOUT_RECEIVER", E["orphans-without-receiver"]);
   }
+  // Judge the closing text before anything moves. A return that carries no
+  // dafny hands back a record whose arguments and results are already gone;
+  // refusing it here leaves the bracket untouched, so the child can retry.
+  const dafny = typeof args.dafny === "string" ? args.dafny.trim() : "";
+  if (dafny === "") {
+    return errorResult("MISSING_DAFNY", E["missing-dafny"]);
+  }
   // Move this branch before it becomes ready: markReady queues the result
   // under the record's current owner. Changing the owner afterwards would
   // leave the queue and the record disagreeing, and the child would wait for
@@ -1146,7 +1153,6 @@ export function handleReturnCall(station, call) {
   // record cannot tell a silent child from a broken one. Amends are filtered
   // first: a withdrawn beat must never return through a replay.
   let renderedRecord = null;
-  const dafny = typeof args.dafny === "string" ? args.dafny.trim() : "";
   if (typeof station.setChildOutcome === "function") {
     const messages =
       typeof station.contextMessages === "function" ? station.contextMessages() : [];
@@ -1157,8 +1163,8 @@ export function handleReturnCall(station, call) {
     renderedRecord = renderChildRecord(visible, {
       start: childRecordStart(visible, record),
     });
-    // The optional dafny goes last: the child named it deliberately, so it
-    // must survive the replay that keeps only assistant text and tool names.
+    // The dafny goes last: the child named it deliberately, so it must
+    // survive the replay that keeps only assistant text and tool names.
     if (dafny !== "") {
       renderedRecord = renderedRecord === "" ? dafny : `${renderedRecord}\n\n${dafny}`;
     }

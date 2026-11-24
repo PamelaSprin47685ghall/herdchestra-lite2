@@ -10,7 +10,7 @@ import {
 	joinAdmission,
 } from "../../scope/admission.mjs";
 import { decideAbandon } from "../../scope/abandon.mjs";
-import { normalizeTurns, validTurns } from "../../scope/turns.mjs";
+import { normalizeBudget, validBudget } from "../../scope/turns.mjs";
 import { normalizeTargets, validTargets } from "../../scope/targets.mjs";
 import { publicScopeId, validScopeId } from "../../scope/scope-id.mjs";
 import { resolveModelSelector } from "../../scope/model-selector.mjs";
@@ -77,11 +77,12 @@ export function validateFork(args) {
 	// targets. A *new* scope still needs an fsm, and the handler enforces that
 	// after it knows whether the name already exists.
 	const fsm = trimText(args?.fsm);
-	if (!Object.hasOwn(args ?? {}, "budget") || !validTurns(args.budget)) {
+	// `budget` is the persisted field name; its values are turn counts.
+	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}
-	const budget = normalizeTurns(args.budget);
-	if (!validTurns(budget)) return { ok: false, code: "INVALID_BUDGET" };
+	const budget = normalizeBudget(args.budget);
+	if (!validBudget(budget)) return { ok: false, code: "INVALID_BUDGET" };
 	if (!validTargets(args?.targets)) {
 		return { ok: false, code: "INVALID_TARGETS" };
 	}

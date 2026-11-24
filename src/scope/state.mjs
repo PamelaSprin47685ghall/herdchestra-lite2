@@ -64,7 +64,7 @@ export function createState() {
     epoch: 0,
     charges: {},
     amends: [],
-    // The bracket tree itself: fork ids, owners, turns, ready order and the
+    // The bracket tree itself: fork ids, owners, budgets, ready order and the
     // frozen record of every child that returned. It is persisted with the
     // state because a reload must be able to close or explain every bracket.
     brackets: createBracketLedger(),

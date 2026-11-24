@@ -181,12 +181,12 @@ describe("the scope state owns the tree", () => {
         persisted += 1;
       },
     };
-    const out = handleReturnCall(station, { id: "r1", arguments: {} });
+    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: "persisted return" } });
     expect(out.isError).toBeUndefined();
     expect(persisted).toBe(1);
     expect(out.content[0].text).not.toContain("Persistence warning");
     expect(forkOf(ledger, "c1").status).toBe("ready");
-    expect(forkOf(ledger, "c1").record).toBe("child work");
+    expect(forkOf(ledger, "c1").record).toBe("child work\n\npersisted return");
   });
 
   test("a failed ledger write is visible in the return receipt", () => {
@@ -203,7 +203,7 @@ describe("the scope state owns the tree", () => {
       persistLedger: () => false,
       noteError: () => {},
     };
-    const out = handleReturnCall(station, { id: "r1", arguments: {} });
+    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: "persisted return" } });
     expect(out.isError).toBeUndefined();
     expect(out.content[0].text).toContain("Persistence warning");
     // The domain fact still stands: the parent can take it this run.

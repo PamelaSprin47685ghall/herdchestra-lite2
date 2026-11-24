@@ -70,13 +70,17 @@ No bracket ledger is attached; fork/join is unavailable in this session. Continu
 
 A new scope needs a non-empty `fsm`. Only a reuse of an existing `scopeId` may omit it.
 
+## missing-dafny
+
+A return needs `dafny` with text. Put there what your text and the tool names cannot carry: the arguments and results the caller never sees. If the replay drops nothing, say that in one line.
+
 ## foreign-scope-id
 
 Scope {{scopeId}} belongs to another owner. Only its owner may reuse it.
 
 ## scope-running-blocked
 
-Scope {{scopeId}} is running, so it cannot be marked blocked. Reuse it with turns or a requirement instead.
+Scope {{scopeId}} is running, so it cannot be marked blocked. Reuse it with `budget` or a requirement instead.
 
 ## scope-reuse-empty
 
@@ -122,11 +126,11 @@ No receiving scope owns this fork. Join the scopes it forked first.
 
 ## root-has-no-budget
 
-The root is outside all scopes and has no ordinary turns. Delegate the work with `scope_fork`; control tools stay available, and so does every `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…), which costs no turn at any level.
+The root is outside all scopes and has no ordinary tool budget. Delegate the work with `scope_fork`; control tools stay available, and so does every `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…), which costs no turn at any level.
 
 ## no-branch-budget
 
-Scope `{{ownerId}}` has no fork record, so it has no turns. Return with `scope_return` or fork the work.
+Scope `{{ownerId}}` has no fork record, so it has no budget. Return with `scope_return` or fork the work.
 
 ## accounting-failed-closed
 
@@ -154,7 +158,7 @@ This scope owns no unreceived work. This call created no receipt. Fork a new sco
 
 ## tool-budget-exhausted
 
-Tool `{{tool}}` has no turns left on this scope (remaining {{remaining}}/{{budget}}). The call runs anyway, and the receipt marks it panhandled. That mark is the whole cost, and it is enough: the scope that forked you reads it on return, and it says your sizing was wrong. The cheap exit is `scope_fork` (free) for whatever another scope can own; `scope_return` is the other.
+Tool `{{tool}}` has no budget left on this scope (remaining {{remaining}}/{{budget}}). The call runs anyway, and the receipt marks it panhandled. That mark is the whole cost, and it is enough: the scope that forked you reads it on return, and it says your sizing was wrong. The cheap exit is `scope_fork` (free) for whatever another scope can own; `scope_return` is the other.
 
 ## model-unknown
 

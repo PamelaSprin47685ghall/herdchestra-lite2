@@ -1,7 +1,7 @@
 // Station texts: every model-facing receipt string. The prose lives in
 // resources/prompts/receipts/scope.md; this module chooses and composes it.
 
-import { forkTurnsText } from "../scope/index.mjs";
+import { forkBudgetText } from "../scope/index.mjs";
 import { handoffDemand } from "../relay/index.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
@@ -37,8 +37,8 @@ export function handoffDemandVisible(relay, history) {
 
 const T = loadDoc("receipts/scope");
 
-function branchTurns(record, clock = null) {
-	return forkTurnsText(record, Date.now(), clock) || "none";
+function branchBudget(record, clock = null) {
+	return forkBudgetText(record, Date.now(), clock) || "none";
 }
 
 /** The pin receipt: the note is saved, and the ledger may now be stale. */
@@ -47,7 +47,7 @@ export const PIN_SAVED_TEXT = T["pin.saved"];
 function amendText(applied, record = null, clock = null) {
 	const refunded = Number.isInteger(applied.refunded) ? applied.refunded : 0;
 	const text = render(T["amend.undone"], { refunded });
-	return record ? `${text}\n${render(T["amend.remaining"], { budget: branchTurns(record, clock) })}` : text;
+	return record ? `${text}\n${render(T["amend.remaining"], { budget: branchBudget(record, clock) })}` : text;
 }
 
 /** A steer when a branch tries to stop with unreceived work. */
@@ -59,11 +59,11 @@ export function skillReceiptText(state, relayOn = true, branch = null, openCount
 	const isChild = child || branch !== null;
 	const lines = [];
 	if (isChild) {
-		// A forked scope always has turns to report. When the ledger holds no
+		// A forked scope always has a budget to report. When the ledger holds no
 		// record for it, say the number is unknown instead of dropping the line:
 		// an absent line reads as "nothing to watch".
 		lines.push(branch
-			? render(T["receipt.branch"], { budget: branchTurns(branch, clock) })
+			? render(T["receipt.branch"], { budget: branchBudget(branch, clock) })
 			: T["receipt.branch-missing"]);
 	}
 	if (openCount > 0) {

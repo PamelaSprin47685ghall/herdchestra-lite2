@@ -363,7 +363,7 @@ describe("owner queries", () => {
     };
     const returned = handleReturnCall(child, {
       id: "call-r1",
-      arguments: {},
+      arguments: { dafny: "the child returns its record" },
     });
     expect(returned.isError).toBeUndefined();
     // The station queues; only the ticket's wait turns this into acceptance.
@@ -489,7 +489,7 @@ describe("owner queries", () => {
     };
     const returned = handleReturnCall(child, {
       id: "call-rp",
-      arguments: {},
+      arguments: { dafny: "the child hands its own children to the parent first" },
     });
     expect(returned.content[0].text).toContain("queued for Root");
     expect(returned.content[0].text).toContain("scope-2");
@@ -504,7 +504,7 @@ describe("owner queries", () => {
     expect(taken.content[0].text).toContain("Call scope_join again to take the next one.");
   });
 
-  test("appends the optional dafny to the end of the child's record", async () => {
+  test("appends the dafny to the end of the child's record", async () => {
     const { handleReturnCall, handleJoinCall } = await import(
       "../src/station/fork-controls.mjs"
     );

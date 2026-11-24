@@ -2,13 +2,13 @@
 //
 // There is no rescue tool and there is no grant for it. A call whose turns are
 // gone still runs, and the record keeps the tool's name in `panhandles`, so the
-// overrun is read back where it happened: `forkTurnsText` ends the branch's
-// turns line with `panhandled Nx`, and the caller reads that line when the
+// overrun is read back where it happened: `forkBudgetText` ends the branch's
+// budget line with `panhandled Nx`, and the caller reads that line when the
 // branch returns. The cost of panhandling is not a refusal. It is that the
 // overrun is public, and it stays on the record after the work is done.
 //
 // Adding turns is a different act, and it is not a rescue: `amendFork`
-// calls `grantTurns` when a reused scope arrives with more work. Scope size
+// calls `grantBudget` when a reused scope arrives with more work. Scope size
 // follows the work a scope holds, so the grant adds and never caps.
 
 import {
@@ -108,7 +108,7 @@ function readSeconds(value) {
  * owns the status gate; validation runs before any mutation. There is no
  * ceiling on the result: a scope that holds more work holds more turns.
  */
-export function grantTurns(record, request = {}, options = {}) {
+export function grantBudget(record, request = {}, options = {}) {
   if (!record || typeof record !== "object") {
     return failure("UNKNOWN_FORK", "No branch record to grant.");
   }
@@ -122,7 +122,7 @@ export function grantTurns(record, request = {}, options = {}) {
   if (Object.keys(tools).length === 0 && seconds === 0) {
     return failure(
       "GRANT_EMPTY",
-      "Name at least one tool's turns, or ask for seconds.",
+      "Name at least one tool budget, or ask for seconds.",
     );
   }
   if (
@@ -133,7 +133,7 @@ export function grantTurns(record, request = {}, options = {}) {
   ) {
     return failure(
       "GRANT_CLOCK_OFF",
-      "This branch has no wall clock to extend; ask for tool turns instead.",
+      "This branch has no wall clock to extend; ask for tool budget instead.",
     );
   }
 

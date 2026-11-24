@@ -44,7 +44,7 @@ export {
   validLedger,
   applyCharge,
   applyRefund,
-  forkTurnsText,
+  forkBudgetText,
 } from "./forkjoin.mjs";
 export {
   pauseClock,

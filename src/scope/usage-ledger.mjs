@@ -187,7 +187,7 @@ export function createUsageLedger(options) {
 		} catch (error) {
 			// A host without a branch keeps the null baseline. The loss is
 			// recorded because every later scope baseline then starts from the
-			// wrong number, which shows up as impossible turn arithmetic.
+			// wrong number, which shows up as impossible budget arithmetic.
 			noteError("usage", error);
 		}
 	}

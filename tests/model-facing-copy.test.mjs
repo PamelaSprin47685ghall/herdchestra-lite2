@@ -111,11 +111,11 @@ test("a forked scope with no ledger record still learns that its turns are unava
 	// The bearer runs inside a scope, yet the ledger holds no fork record for
 	// it. Saying nothing would read as "turns are fine"; say it is unknown.
 	const missing = skillReceiptText(state, true, null, 0, false, true);
-	expect(missing).toContain("Scope turns:");
+	expect(missing).toContain("Scope budget:");
 	expect(missing).toMatch(/no record|unavailable/i);
 	expect(missing).not.toMatch(/remaining\s+\d/);
 	// A root receipt has no turns to report, and must not gain the line.
-	expect(skillReceiptText(state)).not.toContain("Scope turns:");
+	expect(skillReceiptText(state)).not.toContain("Scope budget:");
 });
 
 test("the fork receipt describes new work once and lists all unreceived scopes by name", () => {
@@ -144,8 +144,11 @@ test("the registered scope_return explains the sealed final receipt and the dige
 	const tools = new Map();
 	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
 	const returning = tools.get("scope_return");
-	expect(returning.parameters.required).toBeUndefined();
+	expect(returning.parameters.required).toEqual(["dafny"]);
 	expect(returning.parameters.properties.dafny.type).toBe("string");
+	expect(returning.parameters.properties.dafny.description).toMatch(
+		/^Required\. The record is submitted only with it/,
+	);
 	expect(returning.parameters.properties.dafny.description).toMatch(
 		/appended to the record after trimming/i,
 	);

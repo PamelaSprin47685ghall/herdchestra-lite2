@@ -22,8 +22,8 @@ const E = loadDoc("errors");
 /**
  * Charge one tool call against the branch that owns it.
  *
- * A branch's turns exist only on its fork record. The root has no fork
- * record, so it has no turns: an ordinary tool is refused there and the work
+ * A branch's budget exists only on its fork record. The root has no fork
+ * record, so it has no budget: an ordinary tool is refused there and the work
  * must be delegated with `scope_fork`. A forked branch spends its own fork
  * record, never the parent's. Free calls (the control tools, `todo`, `ask`,
  * `wait`, and a `read` or `write` of a built-in protocol URI) pass at every
@@ -66,7 +66,7 @@ export function chargeBranch(state, ledger, params = {}) {
     if (charged.code !== "BUDGET_EXHAUSTED") return charged;
     // Turns are a ledger, not a fence. A branch that has spent its
     // turns still runs the call: the charge stops at zero, and the record
-    // keeps the tool's name, so `forkTurnsText` ends the turns line with
+    // keeps the tool's name, so `forkBudgetText` ends the budget line with
     // `panhandled Nx` where the caller reads it. The zero-amount charge entry
     // makes a retry of the same call free instead of a second admission.
     const marked = notePanhandled(record, charged.tool, { callId: toolCallId });

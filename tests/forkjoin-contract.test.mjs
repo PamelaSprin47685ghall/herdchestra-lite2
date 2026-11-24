@@ -50,7 +50,7 @@ describe("adoption follows the current receiver", () => {
 
     const out = handleReturnCall(
       stationFor(ledger, { forkId: "p", parentOwnerId: "root" }),
-      { id: "r", arguments: {} },
+      { id: "r", arguments: { dafny: "p returns through the station handler" } },
     );
     expect(out.isError).toBeUndefined();
     expect(out.details.receiver).toBe("g");
@@ -128,16 +128,40 @@ describe("a batch projects one item into each child", () => {
   });
 });
 
+describe("a return without a closing text is refused", () => {
+  test("a missing dafny is refused before any bracket moves", () => {
+    const ledger = createBracketLedger();
+    registerFork(ledger, { forkId: "p", ownerId: "root", fsm: "parent", depth: 0 });
+    const station = stationFor(ledger, { forkId: "p", parentOwnerId: "root" });
+    const out = handleReturnCall(station, { id: "r1", arguments: {} });
+    expect(out.isError).toBe(true);
+    expect(out.details.code).toBe("MISSING_DAFNY");
+    // Nothing moved: the caller can retry with the field filled in.
+    expect(forkOf(ledger, "p").status).toBe("running");
+    expect(readyChildren(ledger, "root")).toEqual([]);
+  });
+
+  test("whitespace alone does not satisfy the field", () => {
+    const ledger = createBracketLedger();
+    registerFork(ledger, { forkId: "p", ownerId: "root", fsm: "parent", depth: 0 });
+    const station = stationFor(ledger, { forkId: "p", parentOwnerId: "root" });
+    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: " \n\t " } });
+    expect(out.isError).toBe(true);
+    expect(out.details.code).toBe("MISSING_DAFNY");
+    expect(forkOf(ledger, "p").status).toBe("running");
+  });
+});
+
 describe("repeated right brackets do not double-count", () => {
   test("a second scope_return is refused and moves no bracket", () => {
     const ledger = createBracketLedger();
     registerFork(ledger, { forkId: "p", ownerId: "root", fsm: "parent", depth: 0 });
     registerFork(ledger, { forkId: "c", ownerId: "p", fsm: "child", depth: 1 });
     const station = stationFor(ledger, { forkId: "p", parentOwnerId: "root" });
-    const first = handleReturnCall(station, { id: "r1", arguments: {} });
+    const first = handleReturnCall(station, { id: "r1", arguments: { dafny: "first return makes the bracket ready" } });
     expect(first.isError).toBeUndefined();
     expect(forkOf(ledger, "p").status).toBe("ready");
-    const second = handleReturnCall(station, { id: "r2", arguments: {} });
+    const second = handleReturnCall(station, { id: "r2", arguments: { dafny: "second return: the bracket already moved" } });
     expect(second.isError).toBe(true);
     expect(second.details.code).toBe("FORK_NOT_RUNNING");
     // The still-running child was not handed over twice.

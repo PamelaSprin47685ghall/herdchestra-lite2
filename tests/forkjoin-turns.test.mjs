@@ -4,7 +4,7 @@ import {
   applyCharge,
   applyRefund,
   createBracketLedger,
-  forkTurnsText,
+  forkBudgetText,
   forkOf,
   registerFork,
 } from "../src/scope/forkjoin.mjs";
@@ -254,13 +254,13 @@ describe("fork turns text", () => {
     const ledger = createBracketLedger();
     fork(ledger, { budget: { read: 4, bash: 2 }, time: 120, startedAt: 0 });
     applyCharge(ledger, "f1", { toolCallId: "c1", tool: "read", amount: 1 });
-    const text = forkTurnsText(forkOf(ledger, "f1"), 30000);
+    const text = forkBudgetText(forkOf(ledger, "f1"), 30000);
     expect(text).toBe("bash remaining 2.00/2.00, read remaining 3.00/4.00, time remaining 1:30/2:00");
   });
 
   test("a fork with no turns renders nothing", () => {
     const ledger = createBracketLedger();
     fork(ledger);
-    expect(forkTurnsText(forkOf(ledger, "f1"), 0)).toBe("");
+    expect(forkBudgetText(forkOf(ledger, "f1"), 0)).toBe("");
   });
 });

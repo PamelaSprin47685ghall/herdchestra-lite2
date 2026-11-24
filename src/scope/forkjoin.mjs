@@ -9,7 +9,7 @@ import { decideAbandon } from "./abandon.mjs";
 import { deadlineInfo } from "./clock.mjs";
 import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
 import { publicScopeId } from "./scope-id.mjs";
-import { grantTurns } from "./panhandle.mjs";
+import { grantBudget } from "./panhandle.mjs";
 import { formatAmount } from "./turns.mjs";
 
 const listeners = Symbol("ledger listeners");
@@ -120,7 +120,7 @@ export function registerFork(ledger, spec, options = {}) {
   if (!isDepth(s.depth)) {
     return failure("INVALID_DEPTH", "depth must be a non-negative integer.");
   }
-  if (s.budget !== undefined && !validTurns(s.budget)) {
+  if (s.budget !== undefined && !validBudget(s.budget)) {
     return failure("INVALID_BUDGET", "The `budget` field must be a plain object of non-negative turns.");
   }
   if (s.time !== undefined && s.time !== null) {
@@ -167,8 +167,8 @@ export function registerFork(ledger, spec, options = {}) {
     outcome: null,
     reason: null,
     reparentedFrom: null,
-    // The branch's own account. A fork spec is the only place a branch's turns
-    // are born; the parent's turns never fund it and never shrink for it.
+    // The branch's own account. A fork spec is the only place a branch's budget
+    // is born; the parent's budget never funds it and never shrinks for it.
     budget,
     remaining,
     spent,
@@ -249,7 +249,7 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
   const seconds = Number.isInteger(source.seconds) && source.seconds > 0 ? source.seconds : 0;
   let granted = { ok: true, tools: {}, seconds: 0 };
   if (Object.keys(tools).length > 0 || seconds > 0) {
-    granted = grantTurns(
+    granted = grantBudget(
       record,
       { tools, ...(seconds > 0 ? { seconds } : {}) },
       { ...options, allowClockOff: true, scopeCap: true },
@@ -774,6 +774,7 @@ function validRecord(forkId, record) {
   if (!isDepth(record.depth)) return false;
   if (!STATUSES.has(record.status)) return false;
   if (!Number.isInteger(record.openSeq) || record.openSeq < 0) return false;
+  // The persisted field is named `budget`; its values are turn counts.
   if (!validNumberMap(record.budget)) return false;
   if (!validNumberMap(record.remaining)) return false;
   if (!validNumberMap(record.spent)) return false;
@@ -907,7 +908,7 @@ function isPlainObject(value) {
   return proto === Object.prototype || proto === null;
 }
 
-function validTurns(value) {
+function validBudget(value) {
   if (!isPlainObject(value)) return false;
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string" || key === "") return false;
@@ -932,7 +933,7 @@ function round2(value) {
 
 function formatClock(ms) {
   // Remaining time floors: ceil made 57.1s render as 0:58, so the first frame
-  // showed remaining equal to the turns granted and looked like a stopped clock.
+  // showed remaining equal to the budget granted and looked like a stopped clock.
   const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
@@ -979,12 +980,12 @@ export function applyCharge(ledger, forkId, charge = {}) {
   if (!Number.isFinite(remaining) || remaining <= 0) {
     const left = Number.isFinite(remaining) ? remaining : 0;
     // The host shows `reason` verbatim when a gate refuses a tool. A refusal
-    // without one reads as an unattributed extension block, so the turns
-    // themselves are stated here.
+    // without one reads as an unattributed extension block, so the budget
+    // itself is stated here.
     return {
       ok: false,
       code: "BUDGET_EXHAUSTED",
-      reason: `Tool "${tool}" has no turns left on this branch (remaining ${formatAmount(left)}/${formatAmount(budget)}).`,
+      reason: `Tool "${tool}" has no budget left on this branch (remaining ${formatAmount(left)}/${formatAmount(budget)}).`,
       tool,
       remaining: left,
       budget,
@@ -1023,7 +1024,7 @@ export function applyRefund(ledger, forkId, toolCallId) {
 }
 
 /** Render a branch's turns and clock the way the old scope line did. */
-export function forkTurnsText(record, now = Date.now(), clock = null) {
+export function forkBudgetText(record, now = Date.now(), clock = null) {
   if (!record || !isPlainObject(record.remaining)) return "";
   const entries = [];
   for (const tool of Object.keys(record.remaining).sort()) {

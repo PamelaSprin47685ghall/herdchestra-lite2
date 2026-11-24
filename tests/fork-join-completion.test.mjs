@@ -104,7 +104,7 @@ describe("adoption keeps the parent ahead of its children", () => {
 
 		const out = handleReturnCall(childStation(ledger, "p"), {
 			id: "return-p",
-			arguments: {},
+			arguments: { dafny: "the child did the work; record carries its text" },
 		});
 		expect(out.isError).toBeUndefined();
 		expect(forkOf(ledger, "c1").ownerId).toBe("root");
@@ -134,7 +134,7 @@ describe("adoption keeps the parent ahead of its children", () => {
 		// A second return cannot mark the same bracket ready again.
 		const out = handleReturnCall(childStation(ledger, "p"), {
 			id: "return-p-again",
-			arguments: {},
+			arguments: { dafny: "second return attempt: the bracket is already ready" },
 		});
 		expect(out.isError).toBe(true);
 		expect(forkOf(ledger, "c1").ownerId).toBe("p");
@@ -160,7 +160,7 @@ describe("adoption files the result at the receiver's level", () => {
 			depth: 1,
 		});
 		markReady(ledger, "c1");
-		handleReturnCall(childStation(ledger, "p"), { id: "return-p", arguments: {} });
+		handleReturnCall(childStation(ledger, "p"), { id: "return-p", arguments: { dafny: "p returns so two children queue" } });
 
 		const root = rootStation(ledger, state);
 		const first = handleJoinCall(root, { id: "j1", arguments: {} });
@@ -188,7 +188,7 @@ describe("a child record is frozen before the parent can take it", () => {
 		]);
 		station.setChildOutcome = (forkId, outcome) => outcomes.set(forkId, outcome);
 
-		const out = handleReturnCall(station, { id: "return-p", arguments: {} });
+		const out = handleReturnCall(station, { id: "return-p", arguments: { dafny: "p returns: the child did the work" } });
 		expect(out.isError).toBeUndefined();
 		expect(outcomes.get("p")?.record).toContain("the child did the work");
 		expect(outcomes.get("p")?.failed).toBe(false);

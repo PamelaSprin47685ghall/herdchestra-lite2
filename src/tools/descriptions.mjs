@@ -93,18 +93,22 @@ export const joinParameters = {
 	properties: {},
 };
 
-// `dafny` is optional: the child's text already reaches the parent, so the
-// field exists for what the replay cannot carry — a tool's arguments and its
-// result are replaced by its bare name. The name is the instruction: a
-// Dafny-style specification is the form it invites, and `fork-join.md` owns
-// the wording the model reads. A returning child does not summarize the
-// parent's elder: the last receipt of its own level has no later sibling to
-// archive it, so it is sealed instead of being reported.
+// `dafny` is required: a return without it is an incomplete handoff, because
+// a tool's arguments and its result are replaced by its bare name in the
+// record, so this field is the only path those facts have to the caller. The
+// station trims it and refuses a blank value (MISSING_DAFNY), and `\S` states
+// the same rule here so a field of spaces cannot pass the schema while the
+// station would reject it. The name is the
+// instruction: a Dafny-style specification is the form it invites, and
+// `fork-join.md` owns the wording the model reads. A returning child does not
+// summarize the parent's elder: the last receipt of its own level has no
+// later sibling to archive it, so it is sealed instead of being reported.
 export const returnParameters = {
 	type: "object",
 	additionalProperties: false,
+	required: ["dafny"],
 	properties: {
-		dafny: { type: "string", description: RETURN_DAFNY_DESCRIPTION },
+		dafny: { type: "string", pattern: "\\S", description: RETURN_DAFNY_DESCRIPTION },
 	},
 };
 

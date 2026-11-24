@@ -10,7 +10,7 @@ Root is outside all scopes. It plans, forks, joins, and answers; no ordinary too
 
 ### Run scopes
 
-- Every level, root included, holds the free control tools (`scope_fork`, `scope_join`, `scope_context`, `todo`, `ask`, `wait`). A `read` or `write` whose path is a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free too: no turn, at any depth, on a scope with zero turns or on the root.
+- Every level, root included, holds the free control tools (`scope_fork`, `scope_join`, `scope_return`, `scope_send`, `scope_context`, `todo`, `ask`, `wait`). A `read` or `write` whose path is a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free too: no turn, at any depth, on a scope with zero turns or on the root.
 - Word to the wise, at every depth: `scope_fork` costs nothing, and the forked scope's budget and clock are minted with the item that starts it — the calling scope's budget is untouched. Plan the split the moment the task arrives: decide then which parts go to fresh scopes — the workers in them can fork again in turn — and join their records before returning. Waiting until a clean handoff is still affordable means you have already started cramming; forking is cheaper than any handout.
 - Turns are a ledger, not a fence. When a scope has spent its turns for a tool, the call still runs: nothing refuses it, and the receipt says the call was panhandled. Panhandling is a scope admitting in public that it sized itself wrong, so the panhandle count stays on the record, and the scope that forked you reads it when you return.
 - Assume every scope can be a subtree, and fork as much as the work allows: a worker in a forked scope forks again when it finds independent work in turn. First, estimate `n`, the ideal turns of work in hand, and pass it with the item. Then, consider the requirement for a scope to match `sqrt(2n)` turns, so we need `sqrt(2n)` scopes to finish the total 2n work. The 2 is the back-and-forth a worker's real work costs, which runs about twice the ideal estimate. 
@@ -45,5 +45,5 @@ Root is outside all scopes. It plans, forks, joins, and answers; no ordinary too
 <skill version="1.0" enforced>
 ### Scope duties
 
-Forked scope duty: complete the assigned slice, then return with `scope_return`. The root evaluates the ledger, arms the handoff, and writes the relay report.
+Forked scope duty: complete the assigned slice, then return with `scope_return`. To reach a scope that already exists — your parent, a sibling, the root, or a scope that has finished — use `scope_send` with its path; the receipt lists every active path. The root evaluates the ledger, arms the handoff, and writes the relay report.
 </skill>

@@ -71,6 +71,7 @@ import {
 	executeFork,
 	executeJoin,
 	executeReturn,
+	executeSend,
 } from "./execute.mjs";
 import {
 	confirmJoinPersistence,
@@ -858,6 +859,10 @@ export class SessionStation {
 		processed?.markCall?.(toolCallId);
 		this.persist();
 		return result;
+	}
+
+	executeSend(toolCallId, params, ctx) {
+		return executeSend(this, toolCallId, params, ctx);
 	}
 
 	executeReturn(toolCallId, params, ctx) {

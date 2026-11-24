@@ -13,15 +13,10 @@ import {
 	rehomeReadyResults,
 	reparentOrphans,
 	serializeLedger,
-	supersedeFork,
 	takeReady,
 } from "../src/scope/index.mjs";
 import { restoreLedgerChecked } from "../src/scope/forkjoin.mjs";
-import {
-	createForkRegistry,
-	notifyWaiters,
-	waitForJoin,
-} from "../src/scope/fork-registry.mjs";
+import { createForkRegistry } from "../src/scope/fork-registry.mjs";
 import { handleReturnCall } from "../src/station/fork-controls.mjs";
 import { returnTicket } from "../src/tools/tickets.mjs";
 
@@ -98,19 +93,18 @@ describe("scope_return after the receiver returned", () => {
 			arguments: { dafny: "adoption probe: child b returns after the receiver moved" },
 		});
 
-		expect(out.details.awaitingReceipt).toBe(true);
+		expect(out.details.accepted).toBe(true);
+		expect(out.details.awaitingReceipt).toBeUndefined();
 		expect(out.details.receiver).toBe("root");
 		expect(ledger.forks.fork_b.ownerId).toBe("root");
 		expect(ledger.forks.fork_b.status).toBe("ready");
 		expect(ledger.queues.root).toContain("fork_b");
 
-		const registry = createForkRegistry();
-		const waited = waitForJoin(registry, ledger, "fork_b");
+		// The record is queued in the same beat the child returned, so the
+		// receiver's take needs no child-side waiter at all.
 		const take = takeReady(ledger, { ownerId: "root" });
 		expect(take.ok).toBe(true);
 		expect(take.fork.forkId).toBe("fork_b");
-		notifyWaiters(registry);
-		expect((await waited).ok).toBe(true);
 	});
 
 	test("orphans follow the resolved receiver, not the dead branch", () => {
@@ -138,53 +132,6 @@ describe("scope_return after the receiver returned", () => {
 		expect(ledger.forks.fork_b.reparentedFrom).toBe("fork_a");
 		expect(ledger.queues.fork_a ?? []).not.toContain("fork_b");
 		expect(ledger.queues.root).toContain("fork_b");
-	});
-});
-
-describe("a reused scope releases its parked child", () => {
-	test("a superseded ready record ends the return wait", async () => {
-		const ledger = createBracketLedger();
-		register(ledger, "fork_a", "root");
-		markReady(ledger, "fork_a", { ok: true });
-		expect(supersedeFork(ledger, "fork_a").ok).toBe(true);
-
-		const registry = createForkRegistry();
-		const waited = await waitForJoin(registry, ledger, "fork_a");
-
-		expect(waited.ok).toBe(true);
-		expect(waited.superseded).toBe(true);
-	});
-
-	test("the return ticket closes with an accepted superseded receipt", async () => {
-		const ledger = createBracketLedger();
-		register(ledger, "fork_a", "root");
-		markReady(ledger, "fork_a", { ok: true });
-		const registry = createForkRegistry();
-		const station = {
-			executeReturn: () => ({
-				content: [{ type: "text", text: "queued" }],
-				details: {
-					forkId: "fork_a",
-					scopeId: "demo",
-					receiver: "root",
-					receiverText: "Root",
-					awaitingReceipt: true,
-				},
-			}),
-			forkWaitPort: () => ({ registry, ledger }),
-			pauseBranchClock() {},
-			resumeBranchClock() {},
-		};
-
-		const pending = returnTicket(station, "call", {}, {}, null);
-		expect(supersedeFork(ledger, "fork_a").ok).toBe(true);
-		notifyWaiters(registry);
-		const result = await pending;
-
-		expect(result.details.accepted).toBe(true);
-		expect(result.details.superseded).toBe(true);
-		expect(result.details.awaitingReceipt).toBe(false);
-		expect(result.content[0].text).toContain("superseded");
 	});
 });
 

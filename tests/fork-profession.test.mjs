@@ -11,7 +11,6 @@ const base = {
   scopeId: "alpha",
   fsm: "read the parser",
   profession: "You are a precise reviewer who rejects a claim without evidence",
-  blocked: false,
   budget: { read: 2 },
   targets: ["the parser"],
 };
@@ -36,12 +35,6 @@ describe("scope_fork profession", () => {
       assert.equal(out.ok, false);
       assert.equal(out.code, "INVALID_PROFESSION");
     }
-  });
-
-  test("validateFork allows an omitted identity so a reuse can amend one field", () => {
-    const out = validateFork({ ...base, profession: undefined });
-    assert.equal(out.ok, true);
-    assert.equal(out.profession, "");
   });
 
   test("the spawned receipt opens with the marker and then the identity", () => {

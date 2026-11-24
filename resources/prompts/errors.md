@@ -56,11 +56,23 @@ Do not pass `time`. The system derives the scope's time limit from the session's
 
 ## invalid-argument
 
-`model` is a string or null; `blocked` is a boolean.
+`model` is a string or null.
 
 ## invalid-targets
 
 `targets` must be a non-empty array of strings, each a natural-language description of what this scope expects to create, read, update, or delete. A file path is only one kind; `["fix any defect you find", "the parts of the source that involve caching"]` is valid. If it is empty, how could a scope with no output be a separate scope?
+
+## invalid-scope-target
+
+`target` is one path or a non-empty array of paths, each resolved against this scope's own path. `.` is yourself, `..` the parent, `/` the root, and `*` or `**` a wildcard over active scopes.
+
+## unknown-scope-target
+
+No scope at `{{target}}`. An exact path must name a scope that exists in this session; the fork receipt and the scope tree both show the paths that do.
+
+## no-matching-scopes
+
+`{{target}}` matched no active scope. A wildcard reaches only scopes that are still running; name a finished scope by its exact path to wake it.
 
 ## fork-ledger-unavailable
 
@@ -68,27 +80,11 @@ No bracket ledger is attached; fork/join is unavailable in this session. Continu
 
 ## missing-fsm
 
-A new scope needs a non-empty `fsm`. Only a reuse of an existing `scopeId` may omit it.
+A new scope needs a non-empty `fsm`.
 
 ## missing-dafny
 
 A return needs `dafny` with text. Put there what your text and the calls cannot carry: the results the caller never sees. If the replay drops nothing, say that in one line.
-
-## foreign-scope-id
-
-Scope {{scopeId}} belongs to another owner. Only its owner may reuse it.
-
-## scope-running-blocked
-
-Scope {{scopeId}} is running, so it cannot be marked blocked. Reuse it with `budget` or a requirement instead.
-
-## scope-reuse-empty
-
-Reusing `{{scopeId}}` changed nothing. Add `budget`, `fsm`, or `targets`.
-
-## scope-not-amendable
-
-This scope cannot be reused in its current state. Fork a new scope instead.
 
 ## child-spawner-unavailable
 
@@ -110,11 +106,11 @@ The record stays ready; use a model with a larger window or shorten the record, 
 
 ## not-a-child
 
-`scope_return` ends a forked scope. The scope that forked it receives the work with `scope_join`.
+`scope_return` ends a forked scope. The scope that forked it receives the work with `scope_join`. A woken scope answers with `scope_send` instead.
 
 ## unknown-fork
 
-This scope is not registered. Use the `scopeId` from the fork receipt, or fork a new scope.
+This scope is not registered. Use the path from the fork receipt, or fork a new scope.
 
 ## fork-not-running
 

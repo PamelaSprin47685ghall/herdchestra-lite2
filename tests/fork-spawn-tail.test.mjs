@@ -36,6 +36,7 @@ function forkArgs(overrides = {}) {
   return {
     scopeId: "one",
     fsm: "audit the first seam",
+    profession: "You are an auditor who trusts only evidence.",
     budget: {},
     time: 60,
     targets: ["src/parser.mjs"],
@@ -68,7 +69,6 @@ describe("a batch whose first spawner throws", () => {
     expect(out.isError).toBeUndefined();
     expect(out.details.started).toEqual(["batch:1"]);
     expect(out.details.failed).toEqual(["batch:0"]);
-    expect(out.details.deferred).toEqual([]);
 
     // The decisive proof: at the first spawn call, both forks already exist
     // and are running, so the failing start cannot strand the second one.

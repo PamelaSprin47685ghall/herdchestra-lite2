@@ -61,7 +61,7 @@ describe("registration", () => {
     const item = {
       scopeId: "probe",
       fsm: "   ",
-      blocked: false,
+      profession: "You are a careful worker like Ada Lovelace.",
       budget: { read: 1 },
       targets: ["src/parser.mjs"],
     };
@@ -79,9 +79,9 @@ describe("registration", () => {
       arguments: { forks: [item] },
     });
     expect(result.isError).toBe(true);
-    expect(result.details.code).toBe("MISSING_FSM");
-    expect(result.details.scopeId).toBe("probe");
-    expect(result.content[0].text).toContain("A new scope needs a non-empty");
+    // A fork only creates, so a blank fsm is refused at validation instead of
+    // being left for a handler that has nothing to amend.
+    expect(result.details.code).toBe("INVALID_FSM");
     expect(spawned).toHaveLength(0);
     expect(ledger.order).toEqual([]);
   });
@@ -335,7 +335,7 @@ describe("owner queries", () => {
           {
             scopeId: "cache-probe",
             fsm: "probe the cache",
-            blocked: false,
+            profession: "You are a cache engineer like Barbara Liskov.",
             budget: { read: 2 },
             time: 60,
             targets: ["src/cache.mjs"],
@@ -344,10 +344,11 @@ describe("owner queries", () => {
       },
     });
     expect(forkOut.isError).toBeUndefined?.();
-    expect(forkOut.content[0].text).toContain("Started (1):\n- cache-probe: probe the cache");
+    // The receipt names the address, not just the last segment of it.
+    expect(forkOut.content[0].text).toContain("/cache-probe: probe the cache");
     expect(spawned).toHaveLength(1);
     expect(spawned[0].childDepth).toBe(1);
-    expect(spawned[0].receipt).toContain("You are now in the scope cache-probe");
+    expect(spawned[0].receipt).toContain("You are now in the scope /cache-probe");
 
     const early = handleJoinCall(station, {
       id: "call-j1",
@@ -366,9 +367,9 @@ describe("owner queries", () => {
       arguments: { dafny: "the child returns its record" },
     });
     expect(returned.isError).toBeUndefined();
-    // The station queues; only the ticket's wait turns this into acceptance.
-    expect(returned.content[0].text).toContain("queued for Root");
-    expect(returned.details.awaitingReceipt).toBe(true);
+    // The station seals the record and answers in the same beat.
+    expect(returned.content[0].text).toContain("has been handed to Root");
+    expect(returned.details.accepted).toBe(true);
 
     const joined = handleJoinCall(station, {
       id: "call-j2",
@@ -391,7 +392,7 @@ describe("owner queries", () => {
         forks: [
           {
             scopeId: "probe", fsm: "x",
-            blocked: false,
+            profession: "You are a parser auditor like Michael Feathers.",
             budget: { read: 1 },
             time: 30,
             targets: ["src/parser.mjs"],
@@ -408,15 +409,18 @@ describe("owner queries", () => {
     const state = { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
     const base = {
       scopeId: "probe", fsm: "x",
+      profession: "You are a parser auditor like Michael Feathers.",
       budget: { read: 1 },
       time: 30,
       targets: ["src/parser.mjs"],
     };
     expect(validateFork(base).ok).toBe(true);
-    // An empty fsm is legal for an amendment; a *new* scope rejects it in
-    // the handler, where the name's existence is known.
-    expect(validateFork({ ...base, fsm: "  " }).ok).toBe(true);
-    expect(validateFork({ ...base, fsm: "  " }).fsm).toBe("");
+    // Every fork creates a scope, so a blank fsm can no longer be deferred to
+    // the handler: there is no existing record to fall back to.
+    expect(validateFork({ ...base, fsm: "  " })).toMatchObject({
+      ok: false,
+      code: "INVALID_FSM",
+    });
     expect(validateFork({ ...base, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
     expect(validateFork({ ...base, time: 0 }).ok).toBe(true);
     expect(validateFork({ ...base, time: 0 }).time).toBeUndefined();
@@ -435,7 +439,7 @@ describe("owner queries", () => {
     const item = {
       scopeId: "natural",
       fsm: "fix defects",
-      blocked: false,
+      profession: "You are a defect fixer like Michael Feathers.",
       budget: { read: 1 },
       time: 30,
       targets,
@@ -491,9 +495,10 @@ describe("owner queries", () => {
       id: "call-rp",
       arguments: { dafny: "the child hands its own children to the parent first" },
     });
-    expect(returned.content[0].text).toContain("queued for Root");
+    expect(returned.content[0].text).toContain("has been handed to Root");
     expect(returned.content[0].text).toContain("scope-2");
-    expect(returned.details.awaitingReceipt).toBe(true);
+    // A return is answered in the same beat; nothing is parked on a join.
+    expect(returned.details.accepted).toBe(true);
     const taken = handleJoinCall(station, {
       id: "call-jp",
       arguments: {},
@@ -529,7 +534,7 @@ describe("owner queries", () => {
       id: "call-rp",
       arguments: { dafny: table },
     });
-    expect(returned.details.awaitingReceipt).toBe(true);
+    expect(returned.details.accepted).toBe(true);
     const station = {
       state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
       forkLedgerPort: () => ledger,

@@ -227,22 +227,26 @@ test("the native working row follows the latest requester and omits Root", () =>
 	const ledger = createBracketLedger();
 	registerFork(ledger, { forkId: "opaque|id", ownerId: "root", scopeId: "oh-my-pie", fsm: "parent", depth: 0 });
 	registerFork(ledger, { forkId: "nested|id", ownerId: "opaque|id", scopeId: "sub_sub_scope", fsm: "child", depth: 1 });
-	registerFork(ledger, { forkId: "plan", ownerId: "root", scopeId: "plan", fsm: "deferred", depth: 0, blocked: true });
+	registerFork(ledger, { forkId: "plan", ownerId: "root", scopeId: "plan", fsm: "deferred", depth: 0 });
+	// A scope that has handed in its record is idle, not busy: the retired
+	// checkpoint state has no successor, and a finished scope is what an
+	// unwoken plan now is.
+	markReady(ledger, "plan");
 	const root = new Session();
 	root.isStreaming = true;
 	let label;
 	const display = childDisplayFor(root, { setWorkingMessage: (value) => { label = value; } });
 	bindScopeView(createScopes({ forkWiring: { ledger } }));
 	display.request(ledger, "root");
-	expect(label()).toBe("[Busy: 3, Idle: 0]");
+	expect(label()).toBe("[Busy: 3, Idle: 1]");
 	display.rootWait(1);
 	display.request(ledger, "nested|id");
-	expect(label()).toBe("[Busy: 2, Idle: 1] Oh My Pie > Sub Sub Scope");
+	expect(label()).toBe("[Busy: 2, Idle: 2] Oh My Pie > Sub Sub Scope");
 	markReady(ledger, "nested|id");
-	expect(label()).toBe("[Busy: 1, Idle: 2] Oh My Pie > Sub Sub Scope");
+	expect(label()).toBe("[Busy: 1, Idle: 3] Oh My Pie > Sub Sub Scope");
 	display.rootWait(-1);
 	display.request(ledger, null);
-	expect(label()).toBe("[Busy: 2, Idle: 1]");
+	expect(label()).toBe("[Busy: 2, Idle: 2]");
 	bindScopeView(null);
 });
 

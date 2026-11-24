@@ -8,7 +8,7 @@
 import { decideAbandon } from "./abandon.mjs";
 import { deadlineInfo } from "./clock.mjs";
 import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
-import { publicScopeId } from "./scope-id.mjs";
+import { childScopePath } from "./path.mjs";
 import { grantBudget } from "./panhandle.mjs";
 import { formatAmount } from "./turns.mjs";
 import {
@@ -36,20 +36,18 @@ function changed(ledger) {
   for (const listener of ledger[listeners] ?? []) listener();
 }
 
-export function reviveBlockedFork(ledger, forkId, startedAt = Date.now()) {
-  const record = forkOf(ledger, forkId);
-  if (!record || record.status !== BLOCKED) return failure("FORK_NOT_BLOCKED", "Fork is not blocked.");
-  record.status = RUNNING;
-  record.startedAt = startedAt;
-  // A blocked fork never ran: its queue time is not its work time. Restart the
-  // clock at the revival edge so the branch receives the full granted turns.
-  if (Number.isFinite(record.deadlineAt) && Number.isFinite(record.timeBudgetMs)) {
-    record.deadlineAt = startedAt + record.timeBudgetMs;
-    record.overtimeAt = null;
-    record.clockPausedAt = null;
-  }
-  changed(ledger);
-  return { ok: true, record };
+/**
+ * Mark one record as changed after a direct field write.
+ *
+ * The mailbox, the read cursor and the wake flag are written by the send path
+ * in place, because they are not fork annotations. A shared snapshot only
+ * copies records whose dirty mark is set, so a message that skips this call can
+ * be missing from the next snapshot while the ledger still holds it.
+ */
+export function touchFork(ledger, forkId) {
+  if (!forkOf(ledger, forkId)) return false;
+  markRecordDirty(ledger, forkId);
+  return true;
 }
 
 export function annotateFork(ledger, forkId, fields = {}) {
@@ -67,6 +65,17 @@ export function annotateFork(ledger, forkId, fields = {}) {
     record.model = fields.model;
     markRecordDirty(ledger, forkId);
   }
+  // A scope's address and its parent pointer are decided once, when the scope
+  // is created, and travel together: the path is derived from the parent's
+  // path, so a record with one and not the other cannot be addressed.
+  if (fields.path !== undefined) {
+    record.path = fields.path;
+    markRecordDirty(ledger, forkId);
+  }
+  if (fields.parentForkId !== undefined) {
+    record.parentForkId = fields.parentForkId;
+    markRecordDirty(ledger, forkId);
+  }
   return { ok: true, record };
 }
 
@@ -74,9 +83,6 @@ const RUNNING = "running";
 const READY = "ready";
 const JOINED = "joined";
 const FAILED = "failed";
-// A blocked fork is a checkpoint entry, not a queue item: it records that this
-// work is known and not yet startable. It never runs and never needs joining.
-const BLOCKED = "blocked";
 
 function failure(code, reason, details) {
   return details && typeof details === "object"
@@ -115,6 +121,9 @@ export function createBracketLedger() {
     order: [],
     queues: {},
     levels: {},
+    // The root's mailbox. A branch addresses `/`, and the message lands here
+    // whether or not a root station is bound in this process.
+    rootInbox: [],
     // Session-wide request timing. Shared by reference across scopes, so k
     // concurrent requests add k durations and k turns. Missing on old snapshots.
     totals: emptyTotals(),
@@ -173,16 +182,43 @@ export function registerFork(ledger, spec, options = {}) {
     profession: typeof s.profession === "string" ? s.profession.trim() : "",
     depth: s.depth,
     childDepth: s.depth + 1,
-    // Reuse identity: a later generation continues the same public scope.
-    generation:
-      Number.isInteger(s.generation) && s.generation > 0 ? s.generation : 1,
-    continuesForkId: isNonEmptyString(s.continuesForkId)
-      ? s.continuesForkId
-      : null,
+    // The address, and the sibling it competes with for its name. A child's
+    // path is its parent's path plus its own name, so the tree is its own
+    // address space.
+    parentForkId:
+      typeof s.parentForkId === "string" && s.parentForkId !== ""
+        ? s.parentForkId
+        : s.ownerId === "root"
+          ? null
+          : s.ownerId,
+    path:
+      typeof s.path === "string" && s.path !== ""
+        ? s.path
+        : childScopePath(s.parentPath ?? "/", s.scopeId ?? s.forkId),
+    // A mailbox. `inboxDelivered` is how far the branch has read it, so a
+    // queued message is never handed twice.
+    inbox: [],
+    inboxDelivered: 0,
+    // True while a finished scope is awake to answer a message. The bracket
+    // status itself does not move: the parent's ready or joined record stays
+    // the parent's business.
+    woken: false,
     // Requirements queued after the birth fsm, and how many the child has
     // been handed. A blocked entry can collect them before it ever runs.
     requirements: [],
     requirementsDelivered: 0,
+    // The scope's address. It is decided once, under the parent's path, and
+    // the sibling namespace is the only uniqueness rule; `null` on a record
+    // written before addresses existed, where the name is the fallback.
+    path: isNonEmptyString(s.path) ? s.path : null,
+    parentForkId: isNonEmptyString(s.parentForkId) ? s.parentForkId : null,
+    // The mailbox. A message is queued here and read at a turn boundary, so a
+    // running tool call is never interrupted; `inboxDelivered` is the read
+    // cursor, and `woken` marks a finished scope that a message returned to
+    // the active list. All three persist with the record.
+    inbox: [],
+    inboxDelivered: 0,
+    woken: false,
     // Return nudges already given. One field, because the station's in-turn
     // steer and the spawn ticket's out-of-turn prompt both spend it.
     returnNudges: 0,
@@ -191,7 +227,7 @@ export function registerFork(ledger, spec, options = {}) {
     closeSeq: null,
     closedOrder: null,
     readySeq: null,
-    status: s.blocked === true ? BLOCKED : RUNNING,
+    status: RUNNING,
     outcome: null,
     reason: null,
     reparentedFrom: null,
@@ -262,102 +298,71 @@ export function markReady(ledger, forkId, outcome = {}) {
 }
 
 /**
- * Reuse an existing scope: add turns and seconds, then queue a requirement.
- * A closed bracket is refused; the station opens the next generation instead.
+ * Put one message on a branch's mailbox. A running branch reads it at its next
+ * turn boundary; a finished one is woken to read it, and its bracket status
+ * never moves, so the parent's ready or joined record stays the parent's.
  */
-export function amendFork(ledger, forkId, request = {}, options = {}) {
+export function enqueueScopeMessage(ledger, forkId, message = {}) {
   const record = forkOf(ledger, forkId);
   if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (record.status !== RUNNING && record.status !== BLOCKED) {
-    return failure(
-      "FORK_CLOSED",
-      `Fork "${forkId}" is ${record.status}; open the next generation instead.`,
-    );
-  }
-  const source = request && typeof request === "object" ? request : {};
-  const tools =
-    source.budget && typeof source.budget === "object" ? source.budget : {};
-  const seconds = Number.isInteger(source.seconds) && source.seconds > 0 ? source.seconds : 0;
-  let granted = { ok: true, tools: {}, seconds: 0 };
-  if (Object.keys(tools).length > 0 || seconds > 0) {
-    granted = grantBudget(
+  if (!Array.isArray(record.inbox)) record.inbox = [];
+  const from = typeof message.from === "string" && message.from !== "" ? message.from : "/";
+  const text = typeof message.message === "string" ? message.message.trim() : "";
+  const envelope =
+    typeof message.envelope === "string" && message.envelope !== ""
+      ? message.envelope
+      : `[Message from ${from}]\n${text}`;
+  record.inbox.push({ from, message: text, envelope });
+  const budget = message.budget;
+  if (budget && typeof budget === "object" && Object.keys(budget).length > 0) {
+    const granted = grantBudget(
       record,
-      { tools, ...(seconds > 0 ? { seconds } : {}) },
-      { ...options, allowClockOff: true, scopeCap: true },
+      { tools: budget },
+      { allowClockOff: true, scopeCap: true },
     );
     if (!granted.ok) return granted;
   }
-  const fsm = typeof source.fsm === "string" ? source.fsm.trim() : "";
-  if (fsm !== "") {
-    if (!Array.isArray(record.requirements)) record.requirements = [];
-    record.requirements.push(fsm);
-  }
-  const profession =
-    typeof source.profession === "string" ? source.profession.trim() : "";
-  if (profession !== "" && profession.startsWith("You are ")) {
-    record.profession = profession;
-  }
-  if (Array.isArray(source.targets) && source.targets.length > 0) {
-    if (!Array.isArray(record.targets)) record.targets = [];
-    for (const target of source.targets) {
-      const text = typeof target === "string" ? target.trim() : "";
-      if (text !== "" && !record.targets.includes(text)) {
-        record.targets.push(text);
-      }
-    }
-  }
+  if (record.status !== RUNNING) record.woken = true;
   markRecordDirty(ledger, forkId);
-  return {
-    ok: true,
-    added: { tools: { ...granted.tools }, seconds: granted.seconds },
-    queued: Array.isArray(record.requirements) ? record.requirements.length : 0,
-    status: record.status,
-    record,
-  };
+  return { ok: true, record, woken: record.woken === true };
 }
 
-/** Mark a ready record as replaced by the next generation and unqueue it. */
-export function supersedeFork(ledger, forkId, now = Date.now()) {
+/** Hand the branch every message it has not read yet, in order. */
+export function takePendingInbox(ledger, forkId) {
+  const record = forkOf(ledger, forkId);
+  if (!record) return [];
+  const inbox = Array.isArray(record.inbox) ? record.inbox : [];
+  const cursor = Number.isInteger(record.inboxDelivered) ? record.inboxDelivered : 0;
+  if (cursor >= inbox.length) return [];
+  const pending = inbox.slice(cursor);
+  record.inboxDelivered = inbox.length;
+  markRecordDirty(ledger, forkId);
+  return pending;
+}
+
+/** End a wake: the branch stops answering and leaves the active list again. */
+export function finishWokenScope(ledger, forkId) {
   const record = forkOf(ledger, forkId);
   if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (record.status !== READY) {
-    return failure(
-      "FORK_NOT_READY",
-      `Fork "${forkId}" is ${record.status}; only a ready result can be superseded.`,
-    );
-  }
-  record.supersededAt = Number.isFinite(now) ? now : Date.now();
-  removeFromQueues(ledger, forkId);
-  settleCharges(ledger, record);
+  record.woken = false;
+  markRecordDirty(ledger, forkId);
   changed(ledger);
   return { ok: true, record };
 }
 
-/**
- * The newest live record for a public scope id. Superseded records are
- * history: addressable, never delivered, never counted as open work.
- */
-export function liveRecordForScope(ledger, scopeId) {
-  const key = typeof scopeId === "string" ? scopeId.toLowerCase() : "";
-  if (key === "") return null;
-  let best = null;
-  for (const forkId of ledger?.order ?? []) {
-    const record = forkOf(ledger, forkId);
-    if (!record) continue;
-    if (publicScopeId(record).toLowerCase() !== key) continue;
-    if (!best) {
-      best = record;
-      continue;
-    }
-    const generation = Number.isInteger(record.generation)
-      ? record.generation
-      : 1;
-    const bestGeneration = Number.isInteger(best.generation)
-      ? best.generation
-      : 1;
-    if (generation >= bestGeneration) best = record;
-  }
-  return best;
+/** Put one message in the root's mailbox; the root has no bracket record. */
+export function enqueueRootMessage(ledger, message = {}) {
+  if (!Array.isArray(ledger.rootInbox)) ledger.rootInbox = [];
+  const from = typeof message.from === "string" && message.from !== "" ? message.from : "/";
+  const text = typeof message.message === "string" ? message.message.trim() : "";
+  const envelope =
+    typeof message.envelope === "string" && message.envelope !== ""
+      ? message.envelope
+      : `[Message from ${from}]\n${text}`;
+  const entry = { from, message: text, envelope };
+  ledger.rootInbox.push(entry);
+  changed(ledger);
+  return { ok: true, entry };
 }
 
 /**
@@ -533,10 +538,7 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
     const record = forkOf(ledger, forkId);
     if (!record) continue;
     if (record.ownerId !== fromOwnerId) continue;
-    // Blocked entries move too: they are the visible remainder of the plan,
-    // and that visibility must follow the receiving branch. They still never
-    // run and never enter the ready queue.
-    if (record.status !== RUNNING && record.status !== BLOCKED) continue;
+    if (record.status !== RUNNING) continue;
     record.reparentedFrom = fromOwnerId;
     record.ownerId = receiverId;
     moved += 1;
@@ -689,17 +691,6 @@ export function readyChildren(ledger, ownerId) {
   return out;
 }
 
-/** Fork ids this owner recorded as blocked by an unmet prerequisite. */
-export function blockedChildren(ledger, ownerId) {
-  const out = [];
-  for (const forkId of ledger.order) {
-    const fork = ledger.forks[forkId];
-    if (!fork || fork.ownerId !== ownerId || fork.status !== BLOCKED) continue;
-    out.push(forkId);
-  }
-  return out;
-}
-
 export function hasOpenChildren(ledger, ownerId) {
   return openChildren(ledger, ownerId).length > 0;
 }
@@ -809,7 +800,7 @@ export function statsOf(ledger) {
 
 const INTERRUPTED_REASON =
   "interrupted by a process restart before the result was received";
-const STATUSES = new Set([RUNNING, READY, JOINED, FAILED, BLOCKED]);
+const STATUSES = new Set([RUNNING, READY, JOINED, FAILED]);
 
 function copyData(value) {
   if (value === undefined) return undefined;
@@ -867,6 +858,26 @@ function validRecord(forkId, record) {
   // none, and the readers treat that as zero.
   if (record.returnNudges !== null && record.returnNudges !== undefined) {
     if (!Number.isInteger(record.returnNudges) || record.returnNudges < 0) return false;
+  }
+  // Address and mailbox: absent in older snapshots, but a present value must
+  // be the shape the sender and the resolver both assume.
+  if (record.path !== null && record.path !== undefined) {
+    if (typeof record.path !== "string" || !record.path.startsWith("/")) return false;
+  }
+  if (record.parentForkId !== null && record.parentForkId !== undefined) {
+    if (typeof record.parentForkId !== "string") return false;
+  }
+  if (record.woken !== undefined && typeof record.woken !== "boolean") return false;
+  if (record.inboxDelivered !== undefined) {
+    if (!Number.isInteger(record.inboxDelivered) || record.inboxDelivered < 0) return false;
+  }
+  if (record.inbox !== undefined) {
+    if (!Array.isArray(record.inbox)) return false;
+    for (const entry of record.inbox) {
+      if (!isPlainObject(entry)) return false;
+      if (typeof entry.envelope !== "string") return false;
+      if (typeof entry.from !== "string") return false;
+    }
   }
   return true;
 }
@@ -986,6 +997,10 @@ export function serializeLedgerShared(ledger) {
     order: copyData(ledger.order),
     queues: copyData(ledger.queues),
     levels: copyData(ledger.levels),
+    // The root's mailbox is ledger state like any other: a message addressed
+    // to `/` must survive the same snapshot a record does, or a reload drops
+    // it while `serializeLedger` still reports it.
+    rootInbox: copyData(ledger.rootInbox ?? []),
     totals: copyData(ledger.totals),
   };
   meta.snapshot = next;
@@ -1069,7 +1084,6 @@ export {
   READY,
   JOINED,
   FAILED,
-  BLOCKED,
 };
 
 // -- Branch account (pure arithmetic; no clock, no I/O) --------------------

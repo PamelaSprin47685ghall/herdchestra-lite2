@@ -6,6 +6,43 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [4.0.0] — 2026-11-24
+
+### Changed — `scope_fork` only creates; `scope_send` carries every later exchange (breaking for callers)
+
+- `scope_fork` is pure creation again, so `scope_fork` and `scope_join` pair
+  1:1. The `blocked` field, the `BLOCKED` state, `amendFork`,
+  `reviveBlockedFork`, `supersedeFork`, `continuesForkId`, and the `:g<N>`
+  generation suffix are gone. A repeated `scopeId` among the same siblings is
+  never an upsert: registration appends the lowest free numeric suffix
+  (`worker` → `worker-2`), and both the caller's receipt and the child's start
+  receipt carry the final path. The same name under two different parents
+  means two unrelated scopes. The ledger snapshot is version 2; a version-1
+  snapshot is refused rather than migrated.
+- Identity is a path. Root is `/` and is outside every scope; a child's path is
+  its parent's path plus `/<scopeId>`, so the tree `parentOwnerId` already
+  encodes is its own address space. There is no global name table.
+- `scope_send({ target, message, budget? })` is a free control tool. It
+  resolves `.`, `..`, a relative `sub`, `../sibling`, an absolute `/a/b` or
+  `/`, and GitHub-style `*` / `**`. A pattern resolves against active scopes
+  only, so a wildcard never wakes a finished one; an exact path may also name a
+  finished scope, and naming it wakes it. Delivery wraps the body as
+  `[Message from <senderPath>]`, so the receiver answers by addressing that
+  path. `budget` is an optional per-tool turn increment using the same grant
+  arithmetic as a fork, and it is ignored for `/`.
+- `ready` is no longer a locked door. A scope's first `scope_return` seals its
+  record and returns immediately instead of parking in `waitForJoin`, so its
+  session stays alive and idle; a send that names it wakes it in place without
+  changing the parent's `ready` or `joined` state and without a second record.
+  A woken scope receives no return nudge and ends at natural stop. Calling
+  `scope_return` while woken is a send to `..`, so one delivery path carries
+  every upward message.
+- Each turn's `<additional-system-instructions>` carries a third sibling
+  `<skill>` element listing every unfinished path in lexicographic order with
+  the receiver's own path on the first line. Finished scopes drop out of the
+  list and stay addressable by exact path; hiding is a display rule, not a
+  deletion.
+
 ### Fixed — a forked scope that stops without returning is steered back
 
 - `nudgeDecision` now knows the child's return obligation. A forked scope that

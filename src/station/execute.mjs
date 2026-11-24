@@ -5,6 +5,7 @@ import { lastStructuralCallId } from "../transcript/index.mjs";
 import { handoffToolBlockedReason } from "../relay/index.mjs";
 import { handlePinCall, handleAmendCall } from "./controls.mjs";
 import { handleForkCall, handleJoinCall, handleReturnCall } from "./fork-controls.mjs";
+import { handleSendCall } from "./send-controls.mjs";
 import { processedOf } from "./domain/tool-call-ledger.mjs";
 
 /**
@@ -194,22 +195,30 @@ function executeJoin(station, toolCallId, params, ctx) {
 	);
 }
 
+/**
+ * Close the bracket and answer in the same beat. The record is sealed for the
+ * parent to take whenever it joins; nothing is left parked, so a woken scope
+ * can be talked to instead of blocked inside a tool call.
+ */
 function executeReturn(station, toolCallId, params, ctx) {
-	return executeControl(
-		station,
-		toolCallId,
-		() => {
-			const { currentMessage } = controlContext(station, toolCallId);
-			return handleReturnCall(
-				station,
-				{ id: toolCallId, name: "scope_return", arguments: params },
-				{ ctx, currentMessage },
-			);
-		},
-		// The queued record is not yet accepted. Only the parent's join makes
-		// it final, so the ticket must be free to call this again after it.
-		{ retryWhen: (result) => result?.details?.awaitingReceipt === true },
-	);
+	return executeControl(station, toolCallId, () => {
+		const { currentMessage } = controlContext(station, toolCallId);
+		return handleReturnCall(
+			station,
+			{ id: toolCallId, name: "scope_return", arguments: params },
+			{ ctx, currentMessage },
+		);
+	});
+}
+
+/** One message addressed by path. Synchronous: every write lands before the wake. */
+function executeSend(station, toolCallId, params, ctx) {
+	return executeControl(station, toolCallId, () =>
+		handleSendCall(
+			station,
+			{ id: toolCallId, name: "scope_send", arguments: params },
+			ctx,
+		));
 }
 
 export {
@@ -219,5 +228,6 @@ export {
 	executeFork,
 	executeJoin,
 	executeReturn,
+	executeSend,
 	directAmend,
 };

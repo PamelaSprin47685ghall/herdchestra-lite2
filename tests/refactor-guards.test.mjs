@@ -137,8 +137,8 @@ describe("retired mechanisms stay retired", () => {
 		expect(station).toContain('name === "scope_join"');
 		expect(station).toContain('name === "scope_return"');
 		const tickets = source("../src/tools/tickets.mjs");
-		expect(tickets.match(/pauseBranchClock\?\.\(\)/g)?.length).toBe(2);
-		expect(tickets.match(/resumeBranchClock\?\.\(\)/g)?.length).toBe(2);
+		expect(tickets.match(/pauseBranchClock\?\.\(\)/g)?.length).toBe(1);
+		expect(tickets.match(/resumeBranchClock\?\.\(\)/g)?.length).toBe(1);
 		const tools = source("../src/tools/catalog.mjs");
 		expect(tools).not.toContain("executionMode");
 	});

@@ -14,9 +14,14 @@ export {
 	forkParameters,
 	joinParameters,
 	returnParameters,
+	sendParameters,
 	FORK_DESCRIPTION,
 	JOIN_DESCRIPTION,
 	RETURN_DESCRIPTION,
+	SEND_DESCRIPTION,
+	SEND_TARGET_DESCRIPTION,
+	SEND_MESSAGE_DESCRIPTION,
+	SEND_BUDGET_DESCRIPTION,
 	scopeContextParameters,
 } from "./descriptions.mjs";
 export {

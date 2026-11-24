@@ -83,14 +83,20 @@ describe("fork validation and register", () => {
 	const item = {
 		scopeId: "probe",
 		fsm: "x",
+		profession: "You are a probe engineer like Barbara Liskov.",
 		budget: { read: 1 },
 		time: 30,
 		targets: ["src/parser.mjs"],
 	};
 
-	test("validateFork normalizes targets and leaves the fsm to the decision", () => {
+	test("validateFork refuses a blank fsm and normalizes targets", () => {
 		expect(validateFork(item).ok).toBe(true);
-		expect(validateFork({ ...item, fsm: "  " })).toMatchObject({ ok: true, fsm: "" });
+		// Every fork creates a scope, so the fsm is required here, not later in
+		// the handler: there is nothing to amend and nothing to fall back to.
+		expect(validateFork({ ...item, fsm: "  " })).toMatchObject({
+			ok: false,
+			code: "INVALID_FSM",
+		});
 		expect(validateFork({ ...item, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
 		expect(validateFork({ ...item, targets: [] }).code).toBe("INVALID_TARGETS");
 		expect(
@@ -98,7 +104,7 @@ describe("fork validation and register", () => {
 		).toEqual(["src/parser.mjs", "src/cache.mjs"]);
 	});
 
-	test("decideRegister amends a live scope id instead of refusing", () => {
+	test("decideRegister renames a taken sibling name instead of amending", () => {
 		const out = decideRegister({
 			items: [validateFork(item)],
 			forks: [
@@ -106,18 +112,22 @@ describe("fork validation and register", () => {
 					forkId: "f1",
 					scopeId: "probe",
 					ownerId: "root",
+					parentForkId: null,
+					path: "/probe",
 					status: "running",
 					generation: 1,
 				},
 			],
+			parentForkId: null,
 			hasSpawner: true,
 		});
 		expect(out.ok).toBe(true);
-		expect(out.items[0].action).toBe("amend");
-		expect(out.items[0].targetForkId).toBe("f1");
+		expect(out.items[0].action).toBe("register");
+		expect(out.items[0].scopeId).toBe("probe-2");
+		expect(out.items[0].path).toBe("/probe-2");
 	});
 
-	test("decideRegister refuses a scope id owned by another branch", () => {
+	test("decideRegister renames a name taken by another sibling", () => {
 		const out = decideRegister({
 			items: [validateFork(item)],
 			forks: [
@@ -125,22 +135,22 @@ describe("fork validation and register", () => {
 					forkId: "f1",
 					scopeId: "probe",
 					ownerId: "someone-else",
+					parentForkId: null,
+					path: "/probe",
 					status: "running",
 					generation: 1,
 				},
 			],
-			ownerId: "root",
+			parentForkId: null,
 			hasSpawner: true,
 		});
-		expect(out.ok).toBe(false);
-		expect(out.code).toBe("FOREIGN_SCOPE_ID");
+		// A name is scoped to its siblings, so a taken one is renamed rather
+		// than refused: two parents may both hold a `probe`.
+		expect(out.ok).toBe(true);
+		expect(out.items[0].scopeId).toBe("probe-2");
 	});
 
-	test("decideRegister requires a spawner only for a runnable batch", () => {
-		const blocked = validateFork({ ...item, blocked: true });
-		expect(
-			decideRegister({ items: [blocked], forks: [], hasSpawner: false }).ok,
-		).toBe(true);
+	test("decideRegister requires a spawner for a runnable batch", () => {
 		const runnable = validateFork(item);
 		expect(
 			decideRegister({ items: [runnable], forks: [], hasSpawner: false }).code,
@@ -153,7 +163,7 @@ describe("fork validation and register", () => {
 			items: [runnable],
 			forks: [],
 			hasSpawner: true,
-			pricedChars: [{ fresh: 10_000, revive: 10_000, generation: 10_000 }],
+			pricedChars: [{ fresh: 10_000 }],
 			baseTokens: 100_000,
 			tokensPerChar: 0.3,
 			window: 100_000,

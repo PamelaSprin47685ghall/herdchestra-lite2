@@ -21,7 +21,6 @@ import {
   markReady,
   registerFork,
   serializeLedgerShared,
-  supersedeFork,
   takeReady,
 } from "../src/scope/forkjoin.mjs";
 import {
@@ -122,13 +121,6 @@ describe("a closed branch drops its receipt trail", () => {
     expect(applyCharge(ledger, "f1", { toolCallId: "c2", tool: "read", amount: 1 }).ok).toBe(true);
     expect(Object.keys(record.charges)).toEqual(["c2"]);
     expect(takeReady(ledger, { ownerId: "root" }).ok).toBe(true);
-    expect(record.charges).toEqual({});
-  });
-
-  test("supersedeFork empties the map", () => {
-    const { ledger, record } = chargedFork();
-    expect(markReady(ledger, "f1", { ok: true, record: "done" }).ok).toBe(true);
-    expect(supersedeFork(ledger, "f1").ok).toBe(true);
     expect(record.charges).toEqual({});
   });
 

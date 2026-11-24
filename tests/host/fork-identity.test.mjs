@@ -95,6 +95,7 @@ describe("buildChildIdentity", () => {
 			forkId: null,
 			parentOwnerId: null,
 			ownScopeId: null,
+			path: null,
 			fsm: null,
 			budget: null,
 			time: null,

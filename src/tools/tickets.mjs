@@ -13,9 +13,9 @@
 
 import { errorResult, textResult } from "./results.mjs";
 import { PIN_INTERNAL_ERROR } from "../features/pin/index.mjs";
-import { levelKeyOf, ownerIdOf, returnAcceptedText, returnSupersededText, admitJoin } from "../station/fork-controls.mjs";
+import { levelKeyOf, ownerIdOf, admitJoin } from "../station/fork-controls.mjs";
 import { loadDoc } from "../prompts/index.mjs";
-import { notifyWaiters, waitForJoin, waitForReady } from "../scope/fork-registry.mjs";
+import { notifyWaiters, waitForReady } from "../scope/fork-registry.mjs";
 
 const errors = loadDoc("errors");
 
@@ -120,58 +120,32 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 }
 
 /**
- * Hand the child's record back, then wait until the parent takes it. The
- * station queues the record in one synchronous beat; the wait belongs here,
- * and the accepted receipt is written only after the take is real.
+ * Hand the child's record back. The station seals it and answers in the same
+ * beat: the bracket is closed, the record waits in the parent's queue, and
+ * this call is done. Nothing parks here, so the child's session stays free to
+ * be talked to instead of being stuck inside an open tool call, and the
+ * parent's next join takes the record whenever it is ready for it.
  */
-export async function returnTicket(station, toolCallId, params, ctx, signal = null, host = {}) {
+export async function returnTicket(station, toolCallId, params, ctx, _signal = null, _host = {}) {
 	try {
-		const queued = station.executeReturn(toolCallId, params, ctx);
+		const result = station.executeReturn(toolCallId, params, ctx);
+		// Every ledger write wakes its waiters: a parent parked in a join is
+		// waiting for exactly this record.
 		const wait = station.forkWaitPort?.() ?? null;
-		if (queued?.details?.awaitingReceipt !== true) {
-			// The return changed the ledger even when it answers at once: a
-			// retried id hits ALREADY_READY, and a failed mark still moved the
-			// bracket. Waking here keeps "every ledger write wakes its waiters"
-			// true for this entry point too; a spurious wake costs one loop.
-			if (wait?.registry) notifyWaiters(wait.registry);
-			return queued;
-		}
-		if (!wait) return queued;
-		notifyWaiters(wait.registry);
-		const waited = await (async () => {
-			// The child has finished its work. Waiting for the parent to take
-			// the record is not the child's own time, so its clock stops.
-			station.pauseBranchClock?.();
-			// A child that has returned still waits for the parent to take the
-			// record, but its card is already settled.
-			try {
-				return await waitForJoin(wait.registry, wait.ledger, queued.details.forkId, {
-					signal,
-				});
-			} finally {
-				station.resumeBranchClock?.();
-			}
-		})();
-		if (!waited.ok) return errorResult(waited.code, waited.reason);
-		const { receiver, receiverText, scopeId } = queued.details;
-		if (waited.superseded === true) {
-			// The record is closed by reuse, not by a take. `accepted` is the
-			// host's terminal signal: the child stops here, and its frozen record
-			// stays history for the next generation.
-			return textResult(returnSupersededText(scopeId), {
-				...queued.details,
-				awaitingReceipt: false,
-				accepted: true,
-				superseded: true,
-			});
-		}
-		return textResult(returnAcceptedText(scopeId, receiverText ?? receiver), {
-			...queued.details,
-			awaitingReceipt: false,
-			accepted: true,
-		});
+		if (wait?.registry) notifyWaiters(wait.registry);
+		return result;
 	} catch (error) {
 		return errorResult("RETURN_INTERNAL_ERROR", String(error?.message ?? error));
+	}
+}
+
+/** One message addressed by path; every state change is synchronous. */
+export async function sendTicket(station, toolCallId, params, host = {}) {
+	try {
+		return station.executeSend(toolCallId, params);
+	} catch (error) {
+		host?.report?.record?.("fork", error, { phase: "send", toolCallId });
+		return errorResult("SEND_INTERNAL_ERROR", String(error?.message ?? error));
 	}
 }
 

@@ -26,6 +26,7 @@ function forkArgs(overrides = {}) {
   return {
     scopeId: "f1",
     fsm: "audit one seam",
+    profession: "You are a seam auditor like Michael Feathers.",
     budget: {},
     time: 60,
     targets: ["src/parser.mjs"],
@@ -100,7 +101,7 @@ describe("a fork start with room", () => {
     expect(out.isError).toBeUndefined();
     expect(spawned).toHaveLength(1);
     expect(spawned[0].forkId).toBe("f1");
-    expect(spawned[0].receipt.startsWith("You are now in the scope f1,")).toBe(true);
+    expect(spawned[0].receipt.startsWith("You are now in the scope /f1,")).toBe(true);
     expect(ledger.order).toEqual(["f1"]);
   });
 });
@@ -140,21 +141,4 @@ describe("evidence that cannot prove a refusal", () => {
     expect(spawned).toHaveLength(1);
   });
 
-  test("a blocked checkpoint needs no admission and spawns nothing", () => {
-    const ledger = createBracketLedger();
-    const spawned = [];
-    const station = stationFor(ledger, {
-      currentContextTokens: () => 900,
-      forkWindowPort: () => 1_000,
-      forkReservePort: () => 0,
-      forkMarginPort: () => 0,
-      childSpawnPort: () => (spec) => spawned.push(spec),
-    });
-    const out = handleForkCall(station, callWith(forkArgs({ blocked: true })));
-
-    expect(out.isError).toBeUndefined();
-    expect(spawned).toEqual([]);
-    expect(ledger.order).toEqual(["f1"]);
-    expect(forkOf(ledger, "f1").status).toBe("blocked");
-  });
 });

@@ -16,7 +16,7 @@ import {
 } from "../scope/fork-registry.mjs";
 import { renderChildRecord } from "../transcript/replay.mjs";
 import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
-import { forkOf } from "../scope/forkjoin.mjs";
+import { forkOf, touchFork } from "../scope/forkjoin.mjs";
 import {
 	childReturnNudge,
 	resetReturnNudges,
@@ -66,6 +66,48 @@ export function writeFrozenOutcome(registry, forkId, outcome) {
 	const existing = outcomeOf(registry, forkId);
 	if (existing && typeof existing.record === "string" && existing.record !== "") return;
 	setOutcome(registry, forkId, outcome);
+}
+
+/**
+ * Wake one finished scope in place.
+ *
+ * The scope already paid its single return, so waking it adds no record and
+ * asks for no nudge: the inbox is drained, the model answers, and a natural
+ * stop leaves the bracket exactly as it was. A second message that lands while
+ * the model is working is not a second concurrent prompt; it sets `pending`,
+ * and this loop drains it before the scope goes idle again.
+ */
+export async function wakeIdleScope(entry, ledger, forkId) {
+	const record = forkOf(ledger, forkId);
+	if (!record || record.woken !== true) return { ok: true, woken: false };
+	if (entry.busy === true) {
+		entry.pending = true;
+		return { ok: true, woken: true, deferred: true };
+	}
+	entry.busy = true;
+	try {
+		do {
+			entry.pending = false;
+			if (!(await entry.drain())) break;
+			const next = forkOf(ledger, forkId);
+			if (!next || next.woken !== true) return { ok: true, woken: false };
+		} while (entry.pending === true);
+		const done = forkOf(ledger, forkId);
+		if (done && done.woken === true) {
+			done.woken = false;
+			touchFork(ledger, forkId);
+		}
+		return { ok: true, woken: false };
+	} catch (error) {
+		const done = forkOf(ledger, forkId);
+		if (done) {
+			done.woken = false;
+			touchFork(ledger, forkId);
+		}
+		return { ok: false, reason: String(error?.message ?? error) };
+	} finally {
+		entry.busy = false;
+	}
 }
 
 /**
@@ -191,25 +233,24 @@ export async function spawnChildTicket(spec, ports) {
 			return finish();
 		}
 		if (typeof session.agent?.abort === "function") detachTermination = ports.stopAfterReturn?.(session.agent) ?? null;
-		// Requirements arrive in the ledger while the child works. The child
-		// has no inbox or session handle; it checks the ledger at each turn
-		// boundary, so a requirement never interrupts a running tool call.
-		const deliverRequirements = async () => {
+		// Messages arrive in the ledger's inbox while the child works. The child
+		// reads them at each turn boundary, so a message never interrupts a
+		// running tool call. Every envelope already names its sender, so the
+		// model answers by addressing that path and is never told who spoke.
+		const deliverInbox = async () => {
 			const record = forkOf(ledger, spec.forkId);
-			if (!record || !Array.isArray(record.requirements)) return false;
-			const delivered = Number.isInteger(record.requirementsDelivered)
-				? record.requirementsDelivered
+			if (!record || !Array.isArray(record.inbox)) return false;
+			const delivered = Number.isInteger(record.inboxDelivered)
+				? record.inboxDelivered
 				: 0;
-			const pending = record.requirements.slice(delivered);
+			const pending = record.inbox.slice(delivered);
 			if (pending.length === 0) return false;
-			record.requirementsDelivered = record.requirements.length;
-			await prompt(
-				["Additional requirements from the scope that forked this one:", ...pending.map((text) => `- ${text}`)].join("\n"),
-			);
+			record.inboxDelivered = record.inbox.length;
+			await prompt(pending.map((entry) => entry.envelope).join("\n\n"));
 			return true;
 		};
 		await prompt(spec.receipt);
-		await deliverRequirements();
+		await deliverInbox();
 		// A natural stop submits nothing. Only scope_return closes the bracket,
 		// so a RUNNING bracket after the prompt proves the child stopped short.
 		// The ticket says so and hands the loop back, once per stop. A record a
@@ -217,7 +258,7 @@ export async function spawnChildTicket(spec, ports) {
 		let bracket = forkOf(ledger, spec.forkId);
 		let unpublished = false;
 		while (bracket && bracket.status === "running") {
-			if (await deliverRequirements()) {
+			if (await deliverInbox()) {
 				// A new requirement restarts the conversation, so it restarts the
 				// allowance this loop shares with the station.
 				resetReturnNudges(bracket);
@@ -242,6 +283,14 @@ export async function spawnChildTicket(spec, ports) {
 			bracket = forkOf(ledger, spec.forkId);
 		}
 		const added = messagesOf(session).slice(before);
+		// The scope is finished, not gone. Hand the prompt handle to the wiring
+		// so a message that names this path wakes the same session in place: the
+		// inbox is drained, the model answers, and a natural stop returns it to
+		// idle. The parent's ready or joined record is never touched, and no
+		// second return is invented.
+		if (!failed && !unpublished) {
+			ports.registerIdle?.(spec.forkId, { prompt, drain: deliverInbox });
+		}
 		const text = unpublished ? "" : renderChildRecord(added, { start: 0 });
 		// An empty record is not a silent success. The parent cannot tell a
 		// child that did nothing from one whose provider rejected the turn, so

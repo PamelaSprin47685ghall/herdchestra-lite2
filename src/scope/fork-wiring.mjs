@@ -27,6 +27,7 @@ import { buildChildIdentity } from "../station/domain/identity.mjs";
 import { selectForkLedger } from "../station/domain/fork-ledger.mjs";
 import {
 	spawnChildTicket,
+	wakeIdleScope,
 	writeFrozenOutcome,
 } from "../tools/spawn-ticket.mjs";
 
@@ -148,6 +149,25 @@ export function attachBaseForkPorts(station, wiring, options = {}) {
 // the one identity every level already carries, so it is the right key.
 const RUNNING_BY_LEDGER = new WeakMap();
 
+// Fork id → prompt handle for children that have finished but whose session is
+// still alive. Same key as the running map, for the same reason: the ledger is
+// the one object every level of the tree already carries.
+const IDLE_BY_LEDGER = new WeakMap();
+
+function idleMapOf(base) {
+	const ledger = base?.ledger;
+	if (ledger && typeof ledger === "object") {
+		let idle = IDLE_BY_LEDGER.get(ledger);
+		if (!idle) {
+			idle = new Map();
+			IDLE_BY_LEDGER.set(ledger, idle);
+		}
+		return idle;
+	}
+	if (!(base.idle instanceof Map)) base.idle = new Map();
+	return base.idle;
+}
+
 function runningMapOf(base) {
 	const ledger = base?.ledger;
 	if (ledger && typeof ledger === "object") {
@@ -207,6 +227,10 @@ function spawnPortFor(station, base, binder, options, wiring) {
 			abortChild: options.abortChild ?? null,
 			registerRunning: (forkId, abort) => runningMapOf(base).set(forkId, abort),
 			unregisterRunning: (forkId) => runningMapOf(base).delete(forkId),
+			// A finished child keeps its prompt handle here so a message can wake
+			// it in place instead of forcing a new session.
+			registerIdle: (forkId, entry) => idleMapOf(base).set(forkId, entry),
+			unregisterIdle: (forkId) => idleMapOf(base).delete(forkId),
 			// A finished spawn is a ledger change too. The parent's branch
 			// persists it, not the child's disappearing one.
 			persistLedger: () => station.persist?.(),
@@ -297,6 +321,18 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 		: null;
 	const spawn = spawnPortFor(station, base, binder, options, host);
 	if (spawn) station.childSpawnPort = spawn;
+	// A message that names a finished scope reaches this port, which drives the
+	// session the spawn ticket left idle. The ticket owns the loop; this only
+	// hands it the fork id.
+	station.childWakePort = () => (forkId) => {
+		const entry = idleMapOf(base).get(forkId);
+		if (!entry) return null;
+		const running = wakeIdleScope(entry, base.ledger, forkId);
+		running?.catch?.((error) => {
+			host.report?.("fork", error, { forkId, phase: "wake" });
+		});
+		return running;
+	};
 	if (base && typeof base === "object") {
 		base.binder = binder;
 		base.phase = "host";

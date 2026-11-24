@@ -178,7 +178,7 @@ describe("waiting on the other bracket does not spend the clock", () => {
 		expect(record.deadlineAt).toBeGreaterThanOrEqual(before + 20);
 	});
 
-	test("scope_return pauses the child clock while the parent has not taken it", async () => {
+	test("scope_return answers at once and leaves the child clock running", async () => {
 		const registry = createForkRegistry();
 		const { ledger, record } = ledgerWith(60, Date.now());
 		const before = record.deadlineAt;
@@ -189,7 +189,7 @@ describe("waiting on the other bracket does not spend the clock", () => {
 			executeReturn: () => ({
 				content: [],
 				details: {
-					awaitingReceipt: true,
+					accepted: true,
 					forkId: "child-1",
 					receiver: "root",
 					receiverText: "the parent",
@@ -200,18 +200,12 @@ describe("waiting on the other bracket does not spend the clock", () => {
 			resumeBranchClock: () => resumeClock(record),
 		};
 
-		const pending = returnTicket(station, "return-1", {}, {});
-		await new Promise((resolve) => setTimeout(resolve, 30));
-
-		expect(Number.isFinite(record.clockPausedAt)).toBe(true);
-		expect(record.deadlineAt).toBe(before);
-		expect(takeReady(ledger, { ownerId: "root" }).ok).toBe(true);
-		notifyWaiters(registry);
-
-		const result = await pending;
+		// The ticket no longer parks: the record is sealed for the parent and
+		// the child's own clock is never frozen waiting for a take.
+		const result = await returnTicket(station, "return-1", {}, {});
 		expect(result.details.accepted).toBe(true);
 		expect(record.clockPausedAt).toBeNull();
-		expect(record.deadlineAt).toBeGreaterThanOrEqual(before + 20);
+		expect(record.deadlineAt).toBe(before);
 	});
 });
 

@@ -168,14 +168,15 @@ test("the registered scope_return explains the sealed final receipt and the dige
 	expect(returning.description).not.toContain("elder_report");
 });
 
-test("the registered scope_fork reads a repeated scopeId as an upsert", () => {
+test("the registered scope_fork renames a repeated sibling name instead of amending", () => {
 	const tools = new Map();
 	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
 	const item = tools.get("scope_fork").parameters.properties.forks.items;
-	expect(item.properties.scopeId.description).toMatch(/reuse is an upsert/i);
-	expect(item.properties.scopeId.description).toContain("only its owner");
-	expect(item.properties.fsm.description).toMatch(/next turn boundary/i);
-	expect(item.required).not.toContain("fsm");
+	expect(item.properties.scopeId.description).toMatch(/lowest free numeric suffix/i);
+	expect(item.properties.scopeId.description).toMatch(/unique among its siblings only/i);
+	expect(item.properties.fsm.description).toMatch(/state machine/i);
+	expect(item.required).toContain("fsm");
+	expect(item.required).not.toContain("blocked");
 });
 
 test("the root receipt reports unreceived work until the root joins it", () => {

@@ -9,7 +9,6 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  BLOCKED,
   JOINED,
   createBracketLedger,
   forkOf,
@@ -56,7 +55,6 @@ describe("the bracket tree survives a reload", () => {
       levelKey: "root|0|0",
       fsm: "work f2",
       depth: 0,
-      blocked: true,
     });
 
     const restored = restoreLedger(serializeLedger(fresh));
@@ -64,7 +62,10 @@ describe("the bracket tree survives a reload", () => {
     expect(forkOf(restored, "f1").ownerId).toBe("root");
     expect(forkOf(restored, "f1").budget).toEqual({ read: 2 });
     expect(forkOf(restored, "f1").status).toBe("ready");
-    expect(forkOf(restored, "f2").status).toBe(BLOCKED);
+    // A bracket that was still open at the snapshot cannot resume: it comes
+    // back as a failed ready result, so the parent can take it and decide.
+    expect(forkOf(restored, "f2").status).toBe("ready");
+    expect(forkOf(restored, "f2").outcome).toBe("failed");
   });
 
   test("a running fork comes back as a failed result, never as running", () => {

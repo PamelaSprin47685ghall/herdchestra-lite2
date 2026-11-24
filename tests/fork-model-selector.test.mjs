@@ -59,7 +59,7 @@ function forkOne(station, ctx, overrides = {}) {
           {
             scopeId: "parser",
             fsm: "read the parser",
-            blocked: false,
+            profession: "You are a careful parser reader like Ada Lovelace.",
             budget: { read: 1 },
             targets: ["src/parser.mjs"],
             ...overrides,
@@ -196,8 +196,8 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
         id: "fork-batch",
         arguments: {
           forks: [
-            { scopeId: "one", fsm: "first", blocked: false, budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
-            { scopeId: "two", fsm: "second", blocked: false, budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
+            { scopeId: "one", fsm: "first", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
+            { scopeId: "two", fsm: "second", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
           ],
         },
       },
@@ -208,15 +208,6 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
     expect(out.content[0].text).toContain("forks[1]");
     expect(spawned).toHaveLength(0);
     expect(ledger.order).toEqual([]);
-  });
-
-  test("does not resolve a model on a blocked checkpoint", () => {
-    const ledger = createBracketLedger();
-    const spawned = [];
-    const out = forkOne(stationWith(ledger, spawned), { models: hostModels() }, { blocked: true, model: "gamma/absent" });
-    expect(out.isError).toBeUndefined();
-    expect(spawned).toHaveLength(0);
-    expect(forkOf(ledger, "fork-call").status).toBe("blocked");
   });
 
   test("refuses a whitespace-only selector before registering the bracket", () => {

@@ -1,10 +1,10 @@
 ## fork.tool
 
-Start new scopes without waiting; receive their records with `scope_join`. A split costs you almost nothing; the serialized job costs you the critical path, and you pay that part alone. Split when you hold two things that do not depend on each other; when you hold one, do it yourself. Ask for reliable deductions, not for verbatim boring chronicle, or even better, ask to do, not to say. Side Effects are all you need.
+Start new scopes without waiting; receive their records with `scope_join`. A split costs you almost nothing; the serialized job costs you the critical path, and you pay that part alone. Split when you hold two things that do not depend on each other; when you hold one, do it yourself. Ask for reliable deductions, not for verbatim boring chronicle, or even better, ask to do, not to say. Side Effects are all you need. Every fork starts a new scope: to talk to one that already exists, call `scope_send`.
 
 ## fork.scope-id
 
-Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name that already exists in this session — including a finished one — is reused instead of starting a new one; only its owner may reuse it, and the match is case-insensitive. Reuse is an upsert: `running` and `blocked` scopes take the budget as an increment, the `fsm` as one more requirement, and the targets merged into the existing list; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history.
+Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name is unique among its siblings only: the same name under two different parents names two unrelated scopes. When a sibling already holds the name — running, finished, or reserved earlier in this same batch — registration appends the lowest free numeric suffix (`worker` → `worker-2` → `worker-3`). The fork receipt and the child's start receipt both show the final name and its path (`/api/worker-2`), and that path is the address `scope_send` takes.
 
 ## fork.n
 
@@ -12,15 +12,15 @@ Required on every item: your estimate of the ideal turns of work in hand for thi
 
 ## fork.fsm
 
-On a new scope `fsm` is required: give it a non-empty description, or the station refuses the item with `MISSING_FSM`. On a reused `scopeId` it is optional, and the text is appended as one more requirement and delivered at the worker's next turn boundary, never in the middle of a running tool. Complex flow orchestration is encouraged, so describe the work as a set of state machines, one per branch: name each machine's states, the transition that advances it, and which branches run at once. Say how to build the result fastest, not only what the finished thing is. For a read-only scope, the worker still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves. State in the `fsm` that the worker in the scope can be a `subtree` lead that divides again.
+Required: give the work a non-empty description, or the station refuses the item with `MISSING_FSM`. Complex flow orchestration is encouraged, so describe the work as a set of state machines, one per branch: name each machine's states, the transition that advances it, and which branches run at once. Say how to build the result fastest, not only what the finished thing is. For a read-only scope, the worker still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves. State in the `fsm` that the worker in the scope can be a `subtree` lead that divides again.
 
 ## fork.profession
 
-Required identity statement for the LLM in the new scope. Start with "You are " and name the famous person it should emulate, for example "You are a famous artist like Van Gogh. " The spawner injects it as the identity prefix of the LLM in the new scope, directly under the receipt marker and before the task; make it a role, not a restatement of the `fsm`. Reusing a running or blocked scope updates the record for its next generation, but cannot rewrite the receipt already delivered to the running scope.
+Required identity statement for the LLM in the new scope. Start with "You are " and name the famous person it should emulate, for example "You are a famous artist like Van Gogh. " The spawner injects it as the identity prefix of the LLM in the new scope, directly under the receipt marker and before the task; make it a role, not a restatement of the `fsm`. A running scope's receipt is fixed; a later message cannot rewrite it.
 
 ## fork.budget
 
-This field is named `budget`; one unit of it is one turn. Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one turn at most, split among its calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose budget falls short still runs its call, and the receipt records that call as panhandled. Size the budget for the work the scope must do, not for individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A scope that runs out keeps working: the call lands, and the receipt says the call was panhandled. Peer fork items each have their own budgets; each item funds its own forked scope at any depth, and the caller's budget is never charged. Size the entry from `n`, as the operating rules say.
+This field is named `budget`; one unit of it is one turn. Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one turn at most, split among its calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose budget falls short still runs its call, and the receipt records that call as panhandled. Size the budget for the work the scope must do, not for individual calls. A later `scope_send` may add turns to this scope, and its numbers are increments to what is left, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A scope that runs out keeps working: the call lands, and the receipt says the call was panhandled. Peer fork items each have their own budgets; each item funds its own forked scope at any depth, and the caller's budget is never charged. Size the entry from `n`, as the operating rules say.
 
 ## fork.time
 
@@ -28,15 +28,11 @@ The system derives the wall clock. Do not pass `time`. One turn is one LLM reque
 
 ## fork.targets
 
-Required, non-empty array of natural-language descriptions of what this scope expects to create, read, update, or delete. Each item may name a file path, a part of the source, a behavior, or a goal; any human language is valid, and a path is only one kind of target. For example, `["fix any defect you find", "the parts of the source that involve caching"]` is valid. Blocked checkpoints declare their targets too. If the list is empty, think carefully: how could a scope that outputs nothing be a separate scope? The list is a declaration, not an audit boundary; the system does not check tool calls against it. When the `scopeId` is reused, the list is merged into the existing targets rather than replacing them.
+Required, non-empty array of natural-language descriptions of what this scope expects to create, read, update, or delete. Each item may name a file path, a part of the source, a behavior, or a goal; any human language is valid, and a path is only one kind of target. For example, `["fix any defect you find", "the parts of the source that involve caching"]` is valid. If the list is empty, think carefully: how could a scope that outputs nothing be a separate scope? The list is a declaration, not an audit boundary; the system does not check tool calls against it. A later message cannot change it; fork a new scope for work the list does not cover.
 
 ## fork.forks
 
-Include the remaining plan, both ready and blocked items. Order does not express dependencies. Invalid input prevents the whole batch from starting. 
-
-## fork.blocked
-
-`false` starts now. `true` records an unmet prerequisite without queuing the item. Resubmit with `false` when ready. Reusing a `running` scope with `true` is refused with `SCOPE_RUNNING_BLOCKED`; reuse it with `budget` or a requirement instead.
+Include the whole plan you are ready to run now. Order does not express dependencies. Invalid input prevents the whole batch from starting.
 
 ## fork.model
 
@@ -51,15 +47,6 @@ Started ({{count}}):
 
 - {{forkId}}: {{fsm}}
 
-## fork.batch-deferred
-
-Deferred, not started ({{count}}):
-{{lines}}
-
-## fork.deferred-line
-
-- {{forkId}}: {{fsm}}
-
 ## fork.batch-failed
 
 Failed to start ({{count}}):
@@ -69,13 +56,25 @@ Failed to start ({{count}}):
 
 - {{forkId}}: {{fsm}} — {{reason}}
 
-## fork.checkpoint-only
-
-No scope started. Resubmit deferred items when ready.
-
 ## fork.unreceived
 
 Unreceived work: {{children}}.
+
+## send.tool
+
+Send a message to another scope, by path. `target` takes `.` for yourself, `..` for the parent, a relative name, an absolute `/a/b`, `/` for the root, or a wildcard: `*` for the direct children of a path, `**` for every scope under it. A wildcard reaches active scopes only, so it never wakes a finished one; an exact path may name a finished scope, and naming it wakes it. The message arrives as `[Message from <your path>]` followed by your text, so the reply is another `scope_send` to that path: the receiver already sees the scope tree, and the envelope already says who you are. A message to a running scope waits in its inbox and is read at its next turn boundary; a message to the root reaches the holder at once.
+
+## send.target
+
+One path or an array of paths, each resolved against your own path. A pattern never matches your own scope. An exact path that names no scope is refused with `UNKNOWN_SCOPE_TARGET`; a pattern that matches nothing is refused with `NO_MATCHING_SCOPES`.
+
+## send.message
+
+The text the target receives, after the sender envelope. State the request or the answer. A scope that has already returned gets no return nudge, so it finishes by stopping: make the message self-contained.
+
+## send.budget
+
+Optional turn increment for each target, in the shape a fork's `budget` takes: tool names as keys, non-negative integers. The numbers are added to what the target has left, so a scope that ran out can be financed this way. Ignored for `/`, which has no budget.
 
 ## join.tool
 
@@ -101,7 +100,3 @@ Fork {{forkId}} queued for {{receiver}}; awaiting the receiver's join.
 ## return.receipt
 
 Fork {{forkId}} has been handed to {{receiver}}.
-
-## return.superseded
-
-Fork {{forkId}} was superseded by a later generation of the same scope. Its record is closed; stop here.

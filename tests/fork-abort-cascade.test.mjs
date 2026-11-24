@@ -24,14 +24,13 @@ import { spawnChildTicket } from "../src/tools/spawn-ticket.mjs";
 
 const REASON = "cancelled by the parent scope";
 
-function fork(ledger, forkId, ownerId, blocked = false) {
+function fork(ledger, forkId, ownerId) {
 	const result = registerFork(ledger, {
 		forkId,
 		scopeId: forkId,
 		ownerId,
 		fsm: "one state",
 		depth: ownerId === "root" ? 0 : 1,
-		blocked,
 	});
 	expect(result.ok).toBe(true);
 	return result.fork;
@@ -42,7 +41,6 @@ function tree() {
 	const registry = createForkRegistry();
 	fork(ledger, "child", "root");
 	fork(ledger, "grandchild", "child");
-	fork(ledger, "blocked", "root", true);
 	fork(ledger, "ready", "child");
 	markReady(ledger, "ready", { record: "done" });
 	fork(ledger, "joined", "root");
@@ -70,11 +68,11 @@ describe("abort cascade", () => {
 
 		const result = cancelDescendants(rootStation(ledger, registry, aborts, persisted));
 
-		expect([...result.abandonedIds].sort()).toEqual(["blocked", "child", "grandchild", "ready"]);
+		expect([...result.abandonedIds].sort()).toEqual(["child", "grandchild", "ready"]);
 		expect([...result.runningIds].sort()).toEqual(["child", "grandchild"]);
 		expect([...aborts].sort()).toEqual(["child", "grandchild"]);
 		expect(persisted).toEqual(["persist"]);
-		for (const id of ["child", "grandchild", "blocked", "ready"]) {
+		for (const id of ["child", "grandchild", "ready"]) {
 			expect(forkOf(ledger, id).status).toBe("failed");
 			expect(forkOf(ledger, id).reason).toBe(REASON);
 		}

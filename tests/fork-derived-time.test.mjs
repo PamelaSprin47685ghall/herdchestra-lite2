@@ -28,7 +28,7 @@ function forkCall(argumentsForFork) {
 				{
 					scopeId: "parser",
 					fsm: "read the parser",
-					blocked: false,
+					profession: "You are a careful parser reader like Ada Lovelace.",
 					budget: { read: 2, bash: 2 },
 					targets: ["src/parser.mjs"],
 					...argumentsForFork,
@@ -74,7 +74,7 @@ describe("fork time is derived from measured turns", () => {
 		const verdict = validateFork({
 			scopeId: "parser",
 			fsm: "read the parser",
-			blocked: false,
+			profession: "You are a careful parser reader like Ada Lovelace.",
 			budget: { read: 2, bash: 2 },
 			targets: ["src/parser.mjs"],
 		});

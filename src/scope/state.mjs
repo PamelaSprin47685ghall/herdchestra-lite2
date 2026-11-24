@@ -10,6 +10,7 @@ const CONTROL_TOOLS = new Set([
   "scope_fork",
   "scope_join",
   "scope_return",
+  "scope_send",
   "scope_context",
   // The retired names are never registered now, but an older transcript
   // still carries amend and pin calls that the scan path must process.

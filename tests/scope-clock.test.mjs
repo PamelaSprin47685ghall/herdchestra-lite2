@@ -3,60 +3,8 @@ import {
   createBracketLedger,
   forkBudgetText,
   registerFork,
-  reviveBlockedFork,
 } from "../src/scope/forkjoin.mjs";
 import { createClockOn } from "../src/scope/clock.mjs";
-
-function blockedFork({ timeSeconds = 10, now = 1_000_000 } = {}) {
-  const ledger = createBracketLedger();
-  const registered = registerFork(
-    ledger,
-    {
-      forkId: "fork_blocked",
-      scopeId: "child",
-      ownerId: "parent",
-      fsm: "wait for a prerequisite",
-      depth: 0,
-      time: timeSeconds,
-      blocked: true,
-    },
-    { clock: createClockOn(() => now) },
-  );
-  expect(registered.ok).toBe(true);
-  return { ledger, record: registered.fork };
-}
-
-describe("blocked fork clock", () => {
-  test("queue time never spends the grant", () => {
-    const { ledger, record } = blockedFork({ timeSeconds: 10, now: 1_000_000 });
-    // Registered at t=1000s, revived 60s later.
-    const revivedAt = 1_060_000;
-    const revived = reviveBlockedFork(ledger, "fork_blocked", revivedAt);
-    expect(revived.ok).toBe(true);
-    expect(record.status).toBe("running");
-    expect(record.deadlineAt).toBe(revivedAt + 10_000);
-    expect(record.startedAt).toBe(revivedAt);
-  });
-
-  test("an unbounded blocked fork stays unbounded", () => {
-    const ledger = createBracketLedger();
-    const registered = registerFork(
-      ledger,
-      {
-        forkId: "fork_open",
-        scopeId: "child",
-        ownerId: "parent",
-        fsm: "no deadline",
-        depth: 0,
-        blocked: true,
-      },
-      { clock: createClockOn(() => 1_000_000) },
-    );
-    expect(registered.ok).toBe(true);
-    reviveBlockedFork(ledger, "fork_open", 1_060_000);
-    expect(registered.fork.deadlineAt).toBeNull();
-  });
-});
 
 describe("remaining clock rendering", () => {
   test("floors the remaining seconds instead of rounding up", () => {

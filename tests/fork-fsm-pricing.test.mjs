@@ -39,6 +39,10 @@ function item(overrides = {}) {
   return {
     scopeId: "f1",
     fsm: "audit one seam",
+    // Every fork creates a scope, so every field is required: the identity
+    // statement, and the declared size of the work.
+    profession: "You are a careful auditor like Ada Lovelace.",
+    n: 1,
     budget: {},
     time: 60,
     targets: ["src/parser.mjs"],
@@ -110,65 +114,9 @@ describe("a fork is priced by the receipt it sends", () => {
   });
 });
 
-describe("a new generation is priced by the record it carries", () => {
-  test("a prior record that does not fit the window refuses the reuse", () => {
-    const ledger = createBracketLedger();
-    const spawned = [];
-    const first = handleForkCall(
-      measuringStation(ledger, spawned),
-      call("call-1", item()),
-    );
-    expect(first.isError).toBeUndefined();
-    markReady(ledger, "call-1", { record: "r".repeat(4_000) });
-
-    const next = handleForkCall(
-      stationFor(ledger, {
-        forkWindowPort: () => 1_000,
-        forkReservePort: () => 0,
-        forkMarginPort: () => 0,
-        childSpawnPort: () => (spec) => spawned.push(spec),
-      }),
-      call("call-2", item({ fsm: "again" })),
-    );
-
-    expect(next.isError).toBe(true);
-    expect(next.details.code).toBe("FORK_CONTEXT_EXCEEDED");
-    expect(next.details.index).toBe(0);
-    expect(next.details.projected).toBeGreaterThan(4_000);
-    expect(spawned).toHaveLength(1);
-    expect(ledger.order).toEqual(["call-1"]);
-    expect(forkOf(ledger, "call-1").supersededAt).toBeNull();
-  });
-});
-
-describe("a revived checkpoint is priced by the target's own text", () => {
-  test("the standing state machine, not the new requirement, decides", () => {
-    const ledger = createBracketLedger();
-    const spawned = [];
-    const held = handleForkCall(
-      measuringStation(ledger, spawned),
-      call("call-1", item({ fsm: "s".repeat(5_000), blocked: true })),
-    );
-    expect(held.isError).toBeUndefined();
-    expect(spawned).toHaveLength(0);
-    expect(forkOf(ledger, "call-1").status).toBe("blocked");
-
-    const revived = handleForkCall(
-      stationFor(ledger, {
-        forkWindowPort: () => 1_500,
-        forkReservePort: () => 0,
-        forkMarginPort: () => 0,
-        childSpawnPort: () => (spec) => spawned.push(spec),
-      }),
-      call("call-2", item({ fsm: "go" })),
-    );
-
-    expect(revived.isError).toBe(true);
-    expect(revived.details.code).toBe("FORK_CONTEXT_EXCEEDED");
-    expect(spawned).toHaveLength(0);
-    expect(forkOf(ledger, "call-1").status).toBe("blocked");
-  });
-});
+// A generation and a revived checkpoint no longer exist: a fork only creates,
+// and a message to an existing scope is `scope_send`. Their pricing paths went
+// with them, so no case here can re-pin them.
 
 describe("the ledger snapshot format", () => {
   test("a version-1 snapshot is refused and rebuilt without throwing", () => {

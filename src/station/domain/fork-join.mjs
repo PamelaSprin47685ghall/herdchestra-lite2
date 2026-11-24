@@ -10,6 +10,7 @@ import {
 	joinAdmission,
 } from "../../scope/admission.mjs";
 import { decideAbandon } from "../../scope/abandon.mjs";
+import { allocateSiblingScopeId, childScopePath } from "../../scope/path.mjs";
 import { normalizeBudget, validBudget } from "../../scope/turns.mjs";
 import { normalizeTargets, validTargets } from "../../scope/targets.mjs";
 import { publicScopeId, validScopeId } from "../../scope/scope-id.mjs";
@@ -51,16 +52,24 @@ export function decideForkAdmission({
 	baseTokens,
 	pricedChars = null,
 	path = null,
+	recordChars = null,
 	tokensPerChar,
 	window,
 	reserve,
 	margin,
 } = {}) {
+	let chars = 0;
+	if (Number.isFinite(recordChars)) {
+		chars = recordChars;
+	} else if (pricedChars !== null && path !== null) {
+		const priced = pricedChars[path];
+		chars = typeof priced === "number"
+			? priced
+			: (Number.isFinite(priced?.fresh) ? priced.fresh : 0);
+	}
 	return admission({
 		baseTokens,
-		recordChars: pricedChars === null || path === null
-			? 0
-			: (pricedChars[path] ?? 0),
+		recordChars: chars,
 		tokensPerChar,
 		window,
 		reserve,
@@ -73,10 +82,11 @@ export function decideForkAdmission({
  * turns on success so the caller never normalizes twice.
  */
 export function validateFork(args) {
-	// Empty is valid here: a repeated scope id may carry only turns or
-	// targets. A *new* scope still needs an fsm, and the handler enforces that
-	// after it knows whether the name already exists.
+	// A fork only creates, so it always carries the state-machine text that
+	// describes the work. An empty one is refused here, before any bracket
+	// moves.
 	const fsm = trimText(args?.fsm);
+	if (fsm === "") return { ok: false, code: "INVALID_FSM" };
 	// `budget` is the persisted field name; its values are turn counts.
 	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
@@ -89,20 +99,15 @@ export function validateFork(args) {
 	if (args.model !== undefined && args.model !== null && typeof args.model !== "string") {
 		return { ok: false, code: "INVALID_ARGUMENT" };
 	}
-	if (args.blocked !== undefined && typeof args.blocked !== "boolean") {
-		return { ok: false, code: "INVALID_ARGUMENT" };
-	}
 	if (!validScopeId(args?.scopeId) || args.scopeId.toLowerCase() === "root") {
 		return { ok: false, code: "INVALID_SCOPE_ID" };
 	}
 	// The child's identity statement. It must open with "You are " so the
 	// spawned scope receives a role, not a task summary; the spawner injects
 	// it as the first line below the receipt marker, before any instruction.
-	// An empty value is legal here: a reused scope may carry only a turn
-	// increment, and a new scope is checked by the station after the action is
-	// known. The JSON schema already requires the field at the tool edge.
+	// The JSON schema already requires the field at the tool edge.
 	const profession = trimText(args?.profession);
-	if (profession !== "" && !profession.startsWith("You are ")) {
+	if (profession === "" || !profession.startsWith("You are ")) {
 		return { ok: false, code: "INVALID_PROFESSION" };
 	}
 	return {
@@ -113,7 +118,6 @@ export function validateFork(args) {
 		budget,
 		targets: normalizeTargets(args.targets),
 		model: typeof args.model === "string" ? args.model.trim() : null,
-		blocked: args.blocked === true,
 	};
 }
 
@@ -137,23 +141,13 @@ export function validateForkBatch(args) {
 }
 
 /**
- * Which receipt a fork item sends, if any. The price and the send path both
- * read this one function: a priced number always describes text that ships,
- * and no second action judgement can drift from it.
- *
- * - `fresh`: a new child receives its first receipt.
- * - `revive`: a blocked checkpoint is woken.
- * - `generation`: the next generation continues a closed scope and carries the
- *   prior record, which is the largest receipt in the system.
- * - `null`: nothing is sent now — a blocked plan entry, a requirement queued
- *   for a running child, or an item that only amends an earlier item in the
- *   same batch.
+ * Which receipt a fork item sends. A fork only creates, so every item sends
+ * one fresh receipt; nothing else can be priced, and no second action
+ * judgement can drift from this one.
  */
 export function forkReceiptPath(item = null) {
-	if (!item || item.blocked === true) return null;
-	if (item.action === "create") return "fresh";
-	if (item.spawnNextGeneration === true) return "generation";
-	if (item.targetStatus === "blocked") return "revive";
+	if (!item) return null;
+	if (item.action === "register" || item.action === "create") return "fresh";
 	return null;
 }
 
@@ -167,6 +161,8 @@ export function forkReceiptPath(item = null) {
 export function decideRegister({
 	items = [],
 	forks = [],
+	parentForkId,
+	parentPath = null,
 	ownerId = "",
 	models = null,
 	hasSpawner = false,
@@ -177,94 +173,50 @@ export function decideRegister({
 	reserve,
 	margin,
 } = {}) {
-	// One live record per public name. A blocked entry is live: it is a
-	// checkpoint that a later fork may amend and then start. Superseded
-	// records are history and never answer a name.
-	const live = new Map();
-	for (const fork of Array.isArray(forks) ? forks : []) {
-		if (!fork) continue;
-		const key = publicScopeId(fork).toLowerCase();
-		const previous = live.get(key);
-		if (!previous) {
-			live.set(key, fork);
-			continue;
-		}
-		const generation = Number.isInteger(fork.generation) ? fork.generation : 1;
-		const previousGeneration = Number.isInteger(previous.generation)
-			? previous.generation
-			: 1;
-		if (generation >= previousGeneration) live.set(key, fork);
+	// A fork only creates. Names are unique among siblings and never across the
+	// conversation: the same name under two parents is two unrelated scopes.
+	const parent =
+		parentForkId !== undefined
+			? (typeof parentForkId === "string" && parentForkId !== "root" ? parentForkId : null)
+			: (typeof ownerId === "string" && ownerId !== "" && ownerId !== "root" ? ownerId : null);
+	const records = Array.isArray(forks) ? forks.filter(Boolean) : [];
+	const parentRecord = parent === null
+		? null
+		: records.find((fork) => fork.forkId === parent);
+	const base =
+		typeof parentPath === "string" && parentPath !== ""
+			? parentPath
+			: (parentRecord?.path ?? "/");
+	const snapshot = { forks: {}, order: [] };
+	for (const record of records) {
+		if (typeof record.forkId !== "string" || record.forkId === "") continue;
+		snapshot.forks[record.forkId] = record;
+		snapshot.order.push(record.forkId);
 	}
+	const reserved = new Set();
 	const next = [];
-	// A repeated name inside one batch is not an error: the first item owns
-	// the name and every later item amends that same record. The handler
-	// resolves `targetStatus: "batch"` to the fork it created or amended
-	// earlier in the same loop.
-	const claimed = new Map();
-	let needsSpawn = false;
 	for (let index = 0; index < items.length; index += 1) {
 		const item = items[index];
 		if (!item || typeof item.scopeId !== "string") {
 			return { ok: false, code: "INVALID_SCOPE_ID", index };
 		}
-		const key = item.scopeId.toLowerCase();
-		if (claimed.has(key)) {
-			next.push({
-				...item,
-				action: "amend",
-				targetForkId: null,
-				targetStatus: "batch",
-				spawnNextGeneration: false,
-			});
-			continue;
-		}
-		claimed.set(key, index);
-		const existing = live.get(key);
-		if (existing) {
-			const recordOwner = existing.ownerId;
-			if (
-				typeof ownerId === "string" &&
-				ownerId !== "" &&
-				typeof recordOwner === "string" &&
-				recordOwner !== "" &&
-				recordOwner !== ownerId
-			) {
-				return {
-					ok: false,
-					code: "FOREIGN_SCOPE_ID",
-					index,
-					scopeId: item.scopeId,
-				};
-			}
-			const spawning =
-				existing.status === "ready" ||
-				existing.status === "joined" ||
-				existing.status === "failed";
-			if (spawning) needsSpawn = true;
-			next.push({
-				...item,
-				action: "amend",
-				targetForkId: existing.forkId,
-				targetStatus: existing.status,
-				spawnNextGeneration: spawning,
-			});
-			continue;
-		}
-		if (item.blocked !== true) needsSpawn = true;
-		next.push({ ...item, action: "create" });
+		const scopeId = allocateSiblingScopeId(snapshot, parent, item.scopeId, reserved);
+		reserved.add(scopeId);
+		const { blocked: _blocked, ...rest } = item;
+		next.push({
+			...rest,
+			action: "register",
+			scopeId,
+			path: childScopePath(base, scopeId),
+			parentForkId: parent,
+		});
 	}
-	if (needsSpawn && hasSpawner !== true) {
+	if (hasSpawner !== true) {
 		return { ok: false, code: "CHILD_SPAWNER_UNAVAILABLE" };
 	}
 	for (let index = 0; index < next.length; index += 1) {
 		const item = next[index];
-		if (
-			item.model == null ||
-			item.blocked === true ||
-			item.action === "amend"
-		) {
-			continue;
-		}
+		if (item.model == null) continue;
 		const resolved = resolveModelSelector(models, item.model);
 		if (!resolved.ok) {
 			return {
@@ -284,15 +236,16 @@ export function decideRegister({
 	}
 	for (let index = 0; index < next.length; index += 1) {
 		const item = next[index];
-		const path = forkReceiptPath(item);
-		if (path === null) continue;
+		const price = pricedChars[index];
+		const chars = typeof price === "number"
+			? price
+			: (Number.isFinite(price?.fresh) ? price.fresh : 0);
 		const override = item.modelOverride?.contextWindow;
 		const itemWindow =
 			Number.isFinite(override) && override > 0 ? override : window;
 		const verdict = decideForkAdmission({
 			baseTokens,
-			pricedChars: pricedChars[index] ?? null,
-			path,
+			recordChars: chars,
 			tokensPerChar,
 			window: itemWindow,
 			reserve,
@@ -317,12 +270,12 @@ export function decideRegister({
 	return {
 		ok: true,
 		items: next,
-		needsSpawn,
+		needsSpawn: true,
 		...(single
 			? {
 					action: single.action,
-					targetForkId: single.targetForkId ?? null,
-					targetStatus: single.targetStatus ?? null,
+					targetForkId: null,
+					targetStatus: null,
 				}
 			: {}),
 	};

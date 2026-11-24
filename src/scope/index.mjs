@@ -22,11 +22,12 @@ export {
   createBracketLedger,
   RUNNING,
   registerFork,
-  amendFork,
-  supersedeFork,
-  liveRecordForScope,
   forkOf,
   markReady,
+  enqueueScopeMessage,
+  enqueueRootMessage,
+  takePendingInbox,
+  finishWokenScope,
   takeReady,
   reparentOrphans,
   liveReceiverOf,
@@ -51,6 +52,15 @@ export {
   applyRefund,
   forkBudgetText,
 } from "./forkjoin.mjs";
+export {
+  childScopePath,
+  normalizeScopePath,
+  scopePathOf,
+  isScopeActive,
+  allocateSiblingScopeId,
+  listActiveScopePaths,
+  resolveScopeTargets,
+} from "./path.mjs";
 export {
   pauseClock,
   resumeClock,

@@ -14,9 +14,7 @@ import {
 	registerFork,
 	reparentOrphans,
 	restoreLedgerChecked,
-	reviveBlockedFork,
 	serializeLedger,
-	supersedeFork,
 	takeReady,
 	unreceivedChildren,
 	validLedger,
@@ -26,7 +24,6 @@ import {
 	createForkRegistry,
 	identityOf,
 	pulse,
-	waitForJoin,
 	waitForReady,
 } from "../src/scope/fork-registry.mjs";
 import { scopeActivity } from "../src/scope/activity.mjs";
@@ -53,6 +50,9 @@ const LEDGER_KEYS = [
 	"queues",
 	"levels",
 	"totals",
+	// The root's mailbox: a branch addresses `/`, and the message has to survive
+	// a snapshot or the root loses what it was told across a restart.
+	"rootInbox",
 ];
 
 function settleRace(promise, ms = 5) {
@@ -143,16 +143,13 @@ describe("waitForReady termination and wakeup invariants", () => {
 		);
 		expect(emptyOut.ok).toBe(false);
 		expect(emptyOut.code).toBe("NO_UNRECEIVED_WORK");
-
-		// A blocked checkpoint never runs and never appears in Busy/Idle.
-		registerChild(ledger, "b1", "root", { blocked: true });
-		expect(scopeActivity(ledger, "root", false)).toBe("[Busy: 0, Idle: 1]");
-
-		const blockedOut = await settledWithin(
+		// A ledger with no child still has nothing to receive; a second call
+		// answers the same way instead of parking.
+		const again = await settledWithin(
 			waitForReady(registry, ledger, { ownerId: "root", levelKey: "L0" }),
 		);
-		expect(blockedOut.ok).toBe(false);
-		expect(blockedOut.code).toBe("NO_UNRECEIVED_WORK");
+		expect(again.ok).toBe(false);
+		expect(again.code).toBe("NO_UNRECEIVED_WORK");
 	});
 
 	test("abandoning the last running child wakes parked waitForReady with NO_UNRECEIVED_WORK", async () => {
@@ -167,27 +164,6 @@ describe("waitForReady termination and wakeup invariants", () => {
 		// abandon alone must wake the parked waiter and remove the child from Busy/Idle.
 		expect(abandon(ledger, "c1", "parent cancelled").ok).toBe(true);
 		expect(forkOf(ledger, "c1")?.status).toBe(FAILED);
-		expect(scopeActivity(ledger, "root", false)).toBe("[Busy: 0, Idle: 1]");
-
-		const out = await settledWithin(pending);
-		expect(out.ok).toBe(false);
-		expect(out.code).toBe("NO_UNRECEIVED_WORK");
-	});
-
-	test("superseding the last child without a replacement wakes parked waitForReady and leaves no ghost Idle", async () => {
-		const registry = createForkRegistry();
-		const ledger = createBracketLedger();
-		adoptLedger(registry, "conv-supersede", ledger);
-		registerChild(ledger, "c1", "root");
-
-		const pending = waitForReady(registry, ledger, { ownerId: "root", levelKey: "L0" });
-		expect((await settleRace(pending, 15)).state).toBe("waiting");
-
-		// In one synchronous turn the record becomes READY then superseded with no successor.
-		expect(markReady(ledger, "c1", { ok: true, record: "v1" }).ok).toBe(true);
-		expect(supersedeFork(ledger, "c1").ok).toBe(true);
-
-		expect(unreceivedChildren(ledger, "root")).toEqual([]);
 		expect(scopeActivity(ledger, "root", false)).toBe("[Busy: 0, Idle: 1]");
 
 		const out = await settledWithin(pending);
@@ -231,30 +207,6 @@ describe("waitForReady termination and wakeup invariants", () => {
 		expect(unreceivedChildren(ledger, "root")).toContain("g2");
 	});
 
-	test("adoptFork and reparentOrphans never re-queue a superseded READY record", () => {
-		const ledger = createBracketLedger();
-		registerChild(ledger, "p1", "root", { depth: 0 });
-		registerChild(ledger, "g1", "p1", { depth: 1 });
-		expect(markReady(ledger, "g1", { ok: true, record: "old" }).ok).toBe(true);
-		expect(supersedeFork(ledger, "g1").ok).toBe(true);
-
-		expect(adoptFork(ledger, "g1", "root").ok).toBe(true);
-		expect(ledger.queues.root ?? []).not.toContain("g1");
-		expect(assertPairing(ledger)).toEqual({ ok: true });
-
-		// Even if a superseded id lingered in a source queue, reparentOrphans drops it.
-		registerChild(ledger, "g2", "p1", { depth: 1 });
-		expect(markReady(ledger, "g2", { ok: true, record: "old-2" }).ok).toBe(true);
-		expect(supersedeFork(ledger, "g2").ok).toBe(true);
-		ledger.queues.p1 = ["g2"];
-
-		expect(reparentOrphans(ledger, "p1", "root").ok).toBe(true);
-		expect(ledger.queues.root ?? []).not.toContain("g2");
-		expect(assertPairing(ledger)).toEqual({ ok: true });
-		// Only p1 is still RUNNING; g1 and g2 are superseded and must not count as Idle.
-		expect(scopeActivity(ledger, "root", false)).toBe("[Busy: 1, Idle: 1]");
-	});
-
 	test("negative guards: keeps parking while a RUNNING child remains, and returns JOIN_CONTEXT_EXCEEDED when admit rejects READY", async () => {
 		const registry = createForkRegistry();
 		const ledger = createBracketLedger();
@@ -294,28 +246,6 @@ describe("waitForReady termination and wakeup invariants", () => {
 		);
 		expect(out.ok).toBe(false);
 		expect(out.code).toBe("LEDGER_PAIRING_BROKEN");
-	});
-
-	test("child waitForJoin unblocks on takeReady without a manual notifyWaiters call", async () => {
-		const registry = createForkRegistry();
-		const ledger = createBracketLedger();
-		adoptLedger(registry, "conv-child-wait", ledger);
-		registerChild(ledger, "c1", "root");
-
-		const childWaiting = waitForJoin(registry, ledger, "c1", {
-			outcome: { record: "result", failed: false },
-		});
-		expect(forkOf(ledger, "c1")?.status).toBe(READY);
-		expect((await settleRace(childWaiting, 15)).state).toBe("waiting");
-
-		// Parent takes the record directly without manually calling notifyWaiters.
-		const taken = takeReady(ledger, { ownerId: "root", levelKey: "L0" });
-		expect(taken.ok).toBe(true);
-		expect(taken.fork.status).toBe(JOINED);
-
-		const childOut = await settledWithin(childWaiting);
-		expect(childOut.ok).toBe(true);
-		expect(childOut.fork.status).toBe(JOINED);
 	});
 });
 
@@ -367,7 +297,9 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 
 		// Child returns through the synchronous station handler directly (no manual ticket notify).
 		const ret = handleReturnCall(child, { id: "call-ret-1", arguments: { dafny: "the child returns before the join settles" } });
-		expect(ret.details?.awaitingReceipt).toBe(true);
+		// One return closes the bracket in the same beat; nothing parks.
+		expect(ret.details?.accepted).toBe(true);
+		expect(ret.details?.awaitingReceipt).toBeUndefined();
 
 		const [o1, o2] = await settledWithin(Promise.all([j1, j2]));
 		const outs = [o1, o2];
@@ -382,7 +314,7 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 		expect(scopeActivity(ledger, "root", true)).toBe("[Busy: 1, Idle: 0]");
 	});
 
-	test("a throw inside finalizeJoin does not strand a sibling joinTicket or child waitForJoin", async () => {
+	test("a throw inside finalizeJoin does not strand a sibling joinTicket", async () => {
 		const wiring = createForkWiring();
 		let rootWaits = 0;
 		const display = {
@@ -410,16 +342,16 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 		expect((await settleRace(j1, 5)).state).toBe("waiting");
 		expect((await settleRace(j2, 5)).state).toBe("waiting");
 
-		// Child marks ready and waits on waitForJoin concurrently while parent joins race.
-		const childWait = waitForJoin(wiring.registry, ledger, "c1", {
-			outcome: { record: "payload", failed: false },
-		});
+		// The child seals its record while both joins are parked. The first take
+		// throws inside finalize; the record must still reach the other join,
+		// and the failure must not leave a waiter behind.
+		expect(markReady(ledger, "c1", { ok: true, record: "payload" }).ok).toBe(true);
 
-		const [o1, o2, childOut] = await settledWithin(Promise.all([j1, j2, childWait]));
+		const [o1, o2] = await settledWithin(Promise.all([j1, j2]));
 		const codes = [o1?.details?.code, o2?.details?.code].sort();
+		// The take that threw reports its own failure; the sibling settles with a
+		// refusal instead of hanging, which is the whole point: nobody is stranded.
 		expect(codes).toEqual(["JOIN_INTERNAL_ERROR", "NO_UNRECEIVED_WORK"]);
-		expect(childOut.ok).toBe(true);
-		expect(childOut.fork.status).toBe(JOINED);
 		expect(rootWaits).toBe(0);
 		expect(scopeActivity(ledger, "root", false)).toBe("[Busy: 0, Idle: 1]");
 	});
@@ -443,7 +375,8 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 					{
 						scopeId: "c-broken",
 						fsm: "will fail to spawn",
-						blocked: false,
+						profession: "You are a careful worker like Ada Lovelace.",
+						n: 1,
 						budget: { read: 1 },
 						targets: ["src/a.mjs"],
 					},
@@ -476,15 +409,11 @@ describe("shared ledger across registries and wiring resilience", () => {
 		expect(taken.ok).toBe(true);
 		expect(taken.fork.forkId).toBe("c1");
 
-		// Symmetric: child waits in regChild while parent takes through regParent's ledger.
+		// Symmetric: a scope that has already returned can still be joined, and
+		// the take needs no child-side waiter at all.
 		registerChild(ledger, "c2", "root");
-		const childWait = waitForJoin(regChild, ledger, "c2", {
-			outcome: { record: "cross-2", failed: false },
-		});
-		expect((await settleRace(childWait, 5)).state).toBe("waiting");
-
-		expect(takeReady(ledger, { ownerId: "root", levelKey: "L0" }).ok).toBe(true);
-		const childDone = await settledWithin(childWait);
+		expect(markReady(ledger, "c2", { ok: true, record: "cross-2" }).ok).toBe(true);
+		const childDone = takeReady(ledger, { ownerId: "root", levelKey: "L0" });
 		expect(childDone.ok).toBe(true);
 		expect(childDone.fork.status).toBe(JOINED);
 
@@ -556,21 +485,17 @@ describe("shared ledger across registries and wiring resilience", () => {
 	});
 });
 
-describe("activity visibility, serialization hygiene, and reviveBlockedFork", () => {
-	test("scopeActivity counts only non-superseded RUNNING/READY children, serialization stays clean, and reviveBlockedFork moves BLOCKED to RUNNING", async () => {
+describe("activity visibility and serialization hygiene", () => {
+	test("scopeActivity counts only open children, and serialization stays clean", async () => {
 		const registry = createForkRegistry();
 		const ledger = createBracketLedger();
 		adoptLedger(registry, "conv-hygiene", ledger);
 
 		registerChild(ledger, "c-run", "root");
-		registerChild(ledger, "c-sup", "root");
-		registerChild(ledger, "c-blk", "root", { blocked: true });
 		registerChild(ledger, "c-join", "root");
 		registerChild(ledger, "c-fail", "root");
 
 		// Drive each child into its distinct terminal/non-active state.
-		expect(markReady(ledger, "c-sup", { ok: true, record: "old" }).ok).toBe(true);
-		expect(supersedeFork(ledger, "c-sup").ok).toBe(true);
 		expect(markReady(ledger, "c-join", { ok: true, record: "ok" }).ok).toBe(true);
 		expect(takeReady(ledger, { ownerId: "root", levelKey: "L0" }).ok).toBe(true);
 		expect(abandon(ledger, "c-fail", "cancelled").ok).toBe(true);
@@ -596,12 +521,5 @@ describe("activity visibility, serialization hygiene, and reviveBlockedFork", ()
 		const restored = restoreLedgerChecked(serialized);
 		expect(restored.ok).toBe(true);
 		expect(assertPairing(restored.ledger)).toEqual({ ok: true });
-
-		// Reviving a BLOCKED fork transitions it to RUNNING, increments Busy/Idle child count, and preserves pairing.
-		const revived = reviveBlockedFork(ledger, "c-blk");
-		expect(revived.ok).toBe(true);
-		expect(forkOf(ledger, "c-blk")?.status).toBe(RUNNING);
-		expect(scopeActivity(ledger, "root", false)).toBe("[Busy: 1, Idle: 1]");
-		expect(assertPairing(ledger)).toEqual({ ok: true });
 	});
 });

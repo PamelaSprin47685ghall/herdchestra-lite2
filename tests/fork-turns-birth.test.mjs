@@ -29,7 +29,7 @@ function forkOne(station, overrides = {}) {
 				{
 					scopeId: "parser",
 					fsm: "read the parser",
-					blocked: false,
+					profession: "You are a careful parser reader like Ada Lovelace.",
 					budget: { read: 2, bash: 1 },
 					targets: ["src/parser.mjs"],
 					...overrides,
@@ -98,14 +98,14 @@ describe("a child is born with the budget it declared", () => {
 		expect(record.spent).toEqual({ edit: 0, read: 0 });
 	});
 
-	test("a blocked plan records its budget but owns no running account", () => {
+	test("a fork's budget is the one it declared", () => {
 		const ledger = createBracketLedger();
 		const spawned = [];
 		const station = stationWith(ledger, spawned);
-		forkOne(station, { blocked: true, budget: { read: 3 } });
-		expect(spawned).toHaveLength(0);
+		forkOne(station, { budget: { read: 3 } });
+		expect(spawned).toHaveLength(1);
 		const record = forkOf(ledger, "fork-call");
-		expect(record.status).toBe("blocked");
+		expect(record.status).toBe("running");
 		expect(record.budget).toEqual({ read: 3 });
 	});
 });

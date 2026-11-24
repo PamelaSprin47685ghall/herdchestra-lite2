@@ -26,6 +26,7 @@ export function buildChildIdentity(spec = {}, deps = {}) {
 		parentOwnerId:
 			typeof spec.parentOwnerId === "string" ? spec.parentOwnerId : null,
 		ownScopeId: typeof spec.ownScopeId === "string" ? spec.ownScopeId : null,
+		path: typeof spec.path === "string" ? spec.path : null,
 		fsm: typeof spec.fsm === "string" ? spec.fsm : null,
 		budget:
 			spec.budget && typeof spec.budget === "object" ? { ...spec.budget } : null,

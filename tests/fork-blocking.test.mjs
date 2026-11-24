@@ -129,7 +129,7 @@ describe("scope_join as a ticket", () => {
 });
 
 describe("scope_return as a ticket", () => {
-  test("does not claim acceptance before the parent takes the record", async () => {
+  test("answers accepted in the same beat it seals the record", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring);
     const station = stationOf(wiring.registry, ledger, {
@@ -138,28 +138,20 @@ describe("scope_return as a ticket", () => {
     });
     opened(ledger, "c1", "root");
 
-    let settled = false;
-    const pending = returnTicket(station, "call-r1", { dafny: "the child returns its record" }, {}).then((result) => {
-      settled = true;
-      return result;
-    });
-    await tick();
-    expect(settled).toBe(false);
+    // Nothing parks: the ticket returns the accepted receipt at once, and the
+    // record waits in the parent's queue for whatever join comes later.
+    const result = await returnTicket(station, "call-r1", { dafny: "the child returns its record" }, {});
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("has been handed to Root");
+    expect(result.details.accepted).toBe(true);
+    expect(result.details.awaitingReceipt).toBeUndefined();
     expect(ledger.forks.c1.status).toBe("ready");
 
     const taken = takeReady(ledger, { ownerId: "root" });
     expect(taken.ok).toBe(true);
-    // A parent's take is what the child's scope_return is parked on.
-    notifyWaiters(wiring.registry);
-
-    const result = await pending;
-    expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain("has been handed to Root");
-    expect(result.details.accepted).toBe(true);
-    expect(result.details.awaitingReceipt).toBe(false);
   });
 
-  test("a cancelled wait leaves the bracket open", async () => {
+  test("a cancelled wait changes nothing, because there is no wait", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring);
     const station = stationOf(wiring.registry, ledger, {
@@ -173,9 +165,11 @@ describe("scope_return as a ticket", () => {
     await tick();
     controller.abort();
 
+    // An abort that lands after the answer cannot retract it: the bracket is
+    // sealed before any signal could matter.
     const result = await pending;
-    expect(result.isError).toBe(true);
-    expect(result.details.code).toBe("RETURN_INTERRUPTED");
+    expect(result.isError).toBeUndefined();
+    expect(result.details.accepted).toBe(true);
     expect(ledger.forks.c2.status).toBe("ready");
   });
 });

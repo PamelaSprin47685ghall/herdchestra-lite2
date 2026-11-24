@@ -5,7 +5,6 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  BLOCKED,
   createBracketLedger,
   forkOf,
   markReady,
@@ -19,12 +18,6 @@ import {
   handleJoinCall,
   handleReturnCall,
 } from "../src/station/fork-controls.mjs";
-import {
-  createForkRegistry,
-  ledgerFor,
-  notifyWaiters,
-  waitForJoin,
-} from "../src/scope/fork-registry.mjs";
 
 function state() {
   return { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
@@ -55,36 +48,7 @@ describe("adoption follows the current receiver", () => {
     expect(out.isError).toBeUndefined();
     expect(out.details.receiver).toBe("g");
     expect(forkOf(ledger, "c").ownerId).toBe("g");
-    expect(out.content[0].text).toContain("queued for scope");
-  });
-
-  test("blocked entries move with the plan they belong to", () => {
-    const ledger = createBracketLedger();
-    registerFork(ledger, {
-      forkId: "later",
-      ownerId: "p",
-      fsm: "needs a decision",
-      depth: 1,
-      blocked: true,
-    });
-    const moved = reparentOrphans(ledger, "p", "g");
-    expect(moved).toEqual({ ok: true, moved: 1, transferred: 0 });
-    expect(forkOf(ledger, "later").ownerId).toBe("g");
-    expect(forkOf(ledger, "later").status).toBe(BLOCKED);
-    expect(openChildren(ledger, "g")).toEqual([]);
-  });
-});
-
-describe("a lost bracket never parks its child", () => {
-  test("waitForJoin returns when the bracket was abandoned", async () => {
-    const registry = createForkRegistry();
-    const ledger = ledgerFor(registry, "lost");
-    registerFork(ledger, { forkId: "c", ownerId: "root", fsm: "child", depth: 0 });
-    markReady(ledger, "c");
-    forkOf(ledger, "c").status = "failed";
-    const waited = await waitForJoin(registry, ledger, "c");
-    expect(waited.ok).toBe(false);
-    expect(waited.code).toBe("RETURN_REJECTED");
+    expect(out.content[0].text).toContain("has been handed to");
   });
 });
 
@@ -110,19 +74,19 @@ describe("a batch projects one item into each child", () => {
       id: "fb",
       arguments: {
         forks: [
-          { scopeId: "one", fsm: "one", budget: { read: 1 }, time: 60, targets: ["one.mjs"], blocked: false },
-          { scopeId: "two", fsm: "two", budget: { read: 1 }, time: 60, targets: ["two.mjs"], blocked: false },
+          { scopeId: "one", fsm: "one", profession: "You are the first worker like Ada Lovelace.", budget: { read: 1 }, time: 60, targets: ["one.mjs"] },
+          { scopeId: "two", fsm: "two", profession: "You are the second worker like Grace Hopper.", budget: { read: 1 }, time: 60, targets: ["two.mjs"] },
         ],
       },
     });
     expect(out.isError).toBeUndefined();
     expect(specs.map((spec) => spec.forkId)).toEqual(["fb:0", "fb:1"]);
-    expect(specs[0].receipt).toContain("You are now in the scope one");
+    expect(specs[0].receipt).toContain("You are now in the scope /one");
     expect(specs[0].receipt).toContain("State machine: one");
     expect(specs[0].receipt).toContain("User messages go to the stable root");
     expect(specs[0].receipt).toContain("Only scope_return submits your full record");
     expect(specs[0].receipt).not.toContain("State machine: two");
-    expect(specs[1].receipt).toContain("You are now in the scope two");
+    expect(specs[1].receipt).toContain("You are now in the scope /two");
     expect(specs[1].receipt).toContain("State machine: two");
     expect(specs[1].receipt).not.toContain("State machine: one");
   });

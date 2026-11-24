@@ -114,17 +114,17 @@ describe("tool contracts map to their documents", () => {
 		const item = tools.get("scope_fork").parameters.properties.forks.items;
 		const { description } = item.properties.scopeId;
 		expect(description).toMatch(/\broot`? is reserved\b[^.]*\b(?:any capitalization|regardless of case|case-insensitive)\b/i);
-		expect(description).toMatch(/is reused instead of starting a new one/i);
-		expect(description).toContain("only its owner");
-		expect(description).toMatch(/case-insensitive/i);
+		expect(description).toMatch(/unique among its siblings only/i);
+		expect(description).toMatch(/lowest free numeric suffix/i);
+		expect(description).not.toMatch(/reuse is an upsert/i);
 		expect(description).not.toMatch(/must be unique/i);
 	});
 
 	test("schemas carry the mapped text", () => {
 		const doc = loadDoc("tools/fork-join");
 		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual(["scopeId", "profession", "blocked", "n", "budget", "targets"]);
-		expect(item.required).not.toContain("fsm");
+		expect(item.required).toEqual(["scopeId", "fsm", "profession", "n", "budget", "targets"]);
+		expect(item.required).toContain("fsm");
 		expect(item.properties.fsm.description).toBe(scopeTools.FORK_FSM_DESCRIPTION);
 		expect(item.properties.budget.description).toBe(scopeTools.FORK_BUDGET_DESCRIPTION);
 		expect(item.properties.time).toBeUndefined();
@@ -356,28 +356,22 @@ describe("fork item schema", () => {
 		expect(item.properties.n.description).toMatch(/sizes a scope from/);
 	});
 
-	test("a reused scopeId amends, and fsm may be omitted", () => {
+	test("a repeated sibling name is renamed, and every field is required", () => {
 		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual(["scopeId", "profession", "blocked", "n", "budget", "targets"]);
-		expect(item.required).not.toContain("fsm");
-		expect(item.properties.fsm.description).toMatch(/next turn boundary/i);
-		expect(item.properties.scopeId.description).toMatch(/ready.*supersedes/i);
-		expect(item.properties.scopeId.description).toMatch(/joined.*failed.*new generation/i);
+		expect(item.required).toEqual(["scopeId", "fsm", "profession", "n", "budget", "targets"]);
+		expect(item.required).toContain("fsm");
+		expect(item.properties.fsm.description).toBe(scopeTools.FORK_FSM_DESCRIPTION);
+		expect(item.properties.scopeId.description).toMatch(/lowest free numeric suffix/i);
+		expect(item.properties.scopeId.description).not.toMatch(/supersedes/i);
+		expect(item.properties).not.toHaveProperty("blocked");
 	});
 
-	test("reuse errors replace duplicate-scope-id", () => {
+	test("the reuse-only errors are gone", () => {
 		const errors = loadDoc("errors");
-		expect(errors["duplicate-scope-id"]).toBeUndefined();
-		for (const key of [
-			"missing-fsm",
-			"foreign-scope-id",
-			"scope-running-blocked",
-			"scope-reuse-empty",
-			"scope-not-amendable",
-		]) {
-			expect(typeof errors[key]).toBe("string");
-			expect(errors[key].length).toBeGreaterThan(0);
+		for (const key of ["scope-reuse-empty", "scope-not-amendable"]) {
+			expect(errors[key]).toBeUndefined();
 		}
+		expect(typeof errors["missing-fsm"]).toBe("string");
 	});
 });
 
@@ -412,7 +406,7 @@ describe("scope size is sqrt(2n), with no cap anywhere", () => {
 		const forks = scopeTools.forkParameters.properties.forks;
 		expect(forks.description).not.toMatch(/never more than/i);
 		expect(forks.description).toContain(
-			"Include the remaining plan, both ready and blocked items",
+			"Include the whole plan you are ready to run now",
 		);
 		// The cap is gone, and the schema never gated it either.
 		expect(forks.maxItems).toBeUndefined();

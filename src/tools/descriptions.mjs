@@ -29,21 +29,25 @@ export const FORK_N_DESCRIPTION = forkJoin["fork.n"];
 const FORK_TARGETS_DESCRIPTION = forkJoin["fork.targets"];
 const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
 const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
-const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
 const FORK_PROFESSION_DESCRIPTION = forkJoin["fork.profession"];
 export const JOIN_DESCRIPTION = forkJoin["join.tool"];
 export const RETURN_DESCRIPTION = forkJoin["return.tool"];
 export const RETURN_DAFNY_DESCRIPTION = forkJoin["return.dafny"];
+
+export const SEND_DESCRIPTION = forkJoin["send.tool"];
+export const SEND_TARGET_DESCRIPTION = forkJoin["send.target"];
+export const SEND_MESSAGE_DESCRIPTION = forkJoin["send.message"];
+export const SEND_BUDGET_DESCRIPTION = forkJoin["send.budget"];
 
 import { SCOPE_ID_PATTERN, MAX_SCOPE_ID_LENGTH } from "../scope/scope-id.mjs";
 
 const forkItem = {
 	type: "object",
 	additionalProperties: false,
-	// `fsm` is optional here because a reused `scopeId` may carry only a turn
-	// increment, merged targets, or one more requirement. A new scope still
-	// needs it: the station refuses with MISSING_FSM.
-	required: ["scopeId", "profession", "blocked", "n", "budget", "targets"],
+	// Every fork starts a new scope, so every field is required; the station
+	// still refuses a blank `fsm` with MISSING_FSM, and this `minLength` states
+	// the same rule one layer earlier.
+	required: ["scopeId", "fsm", "profession", "n", "budget", "targets"],
 	properties: {
 		scopeId: { type: "string", pattern: SCOPE_ID_PATTERN, maxLength: MAX_SCOPE_ID_LENGTH, description: forkJoin["fork.scope-id"] },
 		fsm: { type: "string", minLength: 1, description: FORK_FSM_DESCRIPTION },
@@ -53,7 +57,6 @@ const forkItem = {
 			pattern: "^You are \\S",
 			description: FORK_PROFESSION_DESCRIPTION,
 		},
-		blocked: { type: "boolean", description: FORK_BLOCKED_DESCRIPTION },
 		n: { type: "integer", minimum: 0, description: FORK_N_DESCRIPTION },
 		budget: {
 			type: "object",
@@ -83,6 +86,42 @@ export const forkParameters = {
 			minItems: 1,
 			description: FORK_ITEMS_DESCRIPTION,
 			items: forkItem,
+		},
+	},
+};
+
+const scopePath = {
+	type: "string",
+	minLength: 1,
+	pattern: "\\S",
+};
+
+// `scope_send` addresses a scope instead of creating one: a path, a relative
+// step, or a wildcard, and the message body. `budget` is the one optional
+// field, because financing a scope that ran out is the same arithmetic as a
+// fork's budget.
+export const sendParameters = {
+	type: "object",
+	additionalProperties: false,
+	required: ["target", "message"],
+	properties: {
+		target: {
+			anyOf: [
+				scopePath,
+				{ type: "array", minItems: 1, items: scopePath },
+			],
+			description: SEND_TARGET_DESCRIPTION,
+		},
+		message: {
+			type: "string",
+			minLength: 1,
+			pattern: "\\S",
+			description: SEND_MESSAGE_DESCRIPTION,
+		},
+		budget: {
+			type: "object",
+			additionalProperties: { type: "integer", minimum: 0 },
+			description: SEND_BUDGET_DESCRIPTION,
 		},
 	},
 };

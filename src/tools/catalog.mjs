@@ -13,6 +13,8 @@ import {
 	joinParameters,
 	RETURN_DESCRIPTION,
 	returnParameters,
+	SEND_DESCRIPTION,
+	sendParameters,
 	TODO_DESCRIPTION,
 	TODO_PARAMETERS,
 } from "./index.mjs";
@@ -20,6 +22,7 @@ import {
 	forkTicket,
 	joinTicket,
 	returnTicket,
+	sendTicket,
 	scopeContextTicket,
 } from "./tickets.mjs";
 import { todoTicket } from "./todo.mjs";
@@ -60,6 +63,17 @@ export function createTools({ stationFor, tickets }) {
 			loadMode: ESSENTIAL,
 			execute: (toolCallId, params, signal, _onUpdate, ctx) =>
 				returnTicket(stationFor(ctx), toolCallId, params, ctx, signal, tickets),
+		},
+		{
+			name: "scope_send",
+			label: "Send To Scope",
+			description: SEND_DESCRIPTION,
+			parameters: sendParameters,
+			loadMode: ESSENTIAL,
+			// One synchronous beat: resolve, deliver, wake. There is nothing to
+			// wait for and nothing to cancel.
+			execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
+				sendTicket(stationFor(ctx), toolCallId, params, tickets),
 		},
 		{
 			name: "scope_context",

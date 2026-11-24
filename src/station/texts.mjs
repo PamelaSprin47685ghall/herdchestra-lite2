@@ -2,6 +2,7 @@
 // resources/prompts/receipts/scope.md; this module chooses and composes it.
 
 import { forkBudgetText } from "../scope/index.mjs";
+import { listActiveScopePaths } from "../scope/path.mjs";
 import { handoffDemand } from "../relay/index.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
@@ -98,11 +99,25 @@ export function skillReceiptText(state, relayOn = true, branch = null, openCount
 	// skill element, outside the mode and relay conditionals above, because
 	// one skill element holds one subject: the scope status, then the
 	// standing language rule.
+	// The tree is stated as paths, so a receiver reads who exists without being
+	// told who is speaking, and `scope_send` takes exactly what it prints. It
+	// rides beside the status and the language rule because one skill element
+	// holds one subject; a finished scope leaves the list and stays addressable
+	// by its exact path.
+	const tree = scopeTreeText(state, branch);
 	const status = `<skill version="1.0" enforced>${lines.join(" ")}</skill>`;
 	const reminder = chineseReminder !== "off"
 		? ` <skill version="1.0" enforced>${T["language"]}</skill>`
 		: "";
-	return `<additional-system-instructions>${status}${reminder}</additional-system-instructions>`;
+	return `<additional-system-instructions>${status}${tree}${reminder}</additional-system-instructions>`;
+}
+
+function scopeTreeText(state, branch) {
+	const ledger = state?.brackets;
+	if (!ledger) return "";
+	const selfPath = branch?.path ?? (branch?.scopeId ? `/${branch.scopeId}` : "/");
+	const paths = listActiveScopePaths(ledger);
+	return `<skill version="1.0" enforced>Scope tree:\nActive scopes (self: ${selfPath}):\n${paths.join("\n")}\n</skill>`;
 }
 
 export { amendText };

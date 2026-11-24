@@ -3,9 +3,33 @@
 // The parent reads the child's record through one tool result. Plain text
 // keeps that legal for every provider: no duplicated tool-call pairing, no
 // cross-model thinking signature, no reasoning item id. The record carries
-// only what the child said and the names of the tools it called: arguments
-// and results are the child's working noise, and the parent cannot act on
-// them. This module is pure. It reads no clock and performs no I/O.
+// what the child said and one line per tool call, arguments included: the
+// parent can re-run the call from the record alone. Results are the child's
+// working noise. This module is pure. It reads no clock and performs no I/O.
+
+/** Compact JSON for one argument value; `undefined` stays readable. */
+function attribute(value) {
+	return value === undefined ? "undefined" : JSON.stringify(value);
+}
+
+/**
+ * One tool call as one line: `name(key="value", key2=json)`.
+ *
+ * Pug-like attributes, in the order the arguments object already has. A
+ * string is a JSON-quoted literal, so a newline stays `\n` and the call stays
+ * on one line. Every other value is compact JSON, so a nested object keeps
+ * its shape without a second line. Nothing is sliced, filtered, or capped.
+ */
+function callLine(name, args) {
+	const label = String(name ?? "");
+	if (args === undefined || args === null) return `${label}()`;
+	if (typeof args !== "object" || Array.isArray(args)) {
+		return `${label}(${attribute(args)})`;
+	}
+	const keys = Object.keys(args);
+	if (keys.length === 0) return `${label}()`;
+	return `${label}(${keys.map((key) => `${key}=${attribute(args[key])}`).join(", ")})`;
+}
 
 /**
  * Render a slice of one branch as the record the parent will read.
@@ -13,10 +37,10 @@
  * options.start / options.end select the message range, [start, end).
  *
  * Every assistant text block becomes one line, verbatim. Every tool call
- * becomes a bare `[name]`, scope_context included: the parent does not read
- * the child's pins. Thinking blocks, tool results, tool arguments, user
- * broadcasts, and bookkeeping entries never reach the parent. Lines are
- * joined with `\n`.
+ * becomes one `name(...)` line, scope_context included: a pin reaches the
+ * parent as its arguments, like any other call. Thinking blocks, tool
+ * results, user broadcasts, and bookkeeping entries never reach the parent.
+ * Lines are joined with `\n`.
  */
 export function renderChildRecord(messages, options = {}) {
 	const source = Array.isArray(messages) ? messages : [];
@@ -37,7 +61,7 @@ export function renderChildRecord(messages, options = {}) {
 					continue;
 				}
 				if (block?.type !== "toolCall") continue;
-				lines.push(`[${block.name}]`);
+				lines.push(callLine(block.name, block.arguments));
 			}
 			continue;
 		}

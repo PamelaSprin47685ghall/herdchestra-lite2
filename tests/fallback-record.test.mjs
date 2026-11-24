@@ -23,7 +23,7 @@ function specFor(forkId) {
 }
 
 describe("the fallback record for a child that never returns", () => {
-	test("renders only assistant text and bare tool names", async () => {
+	test("renders assistant text and one call line with its arguments", async () => {
 		const wiring = createForkWiring();
 		const ledger = ledgerFor(wiring.registry, "fallback");
 		registerFork(ledger, {
@@ -76,10 +76,9 @@ describe("the fallback record for a child that never returns", () => {
 		});
 
 		const record = outcomeOf(wiring.registry, "f1").record;
-		expect(record).toBe("did the work\n[read]\nfinished");
+		expect(record).toBe('did the work\nread(path="/private/file")\nfinished');
 		expect(record).not.toContain("private reasoning");
 		expect(record).not.toContain("a large tool result body");
-		expect(record).not.toContain("/private/file");
 		expect(record).not.toContain("a broadcast the parent does not need");
 		expect(record).not.toContain("[call ");
 		expect(record).not.toContain("[result ");

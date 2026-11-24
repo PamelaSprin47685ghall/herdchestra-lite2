@@ -4,6 +4,27 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] — 2026-11-24
+
+### Changed — a record carries each tool call with its arguments
+
+The child record used to keep only a tool's name: `[read]`, `[bash]`. A parent
+could not tell which file was read or which command ran, so the child had to
+restate its own calls in `dafny` and the record answered less than it held.
+
+- `src/transcript/replay.mjs` renders one line per tool call as
+  `name(key="value", ...)`, in the order the arguments object has. A string is
+  a JSON-quoted literal, so a newline stays `\n` and the call stays on one
+  line; every other value is compact JSON, so a nested `forks` array keeps its
+  shape on that same line. Nothing is sliced, filtered, or capped — no
+  argument count limit, no key allow list, no `…`.
+- The record grows with the arguments it names, and `estimateJoinTokens`
+  already prices a record by its measured characters, so join admission sees
+  the larger number instead of a value estimated from the old form.
+- `fork-join.md` §join.tool, §return.tool, and §return.dafny, `errors.md`
+  §missing-dafny, `descriptions.mjs`, and `README.md` describe the new line:
+  `dafny` now carries what the replay still drops, which is the tool results.
+
 ## [3.3.0] — 2026-11-24
 
 ### Changed — `scope_return.dafny` is required (breaking for callers)

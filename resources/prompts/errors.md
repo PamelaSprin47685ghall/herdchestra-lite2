@@ -72,7 +72,7 @@ A new scope needs a non-empty `fsm`. Only a reuse of an existing `scopeId` may o
 
 ## missing-dafny
 
-A return needs `dafny` with text. Put there what your text and the tool names cannot carry: the arguments and results the caller never sees. If the replay drops nothing, say that in one line.
+A return needs `dafny` with text. Put there what your text and the calls cannot carry: the results the caller never sees. If the replay drops nothing, say that in one line.
 
 ## foreign-scope-id
 

@@ -1136,7 +1136,7 @@ export function handleReturnCall(station, call) {
     return errorResult("ORPHANS_WITHOUT_RECEIVER", E["orphans-without-receiver"]);
   }
   // Judge the closing text before anything moves. A return that carries no
-  // dafny hands back a record whose arguments and results are already gone;
+  // dafny hands back a record whose results are already gone;
   // refusing it here leaves the bracket untouched, so the child can retry.
   const dafny = typeof args.dafny === "string" ? args.dafny.trim() : "";
   if (dafny === "") {

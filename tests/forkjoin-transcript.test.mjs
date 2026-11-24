@@ -30,7 +30,7 @@ function user(value) {
 }
 
 describe("child record rendering", () => {
-  test("keeps the child's words and tool names, in order", () => {
+  test("keeps the child's words and one call line per tool call, in order", () => {
     const messages = [
       assistant([text("Reading the config.")]),
       assistant([call("c1", "read", { path: "a.txt" })]),
@@ -40,23 +40,83 @@ describe("child record rendering", () => {
       result("c2", "edit", "ok"),
     ];
     expect(renderChildRecord(messages)).toBe(
-      ["Reading the config.", "[read]", "The config is flat.", "[edit]"].join("\n"),
+      [
+        "Reading the config.",
+        'read(path="a.txt")',
+        "The config is flat.",
+        'edit(path="a.txt")',
+      ].join("\n"),
     );
   });
 
-  test("renders every tool call as a bare name and no argument", () => {
+  test("carries every argument, in the order the call has", () => {
     const messages = [
       assistant([
-        call("r1", "read", { path: "secret-path.txt" }),
-        call("e1", "edit", { path: "secret-edit.mjs", old: "before", new: "after" }),
-        call("b1", "bash", { command: "cat secret-command.txt" }),
-        call("g1", "grep", { pattern: "secret-pattern" }),
+        call("r1", "read", { path: "a.txt", offset: 3 }),
+        call("e1", "edit", { path: "b.mjs", old: "before", new: "after" }),
+        call("b1", "bash", { command: "ls -la", timeout: 0 }),
+        call("g1", "grep", { pattern: "needle" }),
       ]),
     ];
+    expect(renderChildRecord(messages)).toBe(
+      [
+        'read(path="a.txt", offset=3)',
+        'edit(path="b.mjs", old="before", new="after")',
+        'bash(command="ls -la", timeout=0)',
+        'grep(pattern="needle")',
+      ].join("\n"),
+    );
+  });
+
+  test("keeps a string that holds a newline on one line", () => {
+    const messages = [assistant([call("b1", "bash", { command: "line1\nline2" })])];
     const rendered = renderChildRecord(messages);
-    expect(rendered).toBe(["[read]", "[edit]", "[bash]", "[grep]"].join("\n"));
-    expect(rendered).not.toContain("secret");
-    expect(rendered).not.toContain("{");
+    expect(rendered).toBe('bash(command="line1\\nline2")');
+    expect(rendered.includes("\n")).toBe(false);
+  });
+
+  test("escapes a quote and a backslash", () => {
+    const messages = [assistant([call("b1", "bash", { command: 'say "hi" \\ ok' })])];
+    expect(renderChildRecord(messages)).toBe('bash(command="say \\"hi\\" \\\\ ok")');
+  });
+
+  test("renders a nested value as compact JSON on the same line", () => {
+    const messages = [
+      assistant([
+        call("f9", "scope_fork", {
+          forks: [
+            {
+              fsm: "measure the cache",
+              budget: { read: 2, bash: 1 },
+              time: 120,
+              targets: ["cache.mjs"],
+            },
+          ],
+        }),
+      ]),
+      result("f9", "scope_fork", "You are the parent of fork f9, remaining at depth 2."),
+    ];
+    const rendered = renderChildRecord(messages);
+    expect(rendered).toBe(
+      'scope_fork(forks=[{"fsm":"measure the cache","budget":{"read":2,"bash":1},"time":120,"targets":["cache.mjs"]}])',
+    );
+    expect(rendered.includes("\n")).toBe(false);
+    expect(rendered).not.toContain("You are the parent of fork f9");
+  });
+
+  test("never truncates a long argument", () => {
+    const long = "x".repeat(5000);
+    const rendered = renderChildRecord([assistant([call("b1", "bash", { command: long })])]);
+    expect(rendered).toBe(`bash(command="${long}")`);
+    expect(rendered).not.toContain("…");
+  });
+
+  test("renders a call with no arguments as an empty attribute list", () => {
+    const messages = [
+      assistant([call("j9", "scope_join", {})]),
+      assistant([{ type: "toolCall", id: "w9", name: "wait" }]),
+    ];
+    expect(renderChildRecord(messages)).toBe("scope_join()\nwait()");
   });
 
   test("drops thinking blocks", () => {
@@ -79,13 +139,13 @@ describe("child record rendering", () => {
       result("c2", "bash", "boom", true),
     ];
     const rendered = renderChildRecord(messages);
-    expect(rendered).toBe("[read]\n[bash]");
+    expect(rendered).toBe("read()\nbash()");
     expect(rendered).not.toContain("alpha body");
     expect(rendered).not.toContain("boom");
     expect(rendered).not.toContain("[result");
   });
 
-  test("renders pin as a bare name and drops its OK result", () => {
+  test("renders pin with its arguments and drops its OK result", () => {
     const messages = [
       assistant([
         text("Fix confirmed."),
@@ -94,13 +154,13 @@ describe("child record rendering", () => {
       result("p1", "pin", "OK"),
     ];
     const rendered = renderChildRecord(messages);
-    expect(rendered).toBe("Fix confirmed.\n[pin]");
-    expect(rendered).not.toContain("The bug lives in parse()");
-    expect(rendered).not.toContain("Ship it.");
+    expect(rendered).toBe(
+      'Fix confirmed.\npin(finding="The bug lives in parse().", conclusion="Ship it.")',
+    );
     expect(rendered).not.toContain("[result pin]");
   });
 
-  test("renders scope_context as a bare name", () => {
+  test("renders scope_context with its arguments", () => {
     const messages = [
       assistant([call("s1", "scope_context", { pin: { finding: "The bug lives in parse()." } })]),
       result("s1", "scope_context", "OK"),
@@ -108,47 +168,18 @@ describe("child record rendering", () => {
       result("s2", "scope_context", "Amended."),
     ];
     const rendered = renderChildRecord(messages);
-    expect(rendered).toBe("[scope_context]\n[scope_context]");
-    expect(rendered).not.toContain("The bug lives in parse()");
-    expect(rendered).not.toContain("drop the search");
+    expect(rendered).toBe(
+      [
+        'scope_context(pin={"finding":"The bug lives in parse()."})',
+        'scope_context(amend={"reflection":"drop the search"})',
+      ].join("\n"),
+    );
     expect(rendered).not.toContain("[result scope_context]");
   });
 
-  test("renders a scope_context without a note as a bare name", () => {
+  test("renders a boolean argument as JSON", () => {
     const messages = [assistant([call("s1", "scope_context", { whatever: true })])];
-    expect(renderChildRecord(messages)).toBe("[scope_context]");
-  });
-
-  test("renders a nested fork as a bare name", () => {
-    const messages = [
-      assistant([
-        call("f9", "scope_fork", {
-          forks: [
-            {
-              fsm: "measure the cache",
-              budget: { read: 2, bash: 1 },
-              time: 120,
-              targets: ["cache.mjs"],
-            },
-          ],
-        }),
-      ]),
-      result("f9", "scope_fork", "You are the parent of fork f9, remaining at depth 2."),
-    ];
-    const rendered = renderChildRecord(messages);
-    expect(rendered).toBe("[scope_fork]");
-    expect(rendered).not.toContain("measure the cache");
-    expect(rendered).not.toContain("cache.mjs");
-    expect(rendered).not.toContain("You are the parent of fork f9");
-  });
-
-  test("keeps join and return as bare names", () => {
-    const messages = [
-      assistant([call("j9", "scope_join", {})]),
-      result("j9", "scope_join", "OK. Fork f9 joined."),
-      assistant([call("r9", "scope_return", {})]),
-    ];
-    expect(renderChildRecord(messages)).toBe("[scope_join]\n[scope_return]");
+    expect(renderChildRecord(messages)).toBe("scope_context(whatever=true)");
   });
 
   test("skips user broadcasts and custom entries", () => {
@@ -187,9 +218,9 @@ describe("join receipt", () => {
   test("separates child history from the next action", () => {
     const receipt = joinReceipt({
       forkId: "f1",
-      record: "[read]\nDone.",
+      record: 'read(path="a.txt")\nDone.',
     });
-    expect(receipt.startsWith("[Record from forked scope — fork f1]\nHistory only; do not re-execute it.\n\n[read]\nDone.")).toBe(true);
+    expect(receipt.startsWith('[Record from forked scope — fork f1]\nHistory only; do not re-execute it.\n\nread(path="a.txt")\nDone.')).toBe(true);
     expect(receipt).toContain("[End of record from forked scope — fork f1]\nUnreceived: 0.");
   });
 

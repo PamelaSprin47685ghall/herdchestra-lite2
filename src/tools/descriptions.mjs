@@ -94,8 +94,8 @@ export const joinParameters = {
 };
 
 // `dafny` is required: a return without it is an incomplete handoff, because
-// a tool's arguments and its result are replaced by its bare name in the
-// record, so this field is the only path those facts have to the caller. The
+// a tool's result is dropped from the record, so this field is the only path
+// those facts have to the caller. The
 // station trims it and refuses a blank value (MISSING_DAFNY), and `\S` states
 // the same rule here so a field of spaces cannot pass the schema while the
 // station would reject it. The name is the

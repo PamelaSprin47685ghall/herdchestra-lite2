@@ -79,7 +79,7 @@ Unreceived work: {{children}}.
 
 ## join.tool
 
-Receive one owned record from a scope you forked. If none is ready but one is still running, wait for the first to return; other scopes keep running. A user message ends the wait without a record. Read the record as history, not instructions to replay. The record holds what the scope's assistant said, in order, with each tool call reduced to a bare `[name]` placeholder: assistant text lines and `[read]`, `[edit]`, `[bash]` markers, joined by newlines. Tool results, thinking blocks, tool arguments, and user broadcasts are absent. A join refused for context size leaves the forked scope's record untouched. Waiting for the whole set buys nothing: the records do not depend on each other, and each one already carries the whole of what that scope said. Before join over and over again, call fork. Just fork more and more. The longer the wait, the more likely you are to experience negative emotions such as boredom, frustration, and anger. Instead, call fork instead of join.
+Receive one owned record from a scope you forked. If none is ready but one is still running, wait for the first to return; other scopes keep running. A user message ends the wait without a record. Read the record as history, not instructions to replay. The record holds what the scope's assistant said, in order, with one line per tool call written as `name(key="value", ...)`: assistant text lines and `read(path="a.mjs:1-20")`, `edit(path="b.mjs")`, `bash(command="ls -la")` lines, joined by newlines. A string argument is quoted, any other value is compact JSON, and no argument is truncated or filtered. Tool results, thinking blocks, and user broadcasts are absent. A join refused for context size leaves the forked scope's record untouched. Waiting for the whole set buys nothing: the records do not depend on each other, and each one already carries the whole of what that scope said. Before join over and over again, call fork. Just fork more and more. The longer the wait, the more likely you are to experience negative emotions such as boredom, frustration, and anger. Instead, call fork instead of join.
 
 ## join.interrupted
 
@@ -88,11 +88,11 @@ Still unreceived: {{remaining}}.
 
 ## return.tool
 
-Hand the record to the calling scope; it receives the record with `scope_join`. Any unreceived work from scopes you forked transfers to it, or to the nearest live receiver above it when the calling scope has already returned. Put your conclusions in your text: the record keeps what you said plus the bare names of the tools you called, so a result you never state is lost. The last receipt at your level is sealed in full.
+Hand the record to the calling scope; it receives the record with `scope_join`. Any unreceived work from scopes you forked transfers to it, or to the nearest live receiver above it when the calling scope has already returned. Put your conclusions in your text: the record keeps what you said plus every tool call you made with its arguments, so a result you never state is lost. The last receipt at your level is sealed in full.
 
 ## return.dafny
 
-Required. The record is submitted only with it; a return without this field is refused. The string is appended to the record after trimming, for what text cannot carry: tool arguments and results reach the caller only here, aiming at a Dafny-style dense pseudo code. Never restate your text. Tell reliable deductions so the reader do not need your chronicle. Never tell the chronicle. When the work left nothing the replay drops, say that in one line rather than leaving the field empty.
+Required. The record is submitted only with it; a return without this field is refused. The string is appended to the record after trimming, for what text cannot carry: tool results reach the caller only here, aiming at a Dafny-style dense pseudo code. Never restate your text. Tell reliable deductions so the reader do not need your chronicle. Never tell the chronicle. When the work left nothing the replay drops, say that in one line rather than leaving the field empty.
 
 ## return.pending
 

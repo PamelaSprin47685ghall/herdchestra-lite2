@@ -15,6 +15,12 @@ All notable changes to this extension. The format follows
 - `scope_panhandle` is removed: the tool, its schema, its prompt page, its station controls and domain decision, its ticket, the host wiring, and the sync needle. A non-root call whose balance for a tool is gone now runs, clamps its charge at zero, and is recorded as panhandled; the scope's tally returns with its record. The root keeps its refusal, because the root is outside every scope and holds no allowance to overrun.
 - `resources/prompts/errors.md` and `tools/fork-join.md` state what a panhandled receipt is for: not a rescue, but a public admission that the scope sized itself wrong.
 
+### Changed — the control surface names what it does
+
+- `host-omp/src/host/host-tickets.mjs` loses the four forwarders that named `forkControlTicket`, `joinControlTicket`, `returnControlTicket`, and `scopeContextTicket`, together with the `ticketHost` and `ticketDeps` helpers behind them. None of the six had a definition or an import, so any call was a `ReferenceError`; a pure forwarder belongs to the core barrel, as the file's own boundary comment already said.
+- `grantBudget` failures report `GRANT_INVALID_TOOLS`, `GRANT_FREE_TOOL`, `GRANT_INVALID_SECONDS`, `GRANT_EMPTY`, and `GRANT_CLOCK_OFF`. The function raises the allowance of a reused scope; it does not record a scope admitting that it sized itself wrong, and `panhandle` keeps that second meaning alone.
+- `scope_fork` takes no signal, because it has no wait to cancel: a fork finishes in one synchronous beat, so the sixth argument it never declared is gone rather than threaded into a parameter that goes nowhere. The host bag the ticket did receive was unused, and a fork that dies inside the station now records a diagnostic as a join does.
+
 ## [3.1.0] — 2026-11-24
 
 ### Changed — a natural stop is a small handoff

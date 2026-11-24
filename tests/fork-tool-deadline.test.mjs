@@ -60,14 +60,12 @@ describe("fork branch wall clock", () => {
 		expect(station.prepareToolDispatch(MESSAGE, "call-1", "read")).toBe(false);
 	});
 
-	test("a child with a time budget is gated for its remaining time plus one second", () => {
+	test("a child with a time budget is gated, but no call limit reaches the host", () => {
 		const startedAt = Date.now();
 		const { ledger } = ledgerWith(60, startedAt);
 		const station = stationFor(ledger, "child-1");
 		expect(station.prepareToolDispatch(MESSAGE, "call-1", "read")).toBe(true);
-		const limit = station.toolTimeLimit();
-		expect(limit).toBeGreaterThan(59_000);
-		expect(limit).toBeLessThanOrEqual(61_000);
+		expect(station.toolTimeLimit()).toBeNull();
 	});
 
 	test("a child without a time budget has no clock", () => {
@@ -77,24 +75,24 @@ describe("fork branch wall clock", () => {
 		expect(station.prepareToolDispatch(MESSAGE, "call-1", "read")).toBe(false);
 	});
 
-	test("an expired clock drops to the one-second chess-clock unit and records overtime", () => {
+	test("an expired clock has no tool limit and records overtime", () => {
 		const { ledger, record } = ledgerWith(60, Date.now());
 		const station = stationFor(ledger, "child-1");
 		record.deadlineAt = Date.now() - 1_000;
-		expect(station.toolTimeLimit()).toBe(1_000);
+		expect(station.toolTimeLimit()).toBeNull();
 		expect(Number.isFinite(record.overtimeAt)).toBe(true);
 	});
 
-	test("a tool that overruns its limit is refused after it returns", () => {
-		const { ledger } = ledgerWith(60, Date.now());
+	test("a tool that ends past the deadline keeps its result and records a panhandle", () => {
+		const { ledger, record } = ledgerWith(60, Date.now());
 		const station = stationFor(ledger, "child-1");
+		record.deadlineAt = Date.now() - 1_000;
 		const verdict = station.admitToolDispatch("call-1", "read", {}, {
 			elapsedMs: 2_000,
-			limitMs: 1_000,
+			limitMs: 0,
 		});
-		expect(verdict?.block).toBe(true);
-		expect(typeof verdict.reason).toBe("string");
-		expect(verdict.reason.length).toBeGreaterThan(0);
+		expect(verdict?.block).toBeUndefined();
+		expect(record.panhandles.map((entry) => entry.tool)).toEqual(["read"]);
 	});
 
 	test("a receipt without an admission is still metered, not free", () => {
@@ -119,8 +117,10 @@ describe("fork branch wall clock", () => {
 			expect(station.prepareToolDispatch(MESSAGE, `call-${name}`, name)).toBe(false);
 			expect(station.admitToolDispatch(`call-${name}`, name, {}, null)).toBeUndefined();
 		}
-		// A normal tool still sees the expired clock.
+		// A normal tool also runs past the deadline, gated for its debt but
+		// carrying no call limit.
 		expect(station.prepareToolDispatch(MESSAGE, "call-read", "read")).toBe(true);
+		expect(station.toolTimeLimit()).toBeNull();
 		expect(record.overtimeAt).not.toBeNull();
 	});
 
@@ -270,7 +270,7 @@ describe("a receipt after a gate-cache miss still admits the executed call", () 
 		const message = messageWith("call-1", "src/one.mjs");
 		expect(station.prepareToolDispatch(message, "call-1", "read")).toBe(true);
 		const admitted = station.admitToolDispatch("call-1", "read", {});
-		expect(admitted?.limitMs).toBeGreaterThan(0);
+		expect(admitted).toBeUndefined();
 		expect(record.spent.read).toBe(1);
 		expect(record.remaining.read).toBe(3);
 
@@ -290,7 +290,7 @@ describe("a receipt after a gate-cache miss still admits the executed call", () 
 		const { record, station } = fundedStation({ read: 1 });
 		const message = messageWith("call-2", "skill://constitution");
 		expect(station.prepareToolDispatch(message, "call-2", "read")).toBe(true);
-		expect(station.admitToolDispatch("call-2", "read", {})?.limitMs).toBeGreaterThan(0);
+		expect(station.admitToolDispatch("call-2", "read", {})).toBeUndefined();
 		expect(Object.hasOwn(station.state.charges, "call-2")).toBe(false);
 
 		evictGate(station);
@@ -308,16 +308,14 @@ describe("a receipt after a gate-cache miss still admits the executed call", () 
 });
 
 describe("installToolDispatch", () => {
-	test("a gated branch wraps the tool and enforces the limit", async () => {
+	test("a gated branch wraps the tool and passes the result through", async () => {
 		const session = fakeSession("child-agent");
 		installToolDispatch(
 			session,
 			() => true,
 			(_id, _name, _ctx, receipt) => {
 				if (!receipt) return { limitMs: 10 };
-				return receipt.elapsedMs > receipt.limitMs
-					? { block: true, reason: "overtime" }
-					: undefined;
+				return undefined;
 			},
 		);
 		const tool = {
@@ -331,9 +329,8 @@ describe("installToolDispatch", () => {
 			{ assistantMessage: MESSAGE, toolCall: { id: "call-1" }, tool },
 			null,
 		);
-		await expect(
-			tool.execute("call-1", {}, null, null, { agent: { id: "child-agent" } }),
-		).rejects.toThrow("overtime");
+		const out = await tool.execute("call-1", {}, null, null, { agent: { id: "child-agent" } });
+		expect(JSON.stringify(out)).toContain("done");
 	});
 
 	test("a branch without a clock keeps the original execute untouched", () => {

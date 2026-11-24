@@ -36,7 +36,7 @@ describe("clock: on", () => {
 			overtime: false,
 			leftMs: 3_000,
 		});
-		expect(clock.toolLimit(fork, 3_000)).toBe(4_000);
+		expect(clock.toolLimit(fork, 3_000)).toBeNull();
 	});
 
 	test("a pause freezes and a resume shifts the deadline", () => {
@@ -55,7 +55,7 @@ describe("clock: on", () => {
 		expect(fork.clockPausedAt).toBeNull();
 	});
 
-	test("the deadline is overtime and the tool limit is one second", () => {
+	test("the deadline is overtime and gives no tool limit", () => {
 		const clock = createClockOn();
 		const fork = record();
 		clock.start(fork, fork.timeBudgetMs, fork.startedAt);
@@ -64,7 +64,7 @@ describe("clock: on", () => {
 			overtime: true,
 			leftMs: 0,
 		});
-		expect(clock.toolLimit(fork, 7_000)).toBe(1_000);
+		expect(clock.toolLimit(fork, 7_000)).toBeNull();
 		expect(fork.overtimeAt).toBe(7_000);
 	});
 });

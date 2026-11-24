@@ -1038,7 +1038,7 @@ export function forkBudgetText(record, now = Date.now(), clock = null) {
   if (info.bounded) {
     parts.push(
       info.overtime
-        ? "time OVERTIME (1s per tool)"
+        ? "time OVERTIME"
         : `time remaining ${formatClock(info.leftMs)}/${formatClock(record.timeBudgetMs)}`,
     );
   }

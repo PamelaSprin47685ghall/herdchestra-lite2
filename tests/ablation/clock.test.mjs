@@ -53,7 +53,7 @@ test("clock on owns the deadline arithmetic", () => {
 		overtime: false,
 		leftMs: 30_000,
 	});
-	expect(clock.toolLimit(fork, 31_000)).toBe(31_000);
+	expect(clock.toolLimit(fork, 31_000)).toBeNull();
 
 	expect(clock.pause(fork, 31_000)).toBe(true);
 	expect(clock.info(fork, 41_000)).toEqual({

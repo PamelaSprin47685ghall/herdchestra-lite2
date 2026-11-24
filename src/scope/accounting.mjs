@@ -69,7 +69,7 @@ export function chargeBranch(state, ledger, params = {}) {
     // keeps the tool's name, so `forkBudgetText` ends the budget line with
     // `panhandled Nx` where the caller reads it. The zero-amount charge entry
     // makes a retry of the same call free instead of a second admission.
-    const marked = notePanhandled(record, charged.tool);
+    const marked = notePanhandled(record, charged.tool, { callId: toolCallId });
     if (typeof toolCallId === "string") {
       put(state.charges, toolCallId, {
         ownerId,

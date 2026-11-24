@@ -67,10 +67,11 @@ describe("tool dispatch routing", () => {
 		await dispatch(owner, { agent: { id: "owner-1" }, sessionManager: manager });
 		await dispatch(flow, { agent: { id: "flow-1" }, sessionManager: manager });
 
-		expect(seen).toEqual([
-			["owner", "call"],
-			["flow", "call"],
-		]);
+		const admissionThenAccounting = (who) => [
+			[who, "call"],
+			[who, "call"],
+		];
+		expect(seen).toEqual([...admissionThenAccounting("owner"), ...admissionThenAccounting("flow")]);
 	});
 
 	test("a caller without an agent id falls back to the manager key", async () => {
@@ -86,7 +87,8 @@ describe("tool dispatch routing", () => {
 		});
 
 		await dispatch(session, { sessionManager: manager });
-		expect(seen).toEqual(["call"]);
+		const admissionThenAccounting = ["call", "call"];
+		expect(seen).toEqual(admissionThenAccounting);
 	});
 
 	test("a blocking verdict from the routed gate stops the call", async () => {

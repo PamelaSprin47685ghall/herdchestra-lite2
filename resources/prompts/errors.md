@@ -34,10 +34,6 @@ Autopilot is on. Only the user can turn it off with `/herd-autopilot`.
 
 Could not verify {{command}}: {{reason}}. Use the model the host reports.
 
-## overtime-killed
-
-Tool stopped at the scope deadline. Its result is gone. Calls now get one second each. Return with `scope_return` when ready, or hand off.
-
 ## invalid-scope-id
 
 Use a short ASCII `scopeId` other than `root`.

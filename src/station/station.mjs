@@ -37,6 +37,7 @@ import {
 	unreceivedChildren,
 } from "../scope/index.mjs";
 import { recordTurnSample } from "../scope/turn-stats.mjs";
+import { notePanhandled } from "../scope/panhandle.mjs";
 import {
 	adoptLedger,
 	conversationKeyOf,
@@ -127,10 +128,6 @@ export function receiptTextOf(message) {
 		.map((block) => block.text)
 		.join("\n");
 }
-
-import { loadDoc, render } from "../prompts/index.mjs";
-
-const E = loadDoc("errors");
 
 /**
  * The amend arguments a control call carries, or null when it carries none.
@@ -631,7 +628,9 @@ export class SessionStation {
 		// return may block for as long as the counterpart needs, so it never
 		// carries the branch clock's limit.
 		if (name === "scope_join" || name === "scope_return") return false;
-		return this.toolTimeLimit() !== null;
+		// A bounded clock keeps the gate open so the debt can be recorded; the
+		// deadline itself is never handed to a host as a call limit.
+		return this.clockPort().info(this.branchRecord())?.bounded === true;
 	}
 
 	toolGateVerdict(toolCallId) {
@@ -644,20 +643,18 @@ export class SessionStation {
 
 	admitToolDispatch(id, name, ctx, receipt = null) {
 		if (receipt) {
-			if (receipt.limitMs > 0 && receipt.elapsedMs > receipt.limitMs) {
-				return {
-					block: true,
-					reason: render(E["overtime-killed"], {
-						elapsed: Math.round(receipt.elapsedMs),
-						limit: receipt.limitMs,
-					}),
-				};
-			}
 			// A receipt is the post-execution half of a guarded call, so it
 			// normally follows an admission and this cache check is a hit. If
 			// the bounded gate cache evicted the id, or a host uses only this
 			// seam, admit now instead of letting a result skip the branch
 			// budget. Charging is idempotent through `state.charges`.
+			//
+			// A call that ends past the deadline keeps its result: the overrun
+			// is a debt in the same tally as a spent point, never a kill.
+			const record = this.branchRecord();
+			if (record && this.clockPort().info(record)?.overtime) {
+				notePanhandled(record, name, { callId: id });
+			}
 			if (!this.toolGateVerdict(id).hit) {
 				const verdict = this.admitToolDispatch(id, name, ctx);
 				if (verdict?.block) return verdict;
@@ -717,7 +714,7 @@ export class SessionStation {
 		return this.clockPort().resume(this.branchRecord());
 	}
 
-	/** 1000 ms once this branch's deadline has passed, else null. */
+	/** The deadline is measured, never handed to a host as a call limit. */
 	toolTimeLimit() {
 		return this.clockPort().toolLimit(this.branchRecord());
 	}

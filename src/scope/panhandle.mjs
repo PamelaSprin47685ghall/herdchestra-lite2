@@ -34,7 +34,14 @@ export function notePanhandled(record, tool, options = {}) {
   }
   if (!Array.isArray(record.panhandles)) record.panhandles = [];
   const at = Number.isFinite(options.now) ? options.now : Date.now();
-  record.panhandles.push({ at, tool });
+  const callId = typeof options.callId === "string" && options.callId !== "" ? options.callId : null;
+  // One entry per call: a call that both ran past its balance and ended past
+  // the deadline is one debt, not two.
+  if (callId !== null) {
+    const seen = record.panhandles.find((entry) => entry?.callId === callId);
+    if (seen) return { ok: true, count: record.panhandles.length, tool };
+  }
+  record.panhandles.push(callId === null ? { at, tool } : { at, tool, callId });
   return { ok: true, count: record.panhandles.length, tool };
 }
 

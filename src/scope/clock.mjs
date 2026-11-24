@@ -41,19 +41,19 @@ export function deadlineInfo(record, now = Date.now()) {
 }
 
 /**
- * The tool admission limit: remaining time plus the one-second chess-clock
- * unit, or the unit itself once the deadline is past. Stamps the overtime edge
- * exactly once. Null when the branch is unbounded.
+ * The tool admission limit is always absent: the deadline is measured, never
+ * enforced against a running call. A call that starts or ends after the
+ * deadline keeps its result; the overrun is recorded as a debt and the caller
+ * reads it on the record. The first overrun stamps `overtimeAt`.
  */
 export function toolLimitOf(record, now = Date.now()) {
 	const deadline = record?.deadlineAt;
 	if (!Number.isFinite(deadline)) return null;
 	const at = Number.isFinite(now) ? now : Date.now();
-	if (at < deadline) return deadline - at + 1000;
-	if (record.overtimeAt === null || record.overtimeAt === undefined) {
+	if (at >= deadline && (record.overtimeAt === null || record.overtimeAt === undefined)) {
 		record.overtimeAt = at;
 	}
-	return 1000;
+	return null;
 }
 
 export function createClockOn(now = () => Date.now()) {

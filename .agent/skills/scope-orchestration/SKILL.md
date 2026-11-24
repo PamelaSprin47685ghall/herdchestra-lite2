@@ -32,7 +32,7 @@ There is no table, and no constant in `src/scope/budget.mjs` holds one. A scope 
 - **A spent budget is a receipt, not a fence.** A non-root call whose allowance is gone still runs, clamps its charge at zero, and lands in the scope's panhandle tally, which the caller reads on the record. The root is refused because it is outside every scope; join admission is the other refusal.
 - **The root has no budget.** Reading a file at the root requires a child; that fixed cost buys a parent context that is never polluted.
 - **Panhandling is discredit, not rescue.** There is no tool that asks for more. A scope that overruns has published that it sized itself wrong, and the tally stays on the record beside it.
-- **The wall clock is derived from LLM request duration, not tool time.** An I/O-heavy scope can reach its deadline before spending its points, and nothing buys the seconds back; size the points for the time the work needs. See `fork.time`.
+- **The wall clock is derived from LLM request duration, not tool time.** An I/O-heavy scope can reach its deadline before spending its points; past the deadline a call still returns its result and the overrun lands in the panhandle tally, so the deadline is a receipt, not a fence. Size the points for the time the work needs. See `fork.time`.
 - **Depth has no ceiling and no default.** Each extra layer compresses the record to prose and carries another ancestor prefix; that cost is the only thing a parent weighs.
 
 ## Known gaps

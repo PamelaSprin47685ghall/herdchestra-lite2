@@ -39,31 +39,23 @@ function gateTool(tool, manager, admit, agentId = null) {
 				(ctx?.sessionManager ? routes.byManager.get(ctx.sessionManager) : undefined);
 			const verdict = gate?.(toolCallId, tool.name, ctx);
 			if (verdict?.block) throw new Error(verdict.reason);
-			const limitMs = verdict?.limitMs ?? 0;
+			// The station never hands a deadline down as a call limit: the
+			// wall clock is measured on the record, and an overrun is a debt,
+			// not a kill. A limit here would abort the call and lose its
+			// result, which is exactly the fence this host must not add.
 			const startedAt = Date.now();
-			if (limitMs <= 0) {
-				return execute.call(this, toolCallId, params, signal, onUpdate, ctx);
-			}
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), limitMs);
-			const linked =
-				signal && typeof AbortSignal.any === "function"
-					? AbortSignal.any([signal, controller.signal])
-					: controller.signal;
 			const after = () =>
-				!signal?.aborted && gate?.(toolCallId, tool.name, ctx, {
+				gate?.(toolCallId, tool.name, ctx, {
 					elapsedMs: Date.now() - startedAt,
-					limitMs,
+					limitMs: 0,
 				});
 			let outcome;
 			try {
-				outcome = await execute.call(this, toolCallId, params, linked, onUpdate, ctx);
+				outcome = await execute.call(this, toolCallId, params, signal, onUpdate, ctx);
 			} catch (error) {
 				const replacement = after();
 				if (replacement?.block) throw new Error(replacement.reason);
 				throw error;
-			} finally {
-				clearTimeout(timer);
 			}
 			const replacement = after();
 			if (replacement?.block) throw new Error(replacement.reason);

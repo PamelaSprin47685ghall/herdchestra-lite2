@@ -4,6 +4,15 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.2] — 2026-11-24
+
+### Changed — `n` is in the schema, and a receipt is no longer a user turn
+
+- `scope_fork` now requires `n` on every item and takes its description from `resources/prompts/tools/fork-join.md`. The sizing rule stays in `resources/prompts/system.md` §Run scopes; the fork fsm, the budget text, `README.md`, and the orchestration record point at that owner instead of repeating `sqrt(10n)`.
+- The station receipt is a `user`-role message carrying `herdSkill`. The relay prompt never archives it, and the UI renders it as a text step, so the reminder the host appends each turn is not mistaken for a fresh user message.
+- The receipt's language reminder is its own `<skill>` element inside the same `<additional-system-instructions>` wrapper and opens with the host-reminder parenthetical. Turning it off removes that whole element and leaves the rest of the receipt byte-identical.
+- `host-omp/package.json` is back in sync with the core at 3.2.2.
+
 ## [3.2.1] — 2026-11-24
 
 ### Changed — `scope_return.dafny` says what the record cannot carry

@@ -88,7 +88,7 @@ Hand the record to the calling scope; it receives the record with `scope_join`. 
 
 ## return.dafny
 
-Optional string appended to the end of the record the calling scope receives, after leading and trailing whitespace is trimmed. The record replays only assistant text and bare tool names, so this field carries what the replay drops. Let the content choose the form — the one that carries it most densely: a definition, a transition table, a code block, one sentence. Density is the criterion, not length: an exact statement beats a prose summary that restates the record. Omit it when your text already says everything.
+Optional string appended to the end of the record the calling scope receives, after leading and trailing whitespace is trimmed. The record replays only assistant text and bare tool names, so this field carries what the replay drops. The name is a hint: a Dafny-style specification — a signature with its pre- and postconditions, the invariant that holds across the step, the cases that close the set — usually says a design more densely than prose, so aim there first. A definition, a transition table, a code block, or one sentence takes over when it carries the same exactness in less space. Pseudocode, not a module: the field states what holds, it does not ship a program. Density is the criterion, not length: an exact statement beats a prose summary that restates the record. Omit it when your text already says everything.
 
 ## return.pending
 

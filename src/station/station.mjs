@@ -1055,7 +1055,7 @@ export class SessionStation {
 			this.portTable.chineseReminder,
 		);
 		return {
-			role: "developer",
+			role: "user",
 			content: [{ type: "text", text }],
 			attribution: "agent",
 			timestamp: Date.now(),

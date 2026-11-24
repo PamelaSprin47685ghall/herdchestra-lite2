@@ -92,12 +92,17 @@ export function skillReceiptText(state, relayOn = true, branch = null, openCount
 			lines.push(T[relay?.canStop ? "receipt.can-stop" : fullFlow ? "receipt.todo" : "receipt.simple-outside"]);
 		}
 	}
-	// The reminder ends every receipt, root and branch alike: the host appends
-	// the receipt to the session tail, so the newest request keeps it in place
-	// even when the prompt prefix is folded away. It stays out of the mode and
-	// relay conditionals above for that reason.
-	if (chineseReminder !== "off") lines.push(T["language"]);
-	return `<skill version="1.0">${lines.join(" ")}</skill>`;
+	// The reminder rides with every receipt, root and branch alike: the host
+	// appends the receipt to the session tail, so the newest request keeps it
+	// in place even when the prompt prefix is folded away. It is its own
+	// skill element, outside the mode and relay conditionals above, because
+	// one skill element holds one subject: the scope status, then the
+	// standing language rule.
+	const status = `<skill version="1.0">${lines.join(" ")}</skill>`;
+	const reminder = chineseReminder !== "off"
+		? ` <skill version="1.0">${T["language"]}</skill>`
+		: "";
+	return `<additional-system-instructions>${status}${reminder}</additional-system-instructions>`;
 }
 
 export { amendText };

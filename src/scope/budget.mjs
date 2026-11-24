@@ -14,8 +14,9 @@ import {
 const CHARGE_SCALE = 100;
 
 // A scope keeps the control tools and the protocol reads for free; every other
-// call is charged. Size is a judgement, not a constant: the one rule is
-// `sqrt(n)` points for `n` points of work in hand.
+// call is charged. Size is a judgement, not a constant, and no code in this
+// module computes one: `resources/prompts/system.md` §Run scopes holds the rule
+// and its multiplier.
 export function isFreeTool(name) {
   return (
     CONTROL_TOOLS.has(name) ||

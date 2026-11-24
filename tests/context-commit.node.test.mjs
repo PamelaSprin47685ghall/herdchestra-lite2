@@ -13,7 +13,7 @@ function user(text = "start") {
 
 function skill(text = "clock: 1", timestamp = 2) {
 	return {
-		role: "developer",
+		role: "user",
 		content: [{ type: "text", text }],
 		timestamp,
 		herdSkill: true,

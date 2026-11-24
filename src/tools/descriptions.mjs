@@ -25,6 +25,7 @@ const forkJoin = loadDoc("tools/fork-join");
 export const FORK_DESCRIPTION = forkJoin["fork.tool"];
 export const FORK_FSM_DESCRIPTION = forkJoin["fork.fsm"];
 export const FORK_BUDGET_DESCRIPTION = forkJoin["fork.budget"];
+export const FORK_N_DESCRIPTION = forkJoin["fork.n"];
 const FORK_TARGETS_DESCRIPTION = forkJoin["fork.targets"];
 const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
 const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
@@ -42,7 +43,7 @@ const forkItem = {
 	// `fsm` is optional here because a reused `scopeId` may carry only a budget
 	// increment, merged targets, or one more requirement. A new scope still
 	// needs it: the station refuses with MISSING_FSM.
-	required: ["scopeId", "profession", "blocked", "budget", "targets"],
+	required: ["scopeId", "profession", "blocked", "n", "budget", "targets"],
 	properties: {
 		scopeId: { type: "string", pattern: SCOPE_ID_PATTERN, maxLength: MAX_SCOPE_ID_LENGTH, description: forkJoin["fork.scope-id"] },
 		fsm: { type: "string", minLength: 1, description: FORK_FSM_DESCRIPTION },
@@ -53,6 +54,7 @@ const forkItem = {
 			description: FORK_PROFESSION_DESCRIPTION,
 		},
 		blocked: { type: "boolean", description: FORK_BLOCKED_DESCRIPTION },
+		n: { type: "integer", minimum: 0, description: FORK_N_DESCRIPTION },
 		budget: {
 			type: "object",
 			additionalProperties: { type: "integer", minimum: 0 },

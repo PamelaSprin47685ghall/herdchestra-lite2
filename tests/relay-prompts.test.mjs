@@ -29,7 +29,7 @@ describe("collectUserPrompts", () => {
 			{ role: "assistant", content: [{ type: "text", text: "Working." }] },
 			{ role: "user", content: [{ type: "text", text: SECOND }] },
 			{ role: "toolResult", toolCallId: "t1", toolName: "read", content: "x" },
-			{ role: "developer", content: "skill receipt" },
+			{ role: "user", content: "skill receipt", herdSkill: true },
 		];
 		expect(collectUserPrompts(messages)).toEqual([FIRST, SECOND]);
 	});

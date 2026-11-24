@@ -119,7 +119,7 @@ describe("tool contracts map to their documents", () => {
 	test("schemas carry the mapped text", () => {
 		const doc = loadDoc("tools/fork-join");
 		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
+		expect(item.required).toEqual(["scopeId", "profession", "blocked", "n", "budget", "targets"]);
 		expect(item.required).not.toContain("fsm");
 		expect(item.properties.fsm.description).toBe(scopeTools.FORK_FSM_DESCRIPTION);
 		expect(item.properties.budget.description).toBe(scopeTools.FORK_BUDGET_DESCRIPTION);
@@ -351,9 +351,18 @@ describe("fork item schema", () => {
 		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
 	});
 
+	test("n is required on every item and documented as ignored", () => {
+		const item = scopeTools.forkParameters.properties.forks.items;
+		expect(item.required).toContain("n");
+		expect(item.properties.n.type).toBe("integer");
+		expect(item.properties.n.minimum).toBe(0);
+		expect(item.properties.n.description).toMatch(/for later audit/i);
+		expect(item.properties.n.description).toMatch(/framework currently ignores it/);
+	});
+
 	test("a reused scopeId amends, and fsm may be omitted", () => {
 		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
+		expect(item.required).toEqual(["scopeId", "profession", "blocked", "n", "budget", "targets"]);
 		expect(item.required).not.toContain("fsm");
 		expect(item.properties.fsm.description).toMatch(/next turn boundary/i);
 		expect(item.properties.scopeId.description).toMatch(/ready.*supersedes/i);
@@ -376,7 +385,7 @@ describe("fork item schema", () => {
 	});
 });
 
-describe("scope size is sqrt(n), with no cap anywhere", () => {
+describe("scope size is sqrt(10n), with no cap anywhere", () => {
 	test("no exported description leaks a template placeholder", () => {
 		const leaked = Object.entries(scopeTools)
 			.filter(([, value]) => typeof value === "string" && value.includes("{{"))
@@ -384,17 +393,18 @@ describe("scope size is sqrt(n), with no cap anywhere", () => {
 		expect(leaked).toEqual([]);
 	});
 
-	test("the fork fsm sizes a scope by sqrt(n) and names no cap", () => {
+	test("the fork fsm names no cap and leaves sizing to the operating rules", () => {
 		const fsm = scopeTools.FORK_FSM_DESCRIPTION;
-		expect(fsm).toContain("sqrt(n)");
-		expect(fsm).toContain("deeper tree");
+		expect(fsm).toContain("subtree");
+		expect(fsm).not.toContain("sqrt");
 		expect(fsm).not.toMatch(/\b(?:18|27)\b/);
 		expect(fsm).not.toMatch(/never more than/i);
 	});
 
 	test("the budget runs an overspent call and marks it panhandled", () => {
 		const budget = scopeTools.FORK_BUDGET_DESCRIPTION;
-		expect(budget).toContain("sqrt(n)");
+		expect(budget).toContain("Size it from `n`");
+		expect(budget).not.toContain("sqrt");
 		expect(budget).toContain("panhandled");
 		expect(budget).not.toMatch(/\b(?:18|27)\b/);
 		expect(budget).toContain("each item funds its own forked scope at any depth");
@@ -412,13 +422,34 @@ describe("scope size is sqrt(n), with no cap anywhere", () => {
 		expect(budget.additionalProperties.maximum).toBeUndefined();
 	});
 
-	test("the operating rules teach sqrt(n) and nothing else about size", () => {
+	test("the operating rules teach sqrt(10n) and say why ten, once", () => {
 		const text = persistentOperatingSkill;
-		expect(text).toContain("sqrt(n)");
+		expect(text.match(/sqrt\(10n\)/g)).toHaveLength(1);
+		expect(text).toContain("sqrt(10n)");
+		expect(text).toContain("ten times the ideal estimate");
 		expect(text).toContain("fork as much as the work allows");
 		expect(text).not.toMatch(/never more than/i);
 		expect(text).not.toMatch(/scope_panhandle/);
 		expect(text).toContain("panhandled");
+	});
+
+	test("every other model-facing copy points at the owner", () => {
+		const owner = "resources/prompts/system.md";
+		const n = scopeTools.forkParameters.properties.forks.items.properties.n;
+		expect(n.description).not.toContain("sqrt");
+		expect(n.description).toContain(owner);
+
+		const skill = readFileSync(
+			new URL("../.agent/skills/scope-orchestration/SKILL.md", import.meta.url),
+			"utf8",
+		);
+		const sizing = skill.split("## Sizing")[1].split("## Tradeoffs")[0];
+		expect(sizing).not.toContain("sqrt");
+		expect(sizing).toContain(owner);
+
+		// The human doc states the rule, and states it once.
+		const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+		expect(readme.match(/sqrt\(10n\)/g)).toHaveLength(1);
 	});
 
 	test("no cap section survives, so nothing rebukes a large batch", () => {

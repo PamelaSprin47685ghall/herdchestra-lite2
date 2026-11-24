@@ -74,7 +74,7 @@ Your record is still unpublished. Call `scope_return` to hand it to the scope th
 
 ## language
 
-强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。
+（宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。
 
 ## fork.child-routing
 

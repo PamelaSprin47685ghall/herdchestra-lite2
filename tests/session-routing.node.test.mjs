@@ -119,7 +119,7 @@ test("a flow context changes only that flow's live message list", () => {
 	for (const session of [owner, first, second]) rememberSession(session);
 	const ownerMessages = owner.agent.state.messages;
 	const secondMessages = second.agent.state.messages;
-	const replacement = [{ role: "developer", content: "flow-a state", herdSkill: true }];
+	const replacement = [{ role: "user", content: "flow-a state", herdSkill: true }];
 	assert.equal(setAgentMessages(contextFor(manager, "flow-a"), replacement), true);
 	assert.deepEqual(first.agent.state.messages, replacement);
 	assert.notEqual(first.agent.state.messages, replacement);

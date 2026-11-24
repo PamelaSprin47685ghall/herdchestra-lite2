@@ -6,7 +6,9 @@
 
 function promptText(message) {
 	if (!message || message.role !== "user") return "";
-	if (message.excludeFromContext === true) return "";
+	// A skill receipt is a user-role message the host appends itself. It is
+	// not the user's words, so it never enters the requirement archive.
+	if (message.herdSkill === true || message.excludeFromContext === true) return "";
 	const content = message.content;
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";

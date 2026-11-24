@@ -89,6 +89,7 @@ function messageFromEntry(entry) {
     role,
     attribution: message.attribution ?? null,
     synthetic: message.synthetic === true,
+    herdSkill: message.herdSkill === true,
     timestamp: message.timestamp ?? entry.timestamp,
   };
   if (role === "user" || role === "assistant" || role === "developer") {
@@ -222,6 +223,7 @@ function streamingFrom(event) {
     role: event.message?.role ?? "assistant",
     attribution: event.message?.attribution ?? null,
     synthetic: event.message?.synthetic === true,
+    herdSkill: event.message?.herdSkill === true,
     blocks: [],
     timestamp: event.message?.timestamp,
   };
@@ -407,7 +409,11 @@ export function groupTranscriptForDisplay(items) {
     for (const message of segment) {
       if (message.role === "user" && !isRealUser(message)) {
         if (hasVisibleText(message.text)) {
-          steps.push({ kind: "input", text: message.text, messageId: message.id });
+          steps.push({
+            kind: message.herdSkill === true ? "text" : "input",
+            text: message.text,
+            messageId: message.id,
+          });
         }
         continue;
       }

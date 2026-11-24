@@ -62,6 +62,8 @@ export type UiMessage = {
   text?: string;
   streaming?: boolean;
   attribution?: string | null;
+  /** Station receipt: a host reminder, never a real user turn. */
+  herdSkill?: boolean;
   timestamp?: number;
   /** toolResult identity */
   toolCallId?: string;

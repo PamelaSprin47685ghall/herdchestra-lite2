@@ -52,7 +52,7 @@ function fakeStation({ policy = READ_WRITE_SUBAGENT, recovery = false } = {}) {
 		skillReceipt() {
 			events.push("commit:receipt");
 			station.state.receiptBuilt = true;
-			return { role: "developer", herdSkill: true };
+			return { role: "user", herdSkill: true };
 		},
 		ensureTools() {
 			ensureToolsCalls += 1;
@@ -95,7 +95,7 @@ test("prepareRequest commits the receipt before granting todo when no restore is
 
 	const result = prepareRequest(station, CTX, null, undefined);
 
-	expect(result).toMatchObject({ role: "developer", herdSkill: true });
+	expect(result).toMatchObject({ role: "user", herdSkill: true });
 	expect(ensureToolsCalls()).toBe(1);
 	expect(events).toEqual([
 		"commit:model",

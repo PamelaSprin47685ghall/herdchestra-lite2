@@ -14,6 +14,10 @@ import { createBracketLedger, markReady, registerFork, takeReady } from "../src/
 
 const chineseInstruction = /^.*强制以简体中文思考.*$/gm;
 const chineseRequirement = "强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。";
+// The receipt carries the historical self-description so a user-role reminder
+// cannot be mistaken for a fresh user message.
+const chineseParenthetical = "（宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）";
+const chineseReminderSkill = ` <skill version="1.0">${chineseParenthetical}${chineseRequirement}</skill>`;
 
 for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 	test(`the ${typeof hostPrompt === "string" ? "string" : "array"} system prompt stays idempotent when reinjected`, () => {
@@ -85,10 +89,10 @@ test("routine scope status keeps local budget and pending work without repeating
 	const pending = skillReceiptText(state, true, branch, 3);
 	const root = skillReceiptText(state);
 	for (const text of [pending, root]) {
-		// The reminder ends every receipt as well as the persistent system
-		// prompt: the host appends the receipt to the session tail, so the
-		// newest request keeps it even when the prompt prefix is folded away.
-		expect(text).toMatch(new RegExp(` ${chineseRequirement}</skill>$`));
+		// The reminder closes the receipt as its own skill element inside the
+		// same additional-system-instructions wrapper.
+		expect(text.startsWith('<additional-system-instructions><skill version="1.0">')).toBe(true);
+		expect(text.endsWith(`${chineseReminderSkill}</additional-system-instructions>`)).toBe(true);
 		expect(text).not.toMatch(/\bUTC\b|since this session began/);
 	}
 	// The system prompt still states it exactly once.
@@ -282,12 +286,15 @@ test("the language reminder ends every request receipt and follows its port", as
 			const on = await latestReceipt(enabled);
 			const off = await latestReceipt(disabled);
 			// Appended to the session, never patched into an older message: the
-			// reminder is the last text of the newest receipt.
-			expect(on).toMatch(new RegExp(` ${chineseRequirement}</skill>$`));
+			// reminder is the last skill element of the newest receipt, inside
+			// the additional-system-instructions wrapper.
+			expect(on.startsWith('<additional-system-instructions><skill version="1.0">')).toBe(true);
+			expect(on.endsWith(`${chineseReminderSkill}</additional-system-instructions>`)).toBe(true);
 			expect(on.split(chineseRequirement)).toHaveLength(2);
-			// Off removes that one line and leaves the rest byte-identical.
+			// Off removes that whole skill element and leaves the rest
+			// byte-identical.
 			expect(off).not.toContain(chineseRequirement);
-			expect(off).toBe(on.replace(` ${chineseRequirement}`, ""));
+			expect(off).toBe(on.replace(chineseReminderSkill, ""));
 			// A new receipt is appended per turn, never written over the old one:
 			// the prefix stays byte-identical, which is what keeps the cache warm.
 			expect(journalReceipts(enabled)).toBe(round + 1);

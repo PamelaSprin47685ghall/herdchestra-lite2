@@ -221,4 +221,31 @@ describe("buildTurnGroups", () => {
       text: "more guidance",
     });
   });
+
+  test("a user-role station receipt stays a text step, not an input", () => {
+    const groups = buildTurnGroups([
+      user("u1", "go"),
+      {
+        id: "r1",
+        role: "user",
+        attribution: "agent",
+        herdSkill: true,
+        blocks: [
+          {
+            type: "text",
+            text: '<additional-system-instructions><skill version="1.0">Scope budget: bash remaining 3.00/8.00</skill> <skill version="1.0">reminder</skill></additional-system-instructions>',
+          },
+        ],
+      },
+      assistant("a1", [{ type: "text", text: "final answer" }]),
+    ]);
+    expect(groups.map((group) => group.kind)).toEqual(["user", "processing"]);
+    const processing = groups.find((group) => group.kind === "processing");
+    expect(processing.steps).toHaveLength(1);
+    expect(processing.steps[0]).toMatchObject({
+      kind: "text",
+      format: "pre",
+    });
+    expect(processing.body).toBe("final answer");
+  });
 });

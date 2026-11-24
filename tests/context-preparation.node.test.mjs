@@ -39,7 +39,7 @@ function fixture(id = "Main") {
 		skillReceipt(current) {
 			receiptReads += 1;
 			return {
-				role: "developer",
+				role: "user",
 				content: [{ type: "text", text: `${this.value}:${current.agent.id}:${receiptReads}` }],
 				timestamp: receiptReads,
 				herdSkill: true,

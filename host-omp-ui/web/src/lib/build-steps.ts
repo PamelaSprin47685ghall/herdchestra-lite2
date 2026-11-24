@@ -384,7 +384,10 @@ function computeSteps(message: UiMessage): {
       if (laterStep || forceSteps) {
         steps.push({
           key: `${message.id}-step-${start}`,
-          kind: message.role === "user" ? "input" : "text",
+          kind:
+            message.role === "user" && message.herdSkill !== true
+              ? "input"
+              : "text",
           text,
           format: forceSteps ? "pre" : "markdown",
           messageId: message.id,

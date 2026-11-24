@@ -184,6 +184,7 @@ export function normalizeMessage(
     role,
     attribution:
       typeof raw.attribution === "string" ? raw.attribution : undefined,
+    herdSkill: raw.herdSkill === true,
     blocks,
     streaming: Boolean(raw.streaming),
     timestamp: asNumber(raw.timestamp),

@@ -4,6 +4,19 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.2] — 2026-11-24
+
+### Fixed — a bare `bun test` no longer collects the `deer-flow` submodule
+
+- `bunfig.toml` carries `[test] pathIgnorePatterns = ["deer-flow/**"]`. A bare
+  `bun test` from the repository root previously walked into the vendored
+  submodule and ran its 503 test and spec files, failing in dependencies that
+  belong to its own pnpm toolchain.
+- Measured on Bun 1.4.4: bare `bun test` went from 656 files / 2124 tests with
+  502 failures to 153 files / 1617 tests and 0 failures. `bun run test` was
+  already clean, because its positional `tests` scoped the run; the config now
+  covers every invocation instead of one script line.
+
 ## [3.4.1] — 2026-11-24
 
 ### Fixed — `lint` no longer reads the `deer-flow` submodule

@@ -4,6 +4,19 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] — 2026-11-24
+
+### Fixed — `lint` no longer reads the `deer-flow` submodule
+
+- `eslint.config.mjs` ignores `deer-flow/**`. ESLint 10 looks for a flat config
+  beside each linted file, so `eslint .` walked into
+  `deer-flow/frontend/eslint.config.js` and failed with `ERR_MODULE_NOT_FOUND`
+  for `@eslint/eslintrc` — that submodule carries its own pnpm toolchain and
+  its own lint command, so it is not this repository's to lint.
+- `scripts.test` already drew that line with
+  `--path-ignore-patterns 'deer-flow/**'`, so both gates now cover the same
+  files and `bun run lint` exits 0 where it previously exited 2.
+
 ## [3.4.0] — 2026-11-24
 
 ### Changed — a record carries each tool call with its arguments

@@ -143,7 +143,7 @@ test("the registered scope_return explains the sealed final receipt and the dige
 	expect(returning.parameters.required).toBeUndefined();
 	expect(returning.parameters.properties.dafny.type).toBe("string");
 	expect(returning.parameters.properties.dafny.description).toMatch(/appended to the end/i);
-	expect(returning.parameters.properties.dafny.description).toMatch(/Say what a successor needs/);
+	expect(returning.parameters.properties.dafny.description).toMatch(/never restate your text/);
 	expect(returning.parameters.properties.dafny.description).toMatch(/the search that produced it is not part of it/);
 	expect(returning.parameters.properties.dafny.description).toMatch(/Omit it when your text already says everything/);
 	expect(returning.description).toMatch(/(?:last|latest|final)[^.]*receipt[^.]*seal/i);

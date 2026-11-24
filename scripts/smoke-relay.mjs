@@ -194,7 +194,7 @@ await check("scope_join refuses work this branch does not own", async () => {
 });
 
 await check("scope_return refuses the stable root", async () => {
-	const out = await call("scope_return", {});
+	const out = await call("scope_return", { dafny: "root return attempt" });
 	expect(out.isError, "scope_return should refuse the root");
 	expect(
 		String(out.code) === "NOT_A_CHILD" || String(out.code) === "FORK_LEDGER_UNAVAILABLE",

@@ -4,9 +4,11 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.2.4] — 2026-11-24
+## [3.3.0] — 2026-11-24
 
-### Changed — `scope_return.dafny` is required
+### Changed — `scope_return.dafny` is required (breaking for callers)
+
+A return must now carry `dafny`; a caller that relied on omitting it reads `MISSING_DAFNY` and must return again with text.
 
 - The `scope_return` schema lists `dafny` in `required`, so a return without it is refused instead of submitting a record whose tool arguments and results never reach the caller. `resources/prompts/tools/fork-join.md` §return.dafny says so and tells a child with nothing to add to say that in one line.
 - The station enforces the same rule: `handleReturnCall` refuses an absent or whitespace-only `dafny` with `MISSING_DAFNY` before any bracket moves, so the child can fill the field in and return again. A caller that is not a child still reads `NOT_A_CHILD`, because the relationship error is the more fundamental one.

@@ -38,6 +38,15 @@ export async function forkTicket(station, toolCallId, params, ctx, host = {}) {
 	try {
 		result = station.executeFork(toolCallId, params, ctx);
 	} catch (error) {
+		// The host bag is the fifth argument, and this is what it is for: a
+		// fork that dies inside the station leaves a diagnostic, exactly as a
+		// join does. A caller that slips a signal into this position loses the
+		// record instead of the promise.
+		host?.report?.record?.("fork", error, {
+			phase: "fork",
+			toolCallId,
+			stack: error?.stack,
+		});
 		return errorResult("FORK_INTERNAL_ERROR", String(error?.message ?? error));
 	}
 	const applyPending = station?.tickets?.applyPendingModelSwitch;

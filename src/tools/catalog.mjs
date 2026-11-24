@@ -34,8 +34,12 @@ export function createTools({ stationFor, tickets }) {
 			description: FORK_DESCRIPTION,
 			parameters: forkParameters,
 			loadMode: ESSENTIAL,
-			execute: (toolCallId, params, signal, _onUpdate, ctx) =>
-				forkTicket(stationFor(ctx), toolCallId, params, ctx, tickets, signal),
+			// A fork finishes in one synchronous beat and then hands its result
+			// to the host's pending model switch. There is no wait to cancel, so
+			// it takes no signal: its ticket declares four arguments and a host
+			// bag, and that is exactly what it gets.
+			execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
+				forkTicket(stationFor(ctx), toolCallId, params, ctx, tickets),
 		},
 		{
 			name: "scope_join",

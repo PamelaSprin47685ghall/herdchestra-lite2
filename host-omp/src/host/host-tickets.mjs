@@ -361,35 +361,3 @@ export async function applyPendingModelSwitch(pi, station, ctx, result) {
 	}
 	return outcome?.ok ? result : appendModelSwitchWarning(result, req, outcome);
 }
-
-/**
- * The host capability bag the pure tickets read. Ticket entries that are pure
- * forwarders are not re-exported here: the wiring imports them from the core
- * barrel, which is the single owner.
- */
-function ticketHost() {
-	return {
-		record,
-		notifyWaiters,
-		waitForJoin,
-		waitForReady,
-		applyPendingModelSwitch,
-	};
-}
-
-/** The deps the core tickets read. One object, built at the call site. */
-function ticketDeps() {
-	return {
-		record,
-		applyPendingModelSwitch: (station, ctx, result) => applyPendingModelSwitch(null, station, ctx, result),
-	};
-}
-
-export const forkTicket = (station, toolCallId, params, ctx, signal = null) =>
-	forkControlTicket(station, toolCallId, params, ctx, signal, ticketDeps());
-export const joinTicket = (station, toolCallId, params, ctx, signal = null) =>
-	joinControlTicket(station, toolCallId, params, ctx, signal, ticketDeps());
-export const returnTicket = (station, toolCallId, params, ctx, signal = null) =>
-	returnControlTicket(station, toolCallId, params, ctx, signal, ticketDeps());
-export const scopeContextTicket = (station, toolCallId, params) =>
-	scopeContextControlTicket(station, toolCallId, params, ticketDeps());

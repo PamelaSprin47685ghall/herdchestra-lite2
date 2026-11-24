@@ -124,8 +124,8 @@ describe("grantBudget", () => {
 	test("refuses free tools and empty grants", () => {
 		const { record } = open();
 		expect(grantBudget(record, { tools: { scope_fork: 1 } }).code).toBe(
-			"PANHANDLE_FREE_TOOL",
+			"GRANT_FREE_TOOL",
 		);
-		expect(grantBudget(record, {}).code).toBe("PANHANDLE_EMPTY");
+		expect(grantBudget(record, {}).code).toBe("GRANT_EMPTY");
 	});
 });

@@ -57,26 +57,26 @@ function readTools(value) {
   if (value === undefined) return { ok: true, tools: {} };
   if (!isPlainObject(value)) {
     return failure(
-      "PANHANDLE_INVALID_TOOLS",
+      "GRANT_INVALID_TOOLS",
       "tools must be a plain object of whole budget points.",
     );
   }
   const tools = {};
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string" || !isNonEmptyString(key)) {
-      return failure("PANHANDLE_INVALID_TOOLS", "Each tool key must name a tool.");
+      return failure("GRANT_INVALID_TOOLS", "Each tool key must name a tool.");
     }
     const amount = value[key];
     if (!Number.isInteger(amount) || amount <= 0) {
       return failure(
-        "PANHANDLE_INVALID_TOOLS",
+        "GRANT_INVALID_TOOLS",
         `"${key}" must be a whole number of budget points, at least 1.`,
       );
     }
     const tool = normalizeToolName(key);
     if (isFreeTool(tool)) {
       return failure(
-        "PANHANDLE_FREE_TOOL",
+        "GRANT_FREE_TOOL",
         `"${tool}" is free at every level and cannot be granted.`,
       );
     }
@@ -89,7 +89,7 @@ function readSeconds(value) {
   if (value === undefined) return { ok: true, seconds: 0 };
   if (!Number.isInteger(value) || value <= 0) {
     return failure(
-      "PANHANDLE_INVALID_SECONDS",
+      "GRANT_INVALID_SECONDS",
       "seconds must be a whole number of seconds, at least 1.",
     );
   }
@@ -114,7 +114,7 @@ export function grantBudget(record, request = {}, options = {}) {
   const seconds = timed.seconds;
   if (Object.keys(tools).length === 0 && seconds === 0) {
     return failure(
-      "PANHANDLE_EMPTY",
+      "GRANT_EMPTY",
       "Name at least one tool budget or ask for seconds.",
     );
   }
@@ -125,7 +125,7 @@ export function grantBudget(record, request = {}, options = {}) {
     options?.allowClockOff !== true
   ) {
     return failure(
-      "PANHANDLE_CLOCK_OFF",
+      "GRANT_CLOCK_OFF",
       "This branch has no wall clock to extend; ask for tool budget instead.",
     );
   }

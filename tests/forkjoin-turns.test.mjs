@@ -30,7 +30,7 @@ function fork(ledger, spec = {}) {
 }
 
 describe("fork budget registration", () => {
-  test("stores the budget, the remaining balance, and the spent zeroes", () => {
+  test("stores the budget, the remaining turns, and the spent zeroes", () => {
     const ledger = createBracketLedger();
     const record = fork(ledger, { budget: { read: 4, bash: 2 }, time: 180, startedAt: 1000 });
     expect(record.budget).toEqual({ read: 4, bash: 2 });
@@ -41,7 +41,7 @@ describe("fork budget registration", () => {
     expect(record.charges).toEqual({});
   });
 
-  test("a fork without a budget owns no balance and no deadline", () => {
+  test("a fork without a budget owns no turns and no deadline", () => {
     const ledger = createBracketLedger();
     const record = fork(ledger);
     expect(record.budget).toEqual({});
@@ -82,7 +82,7 @@ describe("fork budget registration", () => {
 });
 
 describe("fork charging", () => {
-  test("one call spends its share and reports the balance", () => {
+  test("one call spends its share and reports the remaining turns", () => {
     const ledger = createBracketLedger();
     fork(ledger, { budget: { read: 4 } });
     const charged = applyCharge(ledger, "f1", {
@@ -116,7 +116,7 @@ describe("fork charging", () => {
     expect(forkOf(ledger, "f1").remaining.read).toBe(3.5);
   });
 
-  test("an exhausted tool refuses the next call and names the balance", () => {
+  test("an exhausted tool refuses the next call and names the budget", () => {
     const ledger = createBracketLedger();
     fork(ledger, { budget: { read: 0 } });
     const refused = applyCharge(ledger, "f1", { toolCallId: "c1", tool: "read", amount: 1 });
@@ -126,7 +126,7 @@ describe("fork charging", () => {
     expect(forkOf(ledger, "f1").remaining.read).toBe(0);
   });
 
-  test("a share larger than the balance spends what is left", () => {
+  test("a share larger than the budget spends what is left", () => {
     const ledger = createBracketLedger();
     fork(ledger, { budget: { read: 1 } });
     const charged = applyCharge(ledger, "f1", { toolCallId: "c1", tool: "read", amount: 1.5 });
@@ -135,7 +135,7 @@ describe("fork charging", () => {
     expect(forkOf(ledger, "f1").remaining.read).toBe(0);
   });
 
-  test("a tool absent from the budget refuses without touching another balance", () => {
+  test("a tool absent from the budget refuses without touching another budget", () => {
     const ledger = createBracketLedger();
     fork(ledger, { budget: { read: 2 } });
     const refused = applyCharge(ledger, "f1", { toolCallId: "c1", tool: "bash", amount: 1 });
@@ -153,7 +153,7 @@ describe("fork charging", () => {
 });
 
 describe("fork refunding", () => {
-  test("an amended charge returns to the balance", () => {
+  test("an amended charge returns to the budget", () => {
     const ledger = createBracketLedger();
     fork(ledger, { budget: { read: 4 } });
     applyCharge(ledger, "f1", { toolCallId: "c1", tool: "read", amount: 1 });
@@ -192,7 +192,7 @@ describe("fork deadline", () => {
     expect(deadlineInfo(forkOf(ledger, "f1"), 5000)).toEqual({ bounded: false });
   });
 
-  test("before the deadline the balance is the remaining milliseconds", () => {
+  test("before the deadline the clock reports the remaining milliseconds", () => {
     const ledger = createBracketLedger();
     fork(ledger, { time: 60, startedAt: 0 });
     const info = deadlineInfo(forkOf(ledger, "f1"), 20000);

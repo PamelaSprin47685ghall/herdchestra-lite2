@@ -161,7 +161,7 @@ describe("branch charging", () => {
     expect(s.charges).toEqual({});
   });
 
-  test("a refund from another branch never touches this balance", () => {
+  test("a refund from another branch never touches this budget", () => {
     const s = state();
     const ledger = ledgerWith("f1", { read: 2 });
     chargeBranch(s, ledger, { ownerId: "f1", toolCallId: "c1", toolName: "read" });

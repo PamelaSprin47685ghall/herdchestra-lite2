@@ -55,11 +55,11 @@ describe("prompt documents", () => {
 });
 
 describe("tool contracts map to their documents", () => {
-	test("a nested fork is funded by its item, not the caller's balance", () => {
+	test("a nested fork is funded by its item, not the caller's budget", () => {
 		const budget = loadDoc("tools/fork-join")["fork.budget"];
 		expect(budget).toContain("each item funds its own forked scope at any depth");
 		expect(budget).toContain("never charged");
-		expect(budget).not.toContain("draws from that flow's remaining balance");
+		expect(budget).not.toContain("draws from that flow's remaining budget");
 	});
 
 	test("the three fork/join tools carry their mapped text", () => {

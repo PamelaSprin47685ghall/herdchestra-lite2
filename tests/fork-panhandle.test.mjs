@@ -87,7 +87,7 @@ describe("a call that outruns its turns still runs", () => {
 		expect(record.panhandles.map((entry) => entry.tool)).toEqual(["edit"]);
 	});
 
-	test("the balance bottoms out at zero and never goes negative", () => {
+	test("the budget bottoms out at zero and never goes negative", () => {
 		const ledger = createBracketLedger();
 		const record = branch(ledger, { budget: { read: 1 } });
 		const admit = gate(stationWith(ledger, "worker"));

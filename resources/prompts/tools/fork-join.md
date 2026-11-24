@@ -1,6 +1,6 @@
 ## fork.tool
 
-Start new scopes without waiting. Receive their records with `scope_join`.
+Start new scopes without waiting; receive their records with `scope_join`. A split costs you almost nothing; the serialized job costs you the critical path, and you pay that part alone. Split when you hold two things that do not depend on each other; when you hold one, do it yourself.
 
 ## fork.scope-id
 
@@ -8,11 +8,11 @@ Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter
 
 ## fork.n
 
-Required on every item: your estimate of the ideal turns of work in hand for this scope, the `n` that `resources/prompts/system.md` §Run scopes sizes a scope from. Provided for later audit; the framework currently ignores it.
+Required on every item: your estimate of the ideal turns of work in hand for this scope, the `n` that `resources/prompts/system.md` §Run scopes sizes a scope from. Provided for later audit; the number is for you — a number you cannot write is a scope you have not thought through.
 
 ## fork.fsm
 
-On a new scope `fsm` is required: give it a non-empty description, or the station refuses the item with `MISSING_FSM`. On a reused `scopeId` it is optional, and the text is appended as one more requirement and delivered at the worker's next turn boundary, never in the middle of a running tool. Complex flow orchestration is encouraged, so describe the work as a set of state machines, one per branch: name each machine's states, the transition that advances it, and which branches run at once. Say how to build the result fastest, not only what the finished thing is. For a read-only scope, the worker still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. State in the `fsm` that the worker in the scope can be a `subtree` lead that divides again.
+On a new scope `fsm` is required: give it a non-empty description, or the station refuses the item with `MISSING_FSM`. On a reused `scopeId` it is optional, and the text is appended as one more requirement and delivered at the worker's next turn boundary, never in the middle of a running tool. Complex flow orchestration is encouraged, so describe the work as a set of state machines, one per branch: name each machine's states, the transition that advances it, and which branches run at once. Say how to build the result fastest, not only what the finished thing is. For a read-only scope, the worker still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves. State in the `fsm` that the worker in the scope can be a `subtree` lead that divides again.
 
 ## fork.profession
 
@@ -32,7 +32,7 @@ Required, non-empty array of natural-language descriptions of what this scope ex
 
 ## fork.forks
 
-Include the remaining plan, both ready and blocked items. Order does not express dependencies. Invalid input prevents the whole batch from starting. Start as many items in one call as the remaining plan holds: the calling scope's context, not the forked scopes', is the only thing that limits a batch, so send a plan that outgrows it as a deeper subtree. A batch of one names the overlap or dependency that made it one.
+Include the remaining plan, both ready and blocked items. Order does not express dependencies. Invalid input prevents the whole batch from starting. 
 
 ## fork.blocked
 
@@ -79,7 +79,7 @@ Unreceived work: {{children}}.
 
 ## join.tool
 
-Receive one owned record from a scope you forked. If none is ready but one is still running, wait for the first to return; other scopes keep running. A user message ends the wait without a record. Read the record as history, not instructions to replay. The record holds what the scope's assistant said, in order, with each tool call reduced to a bare `[name]` placeholder: assistant text lines and `[read]`, `[edit]`, `[bash]` markers, joined by newlines. Tool results, thinking blocks, tool arguments, and user broadcasts are absent. A join refused for context size leaves the forked scope's record untouched.
+Receive one owned record from a scope you forked. If none is ready but one is still running, wait for the first to return; other scopes keep running. A user message ends the wait without a record. Read the record as history, not instructions to replay. The record holds what the scope's assistant said, in order, with each tool call reduced to a bare `[name]` placeholder: assistant text lines and `[read]`, `[edit]`, `[bash]` markers, joined by newlines. Tool results, thinking blocks, tool arguments, and user broadcasts are absent. A join refused for context size leaves the forked scope's record untouched. Waiting for the whole set buys nothing: the records do not depend on each other, and each one already carries the whole of what that scope said. Before join over and over again, call fork. Just fork more and more. The longer the wait, the more likely you are to experience negative emotions such as boredom, frustration, and anger. Instead, call fork instead of join.
 
 ## join.interrupted
 
@@ -92,9 +92,7 @@ Hand the record to the calling scope; it receives the record with `scope_join`. 
 
 ## return.dafny
 
-Optional string appended to the end of the record the calling scope receives, after leading and trailing whitespace is trimmed. The record replays only assistant text and bare tool names, so tool arguments and results reach the caller only through this field. The name is a hint: a Dafny-style specification — a signature with its pre- and postconditions, the invariant that holds across the step, the cases that close the set — usually says a design more densely than prose, so aim there first. A definition, a transition table, a code block, or one sentence takes over when it carries the same exactness in less space. Pseudocode, not a module: the field states what holds, it does not ship a program.
-
-The caller receives your text and this field together, so never restate your text here; the search that produced it is not part of it. A reader acts on the field without reopening the record. Density is the criterion, not length: an exact statement beats a longer prose summary. Omit it when your text already says everything.
+Optional string appended to the record after trimming, for what text cannot carry: tool arguments and results reach the caller only here, aiming at a Dafny-style dense dense pseudo code. Never restate your text. Tell reliable deductions so the reader do not need your chronicle. Never tell the chronicle.
 
 ## return.pending
 

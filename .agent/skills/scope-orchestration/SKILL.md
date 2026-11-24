@@ -1,6 +1,6 @@
 ---
 name: scope-orchestration
-description: Design record for herdchestra-lite2 scope orchestration. Load before changing fork, join, return, panhandle, or scope identity behavior, or when explaining why a scope is sized or split as it is.
+description: Design record for herdchestra-lite2 scope orchestration. Load before changing fork, join, return, panhandle, or scope identity behavior, before changing how pin or amend is explained, or when explaining why a scope is sized, split, or closed as it is.
 ---
 
 # Scope Orchestration
@@ -25,6 +25,23 @@ The user-facing account is `README.md`; the code is authoritative for every numb
 
 There is no table, and no constant in `src/scope/budget.mjs` holds one. A scope is sized by the work in hand: `resources/prompts/system.md` §Run scopes gives the points for the `n` a scope declares and why the multiplier is ten, and that text sits in every worker's prefix, so this page points at it instead of repeating it. Fork as much as the work allows, and tell every child to fork again — a scope that cannot fork has rebuilt the bottleneck the fork removed. Nothing caps a scope's points, the items in one call, or the depth of the tree; the over-budget and over-fanout warnings went out with the constants that fed them.
 
+## Cadence
+
+Three tools move the clock, not the content: `pin`, `amend`, and `fork`. Each pays at the moment it is used and leaves nothing worth going back for.
+
+- **`pin` buys reach.** The next hold is out of reach; one pin turns one hard move into two easy ones. The return is collected by the next action, so a later reader is a by-product.
+- **`amend` closes the beat.** A model has no dusk, so a beat that failed stays as present as the beat after it; amend draws the dusk by hand. A shorter context is the by-product; the rite is the point.
+- **`fork` hands the waiting away.** The parent keeps the critical path and pays nothing for the split; Tradeoffs owns the accounting.
+
+The test is the same in all three: can the next action reach what it needs from here? What it cannot reach gets a `pin`, what has already happened gets closed, what does not depend on it is forked off.
+
+Owners, so no fact is written twice:
+
+- `resources/prompts/tools/notes.md` — the wording and the test the model reads at the call site for `pin` and `amend`.
+- `resources/prompts/tools/fork-join.md` — every field of `fork`, `join`, and `return`.
+- `resources/prompts/system.md` §Run scopes — the sizing rule that gives `n` meaning.
+- This page — the reasons, and nothing the model reads as an instruction.
+
 ## Tradeoffs
 
 - **Fork is free.** A child mints its own budget and clock; the parent's balance never funds it. A larger job becomes a deeper tree, not a fatter scope.
@@ -38,4 +55,4 @@ There is no table, and no constant in `src/scope/budget.mjs` holds one. A scope 
 ## Known gaps
 
 - `README.md` is the user-facing account; `resources/prompts/**` is the model-facing account. This page owns the internal boundaries and the reasons they hold.
-- `CONTROL_TOOLS` in `src/scope/state.mjs` also carries the legacy transcript-scan names `amend` and `pin`; it is a scan set, not the live tool list. `resources/prompts/system.md` lists only live tools and must not be changed back.
+- `CONTROL_TOOLS` in `src/scope/state.mjs` also carries the legacy transcript-scan names `amend` and `pin`; it is a scan set, not the live tool list. The live surface is `scope_context`, where `pin` and `amend` are its two modes, plus `scope_fork`. `resources/prompts/system.md` lists only live tools and must not be changed back.

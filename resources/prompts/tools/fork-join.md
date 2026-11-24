@@ -1,6 +1,6 @@
 ## fork.tool
 
-Start new scopes without waiting; receive their records with `scope_join`. A split costs you almost nothing; the serialized job costs you the critical path, and you pay that part alone. Split when you hold two things that do not depend on each other; when you hold one, do it yourself.
+Start new scopes without waiting; receive their records with `scope_join`. A split costs you almost nothing; the serialized job costs you the critical path, and you pay that part alone. Split when you hold two things that do not depend on each other; when you hold one, do it yourself. Ask for reliable deductions, not for verbatim boring chronicle, or even better, ask to do, not to say. Side Effects are all you need.
 
 ## fork.scope-id
 

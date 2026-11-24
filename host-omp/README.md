@@ -38,6 +38,10 @@ core by relative path.
 
 ## Install
 
+Resolve the core first: `cd host-omp && bun install` materializes
+`node_modules/herdchestra-lite2` at this working tree, and the host entry's bare
+import needs it even in a link install.
+
 Two modes, and `sync:plugin` refuses to blur them:
 
 ```

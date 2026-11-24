@@ -25,7 +25,8 @@
  *
  * Exit code is 0 only when the install is inspectable and consistent: a link is
  * in sync by construction, an installed copy is not this script's to police,
- * and a vendor target must match the tree after the copy.
+ * and a vendor target must match the tree after the copy. A link whose core
+ * dependency does not resolve is not runnable, so it is not in sync either.
  */
 import {
   copyFileSync,
@@ -252,8 +253,31 @@ function classifyTarget() {
 
 const target = classifyTarget();
 
+/**
+ * A link install copies nothing, but it only runs when the core resolves from
+ * the host entry: `herdchestra-host-omp` imports `herdchestra-lite2` by name,
+ * and `bun install` in the host package is what materializes that link. A
+ * linked tree without it fails at extension load, which is not "in sync".
+ */
+function coreLinkProblem(hostReal) {
+  const path = join(hostReal, CORE_INSTALL);
+  let real;
+  try {
+    real = realpathSync(path);
+  } catch {
+    return `no core package at ${path}`;
+  }
+  return real === ROOT ? null : `core package at ${path} resolves to ${real}, not ${ROOT}`;
+}
+
 if (target.kind === "link") {
   console.log(`sync-plugin: link install -> ${target.real}`);
+  const problem = coreLinkProblem(target.real);
+  if (problem) {
+    console.error(`sync-plugin: ${problem}`);
+    console.error(`a linked install still resolves its core dependency: cd ${target.real} && bun install`);
+    process.exit(1);
+  }
   console.log("the working tree is the plugin; nothing to copy");
   if (checkOnly) console.log("in sync (link install); nothing to check");
   process.exit(0);

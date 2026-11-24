@@ -6,6 +6,10 @@ All notable changes to this extension. The format follows
 
 ## [3.2.0] — 2026-11-24
 
+### Fixed — a link install without its core link is not in sync
+
+- `host-omp` imports the core by name, so a linked working tree needs `bun install` in `host-omp/` to materialize `node_modules/herdchestra-lite2`. `sync-plugin` reported that shape as "in sync" and exited 0 even when the link was missing, while the host failed at extension load with `Cannot find package 'herdchestra-lite2'`. The link branch now checks that the core resolves to this repository and exits 1 with the remedy when it does not.
+
 ### Changed — `scope_return`'s closing text is `dafny`
 
 - `scope_return`'s `markdown` argument is now `dafny`. The record already reaches the parent as narration, so the string carries what the replay drops and the content chooses its form — prose, pseudocode, a table, a code block — with density, not length, as the criterion. The fork keeps its own name: `scope_fork` still takes `fsm`.

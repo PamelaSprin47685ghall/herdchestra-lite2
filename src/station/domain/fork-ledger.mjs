@@ -7,6 +7,7 @@
 // samples even when the restored tree has no open forks.
 
 import { normalizeTotals } from "../../scope/turn-stats.mjs";
+import { markLedgerStructDirty } from "../../scope/ledger-cache.mjs";
 
 /**
  * Choose the ledger a station must use.
@@ -35,6 +36,9 @@ export function selectForkLedger({
 		const otherHasSamples = otherTotals.turns > 0 || otherTotals.turnMs > 0;
 		if (!chosenHasSamples && otherHasSamples) {
 			chosen.totals = otherTotals;
+			// The shared snapshot reuses the previous ledger copy, so a replaced
+			// totals object must be announced or the next persist keeps zeros.
+			markLedgerStructDirty(chosen);
 			filled = true;
 		}
 	}

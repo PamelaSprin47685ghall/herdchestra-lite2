@@ -7,11 +7,14 @@
 // The record is the only state. The port never keeps a keyed map, so a reload
 // restores the same clock the branch had before it stopped.
 
+import { touchRecord } from "./ledger-cache.mjs";
+
 /** Freeze a branch's clock. The first pause edge wins. */
 export function pauseClock(record, now = Date.now()) {
 	if (!record || !Number.isFinite(record.deadlineAt)) return false;
 	if (Number.isFinite(record.clockPausedAt)) return false;
 	record.clockPausedAt = Number.isFinite(now) ? now : Date.now();
+	touchRecord(record);
 	return true;
 }
 
@@ -24,6 +27,7 @@ export function resumeClock(record, now = Date.now()) {
 	record.deadlineAt += paused;
 	record.pausedMs = (Number.isFinite(record.pausedMs) ? record.pausedMs : 0) + paused;
 	record.clockPausedAt = null;
+	touchRecord(record);
 	return true;
 }
 
@@ -52,6 +56,7 @@ export function toolLimitOf(record, now = Date.now()) {
 	const at = Number.isFinite(now) ? now : Date.now();
 	if (at >= deadline && (record.overtimeAt === null || record.overtimeAt === undefined)) {
 		record.overtimeAt = at;
+		touchRecord(record);
 	}
 	return null;
 }
@@ -75,12 +80,14 @@ export function createClockOn(now = () => Date.now()) {
 				record.overtimeAt = null;
 				record.clockPausedAt = null;
 				record.pausedMs = 0;
+				touchRecord(record);
 				return { ok: false, code: "CLOCK_INVALID_BUDGET" };
 			}
 			record.deadlineAt = start + budget;
 			record.overtimeAt = null;
 			record.clockPausedAt = null;
 			record.pausedMs = 0;
+			touchRecord(record);
 			return { ok: true, deadlineAt: record.deadlineAt };
 		},
 		pause(record, at) {
@@ -108,6 +115,7 @@ export function createClockOff() {
 				record.overtimeAt = null;
 				record.clockPausedAt = null;
 				record.pausedMs = 0;
+				touchRecord(record);
 			}
 			return { ok: true };
 		},

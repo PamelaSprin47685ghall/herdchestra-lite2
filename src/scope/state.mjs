@@ -94,6 +94,10 @@ export function createState() {
 /** Make a flow-local view while keeping session fields shared with its owner. */
 export function createFlowState(base) {
   const flow = createState();
+  // `charges` is deliberately NOT shared: a child station observes its own host
+  // boundary, and `truncateForHostBoundary` drops every entry. Sharing the map
+  // would let a child erase the parent's refund memory. The map is bounded, so
+  // the per-child copy stays small.
   const shared = new Set(["autopilot", "relay", "pins", "brackets"]);
   // A child starts its own receive chain: the parent's receipts belong to the
   // parent's level and must not be folded twice from a child's projection.

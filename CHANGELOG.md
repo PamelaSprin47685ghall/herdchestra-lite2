@@ -4,6 +4,77 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.1] — 2026-11-24
+
+### Fixed — Esc cancels the whole scope tree
+
+- A user abort (`stopReason: "aborted"`, or an aborted signal that is not the
+  queued-message tool interrupt) now closes every descendant bracket the level
+  still owes a receive — running, ready and blocked alike — and hands the
+  running ids to the host wiring, which stops each child agent once. Before
+  this, `onSessionStop` treated an abort as "the host already stopped" and
+  returned with no side effect, so children kept working after the user
+  pressed Esc.
+- The ledger closes first, so the reason a parent reads is `cancelled by the
+  parent scope`, never a prompt that resolved with "aborted". A second Esc and
+  a child's own aborted stop are no-ops.
+- A provider error and a tool interrupt still leave children alive: both are
+  retryable, and a steer must not end the branch.
+- The spawn ticket registers its live session with the wiring, skips the
+  prompt when its fork was cancelled during session creation, and drops its
+  own outcome once the ledger closed the bracket.
+
+### Changed — a serialized ledger shares its records instead of recopying them
+
+- `serializeLedgerShared` keeps one immutable snapshot per ledger and rebuilds
+  only the records that moved since it; an untouched record is the same object
+  in the old and the new snapshot, and an untouched ledger returns the previous
+  snapshot whole. `serializeLedger` still returns a full copy, because callers
+  that write into the result rely on owning it.
+- The persistence anchor now serializes with the shared form. Measured on a
+  200-fork ledger (197 KB): 1000 consecutive passes over an unchanged ledger
+  return the same object in 0.16 ms, changing one record copies one record
+  instead of 200, and keeping 200 successive snapshots costs 1.03 MB of heap
+  where full copies cost about 39 MB.
+- Dirty marks live in module-private `WeakMap`s, so no ledger or record gains a
+  property: the JSON shape, `validRecord` and `validLedger` are unchanged.
+  A hand-built ledger nobody registered still serializes by value.
+- `foldStateChain` replays a chain into one working tree: the checkpoint is
+  cloned once and each delta patches it in place, instead of cloning the whole
+  state once per delta (up to 64 times per cold start). `applyDelta` keeps its
+  contract and still never mutates its base; a written value is cloned so a
+  stored operation can never be corrupted through the replayed state.
+- `annotateFork` copies `targets`, so a later amend no longer pushes into the
+  array the caller handed in.
+
+### Fixed — one panhandled charge no longer discards the session on reload
+
+- `accounting` records an admitted call that had no budget left as
+  `{ amount: 0, panhandled: true }`. `copyCharges` dropped the flag and
+  `validCharges` required a positive amount, so a single such entry failed
+  validation and `deserializeState` fell back to `createState`: every fork,
+  pin and relay of the session was lost on the next reload.
+- The flag now survives serialization, and a zero amount is accepted exactly
+  when it is flagged. A zero amount without the flag still fails.
+
+### Changed — charge receipts and panhandle history are bounded
+
+- A closed branch drops its `record.charges` map (`markReady`, `takeReady`,
+  `supersedeFork`, `abandon`) and announces the change to the snapshot cache.
+  No amend can name a closed branch's tool call, so the receipts were dead
+  weight; `spent` and `remaining` stay exact.
+- A running branch keeps the newest 16 distinct `groupKey`s and the newest 32
+  ungrouped calls, which is one amend window rather than the branch's history.
+- `state.charges` drops the entries of every branch that is no longer running
+  or blocked once it passes 16 entries, and caps the charging branch at the
+  same window. `charges` stays out of `createFlowState`'s shared set on
+  purpose: a child station observes its own host boundary, and sharing the map
+  would let a child erase the parent's refund memory.
+- `record.panhandles` keeps the newest 16 entries and carries
+  `panhandleTotal` and `panhandleTools`, so the parent still reads the true
+  count ("panhandled 50x") while the record stops growing. A record from an
+  older snapshot has both counters seeded from the entries it holds.
+
 ## [3.5.0] — 2026-11-24
 
 ### Changed — a scope is sized from `2n`, not `10n`

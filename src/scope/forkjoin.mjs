@@ -11,6 +11,15 @@ import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
 import { publicScopeId } from "./scope-id.mjs";
 import { grantBudget } from "./panhandle.mjs";
 import { formatAmount } from "./turns.mjs";
+import {
+  ledgerMeta,
+  markLedgerStructDirty,
+  markRecordDirty,
+  registerLedger,
+  registerRecord,
+} from "./ledger-cache.mjs";
+
+export { markLedgerStructDirty, markRecordDirty, touchRecord } from "./ledger-cache.mjs";
 
 const listeners = Symbol("ledger listeners");
 
@@ -19,7 +28,11 @@ export function subscribeLedger(ledger, listener) {
   ledger[listeners].add(listener);
 }
 
+// Every caller of `changed` has just moved a counter, a queue, a level list,
+// or a record. A record-only change may reach here too; the serializer then
+// rebuilds the small top-level arrays and still reuses every untouched record.
 function changed(ledger) {
+  markLedgerStructDirty(ledger);
   for (const listener of ledger[listeners] ?? []) listener();
 }
 
@@ -42,8 +55,18 @@ export function reviveBlockedFork(ledger, forkId, startedAt = Date.now()) {
 export function annotateFork(ledger, forkId, fields = {}) {
   const record = forkOf(ledger, forkId);
   if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (fields.targets !== undefined) record.targets = fields.targets;
-  if (fields.model !== undefined) record.model = fields.model;
+  // The record owns its target list: a later amend pushes into it, and that
+  // push must not grow the array the caller handed in.
+  if (fields.targets !== undefined) {
+    record.targets = Array.isArray(fields.targets)
+      ? fields.targets.map((target) => target)
+      : fields.targets;
+    markRecordDirty(ledger, forkId);
+  }
+  if (fields.model !== undefined) {
+    record.model = fields.model;
+    markRecordDirty(ledger, forkId);
+  }
   return { ok: true, record };
 }
 
@@ -79,7 +102,7 @@ function put(object, key, value) {
 }
 
 export function createBracketLedger() {
-  return {
+  const ledger = {
     version: 2,
     // Monotonic event counter shared by fork registration and join
     // completion, so an interval can compare positions from both sides.
@@ -96,6 +119,8 @@ export function createBracketLedger() {
     // concurrent requests add k durations and k turns. Missing on old snapshots.
     totals: emptyTotals(),
   };
+  registerLedger(ledger);
+  return ledger;
 }
 
 /**
@@ -185,8 +210,10 @@ export function registerFork(ledger, spec, options = {}) {
   if (clock && typeof clock.start === "function") {
     clock.start(record, timeBudgetMs, startedAt);
   }
+  registerRecord(ledger, record);
   put(ledger.forks, s.forkId, record);
   ledger.order.push(s.forkId);
+  markLedgerStructDirty(ledger);
   return { ok: true, fork: record };
 }
 
@@ -226,6 +253,7 @@ export function markReady(ledger, forkId, outcome = {}) {
   if (typeof outcome?.record === "string") record.record = outcome.record;
   const queue = queueFor(ledger, record.ownerId);
   queue.push(forkId);
+  settleCharges(ledger, record);
   changed(ledger);
   return { ok: true, fork: record, position: queue.length - 1 };
 }
@@ -275,6 +303,7 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
       }
     }
   }
+  markRecordDirty(ledger, forkId);
   return {
     ok: true,
     added: { tools: { ...granted.tools }, seconds: granted.seconds },
@@ -296,6 +325,7 @@ export function supersedeFork(ledger, forkId, now = Date.now()) {
   }
   record.supersededAt = Number.isFinite(now) ? now : Date.now();
   removeFromQueues(ledger, forkId);
+  settleCharges(ledger, record);
   changed(ledger);
   return { ok: true, record };
 }
@@ -380,6 +410,7 @@ export function takeReady(ledger, options = {}) {
     if (!Object.hasOwn(ledger.levels, levelKey)) put(ledger.levels, levelKey, []);
     ledger.levels[levelKey].push(record.forkId);
     record.levelKey = levelKey;
+    settleCharges(ledger, record);
     changed(ledger);
     return { ok: true, fork: record };
   }
@@ -545,8 +576,53 @@ export function abandon(ledger, forkId, reason = null) {
   record.outcome = FAILED;
   record.reason = typeof reason === "string" && reason !== "" ? reason : null;
   removeFromQueues(ledger, forkId);
+  settleCharges(ledger, record);
   changed(ledger);
   return { ok: true, fork: record };
+}
+
+/**
+ * Close a whole subtree: every fork under `ownerId` that has not already
+ * closed. Leaves close before their parents, so a parent's abandoned record
+ * never leaves a child open behind it.
+ *
+ * Running ids come back to the caller because a ledger close cannot stop a
+ * live agent. Only the wiring holds that handle, so the station hands the ids
+ * over at its tail; the ledger stays the source of truth either way.
+ */
+export function abandonDescendants(ledger, ownerId, reason = null) {
+  if (!ledger || typeof ledger !== "object") {
+    return { abandonedIds: [], runningIds: [] };
+  }
+  const levels = [];
+  const seen = new Set();
+  let frontier = [typeof ownerId === "string" && ownerId !== "" ? ownerId : "root"];
+  while (frontier.length > 0) {
+    const next = [];
+    for (const owner of frontier) {
+      for (const forkId of ledger.order) {
+        const record = forkOf(ledger, forkId);
+        if (!record || record.ownerId !== owner) continue;
+        if (seen.has(forkId)) continue;
+        seen.add(forkId);
+        levels.push({ forkId, status: record.status });
+        next.push(forkId);
+      }
+    }
+    frontier = next;
+  }
+  const abandonedIds = [];
+  const runningIds = [];
+  for (let index = levels.length - 1; index >= 0; index -= 1) {
+    const { forkId, status } = levels[index];
+    // Already closed: a second cancel is a no-op, and the record keeps the
+    // reason its first cancel wrote.
+    if (status === FAILED || status === JOINED) continue;
+    if (status === RUNNING) runningIds.push(forkId);
+    const decided = abandon(ledger, forkId, reason);
+    if (decided.ok) abandonedIds.push(forkId);
+  }
+  return { abandonedIds, runningIds };
 }
 
 function removeFromQueues(ledger, forkId) {
@@ -826,6 +902,91 @@ export function serializeLedger(ledger) {
 }
 
 /**
+ * True when every scalar field of the last copy still holds the live value.
+ *
+ * Container fields are skipped: the copy holds its own containers, so their
+ * identity never matches, and a container mutation is caught by the dirty mark
+ * the charge, the panhandle, and the amend leave behind.
+ */
+function settledFields(copy, record) {
+  for (const key of Object.keys(record)) {
+    const value = record[key];
+    // The copy drops undefined fields; their absence is not a change.
+    if (value === undefined) continue;
+    const previous = copy[key];
+    if (value !== null && typeof value === "object") {
+      // A container that appeared after the copy must force a new copy. An
+      // unchanged container never matches by identity, so its contents are
+      // covered by the dirty mark its mutator leaves behind.
+      if (!Object.hasOwn(copy, key)) return false;
+      continue;
+    }
+    if (previous !== value) return false;
+  }
+  return true;
+}
+
+/**
+ * A JSON-safe copy of the tree that reuses the previous copy of every record
+ * that did not move.
+ *
+ * A caller that mutates the result must use `serializeLedger`: the returned
+ * snapshot is shared with the previous one and with the cache, so a write
+ * through it would rewrite history. A caller that only reads and persists may
+ * use this one, and gets the same object back while nothing has changed.
+ */
+export function serializeLedgerShared(ledger) {
+  const meta = ledgerMeta(ledger);
+  // Nothing moved since the last snapshot: hand back the same tree. This is
+  // the steady state, and it allocates nothing.
+  if (meta && meta.snapshot && !meta.structDirty && meta.dirtyForks.size === 0) {
+    return meta.snapshot;
+  }
+  if (!validLedger(ledger)) return copyData(createBracketLedger());
+  if (!meta) return copyData(ledger);
+  const previous = meta.snapshot;
+  const forks = {};
+  const live = new Set();
+  for (const forkId of Object.keys(ledger.forks)) {
+    const record = ledger.forks[forkId];
+    live.add(forkId);
+    const kept =
+      !meta.dirtyForks.has(forkId) &&
+      previous?.forks !== undefined &&
+      Object.hasOwn(previous.forks, forkId) &&
+      meta.forkRefs.get(forkId) === record &&
+      settledFields(previous.forks[forkId], record)
+        ? previous.forks[forkId]
+        : null;
+    if (kept) {
+      put(forks, forkId, kept);
+      continue;
+    }
+    put(forks, forkId, copyData(record));
+    meta.forkRefs.set(forkId, record);
+  }
+  // A fork that left the ledger keeps no copy and no reference.
+  for (const forkId of Array.from(meta.forkRefs.keys())) {
+    if (!live.has(forkId)) meta.forkRefs.delete(forkId);
+  }
+  const next = {
+    version: ledger.version,
+    seq: ledger.seq,
+    closedSeq: ledger.closedSeq,
+    receiveSeq: ledger.receiveSeq,
+    forks,
+    order: copyData(ledger.order),
+    queues: copyData(ledger.queues),
+    levels: copyData(ledger.levels),
+    totals: copyData(ledger.totals),
+  };
+  meta.snapshot = next;
+  meta.structDirty = false;
+  meta.dirtyForks.clear();
+  return next;
+}
+
+/**
  * Rebuild a ledger from a stored snapshot.
  *
  * A running child cannot survive the process. It comes back as a failed ready
@@ -881,6 +1042,9 @@ export function restoreLedgerChecked(value) {
   // every later take guess. Refuse the snapshot as a whole, exactly as a
   // malformed value is refused, so the session starts from a clean ledger.
   if (!assertPairing(out).ok) return { ok: false, ledger: createBracketLedger() };
+  // The restored records are the live ones from now on; the clock and the
+  // panhandle reach the snapshot cache through them.
+  for (const forkId of out.order) registerRecord(out, out.forks[forkId]);
   return { ok: true, ledger: out };
 }
 
@@ -936,6 +1100,60 @@ function formatClock(ms) {
   // showed remaining equal to the budget granted and looked like a stopped clock.
   const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+// A running branch keeps the per-call receipts an amend can still reach. An
+// amend walks back one beat at a time, so the newest groups are the only ones
+// worth keeping, and an older group is evicted instead of living until the
+// scope ends.
+const MAX_CHARGE_GROUPS = 16;
+const MAX_UNGROUPED_CHARGES = 32;
+
+/**
+ * Drop the charge map of a branch that can no longer be amended.
+ *
+ * A refund names a tool call of a branch that is still running: an amend only
+ * walks back one beat of the executing scope, and a closed bracket refuses
+ * every later call. `spent` and `remaining` stay authoritative, so the budget
+ * line is unchanged; only the receipt trail goes away.
+ */
+function settleCharges(ledger, record) {
+  if (!isPlainObject(record.charges)) return;
+  record.charges = {};
+  // `settledFields` compares scalar fields only, so an emptied map is invisible
+  // to the snapshot cache. The mark forces the next snapshot to take a copy.
+  markRecordDirty(ledger, record.forkId);
+}
+
+/** Keep a running branch's receipt trail at one amend window, not at its history. */
+function boundCharges(record) {
+  const charges = record.charges;
+  if (!isPlainObject(charges)) return;
+  const groups = [];
+  const members = new Map();
+  const ungrouped = [];
+  for (const key of Object.keys(charges)) {
+    const entry = charges[key];
+    if (!isPlainObject(entry)) {
+      delete charges[key];
+      continue;
+    }
+    if (typeof entry.groupKey === "string") {
+      if (!members.has(entry.groupKey)) {
+        members.set(entry.groupKey, []);
+        groups.push(entry.groupKey);
+      }
+      members.get(entry.groupKey).push(key);
+    } else {
+      ungrouped.push(key);
+    }
+  }
+  const staleGroups = groups.slice(0, Math.max(0, groups.length - MAX_CHARGE_GROUPS));
+  for (const group of staleGroups) {
+    for (const key of members.get(group)) delete charges[key];
+  }
+  const staleCalls = ungrouped.slice(0, Math.max(0, ungrouped.length - MAX_UNGROUPED_CHARGES));
+  for (const key of staleCalls) delete charges[key];
 }
 
 function accountOf(record) {
@@ -1000,7 +1218,9 @@ export function applyCharge(ledger, forkId, charge = {}) {
     const entry = { tool, amount };
     if (groupKey !== null) entry.groupKey = groupKey;
     put(record.charges, toolCallId, entry);
+    boundCharges(record);
   }
+  markRecordDirty(ledger, forkId);
   return { ok: true, amount, ...accountOf(record) };
 }
 
@@ -1020,6 +1240,7 @@ export function applyRefund(ledger, forkId, toolCallId) {
   put(record.spent, tool, round2(Math.max(0, spent - refund)));
   put(record.remaining, tool, round2((record.remaining[tool] ?? 0) + refund));
   delete record.charges[toolCallId];
+  markRecordDirty(ledger, forkId);
   return { ok: true, refunded: refund, ...accountOf(record) };
 }
 
@@ -1043,7 +1264,11 @@ export function forkBudgetText(record, now = Date.now(), clock = null) {
         : `time remaining ${formatClock(info.leftMs)}/${formatClock(record.timeBudgetMs)}`,
     );
   }
-  const panhandled = Array.isArray(record.panhandles) ? record.panhandles.length : 0;
+  const panhandled = Number.isInteger(record.panhandleTotal)
+    ? record.panhandleTotal
+    : Array.isArray(record.panhandles)
+      ? record.panhandles.length
+      : 0;
   if (panhandled > 0) parts.push(`panhandled ${panhandled}x`);
   return parts.filter((part) => part !== "").join(", ");
 }

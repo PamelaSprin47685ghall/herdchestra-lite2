@@ -41,6 +41,24 @@ export { installCapture };
  */
 const FORK_WIRING_KEY = Symbol.for("herdchestra-lite2.fork-wiring.v1");
 
+// The reason a child agent is stopped by a cascade. Distinct from the tool
+// interrupt: that one wakes a parked join and keeps the child alive, while
+// this one ends the child because its parent is gone.
+const CASCADE_ABORT_REASON = Symbol.for("herdchestra-lite2.scope-cascade-abort.v1");
+
+/**
+ * Stop one live child agent. The host owns the session shape; the core only
+ * receives this closure through the fork wiring. A throwing abort must not
+ * turn a cascade into an exception: the ledger already holds the reason.
+ */
+function abortChildSession(session) {
+	try {
+		session?.agent?.abort?.(CASCADE_ABORT_REASON);
+	} catch (error) {
+		record("activation", error, { phase: "cascade-abort" });
+	}
+}
+
 function globalForkWiring(wiring = null) {
 	if (wiring && !globalThis[FORK_WIRING_KEY]) {
 		Object.defineProperty(globalThis, FORK_WIRING_KEY, {
@@ -143,6 +161,7 @@ export function wireExtension(
 				stationFor: (childCtx) => engine.station(childCtx),
 				refresh: attachStation,
 				stopAfterReturn: (agent) => stopAfterScopeReturn(agent),
+				abortChild: abortChildSession,
 			});
 		} catch (error) {
 			record("activation", error, { phase: "station-binding" });

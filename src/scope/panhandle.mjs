@@ -19,11 +19,53 @@ import {
   put,
 } from "./state.mjs";
 import { isFreeTool, normalizeToolName } from "./turns.mjs";
+import { touchRecord } from "./ledger-cache.mjs";
+
+/**
+ * How many recent admissions one record keeps in full.
+ *
+ * The count and the tool list are cumulative; only the entries are bounded.
+ * A long branch can panhandle hundreds of calls, and each entry used to stay
+ * on the record (and in every snapshot) for the life of the session.
+ */
+export const MAX_PANHANDLES = 16;
+
+/** Tool names in first-appearance order, from a list of entries. */
+function uniqueTools(entries) {
+  const tools = [];
+  for (const entry of entries) {
+    const tool = typeof entry?.tool === "string" ? entry.tool : "";
+    if (tool !== "" && !tools.includes(tool)) tools.push(tool);
+  }
+  return tools;
+}
+
+/**
+ * Give a record its cumulative counters, seeding them from the entries it
+ * already carries. A record restored from an older snapshot has entries and
+ * neither counter; this is where it gains them, and the counts start out
+ * exactly right for the entries it holds.
+ */
+function upgradeCounters(record) {
+  if (!Array.isArray(record.panhandles)) record.panhandles = [];
+  if (!Number.isInteger(record.panhandleTotal) || record.panhandleTotal < 0) {
+    record.panhandleTotal = record.panhandles.length;
+  }
+  if (!Array.isArray(record.panhandleTools)) {
+    record.panhandleTools = uniqueTools(record.panhandles);
+  }
+}
 
 /**
  * Record one call that ran past its turns. The panhandle count records
  * admissions: one entry per distinct call, never one per retry, so a reloaded
  * branch shows the same number its caller will read.
+ *
+ * The count is cumulative for the whole branch; the entry list keeps the most
+ * recent `MAX_PANHANDLES` admissions only. Retry dedupe reads that window, so
+ * a retry of an admission that has already fallen out of it counts again. That
+ * is the one thing the window cannot do, and it needs 16 further admissions of
+ * other calls to happen.
  */
 export function notePanhandled(record, tool, options = {}) {
   if (!record || typeof record !== "object") {
@@ -32,28 +74,39 @@ export function notePanhandled(record, tool, options = {}) {
   if (!isNonEmptyString(tool)) {
     return failure("INVALID_TOOL", "A panhandled call must name its tool.");
   }
-  if (!Array.isArray(record.panhandles)) record.panhandles = [];
+  upgradeCounters(record);
   const at = Number.isFinite(options.now) ? options.now : Date.now();
   const callId = typeof options.callId === "string" && options.callId !== "" ? options.callId : null;
   // One entry per call: a call that both ran past its turns and ended past
   // the deadline is one debt, not two.
   if (callId !== null) {
     const seen = record.panhandles.find((entry) => entry?.callId === callId);
-    if (seen) return { ok: true, count: record.panhandles.length, tool };
+    if (seen) return { ok: true, count: record.panhandleTotal, tool };
   }
   record.panhandles.push(callId === null ? { at, tool } : { at, tool, callId });
-  return { ok: true, count: record.panhandles.length, tool };
+  record.panhandleTotal += 1;
+  if (!record.panhandleTools.includes(tool)) record.panhandleTools.push(tool);
+  if (record.panhandles.length > MAX_PANHANDLES) {
+    record.panhandles.splice(0, record.panhandles.length - MAX_PANHANDLES);
+  }
+  touchRecord(record);
+  return { ok: true, count: record.panhandleTotal, tool };
 }
 
-/** Read-only view of the panhandle count, for a receipt or a summary line. */
+/**
+ * Read-only view of the panhandle count, for a receipt or a summary line.
+ *
+ * A record from before the counters existed reports its entries; a record that
+ * has counted past the window reports the cumulative total.
+ */
 export function panhandleCount(record) {
   const entries = Array.isArray(record?.panhandles) ? record.panhandles : [];
-  const tools = [];
-  for (const entry of entries) {
-    const tool = typeof entry?.tool === "string" ? entry.tool : "";
-    if (tool !== "" && !tools.includes(tool)) tools.push(tool);
-  }
-  return { count: entries.length, tools };
+  const counted =
+    Number.isInteger(record?.panhandleTotal) && record.panhandleTotal >= 0;
+  const tools = Array.isArray(record?.panhandleTools)
+    ? record.panhandleTools.filter((tool) => typeof tool === "string" && tool !== "")
+    : uniqueTools(entries);
+  return { count: counted ? record.panhandleTotal : entries.length, tools: [...tools] };
 }
 
 /**
@@ -162,5 +215,6 @@ export function grantBudget(record, request = {}, options = {}) {
     // A grant that moves the deadline back into the future ends overtime.
     record.overtimeAt = null;
   }
+  touchRecord(record);
   return { ok: true, tools: { ...tools }, seconds, record };
 }

@@ -41,6 +41,10 @@ export {
   statsOf,
   restoreLedger,
   serializeLedger,
+  serializeLedgerShared,
+  markLedgerStructDirty,
+  markRecordDirty,
+  touchRecord,
   validLedger,
   applyCharge,
   applyRefund,
@@ -63,6 +67,7 @@ export {
 } from "./accounting.mjs";
 export {
   serializeState,
+  serializeStateShared,
   deserializeState,
   diffState,
   applyDelta,

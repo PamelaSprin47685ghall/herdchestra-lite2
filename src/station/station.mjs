@@ -31,9 +31,11 @@ import {
 	createTurnClock,
 	createUsageLedger,
 	finishRequest,
+	markLedgerStructDirty,
 	normalizeTotals,
 	planStateEntry,
 	serializeState,
+	serializeStateShared,
 	unreceivedChildren,
 } from "../scope/index.mjs";
 import { recordTurnSample } from "../scope/turn-stats.mjs";
@@ -82,6 +84,7 @@ import {
 	recordNaturalStop,
 } from "./handoff-state.mjs";
 import {
+	cancelDescendants,
 	onAssistantMessage,
 	onBeforeAgentStart,
 	onContext,
@@ -232,7 +235,7 @@ export class SessionStation {
 			state: () => this.state,
 			initialState: hasBase ? serializeState(this.state) : null,
 			initialEntryId: hasBase ? persistedBaseId(manager) : null,
-			serialize: serializeState,
+			serialize: serializeStateShared,
 			plan: planStateEntry,
 			type: SESSION_STATE_TYPE,
 			noteError: (domain, error) => this.noteError(domain, error),
@@ -280,7 +283,12 @@ export class SessionStation {
 			const otherTotals = normalizeTotals(other.totals);
 			const chosenHasSamples = chosenTotals.turns > 0 || chosenTotals.turnMs > 0;
 			const otherHasSamples = otherTotals.turns > 0 || otherTotals.turnMs > 0;
-			if (!chosenHasSamples && otherHasSamples) chosen.totals = otherTotals;
+			if (!chosenHasSamples && otherHasSamples) {
+				chosen.totals = otherTotals;
+				// The shared serializer reuses the previous copy of a ledger, so
+				// a replaced totals object must be announced before the next write.
+				markLedgerStructDirty(chosen);
+			}
 		}
 		this.brackets = chosen;
 		if (forkWiring && key !== null && (chosen !== indexed || !indexedLive)) {
@@ -400,6 +408,10 @@ export class SessionStation {
 		if (!totals) return null;
 		const delta = finishRequest(this.turnClock, totals, now);
 		if (delta == null) return null;
+		// `finishRequest` adds to `ledger.totals` in place. The shared snapshot
+		// reuses the previous ledger copy, so a moved total must be announced or
+		// the next persisted snapshot would keep the old number.
+		markLedgerStructDirty(this.brackets);
 		const key = modelKeyOf(message);
 		if (key !== "") {
 			this.turnModelKey = key;
@@ -1073,6 +1085,15 @@ export class SessionStation {
 	onSessionStop(ctx, evidence = null) {
 		this.abandonRequestSample();
 		return onSessionStop(this, ctx, evidence);
+	}
+
+	/**
+	 * End every descendant this level still owes a receive. Called by the
+	 * session-stop gate when the user aborts the turn, and safe to call again:
+	 * a second pass finds no open descendant and changes nothing.
+	 */
+	cancelDescendants() {
+		return cancelDescendants(this);
 	}
 
 	onSessionSwitch(event, ctx) {

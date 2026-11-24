@@ -8,6 +8,9 @@ import {
 	truncateForHostBoundary,
 	unreceivedChildren,
 } from "../scope/index.mjs";
+import { abandonDescendants } from "../scope/forkjoin.mjs";
+import { notifyWaiters } from "../scope/fork-registry.mjs";
+import { TOOL_INTERRUPT_ABORT_REASON } from "../tools/tickets.mjs";
 import { beatKey, toolCalls } from "../transcript/index.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
@@ -296,12 +299,56 @@ function onContext(station, messages, ctx, firstTurn = null) {
 	}
 }
 
+/**
+ * Cancel every descendant this level still owes a receive.
+ *
+ * Esc ends the whole branch, not only the station that saw it. The ledger
+ * closes each descendant before the live agent is stopped, so the reason the
+ * parent reads is the cancellation and not a prompt that resolved with
+ * "aborted". Running ids go to the host through the abort port because only
+ * the wiring holds a session handle; the ledger stays the source of truth.
+ */
+const CANCELLED_BY_PARENT = "cancelled by the parent scope";
+
+export function cancelDescendants(station, reason = CANCELLED_BY_PARENT) {
+	const ledger =
+		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
+	if (!ledger || typeof ledger !== "object") {
+		return { abandonedIds: [], runningIds: [] };
+	}
+	const ownerId = ownerIdOf(station) ?? "root";
+	const { abandonedIds, runningIds } = abandonDescendants(ledger, ownerId, reason);
+	if (abandonedIds.length === 0) return { abandonedIds, runningIds };
+	const wait =
+		typeof station.forkWaitPort === "function" ? station.forkWaitPort() : null;
+	// A join parked on this level wakes now: its child is gone, so waiting for
+	// a return that will never come is a deadlock.
+	notifyWaiters(wait?.registry);
+	// `persistLedger` is the station's own seam: a child's identity points it
+	// at the root branch, and a bare station falls back to its own persist.
+	if (typeof station.persistLedger === "function") station.persistLedger();
+	else if (typeof station.persist === "function") station.persist();
+	// Tail position: every state commit above lands before the agents stop.
+	if (runningIds.length > 0 && typeof station.abortChildrenPort === "function") {
+		station.abortChildrenPort(runningIds);
+	}
+	return { abandonedIds, runningIds };
+}
+
 function onSessionStop(station, ctx, evidence = null) {
-	// The host reports a stop it already aborted, or one whose assistant
-	// message ended in an error. Neither is user intent to stop, and both
-	// must bypass every relay decision. Keeping the test here leaves the hook
-	// a pure binding and puts the rule beside the state it protects.
-	if (evidence?.signal?.aborted || evidence?.reason === "aborted" || evidence?.reason === "error") {
+	// The host reports three kinds of stop. A user abort (Esc) ends the scope
+	// tree: it is a decision about the branch, not about one turn. An errored
+	// turn and a tool-interrupt steer leave the children alive and retryable,
+	// so they bypass every relay decision without cancelling anything.
+	const signal = evidence?.signal ?? null;
+	const aborted =
+		evidence?.reason === "aborted" ||
+		(Boolean(signal?.aborted) && signal?.reason !== TOOL_INTERRUPT_ABORT_REASON);
+	if (aborted) {
+		if (typeof station.cancelDescendants === "function") station.cancelDescendants();
+		return undefined;
+	}
+	if (evidence?.signal?.aborted || evidence?.reason === "error") {
 		return undefined;
 	}
 	const ledger =

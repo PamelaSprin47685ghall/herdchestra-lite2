@@ -22,7 +22,7 @@ const errors = loadDoc("errors");
 // The agent loop aborts an interruptible tool's signal with this registered
 // symbol when a queued user message wants the model. `Symbol.for` resolves to
 // the host's symbol without importing its package.
-const TOOL_INTERRUPT_ABORT_REASON = Symbol.for("pi-agent-core.tool-interrupt");
+export const TOOL_INTERRUPT_ABORT_REASON = Symbol.for("pi-agent-core.tool-interrupt");
 
 function isUserInputInterrupt(signal) {
 	return signal?.aborted === true && signal.reason === TOOL_INTERRUPT_ABORT_REASON;

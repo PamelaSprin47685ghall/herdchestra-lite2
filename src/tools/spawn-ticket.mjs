@@ -19,12 +19,24 @@ import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
 import { forkOf } from "../scope/forkjoin.mjs";
 import { childReturnNudge } from "../scope/return-nudge.mjs";
 
-
-
 // A child that stops without scope_return submits nothing. The ticket asks it
 // to return; after this many refusals the child is recorded as failed, so a
 // runaway stop loop cannot burn the branch forever.
 const MAX_RETURN_NUDGES = 2;
+
+/**
+ * A fork the parent cancelled owns the reason the parent reads.
+ *
+ * The ledger is the source of truth: a cascade closes the record first, then
+ * stops the agent. Anything this ticket writes afterwards describes work the
+ * user already ended, so it is dropped. An unpublished fork (no ledger entry,
+ * as a direct unit test builds) has nothing to contradict and is reported.
+ */
+function isCancelled(ledger, forkId) {
+	const record = forkOf(ledger, forkId);
+	if (!record) return false;
+	return record.status !== "running" && record.status !== "ready";
+}
 
 function messagesOf(session) {
 	// The live host keeps the turn list on the agent state. A test double or a
@@ -75,6 +87,7 @@ export async function spawnChildTicket(spec, ports) {
 	let detachDisplay = null;
 	let detachTermination = null;
 	let detached = false;
+	let unregisterRunning = null;
 	const detach = () => {
 		if (detached) return;
 		detached = true;
@@ -87,7 +100,10 @@ export async function spawnChildTicket(spec, ports) {
 	// The child's own scope_return freezes the record before the parent can
 	// take the bracket. That record wins: the spawner's later copy describes
 	// the same work and must never replace it.
-	const writeOutcome = (outcome) => writeFrozenOutcome(registry, spec.forkId, outcome);
+	const writeOutcome = (outcome) => {
+		if (isCancelled(ledger, spec.forkId)) return;
+		writeFrozenOutcome(registry, spec.forkId, outcome);
+	};
 	try {
 		created = await createSession(spec);
 		if (!created || created.ok !== true || !created.session) {
@@ -114,6 +130,15 @@ export async function spawnChildTicket(spec, ports) {
 			return finish();
 		}
 		session = created.session;
+		// Register the host handle before the first prompt. A cancellation that
+		// lands while this ticket is still assembling must be able to stop the
+		// agent, and must win over the prompt below.
+		ports.registerRunning?.(spec.forkId, () => ports.abortChild?.(session));
+		unregisterRunning = () => ports.unregisterRunning?.(spec.forkId);
+		// The parent may have cancelled this fork while the host was creating
+		// the session. The ledger holds the reason; starting a prompt after
+		// that would resurrect work the user already ended.
+		if (isCancelled(ledger, spec.forkId)) return finish();
 		// The host UI subscribes to the root session only. Attach the child's
 		// presentation stream before its first prompt so text and tool progress
 		// are visible while the child works, not only when the parent joins.
@@ -188,7 +213,8 @@ export async function spawnChildTicket(spec, ports) {
 		await deliverRequirements();
 		// A natural stop submits nothing. Only scope_return closes the bracket,
 		// so a RUNNING bracket after the prompt proves the child stopped short.
-		// The ticket says so and hands the loop back, once per stop.
+		// The ticket says so and hands the loop back, once per stop. A record a
+		// cascade already closed ends the loop without a nudge.
 		let bracket = forkOf(ledger, spec.forkId);
 		let nudges = 0;
 		let unpublished = false;
@@ -237,6 +263,7 @@ export async function spawnChildTicket(spec, ports) {
 		report?.("fork", error, { forkId: spec.forkId });
 		return finish();
 	} finally {
+		unregisterRunning?.();
 		detachTermination?.();
 		if (created?.limitations?.length > 0) {
 			report?.("fork", new Error("limits"), {

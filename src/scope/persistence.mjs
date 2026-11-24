@@ -14,6 +14,7 @@ import {
   createBracketLedger,
   restoreLedgerChecked,
   serializeLedger,
+  serializeLedgerShared,
   validLedger,
 } from "./forkjoin.mjs";
 
@@ -38,6 +39,8 @@ function copyCharges(source) {
     if (typeof charge.ownerId === "string") copied.ownerId = charge.ownerId;
     else if (typeof charge.scopeId === "string") copied.ownerId = charge.scopeId;
     if (typeof charge.groupKey === "string") copied.groupKey = charge.groupKey;
+    // Without this flag a zero-amount charge reads as corrupt on reload.
+    if (charge.panhandled === true) copied.panhandled = true;
     put(out, key, copied);
   }
   return out;
@@ -80,13 +83,30 @@ function copyModelRecovery(source) {
 }
 
 export function serializeState(state) {
+  return serializeStateWith(state, serializeLedger);
+}
+
+/**
+ * Serialize for the persistence hot path.
+ *
+ * The bracket tree comes back shared with the previous snapshot of the same
+ * ledger: an untouched fork is the same object in both, and an unchanged
+ * ledger is not rebuilt at all. The result is read-only and must never be
+ * written through, because the previous entry still holds the same records.
+ * A caller that writes to a serialized state must use `serializeState`.
+ */
+export function serializeStateShared(state) {
+  return serializeStateWith(state, serializeLedgerShared);
+}
+
+function serializeStateWith(state, serializeBrackets) {
   return {
     version: VERSION,
     startedAt: Number.isFinite(state.startedAt) ? state.startedAt : Date.now(),
     seq: state.seq ?? 0,
     charges: copyCharges(state.charges),
     amends: Array.isArray(state.amends) ? state.amends.slice() : [],
-    brackets: serializeLedger(state.brackets),
+    brackets: serializeBrackets(state.brackets),
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
     autopilot: state.autopilot === true,
@@ -143,10 +163,19 @@ function validCharges(value) {
     if (
       typeof charge.amount !== "number" ||
       !Number.isFinite(charge.amount) ||
-      charge.amount <= 0
+      charge.amount < 0
     ) {
       return false;
     }
+    if (charge.panhandled !== undefined && typeof charge.panhandled !== "boolean") {
+      return false;
+    }
+    // A panhandled call is admitted at zero: the branch had nothing left to
+    // spend, and the call still ran. It is the only zero-amount charge that
+    // may be stored. Rejecting it here discarded the whole session on reload,
+    // because one unreadable charge failed `validCharges` and `deserializeState`
+    // starts over from `createState`.
+    if (charge.amount === 0 && charge.panhandled !== true) return false;
     if (charge.groupKey !== undefined && typeof charge.groupKey !== "string") {
       return false;
     }
@@ -368,9 +397,14 @@ function cloneValue(value) {
     : JSON.parse(JSON.stringify(value));
 }
 
-/** Apply operations to a copy of `base`. The input is never mutated. */
-export function applyDelta(base, ops) {
-  const root = cloneValue(base);
+/**
+ * Apply operations to `root` in place.
+ *
+ * Every written value is cloned first, so no operation payload is ever aliased
+ * into `root`. Mutating the result later cannot corrupt the stored operations,
+ * and reusing the same `ops` twice cannot corrupt the result.
+ */
+function applyOpsInPlace(root, ops) {
   if (!Array.isArray(ops)) return root;
   for (const op of ops) {
     if (!Array.isArray(op?.path) || op.path.length === 0) continue;
@@ -392,12 +426,17 @@ export function applyDelta(base, ops) {
     if (parent === undefined || parent === null) continue;
     const key = op.path[op.path.length - 1];
     if (op.op === "set") {
-      parent[key] = op.value;
+      parent[key] = cloneValue(op.value);
     } else if (op.op === "del") {
       delete parent[key];
     }
   }
   return root;
+}
+
+/** Apply operations to a copy of `base`. The input is never mutated. */
+export function applyDelta(base, ops) {
+  return applyOpsInPlace(cloneValue(base), ops);
 }
 
 /**
@@ -425,6 +464,11 @@ export function planStateEntry(prev, next, writesSinceCheckpoint = 0) {
 /**
  * Replay a chain, oldest first, into one serialized state.
  *
+ * The chain is the only owner of the result, so replay mutates one working
+ * tree instead of copying the whole state once per delta: a checkpoint clones
+ * its state once, and every following delta patches that tree in place. The
+ * input entries are never mutated and never aliased into the result.
+ *
  * @param {unknown[]} entries Stored payloads, oldest first.
  * @returns {object|null} The state, or null when a delta has no anchor.
  */
@@ -434,9 +478,9 @@ export function foldStateChain(entries) {
     const entry = normalizeStateEntry(raw);
     if (entry.kind === "delta") {
       if (base === null) return null;
-      base = applyDelta(base, entry.ops);
+      applyOpsInPlace(base, entry.ops);
     } else {
-      base = entry.state;
+      base = cloneValue(entry.state);
     }
   }
   return base;

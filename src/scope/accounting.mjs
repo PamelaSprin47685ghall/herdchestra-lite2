@@ -19,6 +19,64 @@ import { loadDoc, render } from "../prompts/index.mjs";
 
 const E = loadDoc("errors");
 
+// A charge entry exists to answer two questions: was this call already paid,
+// and what did the beat an amend retires spend. Both concern a branch that is
+// still running, so an entry of a closed branch is dead weight: no amend can
+// name it, and the fork record's `remaining` already holds the truth. The map
+// is only inspected once it passes `CHARGE_PRUNE_AT`, which keeps a long
+// session flat without putting a cost on the ordinary turn.
+const MAX_CHARGE_GROUPS = 16;
+const MAX_UNGROUPED_CHARGES = 32;
+
+/** True while the branch that owns an entry can still be amended. */
+function amendable(ledger, ownerId) {
+  if (!ledger || typeof ownerId !== "string") return false;
+  const record = forkOf(ledger, ownerId);
+  if (!record) return false;
+  return record.status === "running" || record.status === "blocked";
+}
+
+/** Keep `state.charges` proportional to the work in flight, not to history. */
+function boundStateCharges(state, ledger, ownerId) {
+  const charges = state.charges;
+  if (!isPlainObject(charges)) return;
+  const keys = Object.keys(charges);
+  // No branch can be over its cap while the whole map is this small, so the
+  // ordinary turn pays a length check and nothing else.
+  if (keys.length <= MAX_CHARGE_GROUPS) return;
+  const groups = [];
+  const members = new Map();
+  const ungrouped = [];
+  for (const key of keys) {
+    const entry = charges[key];
+    if (!isPlainObject(entry)) {
+      delete charges[key];
+      continue;
+    }
+    const owner = typeof entry.ownerId === "string" ? entry.ownerId : null;
+    if (owner !== null && owner !== ownerId && !amendable(ledger, owner)) {
+      delete charges[key];
+      continue;
+    }
+    if (owner !== ownerId) continue;
+    if (typeof entry.groupKey === "string") {
+      if (!members.has(entry.groupKey)) {
+        members.set(entry.groupKey, []);
+        groups.push(entry.groupKey);
+      }
+      members.get(entry.groupKey).push(key);
+    } else {
+      ungrouped.push(key);
+    }
+  }
+  const staleGroups = groups.slice(0, Math.max(0, groups.length - MAX_CHARGE_GROUPS));
+  for (const group of staleGroups) {
+    for (const key of members.get(group)) delete charges[key];
+  }
+  const staleCalls = ungrouped.slice(0, Math.max(0, ungrouped.length - MAX_UNGROUPED_CHARGES));
+  for (const key of staleCalls) delete charges[key];
+}
+
 /**
  * Charge one tool call against the branch that owns it.
  *
@@ -77,6 +135,7 @@ export function chargeBranch(state, ledger, params = {}) {
         amount: 0,
         panhandled: true,
       });
+      boundStateCharges(state, ledger, ownerId);
     }
     return {
       ok: true,
@@ -91,6 +150,7 @@ export function chargeBranch(state, ledger, params = {}) {
     const entry = { ownerId, tool, amount: charged.amount };
     if (typeof groupKey === "string" && groupKey !== "") entry.groupKey = groupKey;
     put(state.charges, toolCallId, entry);
+    boundStateCharges(state, ledger, ownerId);
   }
   return charged;
 }

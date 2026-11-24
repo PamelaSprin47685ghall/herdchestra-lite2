@@ -95,6 +95,9 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 		// binding, or bindHostForkPorts reads null and an accepted scope_return
 		// no longer ends the child at the tool-result boundary.
 		stopAfterReturn: options.stopAfterReturn ?? null,
+		// A cancelled subtree stops its live child agents through this host
+		// handle. The core never sees the session; the binding owns the shape.
+		abortChild: options.abortChild ?? null,
 	};
 }
 

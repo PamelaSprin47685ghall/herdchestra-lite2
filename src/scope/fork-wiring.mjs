@@ -141,6 +141,29 @@ export function attachBaseForkPorts(station, wiring, options = {}) {
 	return state;
 }
 
+// Fork id → host abort handle for children that are still running, keyed by
+// the ledger the whole tree shares. A per-station map splits the handles: the
+// child's ticket registers on the child's station while the root cascade looks
+// on the root's, so a cancelled grandchild keeps working. The ledger object is
+// the one identity every level already carries, so it is the right key.
+const RUNNING_BY_LEDGER = new WeakMap();
+
+function runningMapOf(base) {
+	const ledger = base?.ledger;
+	if (ledger && typeof ledger === "object") {
+		let running = RUNNING_BY_LEDGER.get(ledger);
+		if (!running) {
+			running = new Map();
+			RUNNING_BY_LEDGER.set(ledger, running);
+		}
+		return running;
+	}
+	// A station attached without a ledger keeps the old per-state map; nothing
+	// can cascade through it, but registration must not throw.
+	if (!(base.running instanceof Map)) base.running = new Map();
+	return base.running;
+}
+
 function spawnPortFor(station, base, binder, options, wiring) {
 	if (typeof options.createSession !== "function") return undefined;
 	const createSession = options.createSession;
@@ -178,6 +201,12 @@ function spawnPortFor(station, base, binder, options, wiring) {
 			prepareChild: options.prepareChild ?? null,
 			report: (domain, error, detail) => wiring.report?.(domain, error, detail),
 			stopAfterReturn: options.stopAfterReturn ?? null,
+			// The host handle for a live child agent. Registration happens in
+			// the ticket, right after the session exists; the cascade deletes
+			// the entry as it stops the agent, so one child is stopped once.
+			abortChild: options.abortChild ?? null,
+			registerRunning: (forkId, abort) => runningMapOf(base).set(forkId, abort),
+			unregisterRunning: (forkId) => runningMapOf(base).delete(forkId),
 			// A finished spawn is a ledger change too. The parent's branch
 			// persists it, not the child's disappearing one.
 			persistLedger: () => station.persist?.(),
@@ -227,6 +256,25 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 	// A wiring that was never created is still a legal attach; reads must not
 	// throw on it, and the spawner needs this wiring to report through.
 	const host = wiring && typeof wiring === "object" ? wiring : {};
+	// A cancelled subtree must stop the agents that are still working. The
+	// ledger close is the source of truth; this map only carries the host
+	// handle the ticket registered, and the cascade deletes each entry before
+	// it runs, so one child is stopped once.
+	if (station && typeof station === "object") {
+		station.abortChildrenPort = (forkIds) => {
+			const running = runningMapOf(base);
+			for (const forkId of forkIds ?? []) {
+				const abort = running.get(forkId);
+				if (typeof abort !== "function") continue;
+				running.delete(forkId);
+				try {
+					abort();
+				} catch (error) {
+					host.report?.("fork", error, { forkId, phase: "cascade" });
+				}
+			}
+		};
+	}
 	const existing = base?.binder ? base : null;
 	if (existing) {
 		if (Object.hasOwn(options, "display")) existing.binder.updateDisplay(options.display);

@@ -170,6 +170,51 @@ describe("projectContext", () => {
 		expect(result.usage.frontier).toBe(1);
 	});
 
+	test("a tool-calling opening reports toolUse and drops streaming residue", () => {
+		const calling = [
+			{ role: "user", content: [{ type: "text", text: "go" }] },
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "checking" },
+					{
+						type: "toolCall",
+						id: "call-1",
+						name: "bash",
+						arguments: { command: "pwd" },
+						partialArgs: '{"command": "pwd"}',
+						streamIndex: 0,
+					},
+				],
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "bash",
+				content: [{ type: "text", text: "no budget" }],
+				isError: true,
+			},
+		];
+
+		const result = projectContext(
+			{ amends: [] },
+			{ original: [], modelKey: "m1", firstTurn: calling },
+		);
+
+		// A captured stream still carries the arguments being parsed. Replayed
+		// history must not: the host would treat the call as unfinished, and
+		// the toolResult that follows would lose its call.
+		expect(result.messages[1].stopReason).toBe("toolUse");
+		expect(result.messages[1].content[1]).toEqual({
+			type: "toolCall",
+			id: "call-1",
+			name: "bash",
+			arguments: { command: "pwd" },
+		});
+		expect(JSON.stringify(result.messages)).not.toContain("partialArgs");
+		expect(JSON.stringify(result.messages)).not.toContain("streamIndex");
+	});
+
 	test("an empty first turn leaves the list unchanged", () => {
 		const user = { role: "user", content: "hello", timestamp: 2 };
 		const result = projectContext({}, { original: [user], firstTurn: [] });

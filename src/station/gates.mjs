@@ -14,7 +14,7 @@ import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
 import { successorStartNudge } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { controlsIn, hostBoundaryKey } from "./messages.mjs";
-import { prependFirstTurn } from "./domain/context.mjs";
+import { firstTurnMessage, prependFirstTurn } from "./domain/context.mjs";
 import { decideToolCall } from "./domain/tool-call.mjs";
 import { PANHANDLE_TOOL } from "./domain/panhandle.mjs";
 import { dispatchOf, processedOf } from "./domain/tool-call-ledger.mjs";
@@ -255,14 +255,48 @@ function prepareRequest(station, ctx, previous, history) {
 	return next;
 }
 
+// A projection can lose the opening in two ways: it throws, or it returns the
+// list it was given. Presence, not length, decides restoration: an amendment
+// legitimately shortens the list while still carrying the opening, so a length
+// test would inject a second copy on every amended request.
+function carriesFirstTurn(messages, turn) {
+	const head = turn.map(firstTurnMessage);
+	let at = 0;
+	while (at < messages.length) {
+		const role = messages[at]?.role;
+		if (role !== "system" && role !== "developer") break;
+		at += 1;
+	}
+	if (at + head.length > messages.length) return false;
+	return head.every((message, index) => {
+		const actual = messages[at + index];
+		return actual?.role === message.role &&
+			JSON.stringify(actual?.content) === JSON.stringify(message.content);
+	});
+}
+
 function onContext(station, messages, ctx, firstTurn = null) {
 	const original = Array.isArray(messages) ? messages : [];
-	if (!managesRequest(station, ctx)) {
-		return { messages: prependFirstTurn(original, firstTurn) };
+	const injected = () => ({ messages: prependFirstTurn(original, firstTurn) });
+	// The host applies whatever this handler returns as the outbound list. A
+	// thrown error is swallowed by the extension runner, and a projection that
+	// failed returns the original list unchanged, so both failures look exactly
+	// like a first turn that was never configured: no injection, no symptom the
+	// provider can report. The opening is therefore restored on both paths.
+	try {
+		if (!managesRequest(station, ctx)) return injected();
+		// Context handlers receive a clone. Adding a Skill here would make it
+		// temporary and leave the running tool loop without it on the next call.
+		const result = station.transformContext(original, ctx, firstTurn);
+		if (Array.isArray(firstTurn) && firstTurn.length > 0) {
+			const projected = Array.isArray(result?.messages) ? result.messages : [];
+			if (!carriesFirstTurn(projected, firstTurn)) return injected();
+		}
+		return result;
+	} catch (error) {
+		station.noteError("context", error);
+		return injected();
 	}
-	// Context handlers receive a clone. Adding a Skill here would make it
-	// temporary and leave the running tool loop without it on the next call.
-	return station.transformContext(original, ctx, firstTurn);
 }
 
 function onSessionStop(station, ctx, evidence = null) {

@@ -39,9 +39,27 @@ function firstTurnUsage() {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
 }
 
-/** The recorded content is forwarded verbatim; the host adapter owns the wire shape. */
+/**
+ * The recorded content keeps its parts verbatim, apart from the state only a
+ * live stream carries. A capture records `partialArgs` and `streamIndex` while
+ * the call is still arriving; a replay is finished history, and a host that
+ * sees those flags treats the call as unfinished, leaving its `toolResult`
+ * without a call.
+ */
 function firstTurnContent(content) {
-	return content;
+	if (!Array.isArray(content)) return content;
+	return content.map((part) => {
+		if (part?.type !== "toolCall") return part;
+		const { partialArgs, streamIndex, ...rest } = part;
+		return rest;
+	});
+}
+
+/** A turn that ends in a tool call stopped to use it, not to answer. */
+function firstTurnStopReason(content) {
+	const calling =
+		Array.isArray(content) && content.some((part) => part?.type === "toolCall");
+	return calling ? "toolUse" : "stop";
 }
 
 /**
@@ -64,7 +82,7 @@ export function firstTurnMessage(message) {
 			provider: FIRST_TURN_PROVIDER,
 			model: FIRST_TURN_MODEL,
 			usage: firstTurnUsage(),
-			stopReason: "stop",
+			stopReason: firstTurnStopReason(content),
 			timestamp: FIRST_TURN_TIMESTAMP,
 			attribution: "assistant",
 		};

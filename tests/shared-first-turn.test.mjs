@@ -55,6 +55,19 @@ describe("shared first turn", () => {
 		expect(messages[3]).toBe(user);
 	});
 
+	test("replays the call as finished history, not a stream in flight", () => {
+		const head = loadSharedFirstTurn();
+		const assistant = prependFirstTurn([], head)[1];
+
+		// A capture records partialArgs/streamIndex while the call arrives. A
+		// replayed round must not: the host would leave the call unfinished and
+		// the toolResult would have no call to answer.
+		expect(JSON.stringify(head)).not.toContain("partialArgs");
+		expect(JSON.stringify(head)).not.toContain("streamIndex");
+		expect(assistant.stopReason).toBe("toolUse");
+		expect(head[1].content[1].arguments).toEqual({ command: "pwd" });
+	});
+
 	test("carries no stale model choice", () => {
 		const text = JSON.stringify(loadSharedFirstTurn());
 

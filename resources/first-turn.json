@@ -21,9 +21,7 @@
         "name": "bash",
         "arguments": {
           "command": "pwd"
-        },
-        "partialArgs": "{\"command\": \"pwd\"}",
-        "streamIndex": 0
+        }
       }
     ]
   },
@@ -34,7 +32,7 @@
     "content": [
       {
         "type": "text",
-        "text": "The root is outside all scopes and has no ordinary tool budget. Delegate the work with `scope_fork`; control tools stay available, and so does every `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…), which costs no tool point at any level."
+        "text": "The root is outside all scopes and has no ordinary tool budget. DO NOT REPEAT: delegate the work with `scope_fork`; control tools stay available, and so does every `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…), which costs no tool point at any level."
       }
     ],
     "details": {},

@@ -70,7 +70,7 @@ describe("a fork is priced by the receipt it sends", () => {
     );
     expect(probe.isError).toBeUndefined();
     expect(measured).toHaveLength(1);
-    const receiptChars = measured[0].receipt.length;
+    const receiptLength = measured[0].receipt.length;
 
     // Equality is a refusal: projected + reserve + margin must stay below the
     // window. With no reserve, no margin, base 0 and density 1, the projected
@@ -79,7 +79,7 @@ describe("a fork is priced by the receipt it sends", () => {
     const tightSpawned = [];
     const tight = handleForkCall(
       stationFor(tightLedger, {
-        forkWindowPort: () => receiptChars,
+        forkWindowPort: () => receiptLength,
         forkReservePort: () => 0,
         forkMarginPort: () => 0,
         childSpawnPort: () => (spec) => tightSpawned.push(spec),
@@ -88,7 +88,7 @@ describe("a fork is priced by the receipt it sends", () => {
     );
     expect(tight.isError).toBe(true);
     expect(tight.details.code).toBe("FORK_CONTEXT_EXCEEDED");
-    expect(tight.details.projected).toBe(receiptChars);
+    expect(tight.details.projected).toBe(receiptLength);
     expect(tightSpawned).toHaveLength(0);
     expect(tightLedger.order).toEqual([]);
 
@@ -97,7 +97,7 @@ describe("a fork is priced by the receipt it sends", () => {
     const roomSpawned = [];
     const room = handleForkCall(
       stationFor(roomLedger, {
-        forkWindowPort: () => receiptChars + 1,
+        forkWindowPort: () => receiptLength + 1,
         forkReservePort: () => 0,
         forkMarginPort: () => 0,
         childSpawnPort: () => (spec) => roomSpawned.push(spec),

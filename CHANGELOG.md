@@ -4,6 +4,14 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.3] — 2026-11-24
+
+### Changed — a wall clock is a receipt, not a fence
+
+- A scope that runs past its deadline no longer loses anything. The station stops handing the deadline to the host as a call limit, so no `AbortController` aborts an in-flight tool and no result is dropped; the host gate runs admission and accounting in one dispatch instead.
+- An over-deadline call records one debt in the same tally as a spent point, deduplicated by call id, and the caller reads it on the budget line as `panhandled Nx` with `time OVERTIME`. `scope_join` and `scope_return` still never carry the clock.
+- The `overtime-killed` error is gone with its prompt entry; `resources/prompts/tools/fork-join.md`, `README.md`, and the orchestration record now describe the deadline as a measured receipt.
+
 ## [3.2.2] — 2026-11-24
 
 ### Changed — `n` is in the schema, and a receipt is no longer a user turn

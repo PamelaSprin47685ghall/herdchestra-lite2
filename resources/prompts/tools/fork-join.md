@@ -24,7 +24,7 @@ Use tool names as keys, with non-negative integer turn budgets. Each assistant m
 
 ## fork.time
 
-The system derives the wall-clock budget. Do not pass `time`. One turn is one LLM request. The budget is the session's mean request duration times the sum of this item's tool-budget points, at least one second. The clock covers tool execution too: a bash or test run spends wall time without spending points, so an I/O-heavy scope can reach its deadline first. With no measured requests yet, the mean is one minute. Ordinary tools get at most the remaining time plus one second; waiting in `scope_join` or `scope_return` pauses that scope's clock. A call that runs past the deadline still returns its result; the overrun is recorded as a panhandle and shown on the record.
+The system derives the wall-clock budget. Do not pass `time`. One turn is one LLM request. The budget is the session's mean request duration times the sum of this item's tool-budget points, at least one second. The clock covers tool execution too: a bash or test run spends wall time without spending points, so an I/O-heavy scope can reach its deadline first. With no measured requests yet, the mean is one minute. Ordinary tools carry no deadline limit; waiting in `scope_join` or `scope_return` pauses that scope's clock. A call that runs past the deadline still returns its result; the overrun is recorded as a panhandle and shown on the record.
 
 ## fork.targets
 

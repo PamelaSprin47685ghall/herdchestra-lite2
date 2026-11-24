@@ -39,6 +39,15 @@ const noForAwait = {
 
 export default [
 	{
+		// `deer-flow` is a git submodule (bytedance/deer-flow) with its own pnpm
+		// toolchain and its own eslint config. ESLint 10 looks for a config
+		// beside each linted file, so without this global ignore `eslint .`
+		// loads `deer-flow/frontend/eslint.config.js` and dies on that
+		// submodule's uninstalled dependencies. The root test script draws the
+		// same line with `--path-ignore-patterns 'deer-flow/**'`.
+		ignores: ["deer-flow/**"],
+	},
+	{
 		// `src/scope/fork-registry.mjs` is the session-wide waiter: its Promises
 		// are what a ticket parks on, not a station method. Every other file in
 		// these three domains stays synchronous.

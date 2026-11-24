@@ -71,21 +71,22 @@ describe("amendFork", () => {
 		);
 	});
 
-	test("amending past the scope cap lands with an overage mark, not a refusal", () => {
+	test("amending adds every point the work asks for, with no ceiling", () => {
 		const { ledger, record } = open({ budget: { read: 18 } });
-		const toCap = amendFork(ledger, "f1", { budget: { read: 9 } }, { now: NOW });
-		expect(toCap.ok).toBe(true);
-		expect(toCap.overLimit).toBe(false);
-		expect(record.budget.read).toBe(27);
-
-		const toOver = amendFork(ledger, "f1", { budget: { read: 2 } }, { now: NOW });
-		expect(toOver.ok).toBe(true);
-		expect(toOver.overLimit).toBe(true);
-		expect(record.budget.read).toBe(29);
-
-		expect(amendFork(ledger, "f1", { seconds: 301 }).code).toBe(
-			"PANHANDLE_SECONDS_LIMIT",
+		const clockBefore = Number.isFinite(record.timeBudgetMs)
+			? record.timeBudgetMs
+			: 0;
+		const out = amendFork(
+			ledger,
+			"f1",
+			{ budget: { read: 11 }, seconds: 301 },
+			{ now: NOW },
 		);
+		expect(out.ok).toBe(true);
+		expect(record.budget.read).toBe(29);
+		expect(record.remaining.read).toBe(29);
+		expect(record.timeBudgetMs).toBe(clockBefore + 301_000);
+		expect(out.added).toEqual({ tools: { read: 11 }, seconds: 301 });
 	});
 });
 

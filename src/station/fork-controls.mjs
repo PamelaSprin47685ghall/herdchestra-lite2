@@ -23,15 +23,7 @@ import {
 } from "../scope/forkjoin.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { createClockOn } from "../scope/clock.mjs";
-import { deriveTimeBudgetSeconds, modelSamples, sumBudgetPoints } from "../scope/turn-stats.mjs";
-import {
-  FORK_DEFAULT_DEPTH,
-  FORK_DEFAULT_FANOUT,
-  FORK_MAX_FANOUT,
-  FORK_RECOMMENDED_DEPTH,
-  SCOPE_DEFAULT_BUDGET_POINTS,
-  SCOPE_MAX_BUDGET_POINTS,
-} from "../scope/budget.mjs";
+import { deriveTimeBudgetSeconds, modelSamples } from "../scope/turn-stats.mjs";
 import {
   decideJoinAdmission,
   decideRegister,
@@ -306,8 +298,6 @@ export function childReceiptText(spec) {
     render(S["fork.child-status"], {
       marker: scopeReceiptMarker(spec.scopeId ?? spec.forkId),
       depth: spec.childDepth,
-      defaultDepth: FORK_DEFAULT_DEPTH,
-      recommendedDepth: FORK_RECOMMENDED_DEPTH,
       fsm: spec.fsm,
       budget: budgetText(spec.budget),
       targets: targetsText(spec.targets),
@@ -374,8 +364,6 @@ function generationReceiptText({ scopeId, childDepth, generation, standing, fsm,
     render(S["fork.child-status"], {
       marker: scopeReceiptMarker(scopeId),
       depth: childDepth,
-      defaultDepth: FORK_DEFAULT_DEPTH,
-      recommendedDepth: FORK_RECOMMENDED_DEPTH,
       fsm: standing,
       budget: budgetText(budget),
       targets: targetsText(targets),
@@ -730,8 +718,6 @@ export function handleForkCall(station, call, options = {}) {
         fsm: item.fsm,
         added: out.added,
         queued: Math.max(0, (Array.isArray(target.requirements) ? target.requirements.length : 0) - before),
-        overLimit: out.overLimit === true,
-        totalPoints: out.totalPoints,
       };
       if (target.status === "blocked" && item.blocked !== true) {
         if (typeof spawner !== "function") {
@@ -947,48 +933,6 @@ export function handleForkCall(station, call, options = {}) {
     .map((id) => publicScopeId(forkOf(ledger, id)));
   if (unreceived.length > 0) {
     sections.push(render(F["fork.unreceived"], { children: unreceived.join(", ") }));
-  }
-  // Every over-cap batch already ran. The rebuke rides after the result so the
-  // next split starts from the cap instead of rediscovering it.
-  const overBudget = [];
-  for (const entry of [...started, ...continued, ...deferred]) {
-    const points = sumBudgetPoints(forkOf(ledger, entry.forkId)?.budget ?? {});
-    if (points > SCOPE_MAX_BUDGET_POINTS) {
-      overBudget.push(`${entry.scopeId} (${points} pts)`);
-    }
-  }
-  for (const entry of [...amended, ...revived]) {
-    if (entry.overLimit) {
-      overBudget.push(`${entry.scopeId} (${entry.totalPoints} pts)`);
-    }
-  }
-  if (overBudget.length > 0) {
-    sections.push(render(F["fork.over-budget"], {
-      defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
-      maxPoints: SCOPE_MAX_BUDGET_POINTS,
-      offenders: overBudget.join(", "),
-    }));
-  }
-  if (decision.items.length > FORK_MAX_FANOUT) {
-    sections.push(render(F["fork.over-fanout"], {
-      count: decision.items.length,
-      defaultFanout: FORK_DEFAULT_FANOUT,
-      maxFanout: FORK_MAX_FANOUT,
-    }));
-  }
-  // A fourth layer still runs. The note is context, not a rebuke: unlike the
-  // budget and the fan-out, depth has no floor to defend, so a deeper tree is
-  // fine when the work needs it and needs no written justification. Only a
-  // new child earns the note; amending a live fork does not.
-  const born =
-    started.length + continued.length + revived.length + deferred.length;
-  if (born > 0 && depth + 1 > FORK_RECOMMENDED_DEPTH) {
-    sections.push(render(F["fork.deep-nesting"], {
-      childDepth: depth + 1,
-      defaultDepth: FORK_DEFAULT_DEPTH,
-      recommendedDepth: FORK_RECOMMENDED_DEPTH,
-      defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
-    }));
   }
   return textResult(sections.join("\n\n"), {
     started: started.map((entry) => entry.forkId),

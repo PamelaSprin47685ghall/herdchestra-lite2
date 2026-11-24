@@ -16,7 +16,6 @@ test("every registered tool keeps its schema in the top-level request", () => {
 		"scope_context",
 		"scope_fork",
 		"scope_join",
-		"scope_panhandle",
 		"scope_return",
 		"todo",
 	]);

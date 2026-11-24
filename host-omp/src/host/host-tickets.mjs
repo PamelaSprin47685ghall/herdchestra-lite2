@@ -393,5 +393,3 @@ export const returnTicket = (station, toolCallId, params, ctx, signal = null) =>
 	returnControlTicket(station, toolCallId, params, ctx, signal, ticketDeps());
 export const scopeContextTicket = (station, toolCallId, params) =>
 	scopeContextControlTicket(station, toolCallId, params, ticketDeps());
-export const panhandleTicket = (station, toolCallId, params) =>
-	panhandleControlTicket(station, toolCallId, params, ticketDeps());

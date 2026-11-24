@@ -81,13 +81,12 @@ const UNITS = [
 const FINGERPRINTS = [
   { root: CORE_INSTALL, file: "src/relay/texts.mjs", needle: "status.flow", min: 1 },
   { root: CORE_INSTALL, file: "src/relay/texts.mjs", needle: 'case "reopened"', min: 1 },
-  // The scope protocol is the four fork/join/return/panhandle tools. The
-  // receipt chain is gone, so no needle may depend on it. The tool catalog
-  // lives in the core: the host package only loops over `engine.tools`.
+  // The scope protocol is the three fork/join/return tools. The receipt chain
+  // is gone, so no needle may depend on it. The tool catalog lives in the
+  // core: the host package only loops over `engine.tools`.
   { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_fork"', min: 1 },
   { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_join"', min: 1 },
   { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_return"', min: 1 },
-  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_panhandle"', min: 1 },
 ];
 const checkOnly = process.argv.includes("--check");
 const vendorRequested =

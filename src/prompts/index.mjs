@@ -106,7 +106,6 @@ export const DOCUMENTS = [
 	"receipts/scope",
 	"system",
 	"tools/fork-join",
-	"tools/panhandle",
 	"tools/notes",
 	"tools/todo",
 	"vibe-mode",

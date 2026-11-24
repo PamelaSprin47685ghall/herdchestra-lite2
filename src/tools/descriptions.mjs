@@ -3,21 +3,7 @@
  * this module only wires it into JSON schemas.
  */
 
-import { loadDoc, render } from "../prompts/index.mjs";
-import {
-	PANHANDLE_DEFAULT_POINTS,
-	PANHANDLE_MAX_POINTS,
-	PANHANDLE_MAX_SECONDS,
-} from "../scope/panhandle.mjs";
-import {
-	FORK_DEFAULT_DEPTH,
-	FORK_DEFAULT_FANOUT,
-	FORK_MAX_FANOUT,
-	FORK_RECOMMENDED_DEPTH,
-	SCOPE_DEFAULT_BUDGET_POINTS,
-	SCOPE_MAX_BUDGET_POINTS,
-} from "../scope/budget.mjs";
-
+import { loadDoc } from "../prompts/index.mjs";
 const notes = loadDoc("tools/notes");
 
 // `scope_context` is the one working-level control tool. The retired tool
@@ -37,26 +23,11 @@ export const PIN_CONCLUSION_DESCRIPTION = notes["pin.conclusion"];
 const forkJoin = loadDoc("tools/fork-join");
 
 export const FORK_DESCRIPTION = forkJoin["fork.tool"];
-export const FORK_FSM_DESCRIPTION = render(forkJoin["fork.fsm"], {
-	defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
-	maxPoints: SCOPE_MAX_BUDGET_POINTS,
-	defaultFanout: FORK_DEFAULT_FANOUT,
-	maxFanout: FORK_MAX_FANOUT,
-	defaultDepth: FORK_DEFAULT_DEPTH,
-	recommendedDepth: FORK_RECOMMENDED_DEPTH,
-});
-export const FORK_BUDGET_DESCRIPTION = render(forkJoin["fork.budget"], {
-	defaultPoints: SCOPE_DEFAULT_BUDGET_POINTS,
-	maxPoints: SCOPE_MAX_BUDGET_POINTS,
-	panhandleDefault: PANHANDLE_DEFAULT_POINTS,
-	panhandleMax: PANHANDLE_MAX_POINTS,
-});
+export const FORK_FSM_DESCRIPTION = forkJoin["fork.fsm"];
+export const FORK_BUDGET_DESCRIPTION = forkJoin["fork.budget"];
 const FORK_TARGETS_DESCRIPTION = forkJoin["fork.targets"];
 const FORK_MODEL_DESCRIPTION = forkJoin["fork.model"];
-const FORK_ITEMS_DESCRIPTION = render(forkJoin["fork.forks"], {
-	defaultFanout: FORK_DEFAULT_FANOUT,
-	maxFanout: FORK_MAX_FANOUT,
-});
+const FORK_ITEMS_DESCRIPTION = forkJoin["fork.forks"];
 const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
 const FORK_PROFESSION_DESCRIPTION = forkJoin["fork.profession"];
 export const JOIN_DESCRIPTION = forkJoin["join.tool"];
@@ -64,22 +35,6 @@ export const RETURN_DESCRIPTION = forkJoin["return.tool"];
 export const RETURN_MARKDOWN_DESCRIPTION = forkJoin["return.markdown"];
 
 import { SCOPE_ID_PATTERN, MAX_SCOPE_ID_LENGTH } from "../scope/scope-id.mjs";
-
-const panhandle = loadDoc("tools/panhandle");
-
-export const PANHANDLE_DESCRIPTION = render(panhandle["panhandle.tool"], {
-	defaultPoints: PANHANDLE_DEFAULT_POINTS,
-	maxPoints: PANHANDLE_MAX_POINTS,
-	maxSeconds: PANHANDLE_MAX_SECONDS,
-});
-export const PANHANDLE_TOOLS_DESCRIPTION = render(panhandle["panhandle.tools"], {
-	defaultPoints: PANHANDLE_DEFAULT_POINTS,
-	maxPoints: PANHANDLE_MAX_POINTS,
-});
-export const PANHANDLE_SECONDS_DESCRIPTION = render(panhandle["panhandle.seconds"], {
-	maxSeconds: PANHANDLE_MAX_SECONDS,
-});
-export const PANHANDLE_BECAUSE_DESCRIPTION = panhandle["panhandle.because"];
 
 const forkItem = {
 	type: "object",
@@ -201,30 +156,4 @@ export const scopeContextParameters = {
 	},
 };
 
-// The reasons and caps mirror the runtime: the schema refuses an empty or
-// oversized request before the call runs, and the domain refuses it again.
-export const panhandleParameters = {
-	type: "object",
-	additionalProperties: false,
-	required: ["because"],
-	anyOf: [{ required: ["tools"] }, { required: ["seconds"] }],
-	properties: {
-		tools: {
-			type: "object",
-			// No `maximum`: an oversized request must reach the handler, which
-			// grants it and rebukes the model. A schema refusal would block work.
-			additionalProperties: {
-				type: "integer",
-				minimum: 1,
-			},
-			description: PANHANDLE_TOOLS_DESCRIPTION,
-		},
-		seconds: {
-			type: "integer",
-			minimum: 1,
-			maximum: PANHANDLE_MAX_SECONDS,
-			description: PANHANDLE_SECONDS_DESCRIPTION,
-		},
-		because: pinField(PANHANDLE_BECAUSE_DESCRIPTION),
-	},
-};
+

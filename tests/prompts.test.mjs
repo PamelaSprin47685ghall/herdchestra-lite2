@@ -58,10 +58,6 @@ describe("tool contracts map to their documents", () => {
 		expect(budget).not.toContain("draws from that flow's remaining balance");
 	});
 
-	test("the panhandle description points at the fork that avoids it", () => {
-		expect(loadDoc("tools/panhandle")["panhandle.tool"]).toContain("`scope_fork`");
-	});
-
 	test("the three fork/join tools carry their mapped text", () => {
 		const doc = loadDoc("tools/fork-join");
 		const notes = loadDoc("tools/notes");
@@ -227,10 +223,12 @@ describe("system prompts map to their documents", () => {
 		expect(persistentOperatingSkill).toContain("forking is cheaper than any handout");
 	});
 
-	test("an exhausted budget names the free fork before the handout", () => {
+	test("an exhausted budget runs the call and marks it panhandled", () => {
 		const text = loadDoc("errors")["tool-budget-exhausted"];
+		expect(text).toContain("runs anyway");
+		expect(text).toContain("panhandled");
 		expect(text).toContain("scope_fork");
-		expect(text.indexOf("scope_fork")).toBeLessThan(text.indexOf("scope_panhandle"));
+		expect(text).not.toContain("scope_panhandle");
 	});
 
 	test("a built-in protocol read or write is free wherever the budget is explained", () => {
@@ -378,7 +376,7 @@ describe("fork item schema", () => {
 	});
 });
 
-describe("scope size stays O(1) at every depth", () => {
+describe("scope size is sqrt(n), with no cap anywhere", () => {
 	test("no exported description leaks a template placeholder", () => {
 		const leaked = Object.entries(scopeTools)
 			.filter(([, value]) => typeof value === "string" && value.includes("{{"))
@@ -386,190 +384,66 @@ describe("scope size stays O(1) at every depth", () => {
 		expect(leaked).toEqual([]);
 	});
 
-	test("the fork fsm asks for a small scope, not sqrt(n)", () => {
+	test("the fork fsm sizes a scope by sqrt(n) and names no cap", () => {
 		const fsm = scopeTools.FORK_FSM_DESCRIPTION;
-		expect(fsm).not.toContain("sqrt");
-		expect(fsm).toMatch(/\b(?:18|eighteen)\b/i);
-		expect(fsm).toMatch(/\b(?:27|twenty-seven)\b/i);
+		expect(fsm).toContain("sqrt(n)");
+		expect(fsm).toContain("deeper tree");
+		expect(fsm).not.toMatch(/\b(?:18|27)\b/);
+		expect(fsm).not.toMatch(/never more than/i);
 	});
 
-	test("the budget names the panhandle's small total and keeps its funding rule", () => {
+	test("the budget runs an overspent call and marks it panhandled", () => {
 		const budget = scopeTools.FORK_BUDGET_DESCRIPTION;
-		expect(budget).not.toContain("at most 8");
-		// The working scope carries the tripled turn budget.
-		expect(budget).toMatch(/\b(?:18|eighteen)\b/i);
-		expect(budget).toMatch(/\b(?:27|twenty-seven)\b/i);
-		// The panhandle stays a third of the scope.
-		expect(budget).toMatch(/\b(?:6|six)\b/i);
-		expect(budget).toMatch(/\b(?:9|nine)\b/i);
+		expect(budget).toContain("sqrt(n)");
+		expect(budget).toContain("panhandled");
+		expect(budget).not.toMatch(/\b(?:18|27)\b/);
 		expect(budget).toContain("each item funds its own forked scope at any depth");
 		expect(budget).toContain("never charged");
 		expect(budget).toContain("is free at any depth, so it needs no entry either");
 	});
 
-	test("the batch names the fanout floor and cap for one call", () => {
+	test("the batch sets no fanout ceiling and still has no schema gate", () => {
 		const forks = scopeTools.forkParameters.properties.forks;
-		expect(forks.description).toMatch(/\b(?:4|four)\b/i);
-		expect(forks.description).toMatch(/\b(?:6|six)\b/i);
-		// The cap is a rebuke, not a schema gate: over-cap batches still run.
+		expect(forks.description).not.toMatch(/never more than/i);
+		expect(forks.description).toContain("as many items in one call");
+		// The cap is gone, and the schema never gated it either.
 		expect(forks.maxItems).toBeUndefined();
 		const budget = scopeTools.forkParameters.properties.forks.items.properties.budget;
 		expect(budget.additionalProperties.maximum).toBeUndefined();
 	});
 
-	test("the operating rules carry the floor and the cap at every depth", () => {
+	test("the operating rules teach sqrt(n) and nothing else about size", () => {
 		const text = persistentOperatingSkill;
-		// Scoped to the size sentence so an unrelated "Six project skills"
-		// cannot satisfy the floor.
-		const size = text
-			.split(/(?<=\.)\s+/)
-			.filter((sentence) =>
-				/scope size|per scope|each scope|a scope should|scope should/i.test(sentence),
-			)
-			.join(" ");
-		expect(size.length).toBeGreaterThan(0);
-		expect(size).toMatch(/\b(?:18|eighteen)\b/i);
-		expect(size).toMatch(/\b(?:27|twenty-seven)\b/i);
-		// The panhandle keeps its own sentence and stays a third of the scope.
-		const panhandle = text
-			.split(/(?<=\.)\s+/)
-			.filter((sentence) => /panhandle/i.test(sentence))
-			.join(" ");
-		expect(panhandle.length).toBeGreaterThan(0);
-		expect(panhandle).toMatch(/\b(?:6|six)\b/i);
-		expect(panhandle).toMatch(/\b(?:9|nine)\b/i);
-		// The floor exists to refuse hoarding work and serial retreat.
-		expect(text).toMatch(/hoard(?:ing)?|\bserial\b|hold(?:ing)? work back/i);
+		expect(text).toContain("sqrt(n)");
+		expect(text).toContain("fork as much as the work allows");
+		expect(text).not.toMatch(/never more than/i);
+		expect(text).not.toMatch(/scope_panhandle/);
+		expect(text).toContain("panhandled");
 	});
 
-	test("an over-cap batch still runs and earns a rebuke", () => {
+	test("no cap section survives, so nothing rebukes a large batch", () => {
 		const fork = loadDoc("tools/fork-join");
-		for (const key of ["fork.over-budget", "fork.over-fanout"]) {
-			expect(typeof fork[key]).toBe("string");
-			expect(fork[key].length).toBeGreaterThan(0);
-			expect(fork[key]).toMatch(/\byou\b|\byour\b/i);
-		}
+		expect(fork["fork.over-budget"]).toBeUndefined();
+		expect(fork["fork.over-fanout"]).toBeUndefined();
 	});
 });
 
-describe("panhandle caps render and measure one total", () => {
-	test("the parameter descriptions render their placeholders", () => {
-		for (const text of [
-			scopeTools.PANHANDLE_DESCRIPTION,
-			scopeTools.PANHANDLE_TOOLS_DESCRIPTION,
-			scopeTools.PANHANDLE_SECONDS_DESCRIPTION,
-		]) {
-			expect(text).not.toContain("{{");
-		}
-	});
-
-	test("tools are capped as one total across every tool, so no per-tool maximum", () => {
-		const tools = scopeTools.PANHANDLE_TOOLS_DESCRIPTION;
-		expect(tools).toMatch(/\b(?:6|six)\b/i);
-		expect(tools).toMatch(/\b(?:9|nine)\b/i);
-		expect(tools).toMatch(/total|altogether|combined|in all/i);
-		// The tool description carries the same numbers as its parameters.
-		const description = scopeTools.PANHANDLE_DESCRIPTION;
-		expect(description).not.toContain("{{");
-		expect(description).toMatch(/\b(?:6|six)\b/i);
-		expect(description).toMatch(/\b(?:9|nine)\b/i);
-		const schema = scopeTools.panhandleParameters.properties.tools;
-		expect(schema.description).toBe(tools);
-		expect(schema.additionalProperties.minimum).toBe(1);
-		// A per-tool maximum would contradict the single-total cap.
-		expect(schema.additionalProperties.maximum).toBeUndefined();
-	});
-
-	test("seconds keep their own cap and render it", () => {
-		const seconds = scopeTools.PANHANDLE_SECONDS_DESCRIPTION;
-		expect(seconds).toMatch(/\b(?:300|three hundred)\b/i);
-		const schema = scopeTools.panhandleParameters.properties.seconds;
-		expect(schema.description).toBe(seconds);
-		expect(schema.maximum).toBe(300);
-	});
-
-	test("an oversized panhandle still runs and earns a rebuke", () => {
-		const section = loadDoc("tools/panhandle")["panhandle.over-limit"];
-		expect(typeof section).toBe("string");
-		expect(section.length).toBeGreaterThan(0);
-		expect(section).toMatch(/\byou\b|\byour\b/i);
-	});
-});
-
-describe("tree depth methodology is default and recommended, not a max", () => {
-	// Depth is the one dimension where the default is a target, not a floor:
-	// a small job must not grow a relay layer just to look organized.
-	const noCeiling = /\bmax\b|\bmaximum\b|\bceiling\b/i;
-
-	test("the fork fsm states the default depth and the roles that use it", () => {
-		const fsm = scopeTools.FORK_FSM_DESCRIPTION;
-		expect(fsm).not.toContain("{{");
-		expect(fsm).toMatch(/2/);
-		expect(fsm).toMatch(/3/);
-		expect(fsm).toMatch(/recommended/i);
-		expect(fsm).toMatch(/leaf|subtree/i);
-		// The guidance is advice. Any sentence carrying the depth must read as
-		// a default, never as a hard bound.
-		const depthSentences = fsm
-			.split(/(?<=\.)\s+/)
-			.filter((sentence) => /depth|layer|level/i.test(sentence))
-			.join(" ");
-		expect(depthSentences.length).toBeGreaterThan(0);
-		expect(depthSentences).not.toMatch(noCeiling);
-	});
-
-	test("the fork guidance sizes the tree from closures and refuses both fakes", () => {
-		const doc = loadDoc("tools/fork-join");
-		const fsm = doc["fork.fsm"];
-		const deep = doc["fork.deep-nesting"];
-		// A scope is sized by closed loops, not by the files it touches.
-		expect(fsm).toMatch(/closure/i);
-		expect(fsm).toMatch(/depth before its width/i);
-		// Neither a relay shell nor a fragmented closure justifies a layer.
-		expect(deep).toMatch(/relay layer/i);
-		expect(deep).toMatch(/closure into fragments/i);
-		expect(fsm).not.toMatch(noCeiling);
-		expect(deep).not.toMatch(noCeiling);
-	});
-
-	test("the operating rules keep a default as a floor, never a ceiling", () => {
-		const text = persistentOperatingSkill;
-		expect(text).toMatch(/default is also a floor/i);
-		expect(text).toMatch(/deeper tree/i);
-		const depthSentences = text
-			.split(/(?<=\.)\s+/)
-			.filter((sentence) => /depth|deeper tree|layer/i.test(sentence))
-			.join(" ");
-		expect(depthSentences.length).toBeGreaterThan(0);
-		expect(depthSentences).not.toMatch(noCeiling);
-	});
-
-	test("a deep tree is fine, so the note is context rather than a warning", () => {
-		const section = loadDoc("tools/fork-join")["fork.deep-nesting"];
-		expect(typeof section).toBe("string");
-		expect(section.length).toBeGreaterThan(0);
-		for (const name of [
-			"childDepth",
-			"defaultDepth",
-			"recommendedDepth",
-			"defaultPoints",
-		]) {
-			expect(section).toContain(`{{${name}}}`);
-		}
-		// The closure size is a constant, not a number baked into the prose.
-		expect(section).not.toMatch(/six-point|6-point/i);
-		// It informs. It does not scold, and it never presents itself as a cap.
-		expect(section).not.toMatch(/WARNING/);
-		expect(section).not.toMatch(/do not repeat/i);
-		expect(section).not.toMatch(/\bmax\b/i);
-	});
-
-	test("the child's birth receipt shows its depth against the recommendation", () => {
+describe("depth has no policy and the panhandle has no tool", () => {
+	test("no receipt or guidance states a depth rule", () => {
 		const status = loadDoc("receipts/scope")["fork.child-status"];
-		expect(status.startsWith("{{marker}}")).toBe(true);
-		for (const name of ["depth", "defaultDepth", "recommendedDepth"]) {
-			expect(status).toContain(`{{${name}}}`);
-		}
-		expect(status).not.toMatch(/\bmax\b/i);
+		expect(status).toContain("{{depth}}");
+		expect(status).toContain("{{marker}}");
+		expect(status).not.toMatch(/recommended|default depth/i);
+		const fork = loadDoc("tools/fork-join");
+		expect(fork["fork.deep-nesting"]).toBeUndefined();
+		expect(fork["fork.fsm"]).not.toMatch(/recommended|default depth|one layer|two layers/i);
+	});
+
+	test("the panhandle is a receipt word, not a tool", () => {
+		expect(scopeTools.PANHANDLE_DESCRIPTION).toBeUndefined();
+		expect(scopeTools.panhandleParameters).toBeUndefined();
+		const tools = new Map();
+		wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
+		expect(tools.has("scope_panhandle")).toBe(false);
 	});
 });

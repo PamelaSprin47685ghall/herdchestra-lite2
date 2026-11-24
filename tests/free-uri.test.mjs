@@ -99,15 +99,15 @@ describe("built-in protocol calls are free", () => {
     }
     expect(s.charges).toEqual({});
 
-    const refused = chargeBranch(s, ledger, {
+    const paid = chargeBranch(s, ledger, {
       ownerId: "f1",
       toolCallId: "paid",
       toolName: "read",
       input: { path: "src/scope/budget.mjs" },
     });
-    expect(refused.ok).toBe(false);
-    expect(refused.code).toBe("BUDGET_EXHAUSTED");
-    expect(s.charges).toEqual({});
+    expect(paid.ok).toBe(true);
+    expect(paid.panhandled).toBe(true);
+    expect(paid.amount).toBe(0);
   });
 
   test("a filesystem path and a web page keep their charge", () => {

@@ -1,9 +1,9 @@
 // A scope_fork child must be able to spend the budget it declared.
 //
-// The consumer of this contract is the child branch: it calls a normal tool
-// and the host either runs it or refuses with a stated reason. The parent's
-// consumer view is the fork receipt, which must name the same budget the
-// ledger will charge.
+// The consumer of this contract is the child branch: it calls a normal tool and
+// the host runs it, charging the declared allowance and recording an overrun.
+// The parent's consumer view is the fork receipt, which must name the same
+// budget the ledger will charge.
 
 import { describe, expect, test } from "bun:test";
 
@@ -110,32 +110,30 @@ describe("a child is born with the budget it declared", () => {
 	});
 });
 
-describe("a refusal always states why", () => {
-	test("an exhausted child budget names the tool and the balance", () => {
+describe("an overrun is recorded, not refused", () => {
+	test("an exhausted child budget marks the tool on the child's record", () => {
 		const ledger = createBracketLedger();
 		const station = stationWith(ledger, []);
 		forkOne(station, { budget: { read: 0 } });
-		const refused = chargeBranch(station.state, ledger, {
+		const charged = chargeBranch(station.state, ledger, {
 			ownerId: "fork-call",
 			toolCallId: "child-read-1",
 			toolName: "read",
 		});
-		expect(refused.ok).toBe(false);
-		expect(refused.code).toBe("BUDGET_EXHAUSTED");
-		expect(typeof refused.reason).toBe("string");
-		expect(refused.reason.length).toBeGreaterThan(0);
-		expect(refused.reason).toContain("read");
+		expect(charged.ok).toBe(true);
+		expect(charged.panhandled).toBe(true);
+		const record = forkOf(ledger, "fork-call");
+		expect(record.panhandles.map((entry) => entry.tool)).toEqual(["read"]);
 	});
 
-	test("the host-facing gate never blocks without a reason", () => {
+	test("the host-facing gate runs an exhausted call instead of blocking it", () => {
 		const ledger = createBracketLedger();
 		const station = stationWith(ledger, []);
 		forkOne(station, { budget: { read: 0 } });
 		const gate = childGate(ledger, "fork-call");
 		const verdict = gate("child-read-1", "read");
-		expect(verdict?.block).toBe(true);
-		expect(typeof verdict.reason).toBe("string");
-		expect(verdict.reason.length).toBeGreaterThan(0);
-		expect(verdict.reason).toContain("read");
+		expect(verdict?.block).toBeUndefined();
+		const record = forkOf(ledger, "fork-call");
+		expect(record.panhandles.map((entry) => entry.tool)).toEqual(["read"]);
 	});
 });

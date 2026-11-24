@@ -1,24 +1,16 @@
-// Scope panhandle: a branch with an empty account stands on the corner and
-// asks passers-by for its next budget.
+// Scope panhandle: what a branch does when its allowance is already spent.
 //
-// The grant lands at once. The branch waits for no decision, and no other
-// account shrinks: this is a declaration update, not a transfer from the
-// parent. The tool is free, so a branch with nothing left can still ask.
+// There is no rescue tool and there is no grant for it. A call whose balance is
+// gone still runs, and the record keeps the tool's name in `panhandles`, so the
+// overrun is read back where it happened: `forkBudgetText` ends the branch's
+// budget line with `panhandled Nx`, and the caller reads that line when the
+// branch returns. The cost of panhandling is not a refusal. It is that the
+// overrun is public, and it stays on the record after the work is done.
 //
-// Two bounds keep one instruction from turning a measured budget into an
-// unbounded one: a total for each request, and a cap for seconds. A branch can
-// ask again, and what a request asks past the total still lands — the receipt
-// names the number and the caller sees the tally. Seconds alone are refused.
-// Every grant stays on the record, so the account text shows how often it had
-// to.
+// Adding allowance is a different act, and it is not a rescue: `amendFork`
+// calls `grantBudget` when a reused scope arrives with more work. Scope size
+// follows the work a scope holds, so the grant adds and never caps.
 
-import {
-  SCOPE_MAX_BUDGET_POINTS,
-  isFreeTool,
-  normalizeToolName,
-} from "./budget.mjs";
-import { forkOf } from "./forkjoin.mjs";
-import { sumBudgetPoints } from "./turn-stats.mjs";
 import {
   copyCounts,
   failure,
@@ -26,19 +18,40 @@ import {
   isPlainObject,
   put,
 } from "./state.mjs";
+import { isFreeTool, normalizeToolName } from "./budget.mjs";
 
-// One request carries a total, not a per-tool allowance: nine points of
-// "read" or six of "read" and three of "edit" are the same size. Over the total
-// the grant still lands; the receipt rebukes it and the record keeps the tally.
-export const PANHANDLE_DEFAULT_POINTS = 6;
-export const PANHANDLE_MAX_POINTS = 9;
-export const PANHANDLE_MAX_SECONDS = 300;
+/**
+ * Record one call that ran past its balance. The tally counts admissions: one
+ * entry per distinct call, never one per retry, so a reloaded branch shows the
+ * same number its caller will read.
+ */
+export function notePanhandled(record, tool, options = {}) {
+  if (!record || typeof record !== "object") {
+    return failure("UNKNOWN_FORK", "No branch record to mark.");
+  }
+  if (!isNonEmptyString(tool)) {
+    return failure("INVALID_TOOL", "A panhandled call must name its tool.");
+  }
+  if (!Array.isArray(record.panhandles)) record.panhandles = [];
+  const at = Number.isFinite(options.now) ? options.now : Date.now();
+  record.panhandles.push({ at, tool });
+  return { ok: true, count: record.panhandles.length, tool };
+}
 
-const RUNNING = "running";
+/** Read-only view of the tally, for a receipt or a summary line. */
+export function panhandleTally(record) {
+  const entries = Array.isArray(record?.panhandles) ? record.panhandles : [];
+  const tools = [];
+  for (const entry of entries) {
+    const tool = typeof entry?.tool === "string" ? entry.tool : "";
+    if (tool !== "" && !tools.includes(tool)) tools.push(tool);
+  }
+  return { count: entries.length, tools };
+}
 
 /**
  * Read and validate the requested tool points. Keys merge after name
- * normalization, so `apply_patch` and `edit` share one cap.
+ * normalization, so `apply_patch` and `edit` share one entry.
  */
 function readTools(value) {
   if (value === undefined) return { ok: true, tools: {} };
@@ -80,18 +93,13 @@ function readSeconds(value) {
       "seconds must be a whole number of seconds, at least 1.",
     );
   }
-  if (value > PANHANDLE_MAX_SECONDS) {
-    return failure(
-      "PANHANDLE_SECONDS_LIMIT",
-      `One panhandle grants at most ${PANHANDLE_MAX_SECONDS} seconds.`,
-    );
-  }
   return { ok: true, seconds: value };
 }
 
 /**
- * Validate and add tool points and seconds to one record's account. The
- * caller owns the status gate; validation runs before any mutation.
+ * Validate and add tool points and seconds to one record's account. The caller
+ * owns the status gate; validation runs before any mutation. There is no
+ * ceiling on the result: a scope that holds more work holds more allowance.
  */
 export function grantBudget(record, request = {}, options = {}) {
   if (!record || typeof record !== "object") {
@@ -147,61 +155,5 @@ export function grantBudget(record, request = {}, options = {}) {
     // A grant that moves the deadline back into the future ends overtime.
     record.overtimeAt = null;
   }
-  // A reuse grows one scope, so its overage is the scope's own total. A
-  // panhandle is metered over the whole request, whichever tools it names.
-  const pointsRequested = sumBudgetPoints(tools);
-  const totalPoints = sumBudgetPoints(record.budget);
-  const overLimit =
-    options?.scopeCap === true || options?.totalCap === true
-      ? pointsRequested > 0 && totalPoints > SCOPE_MAX_BUDGET_POINTS
-      : pointsRequested > PANHANDLE_MAX_POINTS;
-  return {
-    ok: true,
-    tools: { ...tools },
-    seconds,
-    pointsRequested,
-    overLimit,
-    totalPoints,
-    record,
-  };
-}
-
-/**
- * Panhandle entry: the caller funds its own running branch, and the grant
- * stays on the record for the budget line.
- */
-export function applyPanhandle(ledger, forkId, request = {}, options = {}) {
-  const record = forkOf(ledger, forkId);
-  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (record.status === "blocked") {
-    return failure(
-      "PANHANDLE_BLOCKED",
-      "This branch is blocked and has not started; declare the budget when you resubmit the fork.",
-    );
-  }
-  if (record.status !== RUNNING) {
-    return failure(
-      "PANHANDLE_CLOSED",
-      `This branch is ${record.status} and no longer spends budget.`,
-    );
-  }
-  const granted = grantBudget(record, request, options);
-  if (!granted.ok) return granted;
-  if (!Array.isArray(record.panhandles)) record.panhandles = [];
-  const at = Number.isFinite(options.now) ? options.now : Date.now();
-  record.panhandles.push({
-    at,
-    tools: { ...granted.tools },
-    seconds: granted.seconds,
-  });
-  return {
-    ok: true,
-    tools: granted.tools,
-    seconds: granted.seconds,
-    count: record.panhandles.length,
-    pointsRequested: granted.pointsRequested,
-    overLimit: granted.overLimit,
-    totalPoints: granted.totalPoints,
-    record,
-  };
+  return { ok: true, tools: { ...tools }, seconds, record };
 }

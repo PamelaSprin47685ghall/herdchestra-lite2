@@ -125,17 +125,25 @@ describe("branch charging", () => {
     expect(ledger.forks.f1.remaining.read).toBe(1);
   });
 
-  test("an exhausted branch refuses the call with its balance", () => {
+  test("an exhausted branch runs the call and marks it panhandled", () => {
     const s = state();
     const ledger = ledgerWith("f1", { read: 0 });
-    const refused = chargeBranch(s, ledger, {
+    const charged = chargeBranch(s, ledger, {
       ownerId: "f1",
       toolCallId: "c1",
       toolName: "read",
     });
-    expect(refused.ok).toBe(false);
-    expect(refused.code).toBe("BUDGET_EXHAUSTED");
-    expect(s.charges).toEqual({});
+    expect(charged.ok).toBe(true);
+    expect(charged.panhandled).toBe(true);
+    expect(charged.amount).toBe(0);
+    expect(s.charges.c1).toEqual({
+      ownerId: "f1",
+      tool: "read",
+      amount: 0,
+      panhandled: true,
+    });
+    expect(ledger.forks.f1.remaining.read).toBe(0);
+    expect(ledger.forks.f1.panhandles.map((entry) => entry.tool)).toEqual(["read"]);
   });
 
   test("an amended beat returns exactly what its calls spent", () => {

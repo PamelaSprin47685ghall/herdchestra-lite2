@@ -56,7 +56,7 @@ Run `todo({ op: "view" })` before writing the inherited ledger.
 
 ## fork.child-status
 
-{{marker}} depth {{depth}} (default tree depth {{defaultDepth}}, recommended through depth {{recommendedDepth}}).
+{{marker}} depth {{depth}}.
 State machine: {{fsm}}
 Budget: {{budget}}. Targets: {{targets}}.
 

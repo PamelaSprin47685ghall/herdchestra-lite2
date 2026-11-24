@@ -10,10 +10,10 @@ import {
 } from "./state.mjs";
 import {
   beatShares,
-  formatAmount,
   isFreeCall,
   normalizeToolName,
 } from "./budget.mjs";
+import { notePanhandled } from "./panhandle.mjs";
 import { applyCharge, applyRefund, forkOf } from "./forkjoin.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
@@ -63,17 +63,29 @@ export function chargeBranch(state, ledger, params = {}) {
     groupKey,
   });
   if (!charged.ok) {
-    if (charged.code === "BUDGET_EXHAUSTED") {
-      return {
-        ...charged,
-        reason: render(E["tool-budget-exhausted"], {
-          tool: charged.tool,
-          remaining: formatAmount(charged.remaining),
-          budget: formatAmount(charged.budget),
-        }),
-      };
+    if (charged.code !== "BUDGET_EXHAUSTED") return charged;
+    // An allowance is a ledger, not a fence. A branch that has spent its
+    // allowance still runs the call: the charge stops at zero, and the record
+    // keeps the tool's name, so `forkBudgetText` ends the budget line with
+    // `panhandled Nx` where the caller reads it. The zero-amount charge entry
+    // makes a retry of the same call free instead of a second admission.
+    const marked = notePanhandled(record, charged.tool);
+    if (typeof toolCallId === "string") {
+      put(state.charges, toolCallId, {
+        ownerId,
+        tool: charged.tool,
+        amount: 0,
+        panhandled: true,
+      });
     }
-    return charged;
+    return {
+      ok: true,
+      amount: 0,
+      panhandled: true,
+      tool: charged.tool,
+      count: marked.ok ? marked.count : 0,
+      remaining: { ...record.remaining },
+    };
   }
   if (charged.amount > 0 && typeof toolCallId === "string") {
     const entry = { ownerId, tool, amount: charged.amount };

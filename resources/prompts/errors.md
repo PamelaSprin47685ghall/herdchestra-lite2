@@ -158,31 +158,7 @@ This scope owns no unreceived work. This call created no receipt. Fork a new sco
 
 ## tool-budget-exhausted
 
-Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}/{{budget}}). The cheap exit is `scope_fork` (free) for whatever another scope can own. Failing that: another tool, `scope_return`, or `scope_panhandle` when only this scope can finish.
-
-## panhandle-no-budget
-
-Only a running scope has an account to beg from, and this one has no fork record. Call `scope_fork` instead of asking a passer-by for an allowance.
-
-## panhandle-blocked
-
-This plan is blocked and has not started, so there is nothing to top up. Resubmit the fork with the budget it needs.
-
-## panhandle-not-running
-
-This scope is no longer running. Return its record; a handout now would buy nothing.
-
-## panhandle-no-reason
-
-State in `because` what the handout buys. An unexplained request is refused, and the record keeps the words you used.
-
-## panhandle-unavailable
-
-The handout did not land. The record is unchanged; retry once, then continue within the current budget.
-
-## panhandle-internal-error
-
-The panhandle failed before it could change the record. Treat the budget as unchanged.
+Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}/{{budget}}). The call runs anyway, and the receipt marks it panhandled. That mark is the whole cost, and it is enough: the scope that forked you reads it on return, and it says your sizing was wrong. The cheap exit is `scope_fork` (free) for whatever another scope can own; `scope_return` is the other.
 
 ## model-unknown
 

@@ -19,27 +19,19 @@ The user-facing account is `README.md`; the code is authoritative for every numb
 
 `running → ready → joined` on the normal path. `failed` is terminal on that path; after a process restart a running child comes back as a failed ready result, so the parent can still take it and decide whether to re-declare the work (`src/scope/forkjoin.mjs`). `blocked` records a checkpoint only: it starts nothing, spends nothing, and is never woken later; the next `scope_fork` with the same `scopeId` and `blocked: false` starts it. `supersededAt` and `generation` mark a record replaced by a later generation of the same `scopeId`. Join admission runs before a ready record is taken, so a refusal leaves it ready.
 
-## Constants
+## Sizing
 
-| Constant | Value | Source |
-|---|---|---|
-| Default scope budget | 18 points | `src/scope/budget.mjs` |
-| Maximum scope budget | 27 points | `src/scope/budget.mjs` |
-| Default fanout | 4 children | `src/scope/budget.mjs` |
-| Maximum fanout | 6 children | `src/scope/budget.mjs` |
-| Default tree depth | 2 | `src/scope/budget.mjs` |
-| Recommended depth | 3 | `src/scope/budget.mjs` |
-| Panhandle default | 6 points | `src/scope/panhandle.mjs` |
-| Panhandle maximum | 9 points, 300 seconds | `src/scope/panhandle.mjs` |
+There is no table, and no constant in `src/scope/budget.mjs` holds one. A scope is sized by the work in hand: about `sqrt(n)` tool-budget points, where `n` is that scope's share of the work counted in points. Fork as much as the work allows, and tell every child to fork again — a scope that cannot fork has rebuilt the bottleneck the fork removed. Nothing caps a scope's points, the items in one call, or the depth of the tree; the over-budget and over-fanout warnings went out with the constants that fed them.
 
 ## Tradeoffs
 
 - **Fork is free.** A child mints its own budget and clock; the parent's balance never funds it. A larger job becomes a deeper tree, not a fatter scope.
 - **Join and return pause the caller's clock.** Waiting costs no wall time.
-- **Caps are soft.** Over-budget, over-fanout, and deep nesting still run and carry a `WARNING`. Only the 300-second panhandle limit and join admission refuse.
+- **A spent budget is a receipt, not a fence.** A non-root call whose allowance is gone still runs, clamps its charge at zero, and lands in the scope's panhandle tally, which the caller reads on the record. The root is refused because it is outside every scope; join admission is the other refusal.
 - **The root has no budget.** Reading a file at the root requires a child; that fixed cost buys a parent context that is never polluted.
-- **The wall clock is derived from LLM request duration, not tool time.** An I/O-heavy scope can reach its deadline before spending its points; `scope_panhandle` buys seconds. See `fork.time`.
-- **Depth has no hard ceiling.** Each extra layer compresses the record to prose and carries another ancestor prefix; the defaults are guidance, not gates.
+- **Panhandling is discredit, not rescue.** There is no tool that asks for more. A scope that overruns has published that it sized itself wrong, and the tally stays on the record beside it.
+- **The wall clock is derived from LLM request duration, not tool time.** An I/O-heavy scope can reach its deadline before spending its points, and nothing buys the seconds back; size the points for the time the work needs. See `fork.time`.
+- **Depth has no ceiling and no default.** Each extra layer compresses the record to prose and carries another ancestor prefix; that cost is the only thing a parent weighs.
 
 ## Known gaps
 

@@ -192,15 +192,3 @@ export async function scopeContextTicket(station, toolCallId, params, host = {})
 	}
 }
 
-/**
- * Ask for more budget. The station lands a whole synchronous grant; the
- * ticket only turns a throw into a stated refusal.
- */
-export async function panhandleTicket(station, toolCallId, params, host = {}) {
-	try {
-		return station.executePanhandle(toolCallId, params);
-	} catch (error) {
-		host?.report?.record?.("tickets", error, { kind: "panhandle", toolCallId });
-		return errorResult("PANHANDLE_INTERNAL_ERROR", errors["panhandle-internal-error"]);
-	}
-}

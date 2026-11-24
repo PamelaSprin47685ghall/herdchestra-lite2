@@ -64,11 +64,9 @@ import {
 	executeAmend,
 	executeContext,
 	executeFork,
-	executePanhandle,
 	executeJoin,
 	executeReturn,
 } from "./execute.mjs";
-import { PANHANDLE_TOOL } from "./domain/panhandle.mjs";
 import {
 	confirmJoinPersistence,
 	renderJoinResult,
@@ -633,10 +631,6 @@ export class SessionStation {
 		// return may block for as long as the counterpart needs, so it never
 		// carries the branch clock's limit.
 		if (name === "scope_join" || name === "scope_return") return false;
-		// A panhandle is the call that buys the next second. Cutting it to one
-		// second because the clock is already dead would make the rescue fail
-		// in exactly the state it exists for.
-		if (name === PANHANDLE_TOOL) return false;
 		return this.toolTimeLimit() !== null;
 	}
 
@@ -692,7 +686,6 @@ export class SessionStation {
 		);
 		if (verdict) return verdict;
 		if (name === "scope_join" || name === "scope_return") return undefined;
-		if (name === PANHANDLE_TOOL) return undefined;
 		const limitMs = this.toolTimeLimit();
 		return limitMs === null ? undefined : { limitMs };
 	}
@@ -866,11 +859,6 @@ export class SessionStation {
 
 	executePin(toolCallId, params) {
 		return executePin(this, toolCallId, params);
-	}
-
-	/** Land one panhandle grant; persisted here, not in the ticket. */
-	executePanhandle(toolCallId, params) {
-		return executePanhandle(this, toolCallId, params);
 	}
 
 	// The three session ports are bound to this station's persisted state in

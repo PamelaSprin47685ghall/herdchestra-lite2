@@ -5,8 +5,6 @@ import { lastStructuralCallId } from "../transcript/index.mjs";
 import { handoffToolBlockedReason } from "../relay/index.mjs";
 import { handlePinCall, handleAmendCall } from "./controls.mjs";
 import { handleForkCall, handleJoinCall, handleReturnCall } from "./fork-controls.mjs";
-import { handlePanhandleCall } from "./panhandle-controls.mjs";
-import { PANHANDLE_TOOL } from "./domain/panhandle.mjs";
 import { processedOf } from "./domain/tool-call-ledger.mjs";
 
 /**
@@ -214,28 +212,6 @@ function executeReturn(station, toolCallId, params, ctx) {
 	);
 }
 
-/**
- * Land one panhandle grant. The answer is cached per tool call: a host retry of
- * the same call must not buy the same reprieve twice.
- */
-function executePanhandle(station, toolCallId, params) {
-	const cached = processedOf(station).handledFor(toolCallId);
-	if (cached) return cached;
-	const result = handlePanhandleCall(station, {
-		id: toolCallId,
-		name: PANHANDLE_TOOL,
-		arguments: params,
-	});
-	processedOf(station).setHandled(toolCallId, result);
-	processedOf(station).markCall(toolCallId);
-	if (station.persist() === false) {
-		station.noteError?.("persist", new Error("panhandle state write failed"), {
-			toolCallId,
-		});
-	}
-	return result;
-}
-
 export {
 	executeAmend,
 	executePin,
@@ -243,6 +219,5 @@ export {
 	executeFork,
 	executeJoin,
 	executeReturn,
-	executePanhandle,
 	directAmend,
 };

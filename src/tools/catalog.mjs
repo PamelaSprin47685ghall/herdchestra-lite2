@@ -13,8 +13,6 @@ import {
 	joinParameters,
 	RETURN_DESCRIPTION,
 	returnParameters,
-	PANHANDLE_DESCRIPTION,
-	panhandleParameters,
 	TODO_DESCRIPTION,
 	TODO_PARAMETERS,
 } from "./index.mjs";
@@ -23,7 +21,6 @@ import {
 	joinTicket,
 	returnTicket,
 	scopeContextTicket,
-	panhandleTicket,
 } from "./tickets.mjs";
 import { todoTicket } from "./todo.mjs";
 
@@ -68,15 +65,6 @@ export function createTools({ stationFor, tickets }) {
 			loadMode: ESSENTIAL,
 			execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 				scopeContextTicket(stationFor(ctx), toolCallId, params, tickets),
-		},
-		{
-			name: "scope_panhandle",
-			label: "Panhandle for Budget",
-			description: PANHANDLE_DESCRIPTION,
-			parameters: panhandleParameters,
-			loadMode: ESSENTIAL,
-			execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-				panhandleTicket(stationFor(ctx), toolCallId, params, tickets),
 		},
 		{
 			name: "todo",

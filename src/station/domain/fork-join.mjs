@@ -10,13 +10,7 @@ import {
 	joinAdmission,
 } from "../../scope/admission.mjs";
 import { decideAbandon } from "../../scope/abandon.mjs";
-import {
-	FORK_MAX_FANOUT,
-	SCOPE_MAX_BUDGET_POINTS,
-	normalizeBudget,
-	validBudget,
-} from "../../scope/budget.mjs";
-import { sumBudgetPoints } from "../../scope/turn-stats.mjs";
+import { normalizeBudget, validBudget } from "../../scope/budget.mjs";
 import { normalizeTargets, validTargets } from "../../scope/targets.mjs";
 import { publicScopeId, validScopeId } from "../../scope/scope-id.mjs";
 import { resolveModelSelector } from "../../scope/model-selector.mjs";
@@ -137,29 +131,8 @@ export function validateForkBatch(args) {
 		if (!item.ok) return { ok: false, code: item.code, index };
 		items.push(item);
 	}
-	// An over-cap batch still runs. The warning is evidence for the receipt,
-	// not a gate: refusing here would stall a split the model already planned.
-	const warnings = [];
-	for (let index = 0; index < items.length; index += 1) {
-		const points = sumBudgetPoints(items[index].budget);
-		if (points > SCOPE_MAX_BUDGET_POINTS) {
-			warnings.push({
-				code: "SCOPE_OVER_BUDGET_CAP",
-				index,
-				scopeId: items[index].scopeId,
-				points,
-				max: SCOPE_MAX_BUDGET_POINTS,
-			});
-		}
-	}
-	if (items.length > FORK_MAX_FANOUT) {
-		warnings.push({
-			code: "FANOUT_OVER_CAP",
-			count: items.length,
-			max: FORK_MAX_FANOUT,
-		});
-	}
-	return { ok: true, items, warnings };
+	// No size or fanout is refused, and none is rebuked: the batch always runs.
+	return { ok: true, items, warnings: [] };
 }
 
 /**

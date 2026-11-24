@@ -7,7 +7,7 @@
 
 import { decideAbandon } from "./abandon.mjs";
 import { deadlineInfo } from "./clock.mjs";
-import { emptyTotals, normalizeTotals, sumBudgetPoints } from "./turn-stats.mjs";
+import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
 import { publicScopeId } from "./scope-id.mjs";
 import { grantBudget } from "./panhandle.mjs";
 import { formatAmount } from "./budget.mjs";
@@ -280,9 +280,6 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
     added: { tools: { ...granted.tools }, seconds: granted.seconds },
     queued: Array.isArray(record.requirements) ? record.requirements.length : 0,
     status: record.status,
-    pointsRequested: granted.pointsRequested ?? 0,
-    overLimit: granted.overLimit === true,
-    totalPoints: sumBudgetPoints(record.budget),
     record,
   };
 }

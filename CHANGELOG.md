@@ -4,6 +4,17 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] — 2026-11-24
+
+### Changed — a scope is sized by the work, not by a table
+
+- Every numeric sizing rule is gone: the 18/27 point scope size, the four/six items per call, the two/three tree-depth default and recommendation, the `SCOPE_OVER_BUDGET_CAP` and `FANOUT_OVER_CAP` warnings, and the constants behind them. `scope_fork` now says to fork as much as the work allows, to fork again inside a child, and to budget about `sqrt(n)` points where `n` is the work in hand. A larger job is a deeper tree, not a fatter scope.
+
+### Changed — a spent budget is recorded, not refused
+
+- `scope_panhandle` is removed: the tool, its schema, its prompt page, its station controls and domain decision, its ticket, the host wiring, and the sync needle. A non-root call whose balance for a tool is gone now runs, clamps its charge at zero, and is recorded as panhandled; the scope's tally returns with its record. The root keeps its refusal, because the root is outside every scope and holds no allowance to overrun.
+- `resources/prompts/errors.md` and `tools/fork-join.md` state what a panhandled receipt is for: not a rescue, but a public admission that the scope sized itself wrong.
+
 ## [3.1.0] — 2026-11-24
 
 ### Changed — a natural stop is a small handoff

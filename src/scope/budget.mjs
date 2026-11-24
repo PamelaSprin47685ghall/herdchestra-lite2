@@ -13,26 +13,12 @@ import {
 // unit however its tools divide it.
 const CHARGE_SCALE = 100;
 
-// Scope size stays O(1) at every depth. A child's budget and clock are minted
-// with the item that starts it, so a large plan splits into deeper subtrees
-// instead of a wider or fatter scope. These are the numbers the prompt states,
-// and the caps are soft: an over-cap fork still runs, and its receipt says so.
-export const SCOPE_DEFAULT_BUDGET_POINTS = 18;
-export const SCOPE_MAX_BUDGET_POINTS = 27;
-export const FORK_DEFAULT_FANOUT = 4;
-export const FORK_MAX_FANOUT = 6;
-
-// Tree depth is the one dimension whose default is a target, not a floor. A
-// small job must not grow a relay layer just to look organized: two layers is
-// ordinary, three already covers a large one, and deeper is allowed when the
-// work truly needs it without a written justification.
-export const FORK_DEFAULT_DEPTH = 2;
-export const FORK_RECOMMENDED_DEPTH = 3;
-
+// A scope keeps the control tools and the protocol reads for free; every other
+// call is charged. Size is a judgement, not a constant: the one rule is
+// `sqrt(n)` points for `n` points of work in hand.
 export function isFreeTool(name) {
   return (
     CONTROL_TOOLS.has(name) ||
-    name === "scope_panhandle" ||
     name === "todo" ||
     name === "ask" ||
     name === "wait"

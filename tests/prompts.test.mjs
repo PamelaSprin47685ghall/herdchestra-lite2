@@ -381,7 +381,7 @@ describe("fork item schema", () => {
 	});
 });
 
-describe("scope size is sqrt(10n), with no cap anywhere", () => {
+describe("scope size is sqrt(2n), with no cap anywhere", () => {
 	test("no exported description leaks a template placeholder", () => {
 		const leaked = Object.entries(scopeTools)
 			.filter(([, value]) => typeof value === "string" && value.includes("{{"))
@@ -420,12 +420,12 @@ describe("scope size is sqrt(10n), with no cap anywhere", () => {
 		expect(budget.additionalProperties.maximum).toBeUndefined();
 	});
 
-	test("the operating rules teach sqrt(10n) and say why ten, once", () => {
+	test("the operating rules teach sqrt(2n) and say why two, once", () => {
 		const text = persistentOperatingSkill;
-		// The sizing rule names sqrt(10n) twice inside one sentence; the "why ten"
+		// The sizing rule names sqrt(2n) twice inside one sentence; the "why two"
 		// clause that explains it appears exactly once, and nowhere else.
-		expect(text.match(/ten times the ideal estimate/g)).toHaveLength(1);
-		expect(text).toMatch(/match `sqrt\(10n\)` turns[^.]*`sqrt\(10n\)` scopes/);
+		expect(text.match(/twice the ideal estimate/g)).toHaveLength(1);
+		expect(text).toMatch(/match `sqrt\(2n\)` turns[^.]*`sqrt\(2n\)` scopes/);
 		expect(text).toContain("fork as much as the work allows");
 		expect(text).not.toMatch(/never more than/i);
 		expect(text).not.toMatch(/scope_panhandle/);
@@ -448,7 +448,7 @@ describe("scope size is sqrt(10n), with no cap anywhere", () => {
 
 		// The human doc states the rule, and states it once.
 		const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-		expect(readme.match(/sqrt\(10n\)/g)).toHaveLength(1);
+		expect(readme.match(/sqrt\(2n\)/g)).toHaveLength(1);
 	});
 
 	test("no cap section survives, so nothing rebukes a large batch", () => {

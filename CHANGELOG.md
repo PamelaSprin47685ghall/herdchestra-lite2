@@ -4,6 +4,18 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] — 2026-11-24
+
+### Changed — a scope is sized from `2n`, not `10n`
+
+- `resources/prompts/system.md` §Run scopes now asks a scope to match `sqrt(2n)`
+  turns, so `sqrt(2n)` scopes finish the total `2n` work. The 2 is the
+  back-and-forth a worker's real work costs, about twice the ideal estimate —
+  the same reasoning as before, with a smaller coefficient.
+- `README.md` states the same rule once, with the same reason.
+- The tests assert `sqrt(2n)` and "twice the ideal estimate" instead of the
+  retired `10n` wording.
+
 ## [3.4.2] — 2026-11-24
 
 ### Fixed — a bare `bun test` no longer collects the `deer-flow` submodule

@@ -6,6 +6,19 @@ All notable changes to this extension. The format follows
 
 ## [3.2.0] — 2026-11-24
 
+### Restored — the language reminder rides in the receipt again
+
+- Every skill receipt now ends with the Simplified-Chinese reminder that `resources/prompts/system.md` carries in its persistent rules. The receipt is appended to the session tail, one per turn and never written over an older message, so the newest request holds the reminder even when the prompt prefix is folded away; nothing before the new message changes, which is what keeps the provider cache warm. The line was lost in 3.0.0, when the receipt rewrite dropped it and only the system-prompt copy survived.
+- `chineseReminder` now gates both copies: `HERD_DISABLE_CHINESE_REMINDER=1` removes the line from the persistent rules and from every receipt, and the rest of the receipt stays byte-identical.
+
+### Fixed — a missing fork record no longer hides the budget line
+
+- A forked scope whose ledger holds no fork record produced a receipt with no `Scope budget:` line, which reads as "nothing to watch"; the model learned its balance only by overrunning a tool and reading `tool-budget-exhausted`. `skillReceiptText` now states `Scope budget: unavailable; the ledger holds no record for this scope.` in that case, while a receipt with a record keeps its bytes unchanged. `resources/prompts/receipts/scope.md` gains `receipt.branch-missing`; root receipts do not gain the line.
+
+### Tests — the receipt append survives a lost write
+
+- `tests/context-commit.node.test.mjs` pins the durable append in three shapes: a journal write that throws leaves neither side of the pair written and a retry appends exactly one receipt; a receipt missing from both the journal and the live history after a reload is replaced once, so the journal holds one `herdSkill` receipt and a repeat of the same request reuses it; and a receipt persisted before the reminder existed is reused byte-for-byte under the same turn key, while the next grown prefix appends a receipt that carries the line and leaves the older one at its original index. A real process kill between the append and the host's flush stays host-owned; the repository has no write there to test.
+
 ### Fixed — a link install without its core link is not in sync
 
 - `host-omp` imports the core by name, so a linked working tree needs `bun install` in `host-omp/` to materialize `node_modules/herdchestra-lite2`. `sync-plugin` reported that shape as "in sync" and exited 0 even when the link was missing, while the host failed at extension load with `Cannot find package 'herdchestra-lite2'`. The link branch now checks that the core resolves to this repository and exits 1 with the remedy when it does not.
@@ -16,7 +29,8 @@ All notable changes to this extension. The format follows
 
 ### Changed — a scope is sized by the work, not by a table
 
-- Every numeric sizing rule is gone: the 18/27 point scope size, the four/six items per call, the two/three tree-depth default and recommendation, the `SCOPE_OVER_BUDGET_CAP` and `FANOUT_OVER_CAP` warnings, and the constants behind them. `scope_fork` now says to fork as much as the work allows, to fork again inside a child, and to budget about `sqrt(n)` points where `n` is the work in hand. A larger job is a deeper tree, not a fatter scope.
+- Every numeric sizing rule is gone: the 18/27 point scope size, the four/six items per call, the two/three tree-depth default and recommendation, the `SCOPE_OVER_BUDGET_CAP` and `FANOUT_OVER_CAP` warnings, and the constants behind them. `scope_fork` now says to fork as much as the work allows, to fork again inside a child, and to size a scope at about `sqrt(10n)` points where `n` is the ideal turns of work in hand — ten, because a worker's real work runs back and forth, about ten turns for every ideal one. A larger job is a deeper tree, not a fatter scope.
+- Every fork item now declares `n`, its parent's estimate of the ideal turns of work in hand. The schema requires it and the station ignores it: it is there for a later audit of how the model sized itself, and no budget, clock, or admission reads it.
 
 ### Changed — a spent budget is recorded, not refused
 

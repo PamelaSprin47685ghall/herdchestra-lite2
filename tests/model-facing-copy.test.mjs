@@ -85,12 +85,13 @@ test("routine scope status keeps local budget and pending work without repeating
 	const pending = skillReceiptText(state, true, branch, 3);
 	const root = skillReceiptText(state);
 	for (const text of [pending, root]) {
-		// The reminder is part of the persistent system prompt, not the receipt:
-		// repeating it here would say the same thing twice on every request.
-		expect(text).not.toContain(chineseRequirement);
+		// The reminder ends every receipt as well as the persistent system
+		// prompt: the host appends the receipt to the session tail, so the
+		// newest request keeps it even when the prompt prefix is folded away.
+		expect(text).toMatch(new RegExp(` ${chineseRequirement}</skill>$`));
 		expect(text).not.toMatch(/\bUTC\b|since this session began/);
 	}
-	// It still ships exactly once in the skill text the system prompt carries.
+	// The system prompt still states it exactly once.
 	expect(persistentOperatingSkill.split(chineseRequirement)).toHaveLength(2);
 	expect(pending).not.toContain(fsm);
 	expect(pending).toMatch(/read remaining\s+2(?:\.00)?\/8(?:\.00)?\b/);
@@ -99,6 +100,18 @@ test("routine scope status keeps local budget and pending work without repeating
 	expect(pending).toMatch(/\b3\s+unreceived result(?:\(s\)|s)? from forked scopes\b|\bunreceived results from forked scopes:\s*3\b/i);
 	expect(pending).toContain("scope_join");
 	expect(root).not.toContain("scope_join");
+});
+
+test("a forked scope with no ledger record still learns that its budget is unavailable", () => {
+	const state = { autopilot: true, startedAt: 0 };
+	// The bearer runs inside a scope, yet the ledger holds no fork record for
+	// it. Saying nothing would read as "budget is fine"; say it is unknown.
+	const missing = skillReceiptText(state, true, null, 0, false, true);
+	expect(missing).toContain("Scope budget:");
+	expect(missing).toMatch(/no record|unavailable/i);
+	expect(missing).not.toMatch(/remaining\s+\d/);
+	// A root receipt has no budget to report, and must not gain the line.
+	expect(skillReceiptText(state)).not.toContain("Scope budget:");
 });
 
 test("the fork receipt describes new work once and lists all unreceived scopes by name", () => {
@@ -210,7 +223,7 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 			if (!keepHook) remove();
 		}
 	}
-	return { station, ctx, sent, commit, request, remove };
+	return { station, ctx, sent, commit, request, remove, manager };
 }
 
 function receiptTextOf(message) {
@@ -247,25 +260,35 @@ test("a toggle regenerates the mode receipt instead of reusing the previous one"
 	}
 });
 
-test("the language port leaves the receipt untouched on successive model requests", async () => {
+test("the language reminder ends every request receipt and follows its port", async () => {
 	// `keepHook` leaves the preparation hook installed: this test makes two
-	// requests in a row. The receipt path reads no language port, so the two
-	// fixtures differ only in identity, which is all the determinism check
-	// below needs.
+	// requests in a row, so each round appends a fresh receipt to the session.
 	const enabled = relayRequest({ keepHook: true });
-	const disabled = relayRequest({ keepHook: true });
+	const disabled = relayRequest({
+		keepHook: true,
+		registry: { ports: () => ({ chineseReminder: "off" }) },
+	});
 	async function latestReceipt(fixture) {
 		const receipts = (await fixture.request()).filter((message) => message.herdSkill);
 		return receipts.at(-1).content[0].text;
 	}
+	const journalReceipts = (fixture) =>
+		fixture.manager.getBranch().filter((entry) => entry.message?.herdSkill === true).length;
 	try {
 		for (let round = 0; round < 2; round++) {
 			const on = await latestReceipt(enabled);
 			const off = await latestReceipt(disabled);
-			// The reminder rides in the persistent system prompt, once. The
-			// per-request receipt must not repeat it or depend on the port.
-			expect(on).not.toContain(chineseRequirement);
-			expect(off).toBe(on);
+			// Appended to the session, never patched into an older message: the
+			// reminder is the last text of the newest receipt.
+			expect(on).toMatch(new RegExp(` ${chineseRequirement}</skill>$`));
+			expect(on.split(chineseRequirement)).toHaveLength(2);
+			// Off removes that one line and leaves the rest byte-identical.
+			expect(off).not.toContain(chineseRequirement);
+			expect(off).toBe(on.replace(` ${chineseRequirement}`, ""));
+			// A new receipt is appended per turn, never written over the old one:
+			// the prefix stays byte-identical, which is what keeps the cache warm.
+			expect(journalReceipts(enabled)).toBe(round + 1);
+			expect(journalReceipts(disabled)).toBe(round + 1);
 			const turn = { role: "user", content: `Continue after round ${round + 1}.` };
 			enabled.commit(turn);
 			disabled.commit(turn);

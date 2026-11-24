@@ -1052,6 +1052,7 @@ export class SessionStation {
 			demandVisible,
 			ownerId !== null,
 			this.clockPort(),
+			this.portTable.chineseReminder,
 		);
 		return {
 			role: "developer",

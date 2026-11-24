@@ -22,6 +22,10 @@ Unreceived results from forked scopes: {{count}}. Receive them with `scope_join`
 
 Scope budget: {{budget}}.
 
+## receipt.branch-missing
+
+Scope budget: unavailable; the ledger holds no record for this scope.
+
 ## receipt.no-ledger
 
 Evaluate the ledger before forking.
@@ -67,6 +71,10 @@ Report your findings. Only scope_return submits your full record.
 ## fork.child-return-nudge
 
 Your record is still unpublished. Call `scope_return` to hand it to the scope that forked this one.
+
+## language
+
+强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。
 
 ## fork.child-routing
 

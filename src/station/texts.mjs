@@ -55,11 +55,16 @@ export function insideScopeNudge(openCount) {
 	return render(T["scope.stop-blocked"], { count: openCount });
 }
 
-export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false, child = false, clock = null) {
+export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false, child = false, clock = null, chineseReminder = "on") {
 	const isChild = child || branch !== null;
 	const lines = [];
-	if (isChild && branch) {
-		lines.push(render(T["receipt.branch"], { budget: branchBudget(branch, clock) }));
+	if (isChild) {
+		// A forked scope always has a budget to report. When the ledger holds no
+		// record for it, say the number is unknown instead of dropping the line:
+		// an absent line reads as "nothing to watch".
+		lines.push(branch
+			? render(T["receipt.branch"], { budget: branchBudget(branch, clock) })
+			: T["receipt.branch-missing"]);
 	}
 	if (openCount > 0) {
 		lines.push(render(T["scope.unreceived"], { count: openCount }));
@@ -87,6 +92,11 @@ export function skillReceiptText(state, relayOn = true, branch = null, openCount
 			lines.push(T[relay?.canStop ? "receipt.can-stop" : fullFlow ? "receipt.todo" : "receipt.simple-outside"]);
 		}
 	}
+	// The reminder ends every receipt, root and branch alike: the host appends
+	// the receipt to the session tail, so the newest request keeps it in place
+	// even when the prompt prefix is folded away. It stays out of the mode and
+	// relay conditionals above for that reason.
+	if (chineseReminder !== "off") lines.push(T["language"]);
 	return `<skill version="1.0">${lines.join(" ")}</skill>`;
 }
 

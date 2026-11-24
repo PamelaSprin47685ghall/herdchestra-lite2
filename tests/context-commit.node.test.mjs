@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import { appendHistoryMessage, commitSkillReceipt } from "../host-omp/src/host/hack-context.mjs";
@@ -18,6 +19,8 @@ function skill(text = "clock: 1", timestamp = 2) {
 		herdSkill: true,
 	};
 }
+
+const REMINDER = "强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。";
 
 function harness(initial = [user()]) {
 	const entries = initial.map((message, index) => ({ type: "message", id: `e${index}`, message }));
@@ -127,6 +130,76 @@ test("commit retries a failed live write using the already persisted receipt", (
 	assert.equal(restored.at(-1), committed);
 	assert.equal(fixture.entries.length, 2);
 	assert.deepEqual(fixture.session.agent.state.messages, restored);
+});
+
+test("a failed journal write leaves both histories untouched and retries once", () => {
+	const fixture = harness();
+	const base = fixture.session.agent.state.messages.slice();
+	const append = fixture.manager.appendMessage;
+	let blocked = true;
+	fixture.manager.appendMessage = (message) => {
+		if (blocked) throw new Error("journal write refused");
+		return append(message);
+	};
+	assert.throws(
+		() => commitSkillReceipt(fixture.manager, [...base, skill()], fixture.ctx),
+		(error) => error.code === "CONTEXT_SKILL_COMMIT_FAILED" && error.phase === "journal write",
+	);
+	assert.equal(fixture.entries.length, 1);
+	assert.deepEqual(fixture.session.agent.state.messages, base);
+	blocked = false;
+	const committed = commitSkillReceipt(fixture.manager, [...base, skill()], fixture.ctx);
+	assert.equal(fixture.entries.length, 2);
+	assert.equal(fixture.entries.filter((entry) => entry.message.herdSkill).length, 1);
+	assert.equal(committed.at(-1), fixture.entries.at(-1).message);
+	assert.equal(fixture.session.agent.state.messages.at(-1), committed.at(-1));
+});
+
+test("a journal that lost its last receipt gets one replacement, not a second copy", () => {
+	const fixture = harness();
+	const lost = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill()], fixture.ctx);
+	// The host never flushed the appended line: a reload sees the session
+	// without that receipt in either history.
+	fixture.entries.pop();
+	fixture.session.agent.state.messages.pop();
+	assert.equal(fixture.entries.length, 1);
+	const resumed = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, skill("clock: 2", 5)], fixture.ctx);
+	assert.equal(fixture.entries.length, 2);
+	assert.equal(fixture.entries.filter((entry) => entry.message.herdSkill).length, 1);
+	assert.notEqual(resumed.at(-1), lost.at(-1));
+	assert.equal(resumed.at(-1), fixture.entries.at(-1).message);
+	const repeated = commitSkillReceipt(fixture.manager, resumed, fixture.ctx);
+	assert.equal(repeated.at(-1), resumed.at(-1));
+	assert.equal(fixture.entries.length, 2);
+	assert.deepEqual(repeated, resumed);
+});
+
+test("a receipt persisted before the language line keeps its bytes until the prefix grows", () => {
+	const fixture = harness();
+	const base = fixture.session.agent.state.messages.slice();
+	// Exactly what the previous build wrote: no reminder, keyed to this prefix.
+	const legacy = {
+		...skill("Autopilot off: manual duty; `ask` is available.", 2),
+		herdSkillTurn: createHash("sha256").update(JSON.stringify(base)).digest("hex"),
+	};
+	fixture.manager.appendMessage(legacy);
+	fixture.session.agent.state.messages.push(legacy);
+	const proposed = skill(`Autopilot off: manual duty; \`ask\` is available. ${REMINDER}`, 3);
+	const reused = commitSkillReceipt(fixture.manager, [...base, proposed], fixture.ctx);
+	assert.equal(reused.at(-1), legacy);
+	assert.equal(fixture.entries.length, 2);
+	assert.equal(reused.at(-1).content[0].text.includes("强制以简体中文思考"), false);
+	// The next real turn grows the prefix, so the reminder reaches the tail.
+	const answer = { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 4 };
+	fixture.manager.appendMessage(answer);
+	fixture.session.agent.state.messages.push(answer);
+	const next = commitSkillReceipt(fixture.manager, [...fixture.session.agent.state.messages, proposed], fixture.ctx);
+	assert.equal(next[1], legacy);
+	assert.notEqual(next.at(-1), legacy);
+	assert.equal(next.at(-1).content[0].text.includes("强制以简体中文思考"), true);
+	assert.equal(next.at(-1), fixture.entries.at(-1).message);
+	assert.equal(fixture.entries.length, 4);
+	assert.equal(fixture.entries.filter((entry) => entry.message?.herdSkill).length, 2);
 });
 
 test("commit creates a new receipt after a real assistant and tool result", () => {

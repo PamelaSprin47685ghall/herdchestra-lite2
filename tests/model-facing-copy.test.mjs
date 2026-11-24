@@ -162,7 +162,9 @@ test("the registered scope_return explains the sealed final receipt and the dige
 		/Tell reliable deductions/i,
 	);
 	expect(returning.description).toMatch(/(?:last|latest|final)[^.]*receipt[^.]*seal/i);
-	expect(returning.description).toContain("bare names of the tools");
+	expect(returning.description).toContain(
+		"every tool call you made with its arguments",
+	);
 	expect(returning.description).not.toContain("elder_report");
 });
 

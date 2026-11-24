@@ -4,6 +4,12 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] — 2026-11-24
+
+### Changed — `scope_return.dafny` says what the record cannot carry
+
+- `scope_return`'s `dafny` guidance now asks for what a successor cannot get from the replay, not for a report that the work exists. It also states that the caller receives the assistant text and this field together, so the field must not restate what the text already says; the search that produced the record is not part of it.
+
 ## [3.2.0] — 2026-11-24
 
 ### Restored — the language reminder rides in the receipt again

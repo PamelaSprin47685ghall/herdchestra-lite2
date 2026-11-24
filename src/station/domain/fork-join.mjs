@@ -79,7 +79,7 @@ export function validateFork(args) {
 	// Empty is valid here: a repeated scope id may carry only budget or
 	// targets. A *new* scope still needs an fsm, and the handler enforces that
 	// after it knows whether the name already exists.
-	const intent = trimText(args?.fsm);
+	const fsm = trimText(args?.fsm);
 	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}
@@ -110,7 +110,7 @@ export function validateFork(args) {
 	return {
 		ok: true,
 		scopeId: args.scopeId,
-		intent,
+		fsm,
 		profession,
 		budget,
 		targets: normalizeTargets(args.targets),
@@ -160,6 +160,27 @@ export function validateForkBatch(args) {
 }
 
 /**
+ * Which receipt a fork item sends, if any. The price and the send path both
+ * read this one function: a priced number always describes text that ships,
+ * and no second action judgement can drift from it.
+ *
+ * - `fresh`: a new child receives its first receipt.
+ * - `revive`: a blocked checkpoint is woken.
+ * - `generation`: the next generation continues a closed scope and carries the
+ *   prior record, which is the largest receipt in the system.
+ * - `null`: nothing is sent now — a blocked plan entry, a requirement queued
+ *   for a running child, or an item that only amends an earlier item in the
+ *   same batch.
+ */
+export function forkReceiptPath(item = null) {
+	if (!item || item.blocked === true) return null;
+	if (item.action === "create") return "fresh";
+	if (item.spawnNextGeneration === true) return "generation";
+	if (item.targetStatus === "blocked") return "revive";
+	return null;
+}
+
+/**
  * The register decision: duplicate scope ids, model selectors and start
  * admission. The handler still registers, spawns, defers and reports.
  *
@@ -172,7 +193,7 @@ export function decideRegister({
 	ownerId = "",
 	models = null,
 	hasSpawner = false,
-	receiptChars = [],
+	pricedChars = [],
 	baseTokens = Number.POSITIVE_INFINITY,
 	tokensPerChar = 0.3,
 	window = null,
@@ -286,13 +307,14 @@ export function decideRegister({
 	}
 	for (let index = 0; index < next.length; index += 1) {
 		const item = next[index];
-		if (item.blocked === true || item.action === "amend") continue;
+		const path = forkReceiptPath(item);
+		if (path === null) continue;
 		const override = item.modelOverride?.contextWindow;
 		const itemWindow =
 			Number.isFinite(override) && override > 0 ? override : window;
 		const verdict = decideForkAdmission({
 			baseTokens,
-			receiptChars: receiptChars[index] ?? 0,
+			receiptChars: pricedChars[index]?.[path] ?? 0,
 			tokensPerChar,
 			window: itemWindow,
 			reserve,

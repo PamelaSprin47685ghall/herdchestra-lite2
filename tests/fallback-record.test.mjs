@@ -14,7 +14,7 @@ function specFor(forkId) {
 	return {
 		forkId,
 		childDepth: 1,
-		intent: "probe",
+		fsm: "probe",
 		// A host can rewrite the receipt. Keep it non-matching so the
 		// timestamp fallback is the only way to find the boundary.
 		receipt: "host rewrote the receipt",
@@ -30,7 +30,7 @@ describe("the fallback record for a child that never returns", () => {
 			forkId: "f1",
 			ownerId: "root",
 			levelKey: "L",
-			intent: "probe",
+			fsm: "probe",
 			depth: 0,
 		});
 

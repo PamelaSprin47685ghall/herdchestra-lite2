@@ -27,9 +27,25 @@ All notable changes to this extension. The format follows
   overwrites the field, so removing it would change snapshot trimming.
 - Tests: 467 pass / 0 fail / 1772 expect / 50 files; `build:web` exits 0.
 
-### Changed — a fork item carries a parallel state machine
+### Changed — a fork item carries a state machine per branch
 
-- The `scope_fork` item contract field is now `fsm`: describe the work as a parallel state machine — the states, the transition that advances each one, and the branches that can run at once — and say how to build the result fastest, not only what the finished thing is. The ledger record keeps the internal name `intent`, so existing snapshots still restore. Error codes (`INVALID_FSM`, `MISSING_FSM`), receipts, and documentation follow the model-facing name.
+- The `scope_fork` item contract field is now `fsm`: describe the work as a set of state machines, one per branch — each machine's states, the transition that advances it, and which branches run at once — and say how to build the result fastest, not only what the finished thing is. Error codes (`INVALID_FSM`, `MISSING_FSM`), receipts, and documentation follow the model-facing name.
+
+### Changed — one word for the state machine text
+
+- The state machine text is `fsm` everywhere: the ledger record, the identity table, the spawn spec, the field the `requirements` queue appends from, and the receipt placeholders (`{{fsm}}`). The internal name `intent` is gone, with no alias left behind.
+
+### Changed — receipts are priced by the text that is actually sent
+
+- The context admission estimate now measures the receipt each path sends: `childReceiptText` for a fresh fork, the blocked target's own text for a revive, and `generationReceiptText` — including the previous generation's whole record — for a continuation. The guessed constants `FORK_RECEIPT_PREFIX_CHARS` and `JOIN_RECEIPT_OVERHEAD_CHARS` are deleted; the join side measures the receipt it renders.
+
+### Changed — every receipt path is admitted
+
+- A revive and a new generation now pass the same admission check as a fresh fork, so a continuation whose prior record does not fit is refused with `FORK_CONTEXT_EXCEEDED` at the fork call instead of colliding with the window inside the child.
+
+### Breaking — ledger snapshots bump to version 2
+
+- A snapshot that still carries `intent` is invalid and rebuilds from an empty ledger; there is no compatibility alias. In-flight fork trees written by 3.0.0 do not restore.
 
 ### Changed — a fork item carries the child's profession
 

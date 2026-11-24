@@ -52,11 +52,6 @@ const F = loadDoc("tools/fork-join");
 const S = loadDoc("receipts/scope");
 const E = loadDoc("errors");
 
-// The join receipt adds a header, the remaining list and the pending-report
-// line. Pricing them keeps the admission estimate from assuming the record
-// rides for free.
-const JOIN_RECEIPT_OVERHEAD_CHARS = 600;
-
 function ledgerOf(station) {
   if (typeof station.forkLedgerPort === "function") {
     const ledger = station.forkLedgerPort();
@@ -182,13 +177,43 @@ function densityOf(station) {
 }
 
 /**
+ * The characters a join receipt adds to the parent's next request.
+ *
+ * The model reads `content[0].text` of the tool result, so the price is the
+ * rendered receipt itself: header, preamble, the record and the unreceived
+ * note. `details` is host metadata and never enters the conversation. The
+ * remaining list is measured after the take, because the candidate leaves the
+ * unreceived set the moment it is accepted.
+ */
+function joinReceiptChars(station, record) {
+  const ledger = ledgerOf(station);
+  const ownerId = ownerIdOf(station);
+  const remaining =
+    ledger === null
+      ? []
+      : unreceivedChildren(ledger, ownerId)
+          .filter((id) => id !== record.forkId)
+          .map((id) => publicScopeId(forkOf(ledger, id)));
+  const outcome =
+    typeof station.childOutcomePort === "function"
+      ? station.childOutcomePort(record.forkId)
+      : null;
+  return joinReceipt({
+    forkId: publicScopeId(record),
+    record: recordTextOf(station, record),
+    failed: record.outcome === "failed" || outcome?.failed === true,
+    reason: record.reason ?? outcome?.reason ?? null,
+    remaining,
+  }).length;
+}
+
+/**
  * Admission for one candidate join. A refusal keeps the record ready; the
  * caller names the refusal and lets the model choose a larger window or a
  * smaller result.
  */
 export function admitJoin(station, record, options = {}) {
-  const recordChars =
-    recordTextOf(station, record).length + JOIN_RECEIPT_OVERHEAD_CHARS;
+  const recordChars = joinReceiptChars(station, record);
   const window = options.window !== undefined ? options.window : windowOf(station);
   const reserve =
     options.reserve !== undefined
@@ -283,7 +308,7 @@ export function childReceiptText(spec) {
       depth: spec.childDepth,
       defaultDepth: FORK_DEFAULT_DEPTH,
       recommendedDepth: FORK_RECOMMENDED_DEPTH,
-      intent: spec.intent,
+      fsm: spec.fsm,
       budget: budgetText(spec.budget),
       targets: targetsText(spec.targets),
     }),
@@ -291,11 +316,6 @@ export function childReceiptText(spec) {
     S["fork.child-routing"],
   ].join("\n");
 }
-
-// The receipt's marker, return note and routing note are fixed lines above the
-// rendered fsm. Pricing them keeps a fork start from looking as small as its
-// state machine alone.
-const FORK_RECEIPT_PREFIX_CHARS = 600;
 
 /** Add two tool-count maps, dropping zeros. */
 function sumBudgets(base, extra) {
@@ -349,21 +369,21 @@ function priorRecordText(record) {
 }
 
 /** Receipt for a generation that continues an already closed scope. */
-function generationReceiptText({ scopeId, childDepth, generation, standing, intent, budget, targets, prior }) {
+function generationReceiptText({ scopeId, childDepth, generation, standing, fsm, budget, targets, prior }) {
   return [
     render(S["fork.child-status"], {
       marker: scopeReceiptMarker(scopeId),
       depth: childDepth,
       defaultDepth: FORK_DEFAULT_DEPTH,
       recommendedDepth: FORK_RECOMMENDED_DEPTH,
-      intent: standing,
+      fsm: standing,
       budget: budgetText(budget),
       targets: targetsText(targets),
     }),
     `[Continuing scope ${scopeId} — generation ${generation}]`,
     "History only; do not re-execute it.",
     prior,
-    ...(intent === "" ? [] : ["", "[New requirement]", intent]),
+    ...(fsm === "" ? [] : ["", "[New requirement]", fsm]),
     S["fork.child-return"],
     S["fork.child-routing"],
   ].join("\n");
@@ -390,18 +410,88 @@ export function handleForkCall(station, call, options = {}) {
   const depth = depthOf(station);
   const spawner =
     typeof station.childSpawnPort === "function" ? station.childSpawnPort() : null;
-  const receiptChars = batch.items.map((item) => {
-    if (item.blocked === true) return 0;
-    const profession =
-      typeof item.profession === "string" ? item.profession.trim() : "";
-    const identityChars = profession === "" ? 0 : profession.length + 1;
-    return childReceiptText({
-      scopeId: item.scopeId,
-      childDepth: depth + 1,
-      intent: item.intent,
-      budget: item.budget,
-      targets: item.targets,
-    }).length + FORK_RECEIPT_PREFIX_CHARS + identityChars;
+  // Pricing mirrors the send loop: one number per receipt-sending path, and
+  // zero for a path that sends nothing. The domain picks the number with the
+  // same action it resolves, so every fork is priced by the text its child
+  // actually reads. A price taken from a different record than the one sent is
+  // a defect, not an approximation.
+  const liveByName = new Map();
+  for (const id of ledger.order) {
+    const fork = forkOf(ledger, id);
+    if (!fork) continue;
+    const key = publicScopeId(fork).toLowerCase();
+    const previous = liveByName.get(key);
+    const generation = Number.isInteger(fork.generation) ? fork.generation : 1;
+    const previousGeneration =
+      previous && Number.isInteger(previous.generation) ? previous.generation : 1;
+    if (!previous || generation >= previousGeneration) liveByName.set(key, fork);
+  }
+  const firstItemByScope = new Map();
+  const identityCharsOf = (item, sent) => {
+    const profession = item.profession ?? sent?.profession ?? "";
+    const trimmed = typeof profession === "string" ? profession.trim() : "";
+    return trimmed === "" ? 0 : trimmed.length + 1;
+  };
+  // A generation is priced by the receipt it sends, whether or not the item
+  // names a budget: an empty budget still renders a receipt.
+  const generationChars = (item, target, identityChars) => {
+    if (!target) return 0;
+    if (
+      target.status !== "ready" &&
+      target.status !== "joined" &&
+      target.status !== "failed"
+    ) {
+      return 0;
+    }
+    const budget = sumBudgets(target.remaining, item.budget);
+    const generation =
+      (Number.isInteger(target.generation) ? target.generation : 1) + 1;
+    return (
+      generationReceiptText({
+        scopeId: item.scopeId,
+        childDepth: depth + 1,
+        generation,
+        standing: target.fsm,
+        fsm: item.fsm,
+        budget,
+        targets: unionTargets(target.targets, item.targets),
+        prior: priorRecordText(target),
+      }).length + identityChars
+    );
+  };
+  const pricedChars = batch.items.map((item) => {
+    if (item.blocked === true) return { fresh: 0, revive: 0, generation: 0 };
+    const key = item.scopeId.toLowerCase();
+    const earlier = firstItemByScope.get(key) ?? null;
+    if (earlier === null) firstItemByScope.set(key, item);
+    // A repeated name inside one batch targets the fork the earlier item
+    // creates, so the receipt it sends carries that item's fsm, budget and
+    // targets.
+    const target = earlier === null ? (liveByName.get(key) ?? null) : null;
+    const sent = target ?? earlier;
+    const identityChars = identityCharsOf(item, sent);
+    const fresh =
+      childReceiptText({
+        scopeId: item.scopeId,
+        childDepth: depth + 1,
+        fsm: item.fsm,
+        budget: item.budget,
+        targets: item.targets,
+      }).length + identityChars;
+    const revive = sent
+      ? childReceiptText({
+          scopeId: item.scopeId,
+          childDepth: target ? target.childDepth : depth + 1,
+          fsm: sent.fsm,
+          budget: sent.budget,
+          targets: sent.targets,
+        }).length + identityChars
+      : 0;
+    return {
+      fresh,
+      revive,
+      generation: generationChars(item, target, identityChars),
+    };
   });
   const decision = decideRegister({
     items: batch.items,
@@ -409,7 +499,7 @@ export function handleForkCall(station, call, options = {}) {
     ownerId: ownerIdOf(station),
     models: options.models ?? station.host?.model?.query?.(options.ctx) ?? null,
     hasSpawner: typeof spawner === "function",
-    receiptChars,
+    pricedChars,
     baseTokens: measuredBase(station),
     tokensPerChar: densityOf(station),
     window: windowOf(station),
@@ -465,14 +555,14 @@ export function handleForkCall(station, call, options = {}) {
     });
   }
 
-  const blankIntent = decision.items.find(
-    (item) => item.action === "create" && item.intent === "",
+  const blankFsm = decision.items.find(
+    (item) => item.action === "create" && item.fsm === "",
   );
-  if (blankIntent) {
+  if (blankFsm) {
     return errorResult(
       "MISSING_FSM",
-      render(E["missing-fsm"] || "A new scope needs an fsm.", { scopeId: blankIntent.scopeId }),
-      { scopeId: blankIntent.scopeId },
+      render(E["missing-fsm"] || "A new scope needs an fsm.", { scopeId: blankFsm.scopeId }),
+      { scopeId: blankFsm.scopeId },
     );
   }
 
@@ -516,12 +606,12 @@ export function handleForkCall(station, call, options = {}) {
     return lines.join("\n");
   }
 
-  const specOf = (fork, item, intent) => ({
+  const specOf = (fork, item, fsm) => ({
     forkId: fork.forkId,
     scopeId: fork.scopeId,
     sourceToolCallId: baseId,
     childDepth: fork.childDepth,
-    intent,
+    fsm,
     profession: item.profession ?? fork.profession ?? "",
     budget: fork.budget,
     time: fork.timeBudgetMs == null ? null : fork.timeBudgetMs / 1000,
@@ -533,13 +623,13 @@ export function handleForkCall(station, call, options = {}) {
     parentDepth: depth,
   });
 
-  const queueChild = (fork, item, intent, receipt, kind = "created") => {
-    const spec = specOf(fork, item, intent);
+  const queueChild = (fork, item, fsm, receipt, kind = "created") => {
+    const spec = specOf(fork, item, fsm);
     spec.receipt = withProfession(receipt, spec.profession);
     pending.push({
       forkId: fork.forkId,
       scopeId: item.scopeId,
-      intent,
+      fsm,
       childDepth: fork.childDepth,
       kind,
       spec,
@@ -550,7 +640,7 @@ export function handleForkCall(station, call, options = {}) {
     failed.push({
       forkId,
       scopeId: item.scopeId,
-      intent: item.intent,
+      fsm: item.fsm,
       reason,
     });
   };
@@ -566,7 +656,7 @@ export function handleForkCall(station, call, options = {}) {
         scopeId: item.scopeId,
         ownerId: parentOwnerId,
         levelKey: levelKeyOf(station),
-        intent: item.intent,
+        fsm: item.fsm,
         depth,
         blocked: item.blocked === true,
         budget: item.budget,
@@ -594,13 +684,13 @@ export function handleForkCall(station, call, options = {}) {
       }
       forkIdByScope.set(key, fork.forkId);
       if (item.blocked === true) {
-        deferred.push({ forkId, scopeId: item.scopeId, intent: item.intent });
+        deferred.push({ forkId, scopeId: item.scopeId, fsm: item.fsm });
         continue;
       }
-      queueChild(fork, item, item.intent, childReceiptText({
+      queueChild(fork, item, item.fsm, childReceiptText({
         scopeId: item.scopeId,
         childDepth: fork.childDepth,
-        intent: item.intent,
+        fsm: item.fsm,
         budget: fork.budget,
         targets: fork.targets,
       }));
@@ -625,7 +715,7 @@ export function handleForkCall(station, call, options = {}) {
       const before = Array.isArray(target.requirements) ? target.requirements.length : 0;
       const out = amendFork(ledger, target.forkId, {
         budget: item.budget,
-        intent: item.intent,
+        fsm: item.fsm,
         profession: item.profession,
         targets: item.targets,
       }, { clock });
@@ -637,7 +727,7 @@ export function handleForkCall(station, call, options = {}) {
       const entry = {
         forkId: target.forkId,
         scopeId: item.scopeId,
-        intent: item.intent,
+        fsm: item.fsm,
         added: out.added,
         queued: Math.max(0, (Array.isArray(target.requirements) ? target.requirements.length : 0) - before),
         overLimit: out.overLimit === true,
@@ -657,10 +747,10 @@ export function handleForkCall(station, call, options = {}) {
         if (clock && typeof clock.start === "function") {
           clock.start(target, target.timeBudgetMs, startedAt);
         }
-        queueChild(target, item, target.intent, childReceiptText({
+        queueChild(target, item, target.fsm, childReceiptText({
           scopeId: item.scopeId,
           childDepth: target.childDepth,
-          intent: target.intent,
+          fsm: target.fsm,
           budget: target.budget,
           targets: target.targets,
         }), "revived");
@@ -695,13 +785,13 @@ export function handleForkCall(station, call, options = {}) {
     }
     const generation = (Number.isInteger(target.generation) ? target.generation : 1) + 1;
     const forkId = nextForkId(index, generation);
-    const standing = item.intent === "" ? target.intent : item.intent;
+    const standing = item.fsm === "" ? target.fsm : item.fsm;
     const registered = registerFork(ledger, {
       forkId,
       scopeId: item.scopeId,
       ownerId: parentOwnerId,
       levelKey: levelKeyOf(station),
-      intent: standing,
+      fsm: standing,
       depth,
       blocked: false,
       budget,
@@ -730,8 +820,8 @@ export function handleForkCall(station, call, options = {}) {
       scopeId: item.scopeId,
       childDepth: fork.childDepth,
       generation,
-      standing: target.intent,
-      intent: item.intent,
+      standing: target.fsm,
+      fsm: item.fsm,
       budget,
       targets: fork.targets,
       prior: priorRecordText(target),
@@ -739,7 +829,7 @@ export function handleForkCall(station, call, options = {}) {
     continued.push({
       forkId,
       scopeId: item.scopeId,
-      intent: item.intent,
+      fsm: item.fsm,
       generation,
       priorForkId: target.forkId,
       added: item.budget,
@@ -757,7 +847,7 @@ export function handleForkCall(station, call, options = {}) {
         started.push({
           forkId: entry.forkId,
           scopeId: entry.scopeId,
-          intent: entry.intent,
+          fsm: entry.fsm,
           childDepth: entry.childDepth,
         });
       }
@@ -768,7 +858,7 @@ export function handleForkCall(station, call, options = {}) {
       failed.push({
         forkId: entry.forkId,
         scopeId: entry.scopeId,
-        intent: entry.intent,
+        fsm: entry.fsm,
         reason,
       });
       markReady(ledger, entry.forkId, { ok: false, reason: `did not start: ${reason}` });
@@ -791,7 +881,7 @@ export function handleForkCall(station, call, options = {}) {
             render(F["fork.started-line"], {
               forkId: entry.scopeId,
               childDepth: entry.childDepth,
-              intent: entry.intent,
+              fsm: entry.fsm,
             }),
           )
           .join("\n"),
@@ -826,7 +916,7 @@ export function handleForkCall(station, call, options = {}) {
           .map((entry) =>
             render(F["fork.deferred-line"], {
               forkId: entry.scopeId,
-              intent: entry.intent,
+              fsm: entry.fsm,
             }),
           )
           .join("\n"),
@@ -841,7 +931,7 @@ export function handleForkCall(station, call, options = {}) {
           .map((entry) =>
             render(F["fork.failed-line"], {
               forkId: entry.scopeId,
-              intent: entry.intent,
+              fsm: entry.fsm,
               reason: entry.reason,
             }),
           )

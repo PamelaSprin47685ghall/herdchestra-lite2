@@ -80,7 +80,7 @@ function put(object, key, value) {
 
 export function createBracketLedger() {
   return {
-    version: 1,
+    version: 2,
     // Monotonic event counter shared by fork registration and join
     // completion, so an interval can compare positions from both sides.
     seq: 0,
@@ -114,7 +114,7 @@ export function registerFork(ledger, spec, options = {}) {
   if (!isNonEmptyString(s.ownerId)) {
     return failure("INVALID_OWNER", "ownerId must be a non-empty string.");
   }
-  if (!isNonEmptyString(s.intent)) {
+  if (!isNonEmptyString(s.fsm)) {
     return failure("INVALID_FSM", "fsm must be a non-empty string.");
   }
   if (!isDepth(s.depth)) {
@@ -141,7 +141,7 @@ export function registerFork(ledger, spec, options = {}) {
     scopeId: s.scopeId,
     ownerId: s.ownerId,
     levelKey,
-    intent: s.intent.trim(),
+    fsm: s.fsm.trim(),
     // The identity statement handed to the child at spawn time. A record
     // without one is legal here only because older snapshots predate the
     // field; every tool-created fork validates it before registration.
@@ -154,7 +154,7 @@ export function registerFork(ledger, spec, options = {}) {
     continuesForkId: isNonEmptyString(s.continuesForkId)
       ? s.continuesForkId
       : null,
-    // Requirements queued after the birth intent, and how many the child has
+    // Requirements queued after the birth fsm, and how many the child has
     // been handed. A blocked entry can collect them before it ever runs.
     requirements: [],
     requirementsDelivered: 0,
@@ -256,10 +256,10 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
     );
     if (!granted.ok) return granted;
   }
-  const intent = typeof source.intent === "string" ? source.intent.trim() : "";
-  if (intent !== "") {
+  const fsm = typeof source.fsm === "string" ? source.fsm.trim() : "";
+  if (fsm !== "") {
     if (!Array.isArray(record.requirements)) record.requirements = [];
-    record.requirements.push(intent);
+    record.requirements.push(fsm);
   }
   const profession =
     typeof source.profession === "string" ? source.profession.trim() : "";
@@ -773,7 +773,7 @@ function validRecord(forkId, record) {
   if (!isPlainObject(record)) return false;
   if (record.forkId !== forkId) return false;
   if (!isNonEmptyString(record.ownerId)) return false;
-  if (!isNonEmptyString(record.intent)) return false;
+  if (!isNonEmptyString(record.fsm)) return false;
   if (!isDepth(record.depth)) return false;
   if (!STATUSES.has(record.status)) return false;
   if (!Number.isInteger(record.openSeq) || record.openSeq < 0) return false;
@@ -792,7 +792,7 @@ function validRecord(forkId, record) {
 /** True when a stored value can rebuild a bracket tree without guessing. */
 export function validLedger(value) {
   if (!isPlainObject(value)) return false;
-  if (value.version !== 1) return false;
+  if (value.version !== 2) return false;
   for (const key of ["seq", "closedSeq", "receiveSeq"]) {
     if (!Number.isInteger(value[key]) || value[key] < 0) return false;
   }

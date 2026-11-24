@@ -33,7 +33,7 @@ function ledgerWith(forkId, budget) {
   const registered = registerFork(ledger, {
     forkId,
     ownerId: "root",
-    intent: "task",
+    fsm: "task",
     depth: 0,
     budget,
     startedAt: 0,

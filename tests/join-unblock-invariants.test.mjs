@@ -73,7 +73,7 @@ function registerChild(ledger, forkId, ownerId = "root", options = {}) {
 		forkId,
 		ownerId,
 		levelKey: options.levelKey ?? "L0",
-		intent: options.intent ?? `task ${forkId}`,
+		fsm: options.fsm ?? `task ${forkId}`,
 		depth: options.depth ?? (ownerId === "root" ? 0 : 1),
 		blocked: options.blocked === true,
 	});
@@ -529,7 +529,7 @@ describe("shared ledger across registries and wiring resilience", () => {
 			ownScopeId: "c-prop",
 			parentOwnerId: "root",
 			childDepth: 1,
-			intent: "check registry propagation",
+			fsm: "check registry propagation",
 			receipt: "hi",
 			budget: { read: 1 },
 			targets: ["x"],

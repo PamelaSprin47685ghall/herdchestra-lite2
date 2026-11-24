@@ -17,7 +17,7 @@ function harness(returnAfterFirst = false) {
     forkId: "f1",
     scopeId: "worker",
     ownerId: "root",
-    intent: "first",
+    fsm: "first",
     depth: 0,
     budget: { read: 2 },
     time: 60,

@@ -41,8 +41,8 @@ function stationFor(ledger, identity = null) {
 describe("adoption follows the current receiver", () => {
   test("a reparented branch hands its children to its current parent", () => {
     const ledger = createBracketLedger();
-    registerFork(ledger, { forkId: "p", ownerId: "root", intent: "parent", depth: 0 });
-    registerFork(ledger, { forkId: "c", ownerId: "p", intent: "child", depth: 1 });
+    registerFork(ledger, { forkId: "p", ownerId: "root", fsm: "parent", depth: 0 });
+    registerFork(ledger, { forkId: "c", ownerId: "p", fsm: "child", depth: 1 });
     // p itself was adopted by g before it returns.
     // The grandparent adopts p, and p still owns c.
     reparentOrphans(ledger, "root", "g");
@@ -63,7 +63,7 @@ describe("adoption follows the current receiver", () => {
     registerFork(ledger, {
       forkId: "later",
       ownerId: "p",
-      intent: "needs a decision",
+      fsm: "needs a decision",
       depth: 1,
       blocked: true,
     });
@@ -79,7 +79,7 @@ describe("a lost bracket never parks its child", () => {
   test("waitForJoin returns when the bracket was abandoned", async () => {
     const registry = createForkRegistry();
     const ledger = ledgerFor(registry, "lost");
-    registerFork(ledger, { forkId: "c", ownerId: "root", intent: "child", depth: 0 });
+    registerFork(ledger, { forkId: "c", ownerId: "root", fsm: "child", depth: 0 });
     markReady(ledger, "c");
     forkOf(ledger, "c").status = "failed";
     const waited = await waitForJoin(registry, ledger, "c");
@@ -131,8 +131,8 @@ describe("a batch projects one item into each child", () => {
 describe("repeated right brackets do not double-count", () => {
   test("a second scope_return is refused and moves no bracket", () => {
     const ledger = createBracketLedger();
-    registerFork(ledger, { forkId: "p", ownerId: "root", intent: "parent", depth: 0 });
-    registerFork(ledger, { forkId: "c", ownerId: "p", intent: "child", depth: 1 });
+    registerFork(ledger, { forkId: "p", ownerId: "root", fsm: "parent", depth: 0 });
+    registerFork(ledger, { forkId: "c", ownerId: "p", fsm: "child", depth: 1 });
     const station = stationFor(ledger, { forkId: "p", parentOwnerId: "root" });
     const first = handleReturnCall(station, { id: "r1", arguments: {} });
     expect(first.isError).toBeUndefined();
@@ -147,7 +147,7 @@ describe("repeated right brackets do not double-count", () => {
 
   test("a second join finds nothing to take", () => {
     const ledger = createBracketLedger();
-    registerFork(ledger, { forkId: "f1", ownerId: "root", intent: "child", depth: 0 });
+    registerFork(ledger, { forkId: "f1", ownerId: "root", fsm: "child", depth: 0 });
     markReady(ledger, "f1");
     const station = stationFor(ledger);
     const first = handleJoinCall(station, { id: "j1", arguments: {} });
@@ -161,14 +161,14 @@ describe("repeated right brackets do not double-count", () => {
 describe("a join leaves the parent where it was", () => {
   test("receives a child without moving the parent's level, model or budget", () => {
     const ledger = createBracketLedger();
-    registerFork(ledger, { forkId: "f1", ownerId: "root", intent: "child", depth: 0 });
+    registerFork(ledger, { forkId: "f1", ownerId: "root", fsm: "child", depth: 0 });
     markReady(ledger, "f1");
     const station = stationFor(ledger);
     station.state = {
       scopes: [
         {
           id: "s1",
-          intent: "parent work",
+          fsm: "parent work",
           budget: { read: 3, bash: 1 },
           remaining: { read: 2, bash: 1 },
           modelKey: "parent-model",

@@ -14,7 +14,7 @@ function ledgerWith(status = "running") {
 		forkId: "fork_a",
 		ownerId: "root",
 		levelKey: "root|0|0",
-		intent: "child work",
+		fsm: "child work",
 		depth: 0,
 	});
 	if (status === "ready") markReady(ledger, "fork_a", { ok: true });
@@ -56,14 +56,14 @@ describe("nudgeDecision", () => {
 			forkId: "fork_a",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent work",
+			fsm: "parent work",
 			depth: 0,
 		});
 		registerFork(ledger, {
 			forkId: "fork_b",
 			ownerId: "fork_a",
 			levelKey: "fork_a|0|0",
-			intent: "grandchild work",
+			fsm: "grandchild work",
 			depth: 1,
 		});
 		const decision = nudgeDecision({

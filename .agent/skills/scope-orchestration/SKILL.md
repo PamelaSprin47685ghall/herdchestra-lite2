@@ -13,7 +13,7 @@ The user-facing account is `README.md`; the code is authoritative for every numb
 - **Station** owns state and stays synchronous; **Ticket** owns waiting and is the only place `await` runs. Fork, join, and return follow the same split.
 - **Identity** is `scopeId`. A reused id is an upsert: `running` and `blocked` take budget increments, one more requirement, and merged targets; `ready` supersedes and starts the next generation; `joined` and `failed` start a new generation with the old record as history.
 - **Records are frozen in the ledger.** The tool surface resolves a `scopeId` to its latest generation only; an older generation has no public query.
-- **The model surface names the contract `fsm`; the ledger record keeps `intent`.** `validateFork` reads the new field and normalizes it to `intent`, so snapshots, `validRecord`, and the station domain stay unchanged. The text describes the work as a set of state machines, one per branch: each machine's states, the transition that advances it, and how to build the result fastest. Complex flow orchestration is why the contract takes this shape.
+- **One word for the contract: `fsm`.** `validateFork`, `record.fsm`, `identity.fsm`, the spawn spec, and the receipt render key all use it; the ledger snapshot is version 2, and a version-1 snapshot is refused rather than migrated. The text describes the work as a set of state machines, one per branch: each machine's states, the transition that advances it, and how to build the result fastest. Complex flow orchestration is why the contract takes this shape.
 
 ## State machine
 

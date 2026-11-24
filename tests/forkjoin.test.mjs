@@ -25,7 +25,7 @@ function fork(ledger, forkId, ownerId = "root", depth = 0, levelKey = "L0") {
     forkId,
     ownerId,
     levelKey,
-    intent: `task ${forkId}`,
+    fsm: `task ${forkId}`,
     depth,
   });
   expect(result.ok).toBe(true);
@@ -49,14 +49,14 @@ describe("registration", () => {
     const again = registerFork(ledger, {
       forkId: "f1",
       ownerId: "root",
-      intent: "again",
+      fsm: "again",
       depth: 0,
     });
     expect(again.ok).toBe(false);
     expect(again.code).toBe("DUPLICATE_FORK");
   });
 
-  test("refuses an empty intent on a new scope", async () => {
+  test("refuses an empty fsm on a new scope", async () => {
     const { handleForkCall } = await import("../src/station/fork-controls.mjs");
     const item = {
       scopeId: "probe",
@@ -75,7 +75,7 @@ describe("registration", () => {
       },
     };
     const result = handleForkCall(station, {
-      id: "call-empty-intent",
+      id: "call-empty-fsm",
       arguments: { forks: [item] },
     });
     expect(result.isError).toBe(true);
@@ -416,7 +416,7 @@ describe("owner queries", () => {
     // An empty fsm is legal for an amendment; a *new* scope rejects it in
     // the handler, where the name's existence is known.
     expect(validateFork({ ...base, fsm: "  " }).ok).toBe(true);
-    expect(validateFork({ ...base, fsm: "  " }).intent).toBe("");
+    expect(validateFork({ ...base, fsm: "  " }).fsm).toBe("");
     expect(validateFork({ ...base, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
     expect(validateFork({ ...base, time: 0 }).ok).toBe(true);
     expect(validateFork({ ...base, time: 0 }).time).toBeUndefined();

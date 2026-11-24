@@ -353,7 +353,7 @@ describe("fork item schema", () => {
 		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
 	});
 
-	test("a reused scopeId amends, and intent may be omitted", () => {
+	test("a reused scopeId amends, and fsm may be omitted", () => {
 		const item = scopeTools.forkParameters.properties.forks.items;
 		expect(item.required).toEqual(["scopeId", "profession", "blocked", "budget", "targets"]);
 		expect(item.required).not.toContain("fsm");
@@ -387,10 +387,10 @@ describe("scope size stays O(1) at every depth", () => {
 	});
 
 	test("the fork fsm asks for a small scope, not sqrt(n)", () => {
-		const intent = scopeTools.FORK_FSM_DESCRIPTION;
-		expect(intent).not.toContain("sqrt");
-		expect(intent).toMatch(/\b(?:18|eighteen)\b/i);
-		expect(intent).toMatch(/\b(?:27|twenty-seven)\b/i);
+		const fsm = scopeTools.FORK_FSM_DESCRIPTION;
+		expect(fsm).not.toContain("sqrt");
+		expect(fsm).toMatch(/\b(?:18|eighteen)\b/i);
+		expect(fsm).toMatch(/\b(?:27|twenty-seven)\b/i);
 	});
 
 	test("the budget names the panhandle's small total and keeps its funding rule", () => {
@@ -502,15 +502,15 @@ describe("tree depth methodology is default and recommended, not a max", () => {
 	const noCeiling = /\bmax\b|\bmaximum\b|\bceiling\b/i;
 
 	test("the fork fsm states the default depth and the roles that use it", () => {
-		const intent = scopeTools.FORK_FSM_DESCRIPTION;
-		expect(intent).not.toContain("{{");
-		expect(intent).toMatch(/2/);
-		expect(intent).toMatch(/3/);
-		expect(intent).toMatch(/recommended/i);
-		expect(intent).toMatch(/leaf|subtree/i);
+		const fsm = scopeTools.FORK_FSM_DESCRIPTION;
+		expect(fsm).not.toContain("{{");
+		expect(fsm).toMatch(/2/);
+		expect(fsm).toMatch(/3/);
+		expect(fsm).toMatch(/recommended/i);
+		expect(fsm).toMatch(/leaf|subtree/i);
 		// The guidance is advice. Any sentence carrying the depth must read as
 		// a default, never as a hard bound.
-		const depthSentences = intent
+		const depthSentences = fsm
 			.split(/(?<=\.)\s+/)
 			.filter((sentence) => /depth|layer|level/i.test(sentence))
 			.join(" ");

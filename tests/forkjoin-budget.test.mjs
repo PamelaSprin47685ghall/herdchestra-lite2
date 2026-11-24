@@ -19,7 +19,7 @@ function fork(ledger, spec = {}) {
   const result = registerFork(ledger, {
     forkId: spec.forkId ?? "f1",
     ownerId: spec.ownerId ?? "root",
-    intent: spec.intent ?? "task",
+    fsm: spec.fsm ?? "task",
     depth: spec.depth ?? 0,
     budget: spec.budget,
     time: spec.time,
@@ -55,7 +55,7 @@ describe("fork budget registration", () => {
       const result = registerFork(ledger, {
         forkId: `f-${String(budget)}`,
         ownerId: "root",
-        intent: "task",
+        fsm: "task",
         depth: 0,
         budget,
       });
@@ -71,7 +71,7 @@ describe("fork budget registration", () => {
       const result = registerFork(ledger, {
         forkId: `t-${String(time)}`,
         ownerId: "root",
-        intent: "task",
+        fsm: "task",
         depth: 0,
         time,
       });

@@ -61,7 +61,7 @@ export function setIdentity(registry, forkId, identity) {
     ownScopeId: typeof identity.ownScopeId === "string" ? identity.ownScopeId : null,
     // The child's own scope needs the same shape the parent declared. These
     // are data, not decisions: the station opens the scope when it reads them.
-    intent: typeof identity.intent === "string" ? identity.intent : null,
+    fsm: typeof identity.fsm === "string" ? identity.fsm : null,
     budget:
       identity.budget && typeof identity.budget === "object" ? { ...identity.budget } : null,
     time: Number.isFinite(identity.time) && identity.time > 0 ? identity.time : null,
@@ -211,7 +211,7 @@ export function ledgerFor(registry, key = null) {
 
 function createLedger() {
   return {
-    version: 1,
+    version: 2,
     seq: 0,
     closedSeq: 0,
     receiveSeq: 0,

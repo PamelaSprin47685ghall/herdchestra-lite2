@@ -262,7 +262,7 @@ function asChild(station, { forkId = "fork_a", budget = { read: 1 }, time = 60 }
 		forkId,
 		ownerId: "root",
 		levelKey: "root|0|0",
-		intent: "child work",
+		fsm: "child work",
 		depth: 0,
 		budget,
 		time,
@@ -316,7 +316,7 @@ describe("todo on the root branch", () => {
 			forkId: "fork_open",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "unreceived child",
+			fsm: "unreceived child",
 			depth: 0,
 		});
 		expect(registered.ok).toBe(true);
@@ -385,7 +385,7 @@ describe("todo in a fork child", () => {
 			forkId: "grand",
 			ownerId: "fork_a",
 			levelKey: "fork_a|0|0",
-			intent: "grandchild work",
+			fsm: "grandchild work",
 			depth: 1,
 		});
 		expect(grandchild.ok).toBe(true);

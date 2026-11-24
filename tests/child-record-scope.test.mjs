@@ -22,7 +22,7 @@ const receipt = (forkId = FORK_ID, timestamp = 300) => ({
 	role: "user",
 	content: childReceiptText({
 		forkId,
-		intent: "read the version",
+		fsm: "read the version",
 		budget: { read: 2 },
 		targets: ["src/parser.mjs"],
 		childDepth: 1,
@@ -76,7 +76,7 @@ describe("childRecordStart", () => {
 	test("the receipt opens with the scope marker, not a family relation", () => {
 		const text = childReceiptText({
 			forkId: FORK_ID,
-			intent: "read the version",
+			fsm: "read the version",
 			budget: { read: 2 },
 			targets: ["src/parser.mjs"],
 			childDepth: 1,

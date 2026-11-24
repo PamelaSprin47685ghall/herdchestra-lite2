@@ -88,7 +88,7 @@ describe("fork validation and register", () => {
 
 	test("validateFork normalizes targets and leaves the fsm to the decision", () => {
 		expect(validateFork(item).ok).toBe(true);
-		expect(validateFork({ ...item, fsm: "  " })).toMatchObject({ ok: true, intent: "" });
+		expect(validateFork({ ...item, fsm: "  " })).toMatchObject({ ok: true, fsm: "" });
 		expect(validateFork({ ...item, budget: { read: -1 } }).code).toBe("INVALID_BUDGET");
 		expect(validateFork({ ...item, targets: [] }).code).toBe("INVALID_TARGETS");
 		expect(
@@ -151,7 +151,7 @@ describe("fork validation and register", () => {
 			items: [runnable],
 			forks: [],
 			hasSpawner: true,
-			receiptChars: 10_000,
+			pricedChars: [{ fresh: 10_000, revive: 10_000, generation: 10_000 }],
 			baseTokens: 100_000,
 			tokensPerChar: 0.3,
 			window: 100_000,

@@ -197,7 +197,7 @@ describe("reuse refusal", () => {
       forkId: "theirs",
       scopeId: "worker",
       ownerId: "other",
-      intent: "not yours",
+      fsm: "not yours",
       depth: 0,
       budget: { read: 1 },
       time: 30,

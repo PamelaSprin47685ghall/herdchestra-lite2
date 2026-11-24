@@ -72,10 +72,10 @@ test("a promoted successor is ready to answer without reevaluating its ledger", 
 });
 
 test("routine scope status keeps local budget and pending work without repeating the assignment", () => {
-	const intent = "Write a report on the cave swallows of Costa Rica";
+	const fsm = "Write a report on the cave swallows of Costa Rica";
 	const state = { autopilot: true, startedAt: 0 };
 	const branch = {
-		intent,
+		fsm,
 		remaining: { read: 2, edit: 1 },
 		budget: { read: 8, edit: 3 },
 		clockPausedAt: 4000,
@@ -92,7 +92,7 @@ test("routine scope status keeps local budget and pending work without repeating
 	}
 	// It still ships exactly once in the skill text the system prompt carries.
 	expect(persistentOperatingSkill.split(chineseRequirement)).toHaveLength(2);
-	expect(pending).not.toContain(intent);
+	expect(pending).not.toContain(fsm);
 	expect(pending).toMatch(/read remaining\s+2(?:\.00)?\/8(?:\.00)?\b/);
 	expect(pending).toMatch(/edit remaining\s+1(?:\.00)?\/3(?:\.00)?\b/);
 	expect(pending).toMatch(/\btime remaining\s+0:20\s*\/\s*0:24\b/);
@@ -151,7 +151,7 @@ test("the root receipt reports unreceived work until the root joins it", () => {
 	station.forkLedgerPort = () => ledger;
 	station.forkOwnerId = () => null;
 	expect(registerFork(ledger, {
-		forkId: "worker-1", ownerId: "root", intent: "inspect the sample", depth: 0,
+		forkId: "worker-1", ownerId: "root", fsm: "inspect the sample", depth: 0,
 	}).ok).toBe(true);
 	expect(markReady(ledger, "worker-1").ok).toBe(true);
 

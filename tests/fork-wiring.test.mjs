@@ -36,7 +36,7 @@ function specFor(forkId) {
   return {
     forkId,
     childDepth: 1,
-    intent: "probe",
+    fsm: "probe",
     receipt: "You are now in the scope " + forkId,
     parentOwnerId: "root",
   };
@@ -108,7 +108,7 @@ describe("attachForkPorts", () => {
       forkId: "f1",
       ownerId: "root",
       levelKey: "L",
-      intent: "probe",
+      fsm: "probe",
       depth: 0,
     });
     const waiting = waitForReady(wiring.registry, attached.ledger, {
@@ -137,7 +137,7 @@ describe("attachForkPorts", () => {
       forkId: "f2",
       ownerId: "root",
       levelKey: "L",
-      intent: "probe",
+      fsm: "probe",
       depth: 0,
     });
     const waiting = waitForReady(wiring.registry, attached.ledger, {
@@ -175,7 +175,7 @@ describe("attachForkPorts", () => {
       forkId: "f4",
       ownerId: "root",
       levelKey: "L",
-      intent: "probe",
+      fsm: "probe",
       depth: 0,
     });
     // The child's own scope_return freezes a record before the spawn tail
@@ -203,7 +203,7 @@ describe("attachForkPorts", () => {
       forkId: "f3",
       ownerId: "root",
       levelKey: "L",
-      intent: "probe",
+      fsm: "probe",
       depth: 0,
     });
     const waiting = waitForReady(wiring.registry, attached.ledger, {
@@ -235,7 +235,7 @@ describe("attachForkPorts", () => {
       forkId: "f4",
       ownerId: "root",
       levelKey: "L",
-      intent: "probe",
+      fsm: "probe",
       depth: 0,
     });
     const waiting = waitForReady(wiring.registry, attached.ledger, {
@@ -263,8 +263,8 @@ describe("attachForkPorts", () => {
         }),
       }),
     });
-    registerFork(attached.ledger, { forkId: "a", ownerId: "root", levelKey: "L", intent: "a", depth: 0 });
-    registerFork(attached.ledger, { forkId: "b", ownerId: "root", levelKey: "L", intent: "b", depth: 0 });
+    registerFork(attached.ledger, { forkId: "a", ownerId: "root", levelKey: "L", fsm: "a", depth: 0 });
+    registerFork(attached.ledger, { forkId: "b", ownerId: "root", levelKey: "L", fsm: "b", depth: 0 });
     const spawn = station.childSpawnPort();
     spawn(specFor("a"));
     spawn(specFor("b"));
@@ -287,7 +287,7 @@ describe("attachForkPorts", () => {
     const identity = {
       forkId: "c9",
       parentOwnerId: "root",
-      intent: "read the parser",
+      fsm: "read the parser",
       budget: { read: 2 },
       time: 90,
       targets: ["src/parser.mjs"],
@@ -365,7 +365,7 @@ describe("attachForkPorts", () => {
       forkId: "f9",
       ownerId: "root",
       levelKey: "L",
-      intent: "identity",
+      fsm: "identity",
       depth: 0,
     });
     station.childSpawnPort()(specFor("f9"));
@@ -414,7 +414,7 @@ describe("attachForkPorts", () => {
       forkId: "slow",
       ownerId: "root",
       levelKey: "L",
-      intent: "slow",
+      fsm: "slow",
       depth: 0,
     });
     const waiting = waitForReady(wiring.registry, attached.ledger, {
@@ -537,7 +537,7 @@ describe("termination hook binding", () => {
       forkId: "f-hook",
       ownerId: "root",
       levelKey: "L",
-      intent: "x",
+      fsm: "x",
       depth: 0,
     });
     station.childSpawnPort()(specFor("f-hook"));
@@ -614,7 +614,7 @@ describe("child identity table", () => {
       forkId: "f-ident",
       ownerId: "root",
       levelKey: "L",
-      intent: "x",
+      fsm: "x",
       depth: 0,
     });
     station.childSpawnPort()({
@@ -648,7 +648,7 @@ describe("child identity table", () => {
       forkId: providerId,
       ownerId: "root",
       levelKey: "L",
-      intent: "early identity",
+      fsm: "early identity",
       depth: 0,
     });
     station.childSpawnPort()(specFor(providerId));
@@ -722,7 +722,7 @@ describe("ledger sharing across stations", () => {
       forkId: "f-shared",
       ownerId: "root",
       levelKey: "L",
-      intent: "shared",
+      fsm: "shared",
       depth: 0,
     });
     expect(child.brackets.forks["f-shared"]).toBeDefined();
@@ -799,7 +799,7 @@ describe("child identities", () => {
       forkId: "pre",
       ownerId: "root",
       levelKey: "L",
-      intent: "x",
+      fsm: "x",
       depth: 0,
     });
     station.childSpawnPort()({ ...specFor("pre"), parentOwnerId: "root" });
@@ -817,7 +817,7 @@ describe("spawnChildTicket directly", () => {
   test("attaches the child display before the first prompt and detaches at the end", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "display");
-    registerFork(ledger, { forkId: "disp", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "disp", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const calls = [];
     const display = {
       attach(flowId, source) {
@@ -845,7 +845,7 @@ describe("spawnChildTicket directly", () => {
   test("reads a host that keeps the child messages on the session", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "shape");
-    registerFork(ledger, { forkId: "shape", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "shape", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const messages = [];
     const session = {
       messages,
@@ -872,7 +872,7 @@ describe("spawnChildTicket directly", () => {
   test("an empty child turn is reported as a failure, not a blank success", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "empty");
-    registerFork(ledger, { forkId: "empty", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "empty", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const result = await spawnChildTicket(specFor("empty"), {
       registry: wiring.registry,
       ledger,
@@ -898,7 +898,7 @@ describe("spawnChildTicket directly", () => {
   test("a display attach failure does not fail the child", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "display-fail");
-    registerFork(ledger, { forkId: "display-fail", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "display-fail", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const display = {
       attach() {
         throw new Error("no subscribe");
@@ -925,7 +925,7 @@ describe("spawnChildTicket directly", () => {
   test("prepares the child context before the first prompt", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "prepare");
-    registerFork(ledger, { forkId: "prepare", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "prepare", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const calls = [];
     const session = {
       prompt: async () => {
@@ -956,7 +956,7 @@ describe("spawnChildTicket directly", () => {
   test("a child context preparation refusal does not fail the child", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "prepare-fail");
-    registerFork(ledger, { forkId: "prepare-fail", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "prepare-fail", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const result = await spawnChildTicket(specFor("prepare-fail"), {
       registry: wiring.registry,
       ledger,
@@ -979,7 +979,7 @@ describe("spawnChildTicket directly", () => {
   test("returns ok with the failed flag instead of throwing", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "direct");
-    registerFork(ledger, { forkId: "d1", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "d1", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const result = await spawnChildTicket(specFor("d1"), {
       registry: wiring.registry,
       ledger,
@@ -996,7 +996,7 @@ describe("spawnChildTicket directly", () => {
   test("leaves the fork running until the parent takes it", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "direct2");
-    registerFork(ledger, { forkId: "d2", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "d2", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     await spawnChildTicket(specFor("d2"), {
       registry: wiring.registry,
       ledger,
@@ -1019,7 +1019,7 @@ describe("spawnChildTicket directly", () => {
   test("a record frozen by scope_return is never overwritten by the spawner", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "direct3");
-    registerFork(ledger, { forkId: "d3", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "d3", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     // The child returned first and wrote its own record.
     const { setOutcome } = await import("../src/scope/fork-registry.mjs");
     setOutcome(wiring.registry, "d3", {
@@ -1040,7 +1040,7 @@ describe("spawnChildTicket directly", () => {
   test("a natural stop is not a return: the child is told to return, then published", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "natural-stop");
-    registerFork(ledger, { forkId: "n1", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "n1", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const messages = [];
     const prompts = [];
     const session = {
@@ -1088,7 +1088,7 @@ describe("spawnChildTicket directly", () => {
   test("two natural stops are scolded, and the third turn returns once", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "natural-stop-twice");
-    registerFork(ledger, { forkId: "n2", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "n2", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const messages = [];
     const prompts = [];
     let joined = false;
@@ -1137,7 +1137,7 @@ describe("spawnChildTicket directly", () => {
   test("repeated natural stops end as a failed record, never as a transcript", async () => {
     const wiring = createForkWiring();
     const ledger = ledgerFor(wiring.registry, "never-returns");
-    registerFork(ledger, { forkId: "nr", ownerId: "root", levelKey: "L", intent: "x", depth: 0 });
+    registerFork(ledger, { forkId: "nr", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
     const prompts = [];
     const session = {
       prompt: async (text) => {

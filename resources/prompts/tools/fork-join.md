@@ -57,7 +57,7 @@ Started ({{count}}):
 
 ## fork.started-line
 
-- {{forkId}}: {{intent}}
+- {{forkId}}: {{fsm}}
 
 ## fork.batch-deferred
 
@@ -66,7 +66,7 @@ Deferred, not started ({{count}}):
 
 ## fork.deferred-line
 
-- {{forkId}}: {{intent}}
+- {{forkId}}: {{fsm}}
 
 ## fork.batch-failed
 
@@ -75,7 +75,7 @@ Failed to start ({{count}}):
 
 ## fork.failed-line
 
-- {{forkId}}: {{intent}} — {{reason}}
+- {{forkId}}: {{fsm}} — {{reason}}
 
 ## fork.checkpoint-only
 

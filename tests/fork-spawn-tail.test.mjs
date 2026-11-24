@@ -88,6 +88,6 @@ describe("a batch whose first spawner throws", () => {
     // The surviving fork is registered and left running for its child.
     const startedFork = forkOf(ledger, "batch:1");
     expect(startedFork.status).toBe(RUNNING);
-    expect(startedFork.intent).toBe("audit the second seam");
+    expect(startedFork.fsm).toBe("audit the second seam");
   });
 });

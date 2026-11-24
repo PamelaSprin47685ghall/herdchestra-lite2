@@ -89,14 +89,14 @@ describe("adoption keeps the parent ahead of its children", () => {
 			forkId: "p",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent",
+			fsm: "parent",
 			depth: 0,
 		});
 		registerFork(ledger, {
 			forkId: "c1",
 			ownerId: "p",
 			levelKey: "p|0|0",
-			intent: "child",
+			fsm: "child",
 			depth: 1,
 		});
 		// The child finishes first; its record waits in the parent's queue.
@@ -120,14 +120,14 @@ describe("adoption keeps the parent ahead of its children", () => {
 			forkId: "p",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent",
+			fsm: "parent",
 			depth: 0,
 		});
 		registerFork(ledger, {
 			forkId: "c1",
 			ownerId: "p",
 			levelKey: "p|0|0",
-			intent: "child",
+			fsm: "child",
 			depth: 1,
 		});
 		markReady(ledger, "p");
@@ -149,14 +149,14 @@ describe("adoption files the result at the receiver's level", () => {
 			forkId: "p",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent",
+			fsm: "parent",
 			depth: 0,
 		});
 		registerFork(ledger, {
 			forkId: "c1",
 			ownerId: "p",
 			levelKey: "p|0|0",
-			intent: "child",
+			fsm: "child",
 			depth: 1,
 		});
 		markReady(ledger, "c1");
@@ -179,7 +179,7 @@ describe("a child record is frozen before the parent can take it", () => {
 			forkId: "p",
 			ownerId: "root",
 			levelKey: "root|0|0",
-			intent: "parent",
+			fsm: "parent",
 			depth: 0,
 		});
 		const outcomes = new Map();

@@ -52,7 +52,7 @@ describe("blocked entries in the ledger", () => {
       forkId: "b1",
       ownerId: "root",
       levelKey: "L",
-      intent: "later",
+      fsm: "later",
       depth: 0,
       blocked: true,
     });
@@ -79,7 +79,7 @@ describe("blocked entries in the ledger", () => {
       forkId: "b1",
       ownerId: "root",
       levelKey: "L",
-      intent: "later",
+      fsm: "later",
       depth: 0,
       blocked: true,
     });
@@ -90,12 +90,12 @@ describe("blocked entries in the ledger", () => {
 
   test("running and blocked entries stay separable", () => {
     const ledger = createBracketLedger();
-    registerFork(ledger, { forkId: "r1", ownerId: "root", levelKey: "L", intent: "a", depth: 0 });
+    registerFork(ledger, { forkId: "r1", ownerId: "root", levelKey: "L", fsm: "a", depth: 0 });
     registerFork(ledger, {
       forkId: "b1",
       ownerId: "root",
       levelKey: "L",
-      intent: "b",
+      fsm: "b",
       depth: 0,
       blocked: true,
     });
@@ -237,7 +237,7 @@ describe("batch fork with a checkpoint", () => {
 
   test("a returning checkpoint leaves the deferred entry untouched", () => {
     const ledger = createBracketLedger();
-    registerFork(ledger, { forkId: "b1", ownerId: "root", levelKey: "L", intent: "later", depth: 0, blocked: true });
+    registerFork(ledger, { forkId: "b1", ownerId: "root", levelKey: "L", fsm: "later", depth: 0, blocked: true });
     markReady(ledger, "b1");
     expect(forkOf(ledger, "b1").status).toBe(BLOCKED);
     expect(blockedChildren(ledger, "root")).toEqual(["b1"]);

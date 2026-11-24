@@ -87,7 +87,7 @@ function branch(ledger, overrides = {}) {
 			forkId: "worker",
 			scopeId: "worker",
 			ownerId: "root",
-			intent: "finish the report",
+			fsm: "finish the report",
 			depth: 0,
 			startedAt: NOW,
 			budget: { read: 0 },
@@ -372,7 +372,7 @@ describe("recommended tree depth guidance", () => {
 		const text = childReceiptText({
 			forkId: "w1",
 			childDepth: 1,
-			intent: "leaf work",
+			fsm: "leaf work",
 			budget: "read 6",
 			targets: ["a.mjs"],
 		});

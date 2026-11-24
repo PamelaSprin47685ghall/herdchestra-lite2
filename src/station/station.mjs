@@ -36,8 +36,10 @@ import {
 	planStateEntry,
 	serializeState,
 	serializeStateShared,
+	forkOf,
 	unreceivedChildren,
 } from "../scope/index.mjs";
+import { takeReturnNudge } from "../scope/return-nudge.mjs";
 import { recordTurnSample } from "../scope/turn-stats.mjs";
 import { notePanhandled } from "../scope/panhandle.mjs";
 import {
@@ -923,8 +925,13 @@ export class SessionStation {
 			ownerId,
 		});
 		if (decision.kind === "none") return;
+		// A steer the host refuses was never delivered, so it must not spend the
+		// child's allowance and must not mark the message as served.
+		if (!this.deliverSteer(decision.text)) return;
 		this.nudged.add(message);
-		this.deliverSteer(decision.text);
+		if (decision.charge === "return" && ledger && ownerId !== null) {
+			takeReturnNudge(forkOf(ledger, ownerId));
+		}
 	}
 
 	// -- Rebase -----------------------------------------------------------------

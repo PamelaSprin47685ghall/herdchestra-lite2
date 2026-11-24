@@ -4,10 +4,13 @@
 
 import {
 	chargeBranch,
+	forkOf,
 	isFreeCall,
+	RUNNING,
 	truncateForHostBoundary,
 	unreceivedChildren,
 } from "../scope/index.mjs";
+import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
 import { abandonDescendants } from "../scope/forkjoin.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
 import { TOOL_INTERRUPT_ABORT_REASON } from "../tools/tickets.mjs";
@@ -368,10 +371,22 @@ function onSessionStop(station, ctx, evidence = null) {
 	if (unreceived > 0) {
 		return continueFeedback(insideScopeNudge(unreceived));
 	}
+	// A child's natural stop is not a ledger submission. The assistant-message
+	// steer is one leg and the host can drop it; the stop itself asks again
+	// while the record is still running and the shared allowance lasts. A
+	// returned, failed, or blocked record has nothing to ask for, and the root
+	// owns no record at all.
+	if (ownerId !== null && ledger) {
+		const self = forkOf(ledger, ownerId);
+		if (self && self.status === RUNNING && takeReturnNudge(self)) {
+			return continueFeedback(childReturnNudge());
+		}
+	}
 	if (!station.state.autopilot) return undefined;
 	if (!station.relayOn(ctx)) return undefined;
-	// A child's natural stop is not a ledger submission. The host's branch
-	// contract keeps it working until `scope_return`; the root relay must not
+	// A child's natural stop is not a ledger submission. The return steer in
+	// `nudge.mjs`, the stop backstop above, and the host's branch contract keep
+	// it working until `scope_return`; the root relay must not
 	// arm a handoff or capture the child's prose as the root's report.
 	if (ownerId !== null) return undefined;
 	const relay = station.state.relay;

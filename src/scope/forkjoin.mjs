@@ -183,6 +183,9 @@ export function registerFork(ledger, spec, options = {}) {
     // been handed. A blocked entry can collect them before it ever runs.
     requirements: [],
     requirementsDelivered: 0,
+    // Return nudges already given. One field, because the station's in-turn
+    // steer and the spawn ticket's out-of-turn prompt both spend it.
+    returnNudges: 0,
     supersededAt: null,
     openSeq: ledger.seq,
     closeSeq: null,
@@ -859,6 +862,11 @@ function validRecord(forkId, record) {
   }
   if (record.reason !== null && record.reason !== undefined) {
     if (typeof record.reason !== "string") return false;
+  }
+  // Absent is legal: snapshots written before the allowance existed have
+  // none, and the readers treat that as zero.
+  if (record.returnNudges !== null && record.returnNudges !== undefined) {
+    if (!Number.isInteger(record.returnNudges) || record.returnNudges < 0) return false;
   }
   return true;
 }

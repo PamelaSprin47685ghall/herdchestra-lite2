@@ -4,6 +4,32 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — a forked scope that stops without returning is steered back
+
+- `nudgeDecision` now knows the child's return obligation. A forked scope that
+  ends a turn without a tool call while its own bracket is still `running`
+  earns the child return nudge as an in-turn steer, so the model is told to
+  call `scope_return` before its run is allowed to end. Before this, the
+  decision handled only the receive obligation: a child with no unreceived
+  children of its own stopped with no steer at all, and the obligation was
+  left to the spawn ticket's out-of-turn prompt.
+- The join steer still outranks it — an unreceived child can be parked inside
+  `scope_return`, and only the parent's take releases it. A returned, failed,
+  blocked, superseded, or missing record earns no steer. One steer per
+  assistant message, root excluded. `tests/return-nudge.test.mjs`; `RUNNING`
+  joins the scope index's public names.
+- Both legs share one bound. `MAX_RETURN_NUDGES` and the spent count moved to
+  `src/scope/return-nudge.mjs`: the count is `record.returnNudges` on the
+  ledger bracket, absent in an older snapshot and read as zero. The station
+  charges it only after a steer is accepted, and the session-stop gate asks
+  again when the host drops that steer, so the reported symptom — a child's
+  natural stop allowed through — no longer depends on the in-turn leg landing.
+  The ticket charges the same field and closes the bracket as failed when it
+  is spent, so one counter bounds both paths and a new requirement resets it.
+  A snapshot whose `returnNudges` is not a non-negative integer is refused.
+
 ## [3.5.1] — 2026-11-24
 
 ### Fixed — Esc cancels the whole scope tree

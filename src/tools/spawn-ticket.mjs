@@ -17,12 +17,11 @@ import {
 import { renderChildRecord } from "../transcript/replay.mjs";
 import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
 import { forkOf } from "../scope/forkjoin.mjs";
-import { childReturnNudge } from "../scope/return-nudge.mjs";
-
-// A child that stops without scope_return submits nothing. The ticket asks it
-// to return; after this many refusals the child is recorded as failed, so a
-// runaway stop loop cannot burn the branch forever.
-const MAX_RETURN_NUDGES = 2;
+import {
+	childReturnNudge,
+	resetReturnNudges,
+	takeReturnNudge,
+} from "../scope/return-nudge.mjs";
 
 /**
  * A fork the parent cancelled owns the reason the parent reads.
@@ -216,11 +215,12 @@ export async function spawnChildTicket(spec, ports) {
 		// The ticket says so and hands the loop back, once per stop. A record a
 		// cascade already closed ends the loop without a nudge.
 		let bracket = forkOf(ledger, spec.forkId);
-		let nudges = 0;
 		let unpublished = false;
 		while (bracket && bracket.status === "running") {
 			if (await deliverRequirements()) {
-				nudges = 0;
+				// A new requirement restarts the conversation, so it restarts the
+				// allowance this loop shares with the station.
+				resetReturnNudges(bracket);
 				bracket = forkOf(ledger, spec.forkId);
 				continue;
 			}
@@ -230,13 +230,14 @@ export async function spawnChildTicket(spec, ports) {
 				reason = `the worker in the forked scope stopped with reason "${stop}"`;
 				break;
 			}
-			if (nudges >= MAX_RETURN_NUDGES) {
+			// The bound lives on the record. The station's steer spends the same
+			// allowance, so this loop can never promise more nudges than remain.
+			if (!takeReturnNudge(bracket)) {
 				failed = true;
 				reason = "the worker in the forked scope stopped without calling scope_return; its record stays unpublished";
 				unpublished = true;
 				break;
 			}
-			nudges += 1;
 			await prompt(childReturnNudge());
 			bracket = forkOf(ledger, spec.forkId);
 		}

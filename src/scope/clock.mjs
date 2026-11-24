@@ -60,11 +60,11 @@ export function createClockOn(now = () => Date.now()) {
 	return {
 		name: "on",
 		bounded: true,
-		start(record, budgetMs, startedAt) {
+		start(record, clockMs, startedAt) {
 			if (!record || typeof record !== "object") {
 				return { ok: false, code: "CLOCK_INVALID_RECORD" };
 			}
-			const budget = Number.isFinite(budgetMs) ? budgetMs : record.timeBudgetMs;
+			const budget = Number.isFinite(clockMs) ? clockMs : record.timeBudgetMs;
 			const start = Number.isFinite(startedAt)
 				? startedAt
 				: Number.isFinite(record.startedAt)

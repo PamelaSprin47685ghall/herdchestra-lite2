@@ -4,7 +4,7 @@ Start new scopes without waiting; receive their records with `scope_join`. A spl
 
 ## fork.scope-id
 
-Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name that already exists in this session — including a finished one — is reused instead of starting a new one; only its owner may reuse it, and the match is case-insensitive. Reuse is an upsert: `running` and `blocked` scopes take the budget as an increment, the `fsm` as one more requirement, and the targets merged into the existing list; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history.
+Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter; separate alphanumeric groups with single hyphens or underscores. `root` is reserved regardless of case. A name that already exists in this session — including a finished one — is reused instead of starting a new one; only its owner may reuse it, and the match is case-insensitive. Reuse is an upsert: `running` and `blocked` scopes take turns as an increment, the `fsm` as one more requirement, and the targets merged into the existing list; `ready` supersedes the old record and starts the next generation; `joined` and `failed` start a new generation with the old record as prior history.
 
 ## fork.n
 
@@ -20,11 +20,11 @@ Required identity statement for the LLM in the new scope. Start with "You are " 
 
 ## fork.budget
 
-Use tool names as keys, with non-negative integer turn budgets. Each assistant message spends one unit at most, split among its budgeted calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero budget; a tool whose balance falls short still runs its call, and the receipt records that call as panhandled. Budget by the turns the work needs, not by individual calls. When the `scopeId` is reused, every value is an increment to the existing budget, not a replacement. Free tools need no entry; an empty budget is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A scope that runs out keeps working: the call lands, and the receipt says the call was panhandled. Peer fork items each have their own budget; each item funds its own forked scope at any depth, and the caller's balance is never charged. Size it from `n`, as the operating rules say.
+This field is named `budget`; one unit of it is one turn. Use tool names as keys, with non-negative integer turn counts. Each assistant message spends one turn at most, split among its calls by count and rounded to two decimals; several reads issued together share one read turn. An unlisted tool has zero turns; a tool whose turns fall short still runs its call, and the receipt records that call as panhandled. Size the turns for the work the scope must do, not for individual calls. When the `scopeId` is reused, every value is an increment to the existing turns, not a replacement. Free tools need no entry; an empty turn map is valid when only free tools are used. A `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…) is free at any depth, so it needs no entry either. A scope that runs out keeps working: the call lands, and the receipt says the call was panhandled. Peer fork items each have their own turns; each item funds its own forked scope at any depth, and the caller's turns are never charged. Size the entry from `n`, as the operating rules say.
 
 ## fork.time
 
-The system derives the wall-clock budget. Do not pass `time`. One turn is one LLM request. The budget is the session's mean request duration times the sum of this item's tool-budget points, at least one second. The clock covers tool execution too: a bash or test run spends wall time without spending points, so an I/O-heavy scope can reach its deadline first. With no measured requests yet, the mean is one minute. Ordinary tools carry no deadline limit; waiting in `scope_join` or `scope_return` pauses that scope's clock. A call that runs past the deadline still returns its result; the overrun is recorded as a panhandle and shown on the record.
+The system derives the wall clock. Do not pass `time`. One turn is one LLM request. That time is the session's mean request duration times the sum of this item's turns, at least one second. The clock covers tool execution too: a bash or test run spends wall time without spending turns, so an I/O-heavy scope can reach its deadline first. With no measured requests yet, the mean is one minute. Ordinary tools carry no deadline limit; waiting in `scope_join` or `scope_return` pauses that scope's clock. A call that runs past the deadline still returns its result; the overrun is recorded as a panhandle and shown on the record.
 
 ## fork.targets
 
@@ -36,7 +36,7 @@ Include the remaining plan, both ready and blocked items. Order does not express
 
 ## fork.blocked
 
-`false` starts now. `true` records an unmet prerequisite without queuing the item. Resubmit with `false` when ready. Reusing a `running` scope with `true` is refused with `SCOPE_RUNNING_BLOCKED`; reuse it with a budget or requirement instead.
+`false` starts now. `true` records an unmet prerequisite without queuing the item. Resubmit with `false` when ready. Reusing a `running` scope with `true` is refused with `SCOPE_RUNNING_BLOCKED`; reuse it with turns or a requirement instead.
 
 ## fork.model
 

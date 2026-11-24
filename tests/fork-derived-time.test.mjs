@@ -1,7 +1,7 @@
 // Red contract: the fork wall clock is derived from this session's measured
 // requests for this model. The model no longer supplies `time`; the system
 // does. A turn is one LLM request. Two measured 20s requests average 20s, and
-// four declared tool points buy 80s. Lifetime totals are not a sample source.
+// four declared turns buy 80s. Lifetime totals are not a sample source.
 
 import { describe, expect, test } from "bun:test";
 
@@ -39,7 +39,7 @@ function forkCall(argumentsForFork) {
 }
 
 describe("fork time is derived from measured turns", () => {
-	test("two 20s turns and four points buy an 80s wall clock", () => {
+	test("two 20s turns and four turns buy an 80s wall clock", () => {
 		const ledger = createBracketLedger();
 		const spawned = [];
 		const station = stationWith(ledger, spawned);
@@ -56,17 +56,17 @@ describe("fork time is derived from measured turns", () => {
 		expect(record).not.toBeNull();
 		expect(record.timeBudgetMs).toBe(80_000);
 		expect(record.deadlineAt - record.startedAt).toBe(80_000);
-		// The child spec carries the same budget in seconds.
+		// The child spec carries the same turns in seconds.
 		expect(spawned[0].time).toBe(80);
 	});
 
-	test("without samples the default turn duration still buys points", () => {
+	test("without samples the default turn duration still buys turns", () => {
 		const ledger = createBracketLedger();
 		const station = stationWith(ledger);
 		const out = handleForkCall(station, forkCall({ budget: { read: 1, bash: 1 } }));
 		expect(out.isError).toBeUndefined();
 		const record = forkOf(ledger, "fork-call");
-		// 60s default per turn x 2 points.
+		// 60s default per turn x 2 turns.
 		expect(record.timeBudgetMs).toBe(120_000);
 	});
 

@@ -233,7 +233,7 @@ describe("buildTurnGroups", () => {
         blocks: [
           {
             type: "text",
-            text: '<additional-system-instructions><skill version="1.0">Scope budget: bash remaining 3.00/8.00</skill> <skill version="1.0">reminder</skill></additional-system-instructions>',
+            text: '<additional-system-instructions><skill version="1.0" enforced>Scope budget: bash remaining 3.00/8.00</skill> <skill version="1.0" enforced>reminder</skill></additional-system-instructions>',
           },
         ],
       },

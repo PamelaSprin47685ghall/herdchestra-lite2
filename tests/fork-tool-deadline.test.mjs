@@ -99,8 +99,8 @@ describe("fork branch wall clock", () => {
 		const { ledger, record } = ledgerWith(60, Date.now());
 		const station = stationFor(ledger, "child-1");
 		// A host may call only the post-execution seam. The result must not be
-		// free merely because the pre-execution gate never ran: this branch owns
-		// no read allowance, so the re-admission runs the call and records it.
+		// free merely because the pre-execution gate never ran: no read turns
+		// were granted, so the re-admission runs the call and records it.
 		const verdict = station.admitToolDispatch("call-receipt", "read", {}, {
 			elapsedMs: 0,
 			limitMs: 1_000,

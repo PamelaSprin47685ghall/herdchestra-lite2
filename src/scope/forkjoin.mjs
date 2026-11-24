@@ -9,8 +9,8 @@ import { decideAbandon } from "./abandon.mjs";
 import { deadlineInfo } from "./clock.mjs";
 import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
 import { publicScopeId } from "./scope-id.mjs";
-import { grantBudget } from "./panhandle.mjs";
-import { formatAmount } from "./budget.mjs";
+import { grantTurns } from "./panhandle.mjs";
+import { formatAmount } from "./turns.mjs";
 
 const listeners = Symbol("ledger listeners");
 
@@ -29,7 +29,7 @@ export function reviveBlockedFork(ledger, forkId, startedAt = Date.now()) {
   record.status = RUNNING;
   record.startedAt = startedAt;
   // A blocked fork never ran: its queue time is not its work time. Restart the
-  // clock at the revival edge so the branch receives the full granted budget.
+  // clock at the revival edge so the branch receives the full granted turns.
   if (Number.isFinite(record.deadlineAt) && Number.isFinite(record.timeBudgetMs)) {
     record.deadlineAt = startedAt + record.timeBudgetMs;
     record.overtimeAt = null;
@@ -120,8 +120,8 @@ export function registerFork(ledger, spec, options = {}) {
   if (!isDepth(s.depth)) {
     return failure("INVALID_DEPTH", "depth must be a non-negative integer.");
   }
-  if (s.budget !== undefined && !validBudget(s.budget)) {
-    return failure("INVALID_BUDGET", "budget must be a plain object of non-negative numbers.");
+  if (s.budget !== undefined && !validTurns(s.budget)) {
+    return failure("INVALID_BUDGET", "The `budget` field must be a plain object of non-negative turns.");
   }
   if (s.time !== undefined && s.time !== null) {
     if (typeof s.time !== "number" || !Number.isFinite(s.time) || s.time <= 0) {
@@ -167,8 +167,8 @@ export function registerFork(ledger, spec, options = {}) {
     outcome: null,
     reason: null,
     reparentedFrom: null,
-    // The branch's own account. A fork spec is the only place a branch budget
-    // is born; the parent's balances never fund it and never shrink for it.
+    // The branch's own account. A fork spec is the only place a branch's turns
+    // are born; the parent's turns never fund it and never shrink for it.
     budget,
     remaining,
     spent,
@@ -231,7 +231,7 @@ export function markReady(ledger, forkId, outcome = {}) {
 }
 
 /**
- * Reuse an existing scope: add budget and seconds, then queue a requirement.
+ * Reuse an existing scope: add turns and seconds, then queue a requirement.
  * A closed bracket is refused; the station opens the next generation instead.
  */
 export function amendFork(ledger, forkId, request = {}, options = {}) {
@@ -249,7 +249,7 @@ export function amendFork(ledger, forkId, request = {}, options = {}) {
   const seconds = Number.isInteger(source.seconds) && source.seconds > 0 ? source.seconds : 0;
   let granted = { ok: true, tools: {}, seconds: 0 };
   if (Object.keys(tools).length > 0 || seconds > 0) {
-    granted = grantBudget(
+    granted = grantTurns(
       record,
       { tools, ...(seconds > 0 ? { seconds } : {}) },
       { ...options, allowClockOff: true, scopeCap: true },
@@ -907,7 +907,7 @@ function isPlainObject(value) {
   return proto === Object.prototype || proto === null;
 }
 
-function validBudget(value) {
+function validTurns(value) {
   if (!isPlainObject(value)) return false;
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string" || key === "") return false;
@@ -932,7 +932,7 @@ function round2(value) {
 
 function formatClock(ms) {
   // Remaining time floors: ceil made 57.1s render as 0:58, so the first frame
-  // showed remaining equal to the budget and looked like a stopped clock.
+  // showed remaining equal to the turns granted and looked like a stopped clock.
   const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
@@ -947,7 +947,7 @@ function accountOf(record) {
 /**
  * Charge one tool call against a branch. A tool call is charged once: the
  * same toolCallId, or the same beat group for the same tool, answers the
- * existing charge instead of spending twice. A share larger than the balance
+ * existing charge instead of spending twice. A share larger than the turns left
  * spends what is left, so the rest of the beat still runs.
  */
 export function applyCharge(ledger, forkId, charge = {}) {
@@ -979,12 +979,12 @@ export function applyCharge(ledger, forkId, charge = {}) {
   if (!Number.isFinite(remaining) || remaining <= 0) {
     const left = Number.isFinite(remaining) ? remaining : 0;
     // The host shows `reason` verbatim when a gate refuses a tool. A refusal
-    // without one reads as an unattributed extension block, so the balance
-    // itself is stated here.
+    // without one reads as an unattributed extension block, so the turns
+    // themselves are stated here.
     return {
       ok: false,
       code: "BUDGET_EXHAUSTED",
-      reason: `Tool "${tool}" has no work budget left on this branch (remaining ${formatAmount(left)}/${formatAmount(budget)}).`,
+      reason: `Tool "${tool}" has no turns left on this branch (remaining ${formatAmount(left)}/${formatAmount(budget)}).`,
       tool,
       remaining: left,
       budget,
@@ -1022,8 +1022,8 @@ export function applyRefund(ledger, forkId, toolCallId) {
   return { ok: true, refunded: refund, ...accountOf(record) };
 }
 
-/** Render a branch's budget and clock the way the old scope line did. */
-export function forkBudgetText(record, now = Date.now(), clock = null) {
+/** Render a branch's turns and clock the way the old scope line did. */
+export function forkTurnsText(record, now = Date.now(), clock = null) {
   if (!record || !isPlainObject(record.remaining)) return "";
   const entries = [];
   for (const tool of Object.keys(record.remaining).sort()) {

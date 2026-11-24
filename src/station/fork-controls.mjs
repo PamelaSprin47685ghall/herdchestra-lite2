@@ -90,9 +90,9 @@ const REFUSAL_KEY = {
   INVALID_TARGETS: "invalid-targets",
 };
 
-function budgetText(budget) {
+function turnsText(turns) {
   const parts = [];
-  for (const key of Object.keys(budget ?? {})) parts.push(`${key} ${budget[key]}`);
+  for (const key of Object.keys(turns ?? {})) parts.push(`${key} ${turns[key]}`);
   return parts.length > 0 ? parts.join(", ") : "none";
 }
 
@@ -299,7 +299,7 @@ export function childReceiptText(spec) {
       marker: scopeReceiptMarker(spec.scopeId ?? spec.forkId),
       depth: spec.childDepth,
       fsm: spec.fsm,
-      budget: budgetText(spec.budget),
+      budget: turnsText(spec.budget),
       targets: targetsText(spec.targets),
     }),
     S["fork.child-return"],
@@ -308,7 +308,7 @@ export function childReceiptText(spec) {
 }
 
 /** Add two tool-count maps, dropping zeros. */
-function sumBudgets(base, extra) {
+function addTurns(base, extra) {
   const out = {};
   for (const source of [base, extra]) {
     if (!source || typeof source !== "object") continue;
@@ -334,18 +334,18 @@ function unionTargets(first, second) {
 
 /** One amended or revived line; both sections share this shape. */
 function amendmentLine(entry) {
-  return `- ${entry.scopeId}: ${budgetDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`;
+  return `- ${entry.scopeId}: ${turnsDelta(entry.added)}${entry.queued > 0 ? `, ${entry.queued} requirement${entry.queued === 1 ? "" : "s"} queued` : ""}.`;
 }
 
-/** Human-readable budget delta for a fork result line. */
-function budgetDelta(added) {
-  const points = Object.entries(added?.tools ?? {})
+/** Human-readable turn delta for a fork result line. */
+function turnsDelta(added) {
+  const granted = Object.entries(added?.tools ?? {})
     .map(([tool, amount]) => `${amount} ${tool}`)
     .join(", ");
   const seconds = Number.isInteger(added?.seconds) && added.seconds > 0
     ? `${added.seconds}s`
     : "";
-  return [points, seconds].filter(Boolean).join(" + ") || "no budget";
+  return [granted, seconds].filter(Boolean).join(" + ") || "no turns";
 }
 
 /** The text a later generation reads as its predecessor's history. */
@@ -365,7 +365,7 @@ function generationReceiptText({ scopeId, childDepth, generation, standing, fsm,
       marker: scopeReceiptMarker(scopeId),
       depth: childDepth,
       fsm: standing,
-      budget: budgetText(budget),
+      budget: turnsText(budget),
       targets: targetsText(targets),
     }),
     `[Continuing scope ${scopeId} — generation ${generation}]`,
@@ -421,7 +421,7 @@ export function handleForkCall(station, call, options = {}) {
     return trimmed === "" ? 0 : trimmed.length + 1;
   };
   // A generation is priced by the receipt it sends, whether or not the item
-  // names a budget: an empty budget still renders a receipt.
+  // names turns: an empty turn map still renders a receipt.
   const generationChars = (item, target, identityChars) => {
     if (!target) return 0;
     if (
@@ -431,7 +431,7 @@ export function handleForkCall(station, call, options = {}) {
     ) {
       return 0;
     }
-    const budget = sumBudgets(target.remaining, item.budget);
+    const budget = addTurns(target.remaining, item.budget);
     const generation =
       (Number.isInteger(target.generation) ? target.generation : 1) + 1;
     return (
@@ -453,7 +453,7 @@ export function handleForkCall(station, call, options = {}) {
     const earlier = firstItemByScope.get(key) ?? null;
     if (earlier === null) firstItemByScope.set(key, item);
     // A repeated name inside one batch targets the fork the earlier item
-    // creates, so the receipt it sends carries that item's fsm, budget and
+    // creates, so the receipt it sends carries that item's fsm, turns and
     // targets.
     const target = earlier === null ? (liveByName.get(key) ?? null) : null;
     const sent = target ?? earlier;
@@ -564,10 +564,10 @@ export function handleForkCall(station, call, options = {}) {
   // A model switch updates baseModelKey immediately; turnModelKey only moves
   // after the next request finishes. Prefer the live selection so a fork made
   // right after switching cannot borrow the previous model's speed.
-  const budgetModelKey = station.state?.baseModelKey ?? station.turnModelKey;
+  const turnModelKey = station.state?.baseModelKey ?? station.turnModelKey;
   const timeOf = (budget) =>
     deriveTimeBudgetSeconds({
-      samples: modelSamples(ledger, budgetModelKey),
+      samples: modelSamples(ledger, turnModelKey),
       budget,
     });
   const baseId = typeof call.id === "string" && call.id !== "" ? call.id : `fork-${Date.now()}`;
@@ -656,7 +656,7 @@ export function handleForkCall(station, call, options = {}) {
         continue;
       }
       const fork = registered.fork;
-      // `registerFork` is the only place a budget is born, and it copies the
+      // `registerFork` is the only place turns are born, and it copies the
       // input into both `budget` and `remaining`. The remaining fields go
       // through the ledger's annotate entry, which is also what wakes parked
       // joins: a bare field write would skip the change notification.
@@ -747,13 +747,13 @@ export function handleForkCall(station, call, options = {}) {
       continue;
     }
 
-    // Decide the reuse budget before touching the old record. A reuse that can
+    // Decide the reuse turns before touching the old record. A reuse that can
     // never start must leave a ready generation deliverable: superseding first
     // and failing after would park the old scope in scope_return against a take
     // that no longer exists.
-    const budget = sumBudgets(target.remaining, item.budget);
+    const budget = addTurns(target.remaining, item.budget);
     if (Object.keys(budget).length === 0) {
-      noteFailure(target.forkId, item, render(E["scope-reuse-empty"] || "This reuse adds no budget and the previous generation has none left.", {
+      noteFailure(target.forkId, item, render(E["scope-reuse-empty"] || "This reuse adds no turns and the previous generation has none left.", {
         scopeId: item.scopeId,
       }));
       continue;
@@ -890,7 +890,7 @@ export function handleForkCall(station, call, options = {}) {
     sections.push([
       `Continued ${continued.length} finished scope${continued.length === 1 ? "" : "s"}:`,
       ...continued.map((entry) =>
-        `- ${entry.scopeId}: generation ${entry.generation}, after ${entry.priorForkId}, ${budgetDelta(entry.added)} added.`,
+        `- ${entry.scopeId}: generation ${entry.generation}, after ${entry.priorForkId}, ${turnsDelta(entry.added)} added.`,
       ),
     ].join("\n"));
   }

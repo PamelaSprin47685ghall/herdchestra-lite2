@@ -40,7 +40,7 @@ import { SCOPE_ID_PATTERN, MAX_SCOPE_ID_LENGTH } from "../scope/scope-id.mjs";
 const forkItem = {
 	type: "object",
 	additionalProperties: false,
-	// `fsm` is optional here because a reused `scopeId` may carry only a budget
+	// `fsm` is optional here because a reused `scopeId` may carry only a turn
 	// increment, merged targets, or one more requirement. A new scope still
 	// needs it: the station refuses with MISSING_FSM.
 	required: ["scopeId", "profession", "blocked", "n", "budget", "targets"],

@@ -1,4 +1,4 @@
-// Scope budget: normalization, rounding, per-beat shares, and display.
+// Scope turns: normalization, rounding, per-beat shares, and display.
 // Pure arithmetic. No I/O.
 
 import {
@@ -8,9 +8,9 @@ import {
   put,
 } from "./state.mjs";
 
-// Charge amounts are real numbers with at most two decimal places. One budget
-// unit is split into 100 hundredths so an assistant turn spends exactly one
-// unit however its tools divide it.
+// Charge amounts are real numbers with at most two decimal places. One turn is
+// split into 100 hundredths so an assistant message spends exactly one turn
+// however its tools divide it.
 const CHARGE_SCALE = 100;
 
 // A scope keeps the control tools and the protocol reads for free; every other
@@ -33,7 +33,7 @@ export function isFreeTool(name) {
 // protocol layer instead of the project tree. That is instruction reading and
 // bookkeeping, not project work, so the call is free at every level, exactly
 // like a control tool. The path decides, not the call site: a scope minted with
-// no budget for `read` or `write` still runs the call, and the root still runs
+// no turns for `read` or `write` still runs the call, and the root still runs
 // it without a fork.
 //
 // `http(s)://` and `file:` are deliberately absent: they fetch a live page or
@@ -65,11 +65,11 @@ export function internalScheme(path) {
 }
 
 /**
- * A read or write on a built-in protocol URI spends no tool point.
+ * A read or write on a built-in protocol URI spends no turn.
  *
  * Resolving a staged ast_edit preview belongs here as well: the harness refuses
  * to run any other tool until it lands, so charging it would deadlock a scope
- * with no write budget on its own proposal.
+ * with no turn for `write` on its own proposal.
  */
 export function isInternalUriCall(toolName, input) {
   if (toolName !== "read" && toolName !== "write") return false;
@@ -84,25 +84,25 @@ export function isFreeCall(toolName, input) {
   return isFreeTool(toolName) || isInternalUriCall(toolName, input);
 }
 
-function validBudget(budget) {
-  if (!isPlainObject(budget)) return false;
-  for (const tool of Reflect.ownKeys(budget)) {
+function validTurns(turns) {
+  if (!isPlainObject(turns)) return false;
+  for (const tool of Reflect.ownKeys(turns)) {
     if (typeof tool !== "string" || !isNonEmptyString(tool)) return false;
-    const amount = budget[tool];
+    const amount = turns[tool];
     if (!Number.isInteger(amount) || amount < 0) return false;
   }
   return true;
 }
 
 /** Normalize tool names: apply_patch → edit. */
-function normalizeBudget(budget) {
-  if (!isPlainObject(budget)) return budget;
+function normalizeTurns(turns) {
+  if (!isPlainObject(turns)) return turns;
   const normalized = {};
-  for (const key of Reflect.ownKeys(budget)) {
+  for (const key of Reflect.ownKeys(turns)) {
     if (typeof key !== "string") continue;
     const normalizedKey = key === "apply_patch" ? "edit" : key;
     const currentValue = Object.hasOwn(normalized, normalizedKey) ? normalized[normalizedKey] : 0;
-    put(normalized, normalizedKey, currentValue + budget[key]);
+    put(normalized, normalizedKey, currentValue + turns[key]);
   }
   return normalized;
 }
@@ -112,7 +112,7 @@ export function normalizeToolName(toolName) {
   return toolName === "apply_patch" ? "edit" : toolName;
 }
 
-/** Round a charge amount to the two-decimal budget precision. */
+/** Round a charge amount to the two-decimal precision. */
 export function roundAmount(value) {
   return Math.round(value * CHARGE_SCALE) / CHARGE_SCALE;
 }
@@ -123,7 +123,7 @@ export function formatAmount(value) {
 }
 
 /**
- * Split one budget unit across the tools called in a single assistant
+ * Split one turn across the tools called in a single assistant
  * message, in proportion to their call counts. The shares sum to exactly one
  * unit. Free tools take no share.
  */
@@ -166,4 +166,4 @@ export function beatShares(items) {
   return shares;
 }
 
-export { CHARGE_SCALE, validBudget, normalizeBudget };
+export { CHARGE_SCALE, validTurns, normalizeTurns };

@@ -85,7 +85,7 @@ export async function todoTicket(station, params, ctx) {
 		);
 	}
 	// An inherited non-empty ledger is read before it is rewritten. A view is
-	// free: it submits nothing, so requiring one costs the successor no budget.
+	// free: it submits nothing, so requiring one costs the successor no turns.
 	// Only the root branch owes this read, and only while autopilot owns the
 	// ledger; a fork child has its own history and never evaluates the relay.
 	if (!ownerId && station.state.autopilot && station.state.relay?.viewRequired && !isTodoView(params)) {

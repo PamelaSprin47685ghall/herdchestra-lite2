@@ -17,7 +17,7 @@ const chineseRequirement = "强制以简体中文思考，尤其要以简体中�
 // The receipt carries the historical self-description so a user-role reminder
 // cannot be mistaken for a fresh user message.
 const chineseParenthetical = "（宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）";
-const chineseReminderSkill = ` <skill version="1.0">${chineseParenthetical}${chineseRequirement}</skill>`;
+const chineseReminderSkill = ` <skill version="1.0" enforced>${chineseParenthetical}${chineseRequirement}</skill>`;
 
 for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 	test(`the ${typeof hostPrompt === "string" ? "string" : "array"} system prompt stays idempotent when reinjected`, () => {
@@ -75,7 +75,7 @@ test("a promoted successor is ready to answer without reevaluating its ledger", 
 	expect(text).not.toMatch(/no ledger|evaluat/i);
 });
 
-test("routine scope status keeps local budget and pending work without repeating the assignment", () => {
+test("routine scope status keeps local turns and pending work without repeating the assignment", () => {
 	const fsm = "Write a report on the cave swallows of Costa Rica";
 	const state = { autopilot: true, startedAt: 0 };
 	const branch = {
@@ -91,7 +91,7 @@ test("routine scope status keeps local budget and pending work without repeating
 	for (const text of [pending, root]) {
 		// The reminder closes the receipt as its own skill element inside the
 		// same additional-system-instructions wrapper.
-		expect(text.startsWith('<additional-system-instructions><skill version="1.0">')).toBe(true);
+		expect(text.startsWith('<additional-system-instructions><skill version="1.0" enforced>')).toBe(true);
 		expect(text.endsWith(`${chineseReminderSkill}</additional-system-instructions>`)).toBe(true);
 		expect(text).not.toMatch(/\bUTC\b|since this session began/);
 	}
@@ -106,16 +106,16 @@ test("routine scope status keeps local budget and pending work without repeating
 	expect(root).not.toContain("scope_join");
 });
 
-test("a forked scope with no ledger record still learns that its budget is unavailable", () => {
+test("a forked scope with no ledger record still learns that its turns are unavailable", () => {
 	const state = { autopilot: true, startedAt: 0 };
 	// The bearer runs inside a scope, yet the ledger holds no fork record for
-	// it. Saying nothing would read as "budget is fine"; say it is unknown.
+	// it. Saying nothing would read as "turns are fine"; say it is unknown.
 	const missing = skillReceiptText(state, true, null, 0, false, true);
-	expect(missing).toContain("Scope budget:");
+	expect(missing).toContain("Scope turns:");
 	expect(missing).toMatch(/no record|unavailable/i);
 	expect(missing).not.toMatch(/remaining\s+\d/);
-	// A root receipt has no budget to report, and must not gain the line.
-	expect(skillReceiptText(state)).not.toContain("Scope budget:");
+	// A root receipt has no turns to report, and must not gain the line.
+	expect(skillReceiptText(state)).not.toContain("Scope turns:");
 });
 
 test("the fork receipt describes new work once and lists all unreceived scopes by name", () => {
@@ -146,10 +146,18 @@ test("the registered scope_return explains the sealed final receipt and the dige
 	const returning = tools.get("scope_return");
 	expect(returning.parameters.required).toBeUndefined();
 	expect(returning.parameters.properties.dafny.type).toBe("string");
-	expect(returning.parameters.properties.dafny.description).toMatch(/appended to the end/i);
-	expect(returning.parameters.properties.dafny.description).toMatch(/never restate your text/);
-	expect(returning.parameters.properties.dafny.description).toMatch(/the search that produced it is not part of it/);
-	expect(returning.parameters.properties.dafny.description).toMatch(/Omit it when your text already says everything/);
+	expect(returning.parameters.properties.dafny.description).toMatch(
+		/appended to the record after trimming/i,
+	);
+	expect(returning.parameters.properties.dafny.description).toMatch(
+		/never restate your text/i,
+	);
+	expect(returning.parameters.properties.dafny.description).toMatch(
+		/for what text cannot carry/,
+	);
+	expect(returning.parameters.properties.dafny.description).toMatch(
+		/Tell reliable deductions/i,
+	);
 	expect(returning.description).toMatch(/(?:last|latest|final)[^.]*receipt[^.]*seal/i);
 	expect(returning.description).toContain("bare names of the tools");
 	expect(returning.description).not.toContain("elder_report");
@@ -288,7 +296,7 @@ test("the language reminder ends every request receipt and follows its port", as
 			// Appended to the session, never patched into an older message: the
 			// reminder is the last skill element of the newest receipt, inside
 			// the additional-system-instructions wrapper.
-			expect(on.startsWith('<additional-system-instructions><skill version="1.0">')).toBe(true);
+			expect(on.startsWith('<additional-system-instructions><skill version="1.0" enforced>')).toBe(true);
 			expect(on.endsWith(`${chineseReminderSkill}</additional-system-instructions>`)).toBe(true);
 			expect(on.split(chineseRequirement)).toHaveLength(2);
 			// Off removes that whole skill element and leaves the rest

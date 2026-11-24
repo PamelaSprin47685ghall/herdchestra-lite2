@@ -6,7 +6,7 @@
 // reimplemented `identityForAgent` over a registry method that did not exist,
 // and dropped the process-wide fork wiring. A child station then resolved no
 // identity, treated itself as root, and charged every tool against a root that
-// owns no budget.
+// owns no turns.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
@@ -149,7 +149,7 @@ test("the child's identity spends the child's budget, never the root's", () => {
 	});
 	expect(child.ok).toBe(true);
 
-	// The root owns no record and therefore no budget: the same call at the
+	// The root owns no record and therefore no turns: the same call at the
 	// root is refused. This is why a lost identity made every child tool fail.
 	const root = chargeBranch({ charges: {} }, ledger, {
 		ownerId: null,

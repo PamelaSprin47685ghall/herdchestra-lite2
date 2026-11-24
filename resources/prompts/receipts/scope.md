@@ -4,7 +4,7 @@ Previous beat replaced. Refunded calls: {{refunded}}.
 
 ## amend.remaining
 
-Budget: {{budget}}.
+Turns: {{budget}}.
 
 ## pin.saved
 
@@ -20,11 +20,11 @@ Unreceived results from forked scopes: {{count}}. Receive them with `scope_join`
 
 ## receipt.branch
 
-Scope budget: {{budget}}.
+Scope turns: {{budget}}.
 
 ## receipt.branch-missing
 
-Scope budget: unavailable; the ledger holds no record for this scope.
+Scope turns: unavailable; the ledger holds no record for this scope.
 
 ## receipt.no-ledger
 
@@ -62,7 +62,7 @@ Run `todo({ op: "view" })` before writing the inherited ledger.
 
 {{marker}} depth {{depth}}.
 State machine: {{fsm}}
-Budget: {{budget}}. Targets: {{targets}}.
+Turns: {{budget}}. Targets: {{targets}}.
 
 ## fork.child-return
 

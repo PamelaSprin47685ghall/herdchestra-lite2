@@ -1,7 +1,7 @@
 // Scope id reuse: a second fork under a live name amends that scope.
 //
 // The station layer is not covered here; these cases pin the pure domain:
-// budget arithmetic, requirement queueing, supersede, live lookup and the
+// turn arithmetic, requirement queueing, supersede, live lookup and the
 // pairing invariants a later generation must not break.
 
 import { describe, expect, test } from "bun:test";
@@ -17,7 +17,7 @@ import {
 	supersedeFork,
 	takeReady,
 } from "../src/scope/forkjoin.mjs";
-import { grantBudget } from "../src/scope/panhandle.mjs";
+import { grantTurns } from "../src/scope/panhandle.mjs";
 
 const NOW = 1_700_000_000_000;
 
@@ -120,12 +120,12 @@ describe("supersede and live lookup", () => {
 	});
 });
 
-describe("grantBudget", () => {
+describe("grantTurns", () => {
 	test("refuses free tools and empty grants", () => {
 		const { record } = open();
-		expect(grantBudget(record, { tools: { scope_fork: 1 } }).code).toBe(
+		expect(grantTurns(record, { tools: { scope_fork: 1 } }).code).toBe(
 			"GRANT_FREE_TOOL",
 		);
-		expect(grantBudget(record, {}).code).toBe("GRANT_EMPTY");
+		expect(grantTurns(record, {}).code).toBe("GRANT_EMPTY");
 	});
 });

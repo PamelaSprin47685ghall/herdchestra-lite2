@@ -1,7 +1,7 @@
-// Red contract: lifetime totals survive a reload, but budget estimates use
+// Red contract: lifetime totals survive a reload, but time estimates use
 // only this session's samples for the model in use. Samples are in memory,
 // keyed by ledger identity, so a restored ledger starts empty and one model's
-// speed never sets another model's budget.
+// speed never sets another model's time estimate.
 
 import { describe, expect, test } from "bun:test";
 
@@ -19,7 +19,7 @@ import {
 	normalizeTotals,
 	recordTurnSample,
 	recentAverageTurnMs,
-	sumBudgetPoints,
+	sumTurns,
 } from "../src/scope/turn-stats.mjs";
 
 function ledger() {
@@ -179,12 +179,12 @@ describe("rolling window and bounds", () => {
 	});
 });
 
-describe("derived fork time budget", () => {
-	test("points are the sum of finite positive tool budgets", () => {
-		expect(sumBudgetPoints({ read: 2, bash: 3 })).toBe(5);
-		expect(sumBudgetPoints({ read: 2, bad: -1, nan: Number.NaN, text: "3" })).toBe(2);
-		expect(sumBudgetPoints(null)).toBe(0);
-		expect(sumBudgetPoints({})).toBe(0);
+describe("derived fork time limit", () => {
+	test("turns are the sum of finite positive tool counts", () => {
+		expect(sumTurns({ read: 2, bash: 3 })).toBe(5);
+		expect(sumTurns({ read: 2, bad: -1, nan: Number.NaN, text: "3" })).toBe(2);
+		expect(sumTurns(null)).toBe(0);
+		expect(sumTurns({})).toBe(0);
 	});
 
 	test("time is the sample mean times the declared points", () => {

@@ -1,4 +1,4 @@
-// A fork batch has no fanout ceiling and a scope has no point ceiling.
+// A fork batch has no fanout ceiling and a scope has no turn ceiling.
 //
 // The consumer is the model that splits work: the runtime charges it nothing
 // for a large batch and warns it about nothing. Seven items land whole, the

@@ -103,7 +103,7 @@ export function serializeState(state) {
   };
 }
 
-function validBudgetCounts(value) {
+function validTurnCounts(value) {
   if (!isPlainObject(value)) return false;
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string") return false;

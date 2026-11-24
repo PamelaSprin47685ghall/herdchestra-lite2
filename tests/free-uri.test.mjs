@@ -1,14 +1,14 @@
 // Free built-in protocol calls.
 //
 // A read or write whose path is a URI the runtime resolves itself addresses
-// harness state, not the project tree, so it spends no tool point. A plain
+// harness state, not the project tree, so it spends no turn. A plain
 // filesystem path and a web page keep their charge. The rule reads the call,
-// not the scope: the root and a zero-budget branch reach the same verdict.
+// not the scope: the root and a zero-turn branch reach the same verdict.
 
 import { describe, expect, test } from "bun:test";
 
 import { chargeBranch } from "../src/scope/accounting.mjs";
-import { beatShares, internalScheme, isFreeCall } from "../src/scope/budget.mjs";
+import { beatShares, internalScheme, isFreeCall } from "../src/scope/turns.mjs";
 import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
 import { createState } from "../src/scope/state.mjs";
 
@@ -103,7 +103,7 @@ describe("built-in protocol calls are free", () => {
       ownerId: "f1",
       toolCallId: "paid",
       toolName: "read",
-      input: { path: "src/scope/budget.mjs" },
+      input: { path: "src/scope/turns.mjs" },
     });
     expect(paid.ok).toBe(true);
     expect(paid.panhandled).toBe(true);
@@ -112,7 +112,7 @@ describe("built-in protocol calls are free", () => {
 
   test("a filesystem path and a web page keep their charge", () => {
     for (const path of [
-      "src/scope/budget.mjs",
+      "src/scope/turns.mjs",
       "./notes.txt",
       "/home/user/x.md",
       "https://example.com/page",

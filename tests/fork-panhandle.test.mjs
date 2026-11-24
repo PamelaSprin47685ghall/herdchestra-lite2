@@ -1,8 +1,8 @@
-// A branch that runs out still works. Its allowance is a ledger, not a fence.
+// A branch that runs out still works. Its turns are a ledger, not a fence.
 //
-// The consumer of this contract is the child branch: a paid tool whose balance
-// is gone is not refused, it runs, and the record admits the overrun. The
-// parent's consumer view is the budget line: `panhandled Nx`, which the record
+// The consumer of this contract is the child branch: a paid tool whose turns
+// are gone is not refused, it runs, and the record admits the overrun. The
+// parent's consumer view is the turns line: `panhandled Nx`, which the record
 // carries when the branch returns. The root keeps its refusal, because the root
 // is outside every scope and has no branch record to overrun.
 
@@ -12,7 +12,7 @@ import { createState } from "../src/scope/state.mjs";
 import {
 	createBracketLedger,
 	createClockOn,
-	forkBudgetText,
+	forkTurnsText,
 	forkOf,
 	registerFork,
 } from "../src/scope/index.mjs";
@@ -63,8 +63,8 @@ function gate(station) {
 		});
 }
 
-describe("a call that outruns its allowance still runs", () => {
-	test("the paid tool passes the gate, spends nothing, and lands in the tally", () => {
+describe("a call that outruns its turns still runs", () => {
+	test("the paid tool passes the gate, spends nothing, and lands in the panhandle count", () => {
 		const ledger = createBracketLedger();
 		const record = branch(ledger, { budget: { read: 0 } });
 		const admit = gate(stationWith(ledger, "worker"));
@@ -75,10 +75,10 @@ describe("a call that outruns its allowance still runs", () => {
 		expect(record.panhandles).toHaveLength(1);
 		expect(record.panhandles[0].tool).toBe("read");
 		// The overrun is what the caller reads, not a silent free call.
-		expect(forkBudgetText(record, NOW)).toContain("panhandled 1x");
+		expect(forkTurnsText(record, NOW)).toContain("panhandled 1x");
 	});
 
-	test("a tool the fork never budgeted panhandles the same way", () => {
+	test("a tool the fork never granted turns panhandles the same way", () => {
 		const ledger = createBracketLedger();
 		const record = branch(ledger, { budget: { read: 1 } });
 		const admit = gate(stationWith(ledger, "worker"));
@@ -112,7 +112,7 @@ describe("a call that outruns its allowance still runs", () => {
 		expect(record.panhandles).toHaveLength(1);
 	});
 
-	test("a free tool never reaches the tally", () => {
+	test("a free tool never reaches the panhandle count", () => {
 		const ledger = createBracketLedger();
 		const record = branch(ledger, { budget: { read: 0 } });
 		const admit = gate(stationWith(ledger, "worker"));

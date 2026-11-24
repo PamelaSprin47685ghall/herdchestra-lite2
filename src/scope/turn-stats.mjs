@@ -1,6 +1,6 @@
 // Sufficient statistics for one LLM request's wall time.
 //
-// Lifetime totals (turnMs/turns) are persisted with the ledger. Budget
+// Lifetime totals (turnMs/turns) are persisted with the ledger. Time
 // estimates must not use them: samples live in memory for this session only,
 // keyed by ledger identity, and are grouped by model. A restored ledger is a
 // new object, so a reload starts with no samples; another model's samples are
@@ -11,7 +11,7 @@ export const DEFAULT_TURN_MS = 60000;
 /** Rolling window of recent request durations per session and model. */
 export const SAMPLE_LIMIT = 20;
 
-/** One slow request must not inflate every later budget. */
+/** One slow request must not inflate every later time estimate. */
 export const MAX_SAMPLE_MS = 120000;
 
 /** A sub-second sample says nothing useful about request cost. */
@@ -34,7 +34,7 @@ export function emptyTotals() {
 }
 
 /**
- * Clamp one request duration into the range a budget estimate may use. The
+ * Clamp one request duration into the range a time estimate may use. The
  * lifetime totals keep the raw span; only the rolling window is bounded.
  */
 export function clampSampleMs(value) {
@@ -141,13 +141,13 @@ export function recentAverageTurnMs(samples) {
 	return count > 0 ? sum / count : null;
 }
 
-/** Sum the fork item's own enumerable budget points. Inherited keys do not count. */
-export function sumBudgetPoints(budget) {
-	if (!budget || typeof budget !== "object") return 0;
+/** Sum the fork item's own enumerable turns. Inherited keys do not count. */
+export function sumTurns(turns) {
+	if (!turns || typeof turns !== "object") return 0;
 	let sum = 0;
-	for (const key of Object.keys(budget)) {
+	for (const key of Object.keys(turns)) {
 		if (typeof key !== "string") continue;
-		const value = budget[key];
+		const value = turns[key];
 		if (typeof value === "number" && Number.isFinite(value) && value > 0) {
 			sum += value;
 		}
@@ -157,8 +157,8 @@ export function sumBudgetPoints(budget) {
 
 /**
  * Seconds for one fork: mean of this session's and this model's recent
- * samples times its budget points, at least one second. No usable sample
- * falls back to one minute per point; another session or another model is
+ * samples times its turns, at least one second. No usable sample
+ * falls back to one minute per turn; another session or another model is
  * never used as a substitute.
  */
 export function deriveTimeBudgetSeconds({
@@ -166,11 +166,11 @@ export function deriveTimeBudgetSeconds({
 	budget,
 	fallbackMs = DEFAULT_TURN_MS,
 } = {}) {
-	const points = sumBudgetPoints(budget);
+	const turns = sumTurns(budget);
 	const measured = recentAverageTurnMs(samples);
 	const avg =
 		measured == null
 			? finiteNonNegative(fallbackMs) || DEFAULT_TURN_MS
 			: measured;
-	return Math.max(1, Math.round((avg / 1000) * points));
+	return Math.max(1, Math.round((avg / 1000) * turns));
 }

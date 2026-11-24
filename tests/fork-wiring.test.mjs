@@ -296,7 +296,7 @@ describe("attachForkPorts", () => {
     const readBack = station.forkIdentityPort();
     expect(readBack).toBe(identity);
     expect(readBack.forkId).toBe("c9");
-    // The fork record owns the budget; reading identity twice creates nothing.
+    // The fork record owns the turns; reading identity twice creates nothing.
     expect(station.state.scopes).toBeUndefined();
   });
 

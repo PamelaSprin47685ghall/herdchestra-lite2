@@ -17,7 +17,7 @@ export {
   isFreeCall,
   internalScheme,
   isInternalUriCall,
-} from "./budget.mjs";
+} from "./turns.mjs";
 export {
   createBracketLedger,
   registerFork,
@@ -44,7 +44,7 @@ export {
   validLedger,
   applyCharge,
   applyRefund,
-  forkBudgetText,
+  forkTurnsText,
 } from "./forkjoin.mjs";
 export {
   pauseClock,
@@ -82,7 +82,7 @@ export {
   abandonRequest,
   createTurnClock,
   deriveTimeBudgetSeconds,
-  sumBudgetPoints,
+  sumTurns,
   averageTurnMs,
   normalizeTotals,
   emptyTotals,

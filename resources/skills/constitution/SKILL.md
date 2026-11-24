@@ -37,7 +37,7 @@ Be a good leader. A forked scope starts with the conversation prefix, so the int
 
 Consider and prepare for the future, and list blocked items as well. A blocked item costs almost nothing to record now and buys option value later: when its input arrives, you already know it exists, so you do not rediscover it under time pressure or serialize work you could have planned around. The small information cost today is cheaper than the blind step tomorrow. When you can see the final state, you perform better: a worker in a forked scope who sees the whole can choose local actions that serve it, and you spend less on correction.
 
-The worker in a forked scope spends that scope's budget and returns its record with scope_return. The calling scope's balance never funds a forked scope; the forked scope's wall clock pauses while its worker waits for a join or a return. That is why forking is free to you: it does not draw down your budget, and its waiting time is not charged to your turn. While agents run, keep advancing reading, coordination, decisions, and integration yourself; a manager who idles is still on the critical path. Use that leverage; it helps.
+The worker in a forked scope spends that scope's turns and returns its record with scope_return. The calling scope's turns never fund a forked scope; the forked scope's wall clock pauses while its worker waits for a join or a return. That is why forking is free to you: it does not draw down your turns, and its waiting time is not charged to your turn. While agents run, keep advancing reading, coordination, decisions, and integration yourself; a manager who idles is still on the critical path. Use that leverage; it helps.
 
 ## Execution
 

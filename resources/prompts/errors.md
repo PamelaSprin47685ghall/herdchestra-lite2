@@ -48,11 +48,11 @@ Start `profession` with "You are " and name the role of the LLM in the new scope
 
 ## invalid-budget
 
-`budget` maps tool names to non-negative integers. Free tools need no entry; neither does a `read` or `write` of a built-in protocol URI, which spends no point at any level.
+`budget` maps tool names to non-negative integer turns. Free tools need no entry; neither does a `read` or `write` of a built-in protocol URI, which spends no turn at any level.
 
 ## invalid-time
 
-Do not pass `time`. The system derives the wall-clock budget from the session's mean LLM-request duration and the sum of the item's tool-budget points.
+Do not pass `time`. The system derives the scope's time limit from the session's mean LLM-request duration and the sum of the item's turns.
 
 ## invalid-argument
 
@@ -76,11 +76,11 @@ Scope {{scopeId}} belongs to another owner. Only its owner may reuse it.
 
 ## scope-running-blocked
 
-Scope {{scopeId}} is running, so it cannot be marked blocked. Reuse it with a budget or requirement instead.
+Scope {{scopeId}} is running, so it cannot be marked blocked. Reuse it with turns or a requirement instead.
 
 ## scope-reuse-empty
 
-Reusing `{{scopeId}}` changed nothing. Add budget, fsm, or targets.
+Reusing `{{scopeId}}` changed nothing. Add `budget`, `fsm`, or `targets`.
 
 ## scope-not-amendable
 
@@ -122,11 +122,11 @@ No receiving scope owns this fork. Join the scopes it forked first.
 
 ## root-has-no-budget
 
-The root is outside all scopes and has no ordinary tool budget. Delegate the work with `scope_fork`; control tools stay available, and so does every `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…), which costs no tool point at any level.
+The root is outside all scopes and has no ordinary turns. Delegate the work with `scope_fork`; control tools stay available, and so does every `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`…), which costs no turn at any level.
 
 ## no-branch-budget
 
-Scope `{{ownerId}}` has no fork record, so it has no tool budget. Return with `scope_return` or fork the work.
+Scope `{{ownerId}}` has no fork record, so it has no turns. Return with `scope_return` or fork the work.
 
 ## accounting-failed-closed
 
@@ -154,7 +154,7 @@ This scope owns no unreceived work. This call created no receipt. Fork a new sco
 
 ## tool-budget-exhausted
 
-Tool `{{tool}}` has no work budget left on this scope (remaining {{remaining}}/{{budget}}). The call runs anyway, and the receipt marks it panhandled. That mark is the whole cost, and it is enough: the scope that forked you reads it on return, and it says your sizing was wrong. The cheap exit is `scope_fork` (free) for whatever another scope can own; `scope_return` is the other.
+Tool `{{tool}}` has no turns left on this scope (remaining {{remaining}}/{{budget}}). The call runs anyway, and the receipt marks it panhandled. That mark is the whole cost, and it is enough: the scope that forked you reads it on return, and it says your sizing was wrong. The cheap exit is `scope_fork` (free) for whatever another scope can own; `scope_return` is the other.
 
 ## model-unknown
 

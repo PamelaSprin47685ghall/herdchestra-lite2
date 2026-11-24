@@ -43,7 +43,7 @@ Snapshot version goes to `2`. `validRecord` requires a non-empty `record.fsm`, w
 | Key | Value | Sends |
 |---|---|---|
 | `fresh` | `childReceiptText(...)` for this fork's own data | first receipt to a new child |
-| `revive` | `childReceiptText(...)` for the blocked **target's** fsm, budget, and targets | receipt to a woken checkpoint |
+| `revive` | `childReceiptText(...)` for the blocked **target's** fsm, `budget`, and targets | receipt to a woken checkpoint |
 | `generation` | `generationReceiptText(...)` including `priorRecordText(target)` | receipt to the next generation; the largest text in the system and unbounded in length |
 | any path that sends nothing (running amendment, queued item, blocked item) | `0` for all three keys | — |
 

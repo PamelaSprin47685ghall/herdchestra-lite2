@@ -10,7 +10,7 @@ import {
 	joinAdmission,
 } from "../../scope/admission.mjs";
 import { decideAbandon } from "../../scope/abandon.mjs";
-import { normalizeBudget, validBudget } from "../../scope/budget.mjs";
+import { normalizeTurns, validTurns } from "../../scope/turns.mjs";
 import { normalizeTargets, validTargets } from "../../scope/targets.mjs";
 import { publicScopeId, validScopeId } from "../../scope/scope-id.mjs";
 import { resolveModelSelector } from "../../scope/model-selector.mjs";
@@ -70,18 +70,18 @@ export function decideForkAdmission({
 
 /**
  * Check every fork argument without changing state. Returns the normalized
- * budget on success so the caller never normalizes twice.
+ * turns on success so the caller never normalizes twice.
  */
 export function validateFork(args) {
-	// Empty is valid here: a repeated scope id may carry only budget or
+	// Empty is valid here: a repeated scope id may carry only turns or
 	// targets. A *new* scope still needs an fsm, and the handler enforces that
 	// after it knows whether the name already exists.
 	const fsm = trimText(args?.fsm);
-	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
+	if (!Object.hasOwn(args ?? {}, "budget") || !validTurns(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}
-	const budget = normalizeBudget(args.budget);
-	if (!validBudget(budget)) return { ok: false, code: "INVALID_BUDGET" };
+	const budget = normalizeTurns(args.budget);
+	if (!validTurns(budget)) return { ok: false, code: "INVALID_BUDGET" };
 	if (!validTargets(args?.targets)) {
 		return { ok: false, code: "INVALID_TARGETS" };
 	}
@@ -97,7 +97,7 @@ export function validateFork(args) {
 	// The child's identity statement. It must open with "You are " so the
 	// spawned scope receives a role, not a task summary; the spawner injects
 	// it as the first line below the receipt marker, before any instruction.
-	// An empty value is legal here: a reused scope may carry only a budget
+	// An empty value is legal here: a reused scope may carry only a turn
 	// increment, and a new scope is checked by the station after the action is
 	// known. The JSON schema already requires the field at the tool edge.
 	const profession = trimText(args?.profession);

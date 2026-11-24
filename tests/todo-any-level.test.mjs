@@ -1,5 +1,5 @@
 /**
- * todo at every branch level, and skill reads in a budgeted child.
+ * todo at every branch level, and skill reads in a child that holds turns.
  *
  * The consumer is the model and the host: every assertion reads a tool result
  * or the relay state. The ledger itself stays the host's native todo; this
@@ -463,7 +463,7 @@ describe("todo in a fork child", () => {
 const SKILL_READ = { path: "skill://tdd-crowdsource", i: "reading the contract skill" };
 
 describe("skill read at every level", () => {
-	test("an ordinary read on the root branch is refused because the root has no budget", async () => {
+	test("an ordinary read on the root branch is refused because the root has no turns", async () => {
 		const { host, ctx, station } = await start();
 		asRoot(station);
 		const [read] = await runAssistant(
@@ -472,9 +472,9 @@ describe("skill read at every level", () => {
 			assistant([call("r1", "read", { path: "notes.txt" })]),
 		);
 		expect(read.blocked).toBe(true);
-		expect(textOf(read)).toContain("no ordinary tool budget");
+		expect(textOf(read)).toContain("no ordinary turns");
 		expect(textOf(read)).toContain("scope_fork");
-		// The refusal is a budget decision, not a relay evaluation.
+		// The refusal is a turn decision, not a relay evaluation.
 		expect(relayOf(ctx).firstEvaluation).toBe(null);
 	});
 
@@ -489,7 +489,7 @@ describe("skill read at every level", () => {
 		expect(read.result.isError).toBeFalsy();
 	});
 
-	test("is free in a budgeted child", async () => {
+	test("is free in a child that holds turns", async () => {
 		const { host, ctx, station } = await start();
 		const ledger = asChild(station, { budget: { read: 1 } });
 		const [read] = await runAssistant(

@@ -28,14 +28,15 @@ function modeRulesBlock(options) {
 
 // The Simplified-Chinese reminder is one line inside the persistent rules.
 // Turning `chineseReminder` off removes that line and nothing else, so the
-// rest of the skill text stays byte-identical.
-const CHINESE_REMINDER_PREFIX = "- 强制以简体中文思考";
+// rest of the skill text stays byte-identical. The line is matched by its
+// text, not by a bullet prefix, because the document may carry it either way.
+const CHINESE_REMINDER = "强制以简体中文思考";
 
 function persistentRulesBlock(options) {
 	if (options?.chineseReminder !== "off") return persistentOperatingSkill;
 	return persistentOperatingSkill
 		.split("\n")
-		.filter((line) => !line.startsWith(CHINESE_REMINDER_PREFIX))
+		.filter((line) => !line.includes(CHINESE_REMINDER))
 		.join("\n");
 }
 

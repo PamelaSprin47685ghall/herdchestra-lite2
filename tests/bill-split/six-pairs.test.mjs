@@ -56,7 +56,7 @@ describe("bill-split directions", () => {
 
 	test("clock × scope: clock owns the deadline; scope only publishes the call's origin", () => {
 		const scope = publisher({ scopeId: "s1", batchId: "b1", startedAt: 1_000 });
-		const clock = decider({ budgetMs: 5_000 }, (_mine, fact) => fact.startedAt + 5_000);
+		const clock = decider({ clockMs: 5_000 }, (_mine, fact) => fact.startedAt + 5_000);
 		const before = snapshot(scope.state);
 
 		expect(clock.judge(scope.publish())).toBe(6_000);

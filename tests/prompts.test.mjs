@@ -9,7 +9,11 @@ import {
 	injectSystemPrompt,
 	persistentOperatingSkill,
 } from "../src/prompts/inject.mjs";
-import { inlinedSkills, SKILL_NAMES } from "../src/prompts/skills.mjs";
+import {
+	inlinedSkills,
+	inlinedSkillsSection,
+	SKILL_NAMES,
+} from "../src/prompts/skills.mjs";
 
 const DOCS = [
 	"tools/fork-join",
@@ -144,9 +148,9 @@ describe("system prompts map to their documents", () => {
 		expect(doc["common-rules"]).toBeUndefined();
 		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
 		expect(persistentOperatingSkill).toContain("强制以简体中文");
-		expect(persistentOperatingSkill).toContain("inlined below");
+		expect(inlinedSkillsSection).toContain("reproduced in full below");
 		for (const name of SKILL_NAMES) {
-			expect(persistentOperatingSkill).toContain(name);
+			expect(inlinedSkillsSection).toContain(`<inlined-skill name="${name}">`);
 			expect(persistentOperatingSkill).not.toContain(`skill://${name}`);
 		}
 	});
@@ -160,8 +164,10 @@ describe("system prompts map to their documents", () => {
 			"skill-authoring",
 			"tdd-crowdsource",
 		]);
-		expect(persistentOperatingSkill).toMatch(/project skills are inlined below/);
-		expect(persistentOperatingSkill).toContain("the runtime enforces no stage gate");
+		expect(inlinedSkillsSection).toContain("reproduced in full below");
+		for (const name of SKILL_NAMES) {
+			expect(inlinedSkillsSection).toContain(`<inlined-skill name="${name}">`);
+		}
 		expect(persistentOperatingSkill).not.toContain("Stage Prompts block");
 	});
 
@@ -187,15 +193,7 @@ describe("system prompts map to their documents", () => {
 			.sort();
 		expect(shipped).toEqual([...SKILL_NAMES]);
 
-		const list = persistentOperatingSkill.match(
-			/Six project skills are inlined below: ([^.]+)\./,
-		);
-		expect(list).not.toBeNull();
-		const named = list[1]
-			.replace(/, and /g, ", ")
-			.split(",")
-			.map((name) => name.trim())
-			.sort();
+		const named = inlinedSkills.map((skill) => skill.name).sort();
 		expect(named).toEqual(shipped);
 
 		for (const name of shipped) {
@@ -203,13 +201,10 @@ describe("system prompts map to their documents", () => {
 		}
 	});
 
-	test("task nature is documented in the system prompt, not repeated by todo", () => {
+	test("the task-nature menu stays out of both the rules and todo", () => {
 		const todo = loadDoc("tools/todo");
-		expect(persistentOperatingSkill).toContain("Choose by task nature.");
-		expect(persistentOperatingSkill).toContain("A refactor counts as development:");
-		expect(persistentOperatingSkill).toContain("in principle submit a ledger");
-		expect(persistentOperatingSkill).toContain("in principle do not submit one");
-		expect(persistentOperatingSkill).toContain("let that judgment override the default");
+		expect(persistentOperatingSkill).not.toContain("Choose by task nature.");
+		expect(persistentOperatingSkill).not.toContain("A refactor counts as development:");
 		expect(todo.tool).not.toContain("Choose by task nature.");
 	});
 
@@ -233,7 +228,7 @@ describe("system prompts map to their documents", () => {
 
 	test("a built-in protocol read or write is free wherever the budget is explained", () => {
 		expect(persistentOperatingSkill).toContain("built-in protocol URI");
-		expect(persistentOperatingSkill).toContain("no tool point, at any depth");
+		expect(persistentOperatingSkill).toContain("no turn, at any depth");
 		expect(persistentOperatingSkill).not.toContain("may read `skill://` paths");
 		expect(loadDoc("tools/fork-join")["fork.budget"]).toContain(
 			"is free at any depth, so it needs no entry either",
@@ -351,13 +346,14 @@ describe("fork item schema", () => {
 		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
 	});
 
-	test("n is required on every item and documented as ignored", () => {
+	test("n is required on every item and documented as an estimate", () => {
 		const item = scopeTools.forkParameters.properties.forks.items;
 		expect(item.required).toContain("n");
 		expect(item.properties.n.type).toBe("integer");
 		expect(item.properties.n.minimum).toBe(0);
 		expect(item.properties.n.description).toMatch(/for later audit/i);
-		expect(item.properties.n.description).toMatch(/framework currently ignores it/);
+		expect(item.properties.n.description).toMatch(/provided for later audit/i);
+		expect(item.properties.n.description).toMatch(/sizes a scope from/);
 	});
 
 	test("a reused scopeId amends, and fsm may be omitted", () => {
@@ -403,7 +399,7 @@ describe("scope size is sqrt(10n), with no cap anywhere", () => {
 
 	test("the budget runs an overspent call and marks it panhandled", () => {
 		const budget = scopeTools.FORK_BUDGET_DESCRIPTION;
-		expect(budget).toContain("Size it from `n`");
+		expect(budget).toContain("Size the entry from `n`");
 		expect(budget).not.toContain("sqrt");
 		expect(budget).toContain("panhandled");
 		expect(budget).not.toMatch(/\b(?:18|27)\b/);
@@ -415,7 +411,9 @@ describe("scope size is sqrt(10n), with no cap anywhere", () => {
 	test("the batch sets no fanout ceiling and still has no schema gate", () => {
 		const forks = scopeTools.forkParameters.properties.forks;
 		expect(forks.description).not.toMatch(/never more than/i);
-		expect(forks.description).toContain("as many items in one call");
+		expect(forks.description).toContain(
+			"Include the remaining plan, both ready and blocked items",
+		);
 		// The cap is gone, and the schema never gated it either.
 		expect(forks.maxItems).toBeUndefined();
 		const budget = scopeTools.forkParameters.properties.forks.items.properties.budget;
@@ -424,9 +422,10 @@ describe("scope size is sqrt(10n), with no cap anywhere", () => {
 
 	test("the operating rules teach sqrt(10n) and say why ten, once", () => {
 		const text = persistentOperatingSkill;
-		expect(text.match(/sqrt\(10n\)/g)).toHaveLength(1);
-		expect(text).toContain("sqrt(10n)");
-		expect(text).toContain("ten times the ideal estimate");
+		// The sizing rule names sqrt(10n) twice inside one sentence; the "why ten"
+		// clause that explains it appears exactly once, and nowhere else.
+		expect(text.match(/ten times the ideal estimate/g)).toHaveLength(1);
+		expect(text).toMatch(/match `sqrt\(10n\)` turns[^.]*`sqrt\(10n\)` scopes/);
 		expect(text).toContain("fork as much as the work allows");
 		expect(text).not.toMatch(/never more than/i);
 		expect(text).not.toMatch(/scope_panhandle/);

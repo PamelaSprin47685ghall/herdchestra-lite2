@@ -159,7 +159,7 @@ describe("repeated right brackets do not double-count", () => {
 });
 
 describe("a join leaves the parent where it was", () => {
-  test("receives a child without moving the parent's level, model or budget", () => {
+  test("receives a child without moving the parent's level, model or turns", () => {
     const ledger = createBracketLedger();
     registerFork(ledger, { forkId: "f1", ownerId: "root", fsm: "child", depth: 0 });
     markReady(ledger, "f1");
@@ -186,7 +186,7 @@ describe("a join leaves the parent where it was", () => {
     expect(out.details.forkId).toBe("f1");
     expect(out.details.joined).toBe(true);
     // The child merged into the parent: the parent's level, its model key,
-    // its cache ledger and its remaining budget are byte-identical. Only the
+    // its cache ledger and its remaining turns are byte-identical. Only the
     // receipt chain may grow, and this station has no receipt writer.
     expect(station.state).toEqual(before);
     expect(ledger.order).toContain("f1");

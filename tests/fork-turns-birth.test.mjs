@@ -1,9 +1,9 @@
-// A scope_fork child must be able to spend the budget it declared.
+// A scope_fork child must be able to spend the turns it declared.
 //
 // The consumer of this contract is the child branch: it calls a normal tool and
-// the host runs it, charging the declared allowance and recording an overrun.
+// the host runs it, charging the declared turns and recording an overrun.
 // The parent's consumer view is the fork receipt, which must name the same
-// budget the ledger will charge.
+// turns the ledger will charge.
 
 import { describe, expect, test } from "bun:test";
 

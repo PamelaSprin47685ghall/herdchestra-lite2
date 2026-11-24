@@ -6,6 +6,10 @@ All notable changes to this extension. The format follows
 
 ## [3.2.0] — 2026-11-24
 
+### Changed — `scope_return`'s closing text is `dafny`
+
+- `scope_return`'s `markdown` argument is now `dafny`. The record already reaches the parent as narration, so the string carries what the replay drops and the content chooses its form — prose, pseudocode, a table, a code block — with density, not length, as the criterion. The fork keeps its own name: `scope_fork` still takes `fsm`.
+
 ### Changed — a scope is sized by the work, not by a table
 
 - Every numeric sizing rule is gone: the 18/27 point scope size, the four/six items per call, the two/three tree-depth default and recommendation, the `SCOPE_OVER_BUDGET_CAP` and `FANOUT_OVER_CAP` warnings, and the constants behind them. `scope_fork` now says to fork as much as the work allows, to fork again inside a child, and to budget about `sqrt(n)` points where `n` is the work in hand. A larger job is a deeper tree, not a fatter scope.

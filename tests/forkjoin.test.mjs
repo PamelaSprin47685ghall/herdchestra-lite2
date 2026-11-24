@@ -504,7 +504,7 @@ describe("owner queries", () => {
     expect(taken.content[0].text).toContain("Call scope_join again to take the next one.");
   });
 
-  test("appends the optional markdown to the end of the child's record", async () => {
+  test("appends the optional dafny to the end of the child's record", async () => {
     const { handleReturnCall, handleJoinCall } = await import(
       "../src/station/fork-controls.mjs"
     );
@@ -527,7 +527,7 @@ describe("owner queries", () => {
     const table = "| a | b |\n|---|---|\n| 1 | 2 |";
     const returned = handleReturnCall(child, {
       id: "call-rp",
-      arguments: { markdown: table },
+      arguments: { dafny: table },
     });
     expect(returned.details.awaitingReceipt).toBe(true);
     const station = {

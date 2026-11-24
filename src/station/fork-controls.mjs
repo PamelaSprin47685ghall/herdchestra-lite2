@@ -1146,7 +1146,7 @@ export function handleReturnCall(station, call) {
   // record cannot tell a silent child from a broken one. Amends are filtered
   // first: a withdrawn beat must never return through a replay.
   let renderedRecord = null;
-  const markdown = typeof args.markdown === "string" ? args.markdown.trim() : "";
+  const dafny = typeof args.dafny === "string" ? args.dafny.trim() : "";
   if (typeof station.setChildOutcome === "function") {
     const messages =
       typeof station.contextMessages === "function" ? station.contextMessages() : [];
@@ -1157,10 +1157,10 @@ export function handleReturnCall(station, call) {
     renderedRecord = renderChildRecord(visible, {
       start: childRecordStart(visible, record),
     });
-    // The optional markdown goes last: the child named it deliberately, so it
+    // The optional dafny goes last: the child named it deliberately, so it
     // must survive the replay that keeps only assistant text and tool names.
-    if (markdown !== "") {
-      renderedRecord = renderedRecord === "" ? markdown : `${renderedRecord}\n\n${markdown}`;
+    if (dafny !== "") {
+      renderedRecord = renderedRecord === "" ? dafny : `${renderedRecord}\n\n${dafny}`;
     }
     station.setChildOutcome(selfForkId, {
       record: renderedRecord,

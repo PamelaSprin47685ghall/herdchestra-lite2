@@ -32,7 +32,7 @@ const FORK_BLOCKED_DESCRIPTION = forkJoin["fork.blocked"];
 const FORK_PROFESSION_DESCRIPTION = forkJoin["fork.profession"];
 export const JOIN_DESCRIPTION = forkJoin["join.tool"];
 export const RETURN_DESCRIPTION = forkJoin["return.tool"];
-export const RETURN_MARKDOWN_DESCRIPTION = forkJoin["return.markdown"];
+export const RETURN_DAFNY_DESCRIPTION = forkJoin["return.dafny"];
 
 import { SCOPE_ID_PATTERN, MAX_SCOPE_ID_LENGTH } from "../scope/scope-id.mjs";
 
@@ -91,16 +91,16 @@ export const joinParameters = {
 	properties: {},
 };
 
-// `markdown` is optional: the child's text already reaches the parent, so the
-// field exists for what the replay cannot carry — a table, a code block, a
-// deliberate closing note. A returning child does not summarize the parent's
-// elder: the last receipt of its own level has no later sibling to archive it,
-// so it is sealed instead of being reported.
+// `dafny` is optional: the child's text already reaches the parent, so the
+// field exists for what the replay cannot carry — a tool's arguments and its
+// result are replaced by its bare name. A returning child does not summarize
+// the parent's elder: the last receipt of its own level has no later sibling
+// to archive it, so it is sealed instead of being reported.
 export const returnParameters = {
 	type: "object",
 	additionalProperties: false,
 	properties: {
-		markdown: { type: "string", description: RETURN_MARKDOWN_DESCRIPTION },
+		dafny: { type: "string", description: RETURN_DAFNY_DESCRIPTION },
 	},
 };
 

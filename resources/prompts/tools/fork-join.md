@@ -8,7 +8,7 @@ Required name, up to 48 ASCII characters (e.g. `oh-my-pie`). Start with a letter
 
 ## fork.fsm
 
-Complex flow orchestration is encouraged, so describe the work as a set of state machines, one per branch: name each machine's states, the transition that advances it, and which branches run at once. Say how to build the result fastest, not only what the finished thing is. For a read-only scope, the worker still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size a scope to about `sqrt(n)` points for `n` points of work in hand, and start as many scopes in one call as that work holds: a larger job is a deeper tree, not a bigger scope. There is no other rule for size, fanout, or depth, and no ceiling on any of them. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. State in the `fsm` that the worker in the scope can be a `subtree` lead that divides again. On a new scope `fsm` is required. When the `scopeId` is reused it is optional: the text is appended as one more requirement and delivered at the worker's next turn boundary, never in the middle of a running tool.
+On a new scope `fsm` is required: give it a non-empty description, or the station refuses the item with `MISSING_FSM`. On a reused `scopeId` it is optional, and the text is appended as one more requirement and delivered at the worker's next turn boundary, never in the middle of a running tool. Complex flow orchestration is encouraged, so describe the work as a set of state machines, one per branch: name each machine's states, the transition that advances it, and which branches run at once. Say how to build the result fastest, not only what the finished thing is. For a read-only scope, the worker still names what it reads in `targets`, and closes by answering its question or pinning the finding. Split where coordination cost falls faster than the work it saves; keep a shared mutable surface, an irreversible step, or one decision in one scope. Size a scope to about `sqrt(n)` points for `n` points of work in hand, and start as many scopes in one call as that work holds: a larger job is a deeper tree, not a bigger scope. There is no other rule for size, fanout, or depth, and no ceiling on any of them. Never split one closure across scopes, and never pack several closures into one; a record that only gathers material has not closed. State in the `fsm` that the worker in the scope can be a `subtree` lead that divides again.
 
 ## fork.profession
 
@@ -86,9 +86,9 @@ Still unreceived: {{remaining}}.
 
 Hand the record to the calling scope; it receives the record with `scope_join`. Any unreceived work from scopes you forked transfers to it, or to the nearest live receiver above it when the calling scope has already returned. Put your conclusions in your text: the record keeps what you said plus the bare names of the tools you called, so a result you never state is lost. The last receipt at your level is sealed in full.
 
-## return.markdown
+## return.dafny
 
-Optional text appended to the end of the record the calling scope receives, after leading and trailing whitespace is trimmed. Use it for what the replay drops — a table, a code block, a closing note — and omit it when your text already says everything.
+Optional string appended to the end of the record the calling scope receives, after leading and trailing whitespace is trimmed. The record replays only assistant text and bare tool names, so this field carries what the replay drops. Let the content choose the form — the one that carries it most densely: a definition, a transition table, a code block, one sentence. Density is the criterion, not length: an exact statement beats a prose summary that restates the record. Omit it when your text already says everything.
 
 ## return.pending
 

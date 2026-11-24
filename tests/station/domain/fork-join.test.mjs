@@ -56,7 +56,8 @@ describe("admission decisions", () => {
 	test("fork admission prices the receipt characters", () => {
 		const out = decideForkAdmission({
 			baseTokens: 1_000,
-			receiptChars: 2_000,
+			pricedChars: { fresh: 2_000, revive: 2_000, generation: 2_000 },
+			path: "fresh",
 			tokensPerChar: 0.3,
 			window: WINDOW,
 			reserve: 100,
@@ -69,7 +70,8 @@ describe("admission decisions", () => {
 	test("admission does not mutate a frozen input", () => {
 		const input = Object.freeze({
 			baseTokens: 1,
-			receiptChars: 2,
+			pricedChars: { fresh: 2, revive: 2, generation: 2 },
+			path: "fresh",
 			tokensPerChar: 0.3,
 			window: WINDOW,
 		});

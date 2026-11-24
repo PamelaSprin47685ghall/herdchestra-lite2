@@ -55,7 +55,8 @@ export function decideJoinAdmission({
 /** Can the parent's next request hold a fork receipt of this size? */
 export function decideForkAdmission({
 	baseTokens,
-	receiptChars,
+	pricedChars = null,
+	path = null,
 	tokensPerChar,
 	window,
 	reserve,
@@ -63,7 +64,9 @@ export function decideForkAdmission({
 } = {}) {
 	return admission({
 		baseTokens,
-		recordChars: receiptChars,
+		recordChars: pricedChars === null || path === null
+			? 0
+			: (pricedChars[path] ?? 0),
 		tokensPerChar,
 		window,
 		reserve,
@@ -314,7 +317,8 @@ export function decideRegister({
 			Number.isFinite(override) && override > 0 ? override : window;
 		const verdict = decideForkAdmission({
 			baseTokens,
-			receiptChars: pricedChars[index]?.[path] ?? 0,
+			pricedChars: pricedChars[index] ?? null,
+			path,
 			tokensPerChar,
 			window: itemWindow,
 			reserve,

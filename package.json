@@ -29,7 +29,7 @@
 		"bun": ">=1.4.4"
 	},
 	"scripts": {
-		"test": "bun test tests",
+		"test": "bun test tests --path-ignore-patterns 'deer-flow/**'",
 		"test:gate": "bun test tests/architecture tests/host-omp-ui",
 		"lint": "eslint .",
 		"sync:plugin": "bun scripts/sync-plugin.mjs",

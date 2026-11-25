@@ -6,6 +6,28 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [4.1.3] — 2026-11-25
+
+### Fixed — sub-scope rendering, live thinking, and stalls on omp 19.2.0
+
+After upgrading to omp 19.2.0, every sub-scope was painted inside a default
+`herd.fork-activity` card, thinking froze at its first word, and concurrent
+streams stalled the main loop. The host moved extension rendering to its own
+`@oh-my-pi/pi-tui`, removed the old `pi.pi` component bag and
+`pi-tui/chat/tool-execution`, and no longer treats a custom `message_end` as a
+repaint. The old renderer therefore returned `undefined`, the message frame
+fell back to its titled card, and its snapshot never grew.
+
+- The renderer now resolves the host `pi-tui` singleton and returns native
+  `UiNode`s for `herd.fork-activity` and `fission.broadcast`, so both take the
+  borderless custom-message path.
+- Live child thinking and prose update through stable per-slot signals; the
+  message sends one `message_start` and emits no custom `message_end`, so the
+  host's serialized event queue stays free and Ctrl+O re-renders read the
+  latest accumulated state.
+- The tool tray and completed tool rows use native inline `<tool>` nodes; the
+  tray mounts once per active episode and updates through a signal.
+
 ## [4.1.2] — 2026-11-25
 
 ### Fixed — a forked scope's first request reuses the owner's prompt cache

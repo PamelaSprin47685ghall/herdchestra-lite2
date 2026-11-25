@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { activate } from "../host-omp/src/main.mjs";
+import { CHILD_ACTIVITY_TYPE } from "../host-omp/src/host/child-display.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
 import { installVibeTools } from "../host-omp/src/host/index.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
@@ -112,17 +113,47 @@ function toolResult(id, name, text, isError = false) {
 	};
 }
 
+function fakeTui() {
+	function signal(initial) {
+		let value = initial;
+		return Object.assign(() => value, {
+			set(next) { value = next; },
+			peek() { return value; },
+		});
+	}
+	return {
+		jsx(kind, props = {}) {
+			return {
+				kind,
+				props: () => props,
+				children: () => {
+					const children = props.children;
+					if (typeof children === "function") return children();
+					return children === undefined || children === null ? [] : Array.isArray(children) ? children : [children];
+				},
+			};
+		},
+		signal,
+		batch: (run) => run(),
+		For: ({ each, children }) => ({ kind: "col", children: () => (each() ?? []).map(children) }),
+	};
+}
+
 test("broadcast renderer displays the complete message", async () => {
 	const host = makeHost();
-	let renderer;
-	host.pi.pi = { Text: class { constructor(text) { this.text = text; } } };
-	host.pi.registerMessageRenderer = (type, render) => {
-		if (type === "fission.broadcast") renderer = render;
-	};
+	const registered = new Map();
+	host.pi.tui = fakeTui();
+	host.pi.registerMessageRenderer = (type, render) => registered.set(type, render);
 	await activate(host.pi);
-	const message = { content: "(broadcast to 2 flows)\n\noperator note" };
-	expect(renderer(message).text).toBe(message.content);
-	expect(renderer({ content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] }).text).toBe("first\nsecond");
+	const renderer = registered.get("fission.broadcast");
+	expect(renderer).toBeTypeOf("function");
+	expect(registered.has(CHILD_ACTIVITY_TYPE)).toBe(true);
+	const node = renderer({ content: "(broadcast to 2 flows)\n\noperator note" });
+	expect(node.kind).toBe("text");
+	expect(node.props().text).toBe("(broadcast to 2 flows)\n\noperator note");
+	expect(node.props().wrap).toBe(true);
+	const joined = renderer({ content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] });
+	expect(joined.props().text).toBe("first\nsecond");
 });
 
 async function start(manager, options = {}) {

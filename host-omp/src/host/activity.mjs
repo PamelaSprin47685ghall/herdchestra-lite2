@@ -31,10 +31,15 @@ export function formatFallbackLine(entry, now) {
 	return `${prefix}• ${title}${tail} ${elapsed}s`;
 }
 
-export function assistantParts(message) {
-	if (!Array.isArray(message?.content)) return [];
+const TOOL_TARGET_FIELDS = ["command", "path", "file_path", "filePath", "pattern", "query", "url", "scopeId", "target", "name"];
+
+export function assistantParts(message, assistantMessageEvent) {
+	const content = Array.isArray(message?.content) && message.content.length > 0
+		? message.content
+		: assistantMessageEvent?.partial?.content;
+	if (!Array.isArray(content)) return [];
 	const parts = [];
-	for (const block of message.content) {
+	for (const block of content) {
 		if (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
 			parts.push({ kind: "thinking", text: block.thinking });
 		} else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
@@ -42,6 +47,24 @@ export function assistantParts(message) {
 		}
 	}
 	return parts;
+}
+
+export function formatToolTarget(_toolName, args) {
+	if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+	for (const field of TOOL_TARGET_FIELDS) {
+		const value = args[field];
+		if (typeof value !== "string" || !value.trim()) continue;
+		const line = value.replace(/\s+/g, " ").trim();
+		return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+	}
+	return "";
+}
+
+export function formatToolOutput(result) {
+	if (typeof result === "string") return result.trimEnd();
+	if (!result || typeof result !== "object") return "";
+	if (typeof result.text === "string" && result.text.trim()) return result.text.trimEnd();
+	return textBlocks(result.content, "text", "text").trimEnd();
 }
 
 export function partsText(parts) {

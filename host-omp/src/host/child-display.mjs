@@ -8,10 +8,15 @@ import {
 	textBlocks,
 	toolSummaryText,
 	formatFallbackLine,
+	formatToolTarget,
 	assistantParts,
 	partsText,
 	partsSignature,
 } from "./activity.mjs";
+import { createActivityStore, renderActiveToolTray, renderChildActivity } from "./activity-render.mjs";
+import { createReactiveSignal, getHostTui } from "./tui-runtime.mjs";
+
+export { renderChildActivity };
 
 // The engine's scope read model, bound once at activation. A display is a host
 // surface; it reads DTOs and never a ledger.
@@ -26,14 +31,8 @@ export const ACTIVE_TOOLS_WIDGET_KEY = "herd-tools";
 const CAPTURE = Symbol.for("herdchestra-lite2.transcript-subscribe.v1");
 const STATE = Symbol.for("herdchestra-lite2.transcript-listeners.v1");
 const transcript = globalThis[STATE] ??= new WeakMap();
-const noopRepaint = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
 // One stable identity: the host detach only clears the slot it installed.
 const SUPPRESS_APPROVAL_PREVIEW = () => Promise.resolve();
-let toolCardCtor = null;
-
-export function registerToolCardComponent(Component) {
-	toolCardCtor = typeof Component === "function" ? Component : null;
-}
 
 function stateFor(session) {
 	let state = transcript.get(session);
@@ -68,95 +67,6 @@ export function captureTranscriptSubscriptions(prototype) {
 	};
 }
 
-
-function resolveTool(session, toolName) {
-	try {
-		return session?.getToolByName?.(toolName);
-	} catch {
-		return undefined;
-	}
-}
-
-function resolveCwd(session) {
-	try {
-		return session?.sessionManager?.getCwd?.();
-	} catch {
-		return undefined;
-	}
-}
-
-function isBuiltInTool(session, toolName) {
-	try {
-		return typeof session?.hasBuiltInTool === "function" ? session.hasBuiltInTool(toolName) : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function buildToolCard(Card, tool, tui) {
-	const options = tool.builtIn === undefined ? {} : { useBuiltInRenderer: tool.builtIn };
-	const card = new Card(tool.toolName, tool.args, options, tool.definition, tui ?? noopRepaint, tool.cwd, tool.toolCallId);
-	card.setArgsComplete?.(tool.toolCallId);
-	card.setExecutionStarted?.(tool.toolCallId);
-	return card;
-}
-
-function buildMarkdownBlock(Markdown, getMarkdownTheme, theme, part) {
-	if (part.kind === "thinking") {
-		return new Markdown(part.text, 1, 0, getMarkdownTheme(), {
-			color: (value) => theme.fg("thinkingText", value),
-			italic: true,
-		});
-	}
-	return new Markdown(part.text, 1, 0, getMarkdownTheme());
-}
-
-export function renderChildActivity(ui, message, options, theme, ToolExecutionComponent = toolCardCtor) {
-	const { Container, Markdown, Spacer, Text, getMarkdownTheme } = ui ?? {};
-	if (![Container, Markdown, Text, getMarkdownTheme].every((value) => typeof value === "function")) return undefined;
-	const frame = new Container();
-	const { label, body, parts, tool } = message.details ?? {};
-	const header = label ? new Text(theme.fg("muted", label), 1, 0) : null;
-	if (header) frame.addChild(header);
-	if (tool?.type === "tool_execution_end" && typeof ToolExecutionComponent === "function") {
-		const card = buildToolCard(ToolExecutionComponent, tool, noopRepaint);
-		card.setExpanded?.(options?.expanded === true);
-		card.updateResult({ ...(tool.result ?? { content: [] }), isError: tool.isError === true }, false, tool.toolCallId);
-		card.seal?.();
-		frame.addChild(card);
-		return frame;
-	}
-	const slots = [];
-	const syncParts = (nextParts) => {
-		const list = Array.isArray(nextParts) && nextParts.length > 0
-			? nextParts
-			: [{ kind: "text", text: body ?? message.content ?? "" }];
-		let compatible = list.length >= slots.length;
-		for (let i = 0; compatible && i < slots.length; i += 1) {
-			if (slots[i].kind !== list[i].kind) compatible = false;
-		}
-		if (!compatible) {
-			frame.clear?.();
-			slots.length = 0;
-			if (header) frame.addChild(header);
-		}
-		for (let i = 0; i < list.length; i += 1) {
-			const part = list[i];
-			if (i < slots.length) {
-				slots[i].md.setText(part.text);
-				continue;
-			}
-			if (slots.length > 0 && typeof Spacer === "function") frame.addChild(new Spacer(1));
-			const md = buildMarkdownBlock(Markdown, getMarkdownTheme, theme, part);
-			slots.push({ kind: part.kind, md });
-			frame.addChild(md);
-		}
-	};
-	syncParts(parts);
-	if (message.details) message.details.syncParts = syncParts;
-	return frame;
-}
-
 function publish(state, event) {
 	for (const entry of state.listeners) {
 		try {
@@ -168,17 +78,12 @@ function publish(state, event) {
 	}
 }
 
-
-
-
-function createActiveToolTray(getUi, current) {
+function createActiveToolTray(getUi, current, getTui) {
 	const entries = new Map();
+	const entriesSignal = createReactiveSignal(getTui(), []);
 	let mounted = false;
-	let hostTui = null;
-	let hostTheme = null;
-	let tick = 0;
 
-	function entryKey(source, toolCallId, toolName) {
+	function entryKey(toolCallId, toolName) {
 		return typeof toolCallId === "string" && toolCallId !== "" ? toolCallId : `name:${toolName ?? "tool"}`;
 	}
 
@@ -191,79 +96,29 @@ function createActiveToolTray(getUi, current) {
 		return map;
 	}
 
-	function totalCount() {
-		let count = 0;
-		for (const map of entries.values()) count += map.size;
-		return count;
-	}
-
-	function disposeCard(entry) {
-		try {
-			entry.card?.seal?.();
-			entry.card?.dispose?.();
-		} catch {
-			// Disposing a visual card must never break tool delivery.
+	function snapshot() {
+		const list = [];
+		for (const map of entries.values()) {
+			for (const [key, entry] of map) {
+				list.push({
+					key,
+					label: entry.label,
+					toolCallId: entry.toolCallId,
+					toolName: entry.toolName,
+					target: formatToolTarget(entry.toolName, entry.args),
+					partialText: entry.partialText,
+				});
+			}
 		}
-		entry.card = null;
-	}
-
-	function ensureCard(entry) {
-		if (entry.card || !toolCardCtor || !hostTui) return entry.card;
-		const card = buildToolCard(toolCardCtor, entry, hostTui);
-		if (entry.partialResult) card.updateResult(entry.partialResult, true, entry.toolCallId);
-		entry.card = card;
-		return card;
-	}
-
-	function renderRow(entry, width, frame) {
-		const safeWidth = Math.max(1, width);
-		const tag = entry.label ? ` ${entry.label} ` : " ";
-		const styledTag = entry.label && hostTheme?.fg ? ` ${hostTheme.fg("muted", entry.label)} ` : tag;
-		const card = ensureCard(entry);
-		if (card) {
-			const innerWidth = Math.max(8, safeWidth - tag.length);
-			card.setTranscriptAllocation?.(1, frame);
-			const lines = card.render(innerWidth);
-			const first = Array.isArray(lines) && lines.length > 0 ? lines[0] : "";
-			if (first) return `${styledTag}${first}`;
-		}
-		const line = ` ${formatFallbackLine(entry, frame.now)}`;
-		return line.length > safeWidth ? `${line.slice(0, Math.max(1, safeWidth - 1))}…` : line;
-	}
-
-	function buildWidget(tui, theme) {
-		hostTui = tui;
-		hostTheme = theme;
-		return {
-			render(width) {
-				tick += 1;
-				const frame = { tick, now: performance.now() };
-				const rows = [];
-				for (const map of entries.values()) {
-					for (const entry of map.values()) rows.push(renderRow(entry, width, frame));
-				}
-				return rows;
-			},
-			invalidate() {
-				for (const map of entries.values()) {
-					for (const entry of map.values()) entry.card?.invalidate?.();
-				}
-			},
-			dispose() {
-				for (const map of entries.values()) {
-					for (const entry of map.values()) disposeCard(entry);
-				}
-				hostTui = null;
-				hostTheme = null;
-			},
-		};
+		return list;
 	}
 
 	function syncWidget() {
 		const ui = getUi();
 		if (!current() || typeof ui?.setWidget !== "function") return;
-		const count = totalCount();
-		if (count === 0) {
+		const list = snapshot();
+		if (list.length === 0) {
+			entriesSignal.set([]);
 			if (!mounted) return;
 			mounted = false;
 			try {
@@ -273,60 +128,62 @@ function createActiveToolTray(getUi, current) {
 			}
 			return;
 		}
-		if (!mounted) {
+		entriesSignal.set(list);
+		const tui = getTui();
+		if (typeof tui?.jsx === "function") {
+			if (mounted) return;
 			mounted = true;
 			try {
-				ui.setWidget(ACTIVE_TOOLS_WIDGET_KEY, buildWidget, { placement: "aboveEditor" });
+				ui.setWidget(ACTIVE_TOOLS_WIDGET_KEY, () => renderActiveToolTray(entriesSignal, tui), { placement: "aboveEditor" });
 			} catch (error) {
 				mounted = false;
 				record("fork", error, { phase: "child-display" });
 			}
 			return;
 		}
-		hostTui?.requestRender?.();
+		mounted = true;
+		try {
+			ui.setWidget(
+				ACTIVE_TOOLS_WIDGET_KEY,
+				list.map((item) => formatFallbackLine({
+					label: item.label,
+					toolName: item.toolName,
+					partialText: item.partialText,
+					startedAt: Date.now(),
+				}, Date.now())),
+				{ placement: "aboveEditor" },
+			);
+		} catch (error) {
+			record("fork", error, { phase: "child-display" });
+		}
 	}
 
 	return {
-		start(source, label, session, event) {
+		start(source, label, _session, event) {
 			const map = mapFor(source, true);
-			const key = entryKey(source, event.toolCallId, event.toolName);
-			const previous = map.get(key);
-			if (previous) disposeCard(previous);
-			const entry = {
+			const key = entryKey(event.toolCallId, event.toolName);
+			map.set(key, {
 				label,
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
 				args: event.args,
-				definition: resolveTool(session, event.toolName),
-				builtIn: isBuiltInTool(session, event.toolName),
-				cwd: resolveCwd(session),
-				startedAt: performance.now(),
-				partialResult: null,
 				partialText: "",
-				card: null,
-			};
-			map.set(key, entry);
+			});
 			syncWidget();
 		},
 		update(source, event) {
-			const map = mapFor(source);
-			if (!map) return;
-			const entry = map.get(entryKey(source, event.toolCallId, event.toolName));
+			const entry = mapFor(source)?.get(entryKey(event.toolCallId, event.toolName));
 			if (!entry) return;
-			entry.partialResult = event.partialResult ?? null;
 			const text = textBlocks(event.partialResult?.content, "text", "text").split("\n", 1)[0]?.trim() ?? "";
+			if (text === entry.partialText) return;
 			entry.partialText = text;
-			if (entry.card && entry.partialResult) {
-				entry.card.updateResult(entry.partialResult, true, entry.toolCallId);
-			}
 			syncWidget();
 		},
 		end(source, event) {
 			const map = mapFor(source);
-			const key = entryKey(source, event.toolCallId, event.toolName);
+			const key = entryKey(event.toolCallId, event.toolName);
 			const entry = map?.get(key) ?? null;
 			if (entry) {
-				disposeCard(entry);
 				map.delete(key);
 				if (map.size === 0) entries.delete(source);
 				syncWidget();
@@ -334,36 +191,34 @@ function createActiveToolTray(getUi, current) {
 			return entry;
 		},
 		clearSource(source) {
-			const map = mapFor(source);
-			if (!map) return;
-			for (const entry of map.values()) disposeCard(entry);
+			if (!mapFor(source)) return;
 			entries.delete(source);
 			syncWidget();
 		},
 		get activeCount() {
-			return totalCount();
+			let count = 0;
+			for (const map of entries.values()) count += map.size;
+			return count;
 		},
 	};
 }
 
-
 const ROOT = Symbol("root");
 
-
-
-
-function displayArbiter(state, tray, suppressApprovalPreview) {
+function displayArbiter(state, tray, suppressApprovalPreview, getTui) {
 	let owner = null;
 	const queue = [];
 	const streams = new Map();
 	const rootEvent = (event) => publish(state, event);
 
-	function row(label, text, tool = null, parts = null) {
+	function row(label, text, tool = null, parts = null, live = false) {
 		state.timestamp = Math.max(Date.now(), state.timestamp + 1);
+		const store = tool ? null : createActivityStore(parts ?? (text ? [{ kind: "text", text }] : []), live, getTui());
 		const message = {
 			role: "custom", customType: CHILD_ACTIVITY_TYPE, attribution: "agent",
 			content: label ? `${label}\n${text}` : text, display: true, excludeFromContext: true,
-			timestamp: state.timestamp, details: { label, body: text, parts, tool },
+			timestamp: state.timestamp,
+			details: { label, body: text, parts, tool, ...(store ? { store } : {}) },
 		};
 		rootEvent({ type: "message_start", message });
 		return message;
@@ -387,10 +242,7 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 		stream.row.content = `${stream.label}\n${text}`;
 		stream.row.details.body = text;
 		stream.row.details.parts = parts;
-		stream.row.details.syncParts?.(parts);
-		// This is a custom row, not an assistant frame. Omp's message_end
-		// handler requests a repaint without touching the assistant slot.
-		rootEvent({ type: "message_end", message: stream.row });
+		stream.row.details.store?.update(parts, true);
 	}
 
 	function finish(source, event) {
@@ -408,11 +260,22 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 				else block(show);
 			}
 		} else {
-			const parts = assistantParts(event?.message ?? stream.last);
+			const parts = assistantParts(event?.message ?? stream.last, event?.assistantMessageEvent);
 			const text = partsText(parts);
-			if (stream.live && stream.row !== null && parts.length > 0) updateLive(stream, parts);
-			else if (stream.live && text) row(stream.label, text, null, parts);
-			else if (text) block(() => row(stream.label, text, null, parts));
+			if (stream.live && stream.row) {
+				if (parts.length > 0) {
+					stream.row.content = `${stream.label}\n${text}`;
+					stream.row.details.body = text;
+					stream.row.details.parts = parts;
+					stream.row.details.store?.update(parts, false);
+				} else {
+					stream.row.details.store?.update(stream.row.details.parts ?? [], false);
+				}
+			} else if (parts.length > 0 || text) {
+				const show = () => row(stream.label, text, null, parts, false);
+				if (stream.live) show();
+				else block(show);
+			}
 		}
 		if (owner === source) {
 			owner = null;
@@ -438,9 +301,6 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 			const completed = {
 				...event,
 				args: active?.args ?? event.args,
-				definition: active?.definition ?? resolveTool(session, event.toolName),
-				builtIn: active?.builtIn ?? isBuiltInTool(session, event.toolName),
-				cwd: active?.cwd ?? resolveCwd(session),
 			};
 			block(() => row(root ? null : label, toolSummaryText(event), completed));
 			return;
@@ -462,9 +322,9 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 				if (stream.live) {
 					if (root) rootEvent(shown);
 					else {
-						const parts = assistantParts(message);
+						const parts = assistantParts(message, event.assistantMessageEvent);
 						if (stream.row === null && parts.length > 0) {
-							stream.row = row(label, partsText(parts), null, parts);
+							stream.row = row(label, partsText(parts), null, parts, true);
 							stream.signature = partsSignature(parts);
 						} else if (parts.length > 0) {
 							updateLive(stream, parts);
@@ -491,8 +351,8 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 			if (owner === ROOT) rootEvent(event);
 			else block(() => rootEvent(event));
 		} else if (type === "message_end" && message?.role === "assistant") {
-			const parts = assistantParts(message);
-			if (parts.length > 0) block(() => row(label, partsText(parts), null, parts));
+			const parts = assistantParts(message, event.assistantMessageEvent);
+			if (parts.length > 0) block(() => row(label, partsText(parts), null, parts, false));
 		}
 	}
 
@@ -539,13 +399,14 @@ function releaseApprovalPreviewSuppression(binding) {
 	}
 }
 
-export function childDisplayFor(root, ui) {
+export function childDisplayFor(root, ui, options = {}) {
 	if (!root) return null;
 	const manager = root.sessionManager;
 	const sessionId = manager?.getSessionId?.();
 	const state = stateFor(root);
 	if (state.display && state.display.manager === manager && state.display.sessionId === sessionId) {
 		if (ui) state.display.ui = ui;
+		if (options?.tui) state.display.tui = options.tui;
 		return state.display.port;
 	}
 	releaseApprovalPreviewSuppression(state.display);
@@ -553,6 +414,7 @@ export function childDisplayFor(root, ui) {
 		manager,
 		sessionId,
 		ui,
+		tui: options?.tui ?? getHostTui(),
 		port: null,
 		approvalPreviewInstalled: false,
 		approvalPreviewDetach: null,
@@ -561,9 +423,9 @@ export function childDisplayFor(root, ui) {
 	const current = () => state.display === binding && !root.isSessionTransitioning && root.sessionManager === manager && manager?.getSessionId?.() === sessionId;
 	let lastOwnerId = "root";
 	let rootWaits = 0;
-	const tray = createActiveToolTray(() => binding.ui, current);
+	const tray = createActiveToolTray(() => binding.ui, current, () => binding.tui);
 	const suppressApprovalPreview = () => installApprovalPreviewSuppression(root, binding);
-	const arbiter = displayArbiter(state, tray, suppressApprovalPreview);
+	const arbiter = displayArbiter(state, tray, suppressApprovalPreview, () => binding.tui);
 	suppressApprovalPreview();
 	state.route = (event) => {
 		if (current()) arbiter.accept(ROOT, null, root, event);

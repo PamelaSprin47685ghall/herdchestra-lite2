@@ -13,30 +13,18 @@ import {
 	loadSharedFirstTurn,
 	SHARED_FIRST_TURN_PATH,
 } from "./host/shared-first-turn.mjs";
-import { CHILD_ACTIVITY_TYPE, registerToolCardComponent, renderChildActivity } from "./host/child-display.mjs";
+import { CHILD_ACTIVITY_TYPE } from "./host/child-display.mjs";
+import { renderBroadcastMessage, renderChildActivity } from "./host/activity-render.mjs";
+import { getHostTui } from "./host/tui-runtime.mjs";
 
 export async function activate(pi, env = process.env) {
 	// Broadcasts are custom messages; register before startup so transcript
 	// replay and live streams use the same readable presentation.
 	if (typeof pi.registerMessageRenderer === "function") {
-		const render = (message) => {
-			const Text = pi.pi?.Text;
-			if (typeof Text !== "function") return undefined;
-			const content = typeof message.content === "string"
-				? message.content
-				: (message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n");
-			return new Text(content, 1, 0);
-		};
-		pi.registerMessageRenderer("fission.broadcast", render);
-		let ToolExecutionComponent;
-		try {
-			({ ToolExecutionComponent } = await import("@oh-my-pi/pi-tui/chat/tool-execution"));
-			registerToolCardComponent(ToolExecutionComponent);
-		} catch {
-			// A host without the standalone card export can still use Markdown.
-		}
+		const tui = pi?.tui ?? getHostTui();
+		pi.registerMessageRenderer("fission.broadcast", (message) => renderBroadcastMessage(message, tui));
 		pi.registerMessageRenderer(CHILD_ACTIVITY_TYPE, (message, options, theme) =>
-			renderChildActivity(pi.pi, message, options, theme, ToolExecutionComponent));
+			renderChildActivity(message, options, theme, tui));
 	}
 	// Resolve the builtin at the extension entry so compiled omp can bind its
 	// embedded module rather than resolving from a transitive helper.

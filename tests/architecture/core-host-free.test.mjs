@@ -71,11 +71,22 @@ test("core never dereferences a host session handle", () => {
 	expect(offenders).toEqual([]);
 });
 
-test("the host package is the only extension entry", () => {
+test("the root package names both extension entries", () => {
+	// A one-command install fetches the root package, so the root is where the
+	// two extension entries must be declared; the host package keeps its own
+	// entry so a standalone `omp plugin link ./host-omp` still works. The core
+	// stays a library: no `pi` field, and every `src/` file is still scanned
+	// above for host imports.
 	const core = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 	const host = JSON.parse(readFileSync(join(HOST, "package.json"), "utf8"));
-	expect(core.omp).toBeUndefined();
 	expect(core.pi).toBeUndefined();
+	expect(core.omp.extensions).toEqual([
+		"./host-omp/src/main.mjs",
+		"./host-omp-ui/src/main.mjs",
+	]);
+	for (const entry of core.omp.extensions) {
+		expect({ entry, exists: existsSync(join(ROOT, entry)) }).toEqual({ entry, exists: true });
+	}
 	expect(host.omp.extensions).toEqual(["./src/main.mjs"]);
 	expect(host.pi.extensions).toEqual(["./src/main.mjs"]);
 	expect(existsSync(join(HOST, host.omp.extensions[0]))).toBe(true);

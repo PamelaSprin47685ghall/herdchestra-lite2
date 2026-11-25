@@ -6,6 +6,34 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [4.1.1] — 2026-11-25
+
+### Added — one URL is now a working install
+
+`omp plugin install https://github.com/PamelaSprin47685ghall/herdchestra-lite2`
+used to fetch a package that registered no extension at all: the root manifest
+named no `omp.extensions`, so `omp` reported `enabled: true` for a plugin that
+loaded nothing. The root manifest now declares both entries, which is the
+manifest a one-command install actually fetches:
+
+```json
+"omp": { "extensions": ["./host-omp/src/main.mjs", "./host-omp-ui/src/main.mjs"] }
+```
+
+`host-omp` keeps its own entry, so `omp plugin link ./host-omp` still works as
+before. The core stays a library: it declares no `pi` field, its `src/` tree
+still imports no host module, and `tests/architecture/core-host-free.test.mjs`
+now asserts the root contract instead of asserting the field is absent.
+
+`files` also names `host-omp/` and `host-omp-ui/`. Without them a tarball-pack
+install would ship a manifest whose entries point at directories it omitted —
+the same silent no-op by a different route.
+
+The Web UI artifact is still not in Git: `host-omp-ui/web/dist/` is built from
+a sibling `../deer-flow/frontend` checkout that a fresh clone does not have.
+Distribute it out of band (`scp -r`) into the installed copy; `host-omp` works
+without it.
+
 ## [4.1.0] — 2026-11-25
 
 ### Changed — a long session pays for the frame, not for its history

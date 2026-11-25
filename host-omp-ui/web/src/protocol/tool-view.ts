@@ -566,7 +566,7 @@ function pickExitCode(result: unknown): number | undefined {
 
 export function mergeToolBlock(
   block: MessageBlock,
-  execution: ToolExecution | undefined,
+  execution: Partial<ToolExecution> | undefined,
 ): ToolExecution {
   const fromBlock: ToolExecution =
     block.type === "toolCall"
@@ -605,7 +605,7 @@ export function mergeToolBlock(
       ? "failed"
       : execution.status === "running" && fromBlock.status !== "running"
         ? fromBlock.status
-        : execution.status,
+        : (execution.status ?? fromBlock.status),
   };
 }
 

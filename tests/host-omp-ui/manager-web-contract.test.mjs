@@ -366,7 +366,9 @@ describe("session selection isolation", () => {
 		);
 		expect(state.session?.id).toBe("B");
 		expect(state.liveSession.session?.id).toBe("B");
-		expect(state.messages).toEqual([]);
+		// The sequence is a persistent vector at run time; compare its contents,
+		// not the container shape. "Empty" is what the assertion means.
+		expect([...state.messages]).toEqual([]);
 		expect(state.model).toBeNull();
 		expect(state.meta.model ?? null).toBeNull();
 		expect(state.commands?.rA).toBeUndefined();

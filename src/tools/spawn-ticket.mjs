@@ -16,7 +16,7 @@ import {
 } from "../scope/fork-registry.mjs";
 import { renderChildRecord } from "../transcript/replay.mjs";
 import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
-import { forkOf, touchFork } from "../scope/forkjoin.mjs";
+import { clearWakeFlag, forkOf, takePendingInbox } from "../scope/forkjoin.mjs";
 import {
 	childReturnNudge,
 	resetReturnNudges,
@@ -92,18 +92,10 @@ export async function wakeIdleScope(entry, ledger, forkId) {
 			const next = forkOf(ledger, forkId);
 			if (!next || next.woken !== true) return { ok: true, woken: false };
 		} while (entry.pending === true);
-		const done = forkOf(ledger, forkId);
-		if (done && done.woken === true) {
-			done.woken = false;
-			touchFork(ledger, forkId);
-		}
+		clearWakeFlag(ledger, forkId, true);
 		return { ok: true, woken: false };
 	} catch (error) {
-		const done = forkOf(ledger, forkId);
-		if (done) {
-			done.woken = false;
-			touchFork(ledger, forkId);
-		}
+		clearWakeFlag(ledger, forkId);
 		return { ok: false, reason: String(error?.message ?? error) };
 	} finally {
 		entry.busy = false;
@@ -238,14 +230,9 @@ export async function spawnChildTicket(spec, ports) {
 		// running tool call. Every envelope already names its sender, so the
 		// model answers by addressing that path and is never told who spoke.
 		const deliverInbox = async () => {
-			const record = forkOf(ledger, spec.forkId);
-			if (!record || !Array.isArray(record.inbox)) return false;
-			const delivered = Number.isInteger(record.inboxDelivered)
-				? record.inboxDelivered
-				: 0;
-			const pending = record.inbox.slice(delivered);
+			// The ledger owns the cursor and marks it before the prompt can yield.
+			const pending = takePendingInbox(ledger, spec.forkId);
 			if (pending.length === 0) return false;
-			record.inboxDelivered = record.inbox.length;
 			await prompt(pending.map((entry) => entry.envelope).join("\n\n"));
 			return true;
 		};

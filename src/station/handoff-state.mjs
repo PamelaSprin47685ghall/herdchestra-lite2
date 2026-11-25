@@ -217,8 +217,14 @@ function commitSelfHandoff(station, ctx, report) {
 	station.clearPending();
 	if (manager && typeof manager.buildSessionContext === "function") {
 		try {
-			const rebuilt = manager.buildSessionContext()?.messages;
-			if (Array.isArray(rebuilt)) station.host?.session?.setMessages?.(ctx, rebuilt);
+			// One rebuild, read through the station's branch projection: the
+			// compaction above already moved the leaf, so this is a fresh
+			// projection rather than the pre-handoff cache.
+			const rebuilt = station.contextMessages();
+			station.host?.session?.setMessages?.(ctx, rebuilt);
+			// The host now owns a different message list; the next projection
+			// must come from the branch, not from the object cached above.
+			station.contextCache = null;
 		} catch (error) {
 			// Keep existing agent messages if the rebuild fails, but record it:
 			// a silent miss leaves the successor reading the pre-handoff

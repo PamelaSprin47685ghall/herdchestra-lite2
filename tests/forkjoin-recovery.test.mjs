@@ -68,6 +68,20 @@ describe("the bracket tree survives a reload", () => {
     expect(forkOf(restored, "f2").outcome).toBe("failed");
   });
 
+  test("restored queues pair every ready result without repeated queue searches", () => {
+    const ledger = createBracketLedger();
+    running(ledger, "one");
+    running(ledger, "two");
+    running(ledger, "three");
+    markReady(ledger, "two", { ok: true, record: "second" });
+    markReady(ledger, "one", { ok: true, record: "first" });
+    const payload = serializeLedger(ledger);
+    const restored = restoreLedger(payload);
+    expect(readyChildren(restored, "root")).toEqual(["two", "one", "three"]);
+    expect(forkOf(restored, "three").reason).toContain("restart");
+    expect(payload.forks.three.status).toBe("running");
+  });
+
   test("a running fork comes back as a failed result, never as running", () => {
     const ledger = createBracketLedger();
     running(ledger, "f1", "root", { time: 60 });

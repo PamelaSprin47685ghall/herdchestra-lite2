@@ -25,6 +25,7 @@ import { nudgeDecision } from "../src/station/nudge.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 import { createTestStation } from "./helpers/station-ports.mjs";
+import { createState, planLedgerEntry, foldStateChain } from "../src/scope/index.mjs";
 
 function childLedger() {
 	const ledger = createBracketLedger();
@@ -171,6 +172,18 @@ describe("the shared return allowance", () => {
 
 		expect(record.returnNudges).toBe(0);
 		expect(returnNudgesOf(record)).toBe(0);
+	});
+
+	test("the return allowance survives a ledger persistence round trip", () => {
+		const state = createState();
+		state.brackets = childLedger();
+		const first = planLedgerEntry(state, null);
+		const record = forkOf(state.brackets, "fork_a");
+		expect(takeReturnNudge(record)).toBe(true);
+		const next = planLedgerEntry(state, first.brackets);
+		expect(next.entry).not.toBeNull();
+		const restored = foldStateChain([first.entry, next.entry]);
+		expect(restored.brackets.forks.fork_a.returnNudges).toBe(1);
 	});
 
 	test("the station's leg and the ticket's leg spend the same counter", () => {

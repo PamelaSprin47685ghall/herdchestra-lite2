@@ -26,15 +26,24 @@ import { applyDelta } from "./reducers/transcript";
 import { reduceSnapshot, surfacePatch } from "./reducers/snapshot";
 import { reduceFrame } from "./reducers/frames";
 export { renderIndexes } from "./reducers/live";
+import { MessageLog } from "./message-log";
+
 export type { RenderIndexes } from "./reducers/live";
 
 export function createInitialWebState(): WebState {
+  // One empty log, shared by both views of the sequence. The runtime value is a
+  // persistent vector that reads like an array, so consumers keep their
+  // positional access and the state has a single sequence to compare by
+  // identity — no cast, because the type says what the value is.
+  const emptyMessages = MessageLog.empty();
   return {
     transcriptSeq: 0,
+    streamRev: 0,
+    streamDirtyFrom: 0,
     commands: {},
     session: null,
-    liveSession: { messages: [], session: null },
-    messages: [],
+    liveSession: { messages: emptyMessages, session: null },
+    messages: emptyMessages,
     streaming: false,
     todos: [],
     todoPhases: [],
@@ -88,7 +97,7 @@ function reduceWebStateInner(state: WebState, frame: ServerFrame): WebState {
       const session = { id, title: typeof frame.title === "string" ? frame.title : null };
       const fresh = createInitialWebState();
       return { ...fresh, models: state.models, sessions: state.sessions, notifications: state.notifications,
-        session, liveSession: { session, messages: [] } };
+        session, liveSession: { session, messages: fresh.messages } };
     }
     case "snapshot":
       return reduceSnapshot(state, frame);

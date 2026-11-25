@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   JOINED,
   READY,
+  clearWakeFlag,
   createBracketLedger,
   forkOf,
   markReady,
@@ -13,6 +14,7 @@ import {
 import { listActiveScopePaths } from "../src/scope/path.mjs";
 import { handleReturnCall } from "../src/station/fork-controls.mjs";
 import { handleSendCall } from "../src/station/send-controls.mjs";
+import { createState, planLedgerEntry, foldStateChain } from "../src/scope/index.mjs";
 
 const STATE = {
   scopes: [],
@@ -136,6 +138,49 @@ describe("a message wakes a finished scope in place", () => {
 });
 
 describe("scope_return while woken is a send to ..", () => {
+  test("wake clearing marks a partially throwing setter", () => {
+    const ledger = createBracketLedger();
+    const record = fork(ledger, "f-c1", "root", 0, "/worker");
+    // An application-provided accessor can throw after changing state. The
+    // domain operation preserves the old exception and records that mutation.
+    let value = true;
+    Object.defineProperty(record, "woken", {
+      configurable: true, enumerable: true,
+      get: () => value,
+      set(next) { value = next; throw new Error("setter failed"); },
+    });
+    const state = createState();
+    state.brackets = ledger;
+    const before = planLedgerEntry(state, null);
+    expect(() => clearWakeFlag(ledger, "f-c1")).toThrow("setter failed");
+    expect(value).toBe(false);
+    const after = planLedgerEntry(state, before.brackets);
+    expect(after.entry).not.toBeNull();
+    expect(foldStateChain([before.entry, after.entry]).brackets.forks["f-c1"].woken).toBe(false);
+  });
+
+  test("the cleared wake flag survives persistence after an intervening snapshot", () => {
+    const state = createState();
+    const ledger = state.brackets;
+    fork(ledger, "f-c1", "root", 0, "/worker");
+    markReady(ledger, "f-c1", { ok: true, record: "first look" });
+    handleSendCall(sender(ledger), {
+      id: "wake",
+      arguments: { target: "/worker", message: "look again" },
+    });
+    const first = planLedgerEntry(state, null);
+    expect(first.brackets.forks["f-c1"].woken).toBe(true);
+
+    handleReturnCall(child(ledger, "f-c1", "/worker"), {
+      id: "return",
+      arguments: { dafny: "done" },
+    });
+    const next = planLedgerEntry(state, first.brackets);
+    expect(next.entry).not.toBeNull();
+    const restored = foldStateChain([first.entry, next.entry]);
+    expect(restored.brackets.forks["f-c1"].woken).toBe(false);
+  });
+
   test("it forwards the text to the parent and ends the woken state", () => {
     const ledger = createBracketLedger();
     fork(ledger, "f-c1", "root", 0, "/worker");

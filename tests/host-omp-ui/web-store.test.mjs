@@ -99,7 +99,9 @@ describe("createInitialWebState", () => {
 	test("has empty session, messages, interactions, surface, and draft", async () => {
 		const state = await initial();
 		expect(state.session).toBeNull();
-		expect(state.messages).toEqual([]);
+		// The sequence is a persistent vector at run time; compare its contents,
+		// not the container shape. "Empty" is what the assertion means.
+		expect([...state.messages]).toEqual([]);
 		expect(state.openInteractions).toEqual([]);
 		expect(state.surfaceDoc).toEqual({});
 		expect(state.hasLiveOverlay).toBe(false);

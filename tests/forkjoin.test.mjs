@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { serializeLedgerShared } from "../src/scope/forkjoin.mjs";
+import { registerConsumer, commitConsumer, consumerPending } from "../src/scope/ledger-cache.mjs";
 
 import {
   READY,
@@ -6,8 +8,12 @@ import {
   FAILED,
   RUNNING,
   abandon,
+  applyCharge,
+  applyRefund,
   assertPairing,
   createBracketLedger,
+  enqueueScopeMessage,
+  enqueueRootMessage,
   forkOf,
   hasOpenChildren,
   levelOrder,
@@ -18,6 +24,7 @@ import {
   reparentOrphans,
   statsOf,
   takeReady,
+  takePendingInbox,
 } from "../src/scope/forkjoin.mjs";
 
 function fork(ledger, forkId, ownerId = "root", depth = 0, levelKey = "L0") {
@@ -32,7 +39,157 @@ function fork(ledger, forkId, ownerId = "root", depth = 0, levelKey = "L0") {
   return result.fork;
 }
 
+describe("registration boundary", () => {
+  test("a clock throwing after sequence allocation leaves the change marked", () => {
+    const ledger = createBracketLedger();
+    const consumer = {};
+    registerConsumer(ledger, consumer);
+    commitConsumer(ledger, consumer);
+    const failure = new Error("clock failed");
+    expect(() => registerFork(ledger, {
+      forkId: "f1", ownerId: "root", fsm: "task", depth: 0,
+    }, { clock: { start() { throw failure; } } })).toThrow(failure);
+    expect(ledger.seq).toBe(1);
+    expect(forkOf(ledger, "f1")).toBeNull();
+    expect(consumerPending(ledger, consumer).struct).toBe(true);
+  });
+});
+
+describe("mailbox delivery boundary", () => {
+  test("root inbox initialization is marked before a message getter throws", () => {
+    const ledger = createBracketLedger();
+    delete ledger.rootInbox;
+    const consumer = {};
+    registerConsumer(ledger, consumer);
+    commitConsumer(ledger, consumer);
+    const failure = new Error("message getter failed");
+    expect(() => enqueueRootMessage(ledger, {
+      get from() { throw failure; },
+    })).toThrow(failure);
+    expect(ledger.rootInbox).toEqual([]);
+    expect(consumerPending(ledger, consumer).struct).toBe(true);
+  });
+
+  test("inbox initialization is marked before a message getter throws", () => {
+    const ledger = createBracketLedger();
+    const record = fork(ledger, "f1");
+    delete record.inbox;
+    const before = serializeLedgerShared(ledger);
+    const consumer = {};
+    registerConsumer(ledger, consumer);
+    commitConsumer(ledger, consumer);
+    const failure = new Error("message getter failed");
+    expect(() => enqueueScopeMessage(ledger, "f1", {
+      get from() { throw failure; },
+    })).toThrow(failure);
+    expect(record.inbox).toEqual([]);
+    expect(consumerPending(ledger, consumer).records).toContain("f1");
+    expect(before.forks.f1.inbox).toBeUndefined();
+    expect(serializeLedgerShared(ledger).forks.f1.inbox).toEqual([]);
+  });
+
+  test("a queued message is marked even if reading the optional budget throws", () => {
+    const ledger = createBracketLedger();
+    fork(ledger, "f1");
+    const before = serializeLedgerShared(ledger);
+    const consumer = {};
+    registerConsumer(ledger, consumer);
+    commitConsumer(ledger, consumer);
+    const failure = new Error("budget getter failed");
+    const message = {
+      message: "queued before failure",
+      get budget() { throw failure; },
+    };
+    expect(() => enqueueScopeMessage(ledger, "f1", message)).toThrow(failure);
+    expect(consumerPending(ledger, consumer).records).toContain("f1");
+    const after = serializeLedgerShared(ledger);
+    expect(before.forks.f1.inbox).toEqual([]);
+    expect(after.forks.f1.inbox.map((entry) => entry.message)).toEqual(["queued before failure"]);
+  });
+
+  test("taking unread messages advances the persisted cursor once", () => {
+    const ledger = createBracketLedger();
+    fork(ledger, "f1");
+    enqueueScopeMessage(ledger, "f1", { from: "/", message: "one" });
+    enqueueScopeMessage(ledger, "f1", { from: "/", message: "two" });
+    const before = serializeLedgerShared(ledger);
+    expect(before.forks.f1.inboxDelivered).toBe(0);
+    expect(takePendingInbox(ledger, "f1").map((item) => item.message)).toEqual(["one", "two"]);
+    expect(serializeLedgerShared(ledger).forks.f1.inboxDelivered).toBe(2);
+    expect(takePendingInbox(ledger, "f1")).toEqual([]);
+    expect(takePendingInbox(ledger, "missing")).toEqual([]);
+  });
+});
+
 describe("registration", () => {
+  test("a throwing outcome getter leaves the partial ready transition marked", () => {
+    const ledger = createBracketLedger();
+    const record = fork(ledger, "f1");
+    serializeLedgerShared(ledger);
+    const consumer = {};
+    registerConsumer(ledger, consumer);
+    commitConsumer(ledger, consumer);
+    const failure = new Error("outcome getter failed");
+    expect(() => markReady(ledger, "f1", {
+      get ok() { throw failure; },
+    })).toThrow(failure);
+    expect(record.status).toBe(READY);
+    expect(record.readySeq).toBe(1);
+    const pending = consumerPending(ledger, consumer);
+    expect(pending.records).toContain("f1");
+    expect(pending.struct).toBe(true);
+  });
+
+  test("reentrant outcome getters cannot consume marks for later fields", () => {
+    const ledger = createBracketLedger();
+    const record = fork(ledger, "f1");
+    const consumer = {};
+    registerConsumer(ledger, consumer);
+    commitConsumer(ledger, consumer);
+    const failure = new Error("reason failed");
+    expect(() => markReady(ledger, "f1", {
+      get ok() {
+        // Simulate a synchronous persistence pass from an external getter.
+        commitConsumer(ledger, consumer);
+        return false;
+      },
+      get reason() { throw failure; },
+    })).toThrow(failure);
+    expect(record.outcome).toBe(FAILED);
+    expect(consumerPending(ledger, consumer).records).toContain("f1");
+  });
+
+  test("legacy accounting field initialization is persisted on early returns", () => {
+    const ledger = createBracketLedger();
+    const record = fork(ledger, "f1");
+    record.charges = null;
+    const before = serializeLedgerShared(ledger);
+    expect(before.forks.f1.charges).toBeNull();
+    expect(applyCharge(ledger, "f1", {}).code).toBe("INVALID_TOOL");
+    expect(serializeLedgerShared(ledger).forks.f1.charges).toEqual({});
+
+    // A separate ledger keeps this check independent of the prior snapshot.
+    const second = createBracketLedger();
+    const other = fork(second, "f2");
+    other.charges = null;
+    expect(serializeLedgerShared(second).forks.f2.charges).toBeNull();
+    expect(applyRefund(second, "f2", "missing").refunded).toBe(0);
+    expect(serializeLedgerShared(second).forks.f2.charges).toEqual({});
+  });
+  test("a refused budget grant still persists the message already queued", () => {
+    const ledger = createBracketLedger();
+    const record = fork(ledger, "f1");
+    const before = serializeLedgerShared(ledger);
+    expect(before.forks.f1.inbox).toEqual([]);
+
+    const result = enqueueScopeMessage(ledger, "f1", {
+      from: "/", message: "queued despite refusal", budget: { read: -1 },
+    });
+    expect(result.ok).toBe(false);
+    expect(record.inbox.map((entry) => entry.message)).toEqual(["queued despite refusal"]);
+    expect(serializeLedgerShared(ledger).forks.f1.inbox.map((entry) => entry.message))
+      .toEqual(["queued despite refusal"]);
+  });
   test("opens a bracket at the next depth", () => {
     const ledger = createBracketLedger();
     const record = fork(ledger, "f1", "root", 0);
@@ -142,6 +299,49 @@ describe("out-of-order pairing", () => {
     const taken = takeReady(ledger, { ownerId: "root" });
     expect(taken.ok).toBe(false);
     expect(taken.code).toBe("NO_READY_CHILD");
+  });
+
+  test("creating an empty owner queue invalidates an already captured snapshot", () => {
+    const ledger = createBracketLedger();
+    const before = serializeLedgerShared(ledger);
+    expect(Object.hasOwn(before.queues, "other")).toBe(false);
+    expect(takeReady(ledger, { ownerId: "other" }).code).toBe("NO_READY_CHILD");
+    expect(serializeLedgerShared(ledger).queues.other).toEqual([]);
+  });
+
+  test("an admission callback that mutates then throws leaves the record marked", () => {
+    const ledger = createBracketLedger();
+    const record = fork(ledger, "f1");
+    markReady(ledger, "f1");
+    serializeLedgerShared(ledger);
+    const consumer = {};
+    registerConsumer(ledger, consumer);
+    commitConsumer(ledger, consumer);
+    const failure = new Error("admission failed");
+    expect(() => takeReady(ledger, {
+      ownerId: "root",
+      admit(candidate) {
+        candidate.budget.read = 7;
+        throw failure;
+      },
+    })).toThrow(failure);
+    expect(record.budget.read).toBe(7);
+    expect(consumerPending(ledger, consumer).records).toContain("f1");
+    expect(serializeLedgerShared(ledger).forks.f1.budget.read).toBe(7);
+  });
+
+  test("removing a stale queue entry invalidates the persisted snapshot even when no result is ready", () => {
+    const ledger = createBracketLedger();
+    fork(ledger, "f1");
+    markReady(ledger, "f1");
+    // A stale entry is a documented input to takeReady, e.g. after reparenting.
+    ledger.queues.root.unshift("missing");
+    const before = serializeLedgerShared(ledger);
+    expect(before.queues.root).toEqual(["missing", "f1"]);
+    const taken = takeReady(ledger, { ownerId: "root", admit: () => ({ ok: false }) });
+    expect(taken.code).toBe("NO_ADMISSIBLE_CHILD");
+    expect(ledger.queues.root).toEqual(["f1"]);
+    expect(serializeLedgerShared(ledger).queues.root).toEqual(["f1"]);
   });
 
   test("drops a stale queue entry left by a cancelled child", () => {

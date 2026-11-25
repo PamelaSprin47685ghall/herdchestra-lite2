@@ -11,13 +11,22 @@ import {
   listOpenInteractions,
 } from "./domain/interaction-race.mjs";
 import {
-  reconstructTranscriptFromEntries,
   applyAgentEvent,
-  groupTranscriptForDisplay,
+  buildHistoryIndex,
+  extendHistoryIndex,
+  messageOrdinalOfId,
+  reconstructRange,
+  reconstructTranscriptFromEntries,
 } from "./domain/transcript-model.mjs";
-import { extractArtifacts, stripAnsi } from "./domain/tool-artistry.mjs";
+import { createArtifactCollector, stripAnsi } from "./domain/tool-artistry.mjs";
 import { capArtifact, capMessage, capTool, fitSnapshot } from "./domain/snapshot-fit.mjs";
-import { alignToTurnStart, planHistoryPage } from "./domain/history-page.mjs";
+import {
+  alignToTurnStart,
+  MAX_HISTORY_LIMIT,
+  normalizeHistoryLimit,
+  planHistoryPage,
+  TURN_ALIGN_LIMIT,
+} from "./domain/history-page.mjs";
 import { arbitrateDraft } from "./domain/draft-arbiter.mjs";
 import { normalizeMetaPatch } from "./domain/meta-normalize.mjs";
 import { applyTspOpsToDocument, createEmptyDocument } from "./domain/surface-fence.mjs";
@@ -214,7 +223,14 @@ export function createUiBridgeStation(options) {
   const state = {
     seq: 0,
     session: { id: null, file: null, title: null, cwd: options?.cwd ?? null },
+    // The host already holds the whole branch; this station does not need a
+    // second full copy of every message body. `messages` is a bounded window of
+    // the tail — enough for a frame plus the turn-alignment back-scan — and
+    // `history` remembers where that window sits in the branch so any older
+    // page can be rebuilt on demand. `history.entries` is the host's own array,
+    // kept by reference: nothing is copied until a message is displayed.
     messages: [],
+    history: { entries: null, index: null, base: 0 },
     artifacts: [],
     todos: [],
     usage: { tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: { total: 0 }, context: null },
@@ -256,20 +272,218 @@ export function createUiBridgeStation(options) {
     }));
   }
 
+  // A frame plus the turn-alignment back-scan. Anything older than this is not
+  // held as messages at all: it stays in the host's branch and is rebuilt when
+  // a page asks for it.
+  const HISTORY_WINDOW = 512;
+  // Hydration projects artifacts in contiguous runs, never one ordinal at a
+  // time. The bound keeps a run's projection (and its pairing maps) small while
+  // still amortizing the per-call allocation across many messages.
+  const HYDRATE_ARTIFACT_CHUNK = 256;
+
+  // Artifacts describe the whole branch, so hydration has to read all of it —
+  // but only the entries that can contribute to the list. The predicate is the
+  // exact condition under which a projected message can hold a tool-call block:
+  //
+  //   blocks come from `blocksOf(content)`, whose only tool-call branch is
+  //   `block.type === "toolCall"` — no alias, no case folding, and `cleanBlocks`
+  //   only strips ANSI, never dropping a block. So a message has a tool-call
+  //   block exactly when its content array carries one of that type.
+  //
+  // The three execution roles below build their blocks without reading content
+  // (`bashExecution`, `pythonExecution`) or carry no blocks at all
+  // (`fileMention`), so a tool call inside their content could never reach the
+  // list.
+  function mayCarryToolCall(entry) {
+    const message = entry?.message;
+    if (!message) return false;
+    const role = message.role;
+    if (role === "bashExecution" || role === "pythonExecution" || role === "fileMention") return false;
+    const content = message.content;
+    if (!Array.isArray(content)) return false;
+    for (const block of content) {
+      if (block?.type === "toolCall") return true;
+    }
+    return false;
+  }
+
+  /**
+   * How many display messages there are.
+   *
+   * The branch has what it has, and the live window may already hold messages
+   * the branch does not: an event appends a message before the host writes its
+   * entry. The transcript is therefore as long as the later of the two, and a
+   * frame at the tail must see the live message rather than the branch's older
+   * count.
+   */
+  /**
+   * The current index of the branch, rebuilt when the host grew it.
+   *
+   * The host owns `entries` and may append to that very array. An index built
+   * before the append still claims the old length, and every ordinal past it
+   * answers as absent: a page for a message the branch already holds would be
+   * reported stale. Identity and length are the cheap signals; a mismatch
+   * rebuilds once, with the same call hydration made.
+   */
+  function currentHistoryIndex() {
+    const entries = state.history.entries;
+    if (!entries) return null;
+    const index = state.history.index;
+    // Equal length alone does not mean the branch is the same. A rewound and
+    // re-appended branch has the same size and different contents, and the
+    // index would then name ids that are gone while answering -1 for the ones
+    // that are there. The tail reference catches a rewrite that replaces the
+    // end; it is the cheapest signal available, not a proof that earlier entries
+    // are untouched — that case is the host's explicit branch switch, which
+    // goes through `resetHistory`.
+    if (
+      index &&
+      index.source === entries &&
+      index.entryCount === entries.length &&
+      index.tailRef === (entries.length > 0 ? entries[entries.length - 1] : null)
+    ) {
+      return index;
+    }
+    // An append is the common case: the host adds to its own array between two
+    // frames, so the index only has to learn the tail. A replaced or shorter
+    // array is not a growth, and `extendHistoryIndex` answers it with a full
+    // build — the same call hydration makes.
+    const grew =
+      Boolean(index) && index.source === entries && entries.length > index.entryCount;
+    const rebuilt = extendHistoryIndex(index, entries);
+    state.history.index = rebuilt;
+    if (!grew) {
+      // The branch was rewound, replaced or rewritten in place. The held window
+      // was built from entries that no longer exist, so paging would answer with
+      // the old conversation's messages and a cursor naming a new one would read
+      // as stale. The branch part of the window is therefore rebuilt — but only
+      // that part: everything at an ordinal the branch does not cover exists
+      // nowhere else. This runs from the trim, which runs after a live append,
+      // so discarding the live tail here would delete the message that was just
+      // streamed.
+      const branch = rebuilt.entryOfMessage.length;
+      const start = Math.max(0, branch - HISTORY_WINDOW);
+      const fromBranch = reconstructRange(entries, start, branch, rebuilt);
+      const liveTail = state.messages.slice(Math.max(0, branch - state.history.base));
+      state.history.base = start;
+      state.messages = [...fromBranch, ...liveTail];
+    }
+    return rebuilt;
+  }
+
+  function historyTotal() {
+    const index = currentHistoryIndex();
+    const branch = index ? index.entryOfMessage.length : 0;
+    return Math.max(branch, state.history.base + state.messages.length);
+  }
+
+  /**
+   * The messages for ordinals `[from, to)`.
+   *
+   * Inside the held window this is a slice. Outside it, the range is rebuilt
+   * from the branch: the host's entries are the source of truth, so an old page
+   * costs a tour of that page, not of the session. A strip that crosses the
+   * window's head is stitched: the branch answers what it has, and the window
+   * answers the live tail the branch has not caught up with.
+   */
+  function messagesInRange(from, to) {
+    const entries = state.history.entries;
+    const index = currentHistoryIndex();
+    if (!entries || !index) return state.messages.slice(from, to);
+    const total = historyTotal();
+    const start = Math.max(0, Math.min(from, total));
+    const end = Math.max(start, Math.min(to, total));
+    const base = state.history.base;
+    if (start >= base && end <= base + state.messages.length) {
+      return state.messages.slice(start - base, end - base);
+    }
+    const branch = index.entryOfMessage.length;
+    if (end <= branch) {
+      const rebuilt = reconstructRange(entries, start, end, index);
+      if (end === total && end - start <= HISTORY_WINDOW) {
+        state.messages = rebuilt;
+        state.history.base = start;
+      }
+      return rebuilt;
+    }
+    // The strip crosses what the branch covers and what only the held window
+    // has. They have to meet exactly once: the branch answers up to the window's
+    // first ordinal, and the window answers from there. Cutting the branch at
+    // its own length instead repeats every ordinal the window also holds above
+    // that length, and skipping to the window's head loses the ones between.
+    const boundary = Math.min(end, Math.max(start, base));
+    const head = start < boundary ? reconstructRange(entries, start, boundary, index) : [];
+    const tail = state.messages.slice(
+      Math.max(0, boundary - base),
+      Math.max(0, end - base),
+    );
+    return [...head, ...tail];
+  }
+
+  /**
+   * Adopt a branch, keeping only its tail.
+   *
+   * The host already holds every entry; what a long session cannot afford is a
+   * second full projection of them. Only the window a frame can read is built
+   * here, and the rest is rebuilt on demand from the same entries — so the
+   * messages a page shows are produced by the same kernel as the ones a frame
+   * shows, and cannot drift.
+   */
+  function resetHistory(entries) {
+    const list = entries ?? [];
+    const index = buildHistoryIndex(list);
+    const total = index.entryOfMessage.length;
+    const start = Math.max(0, total - HISTORY_WINDOW);
+    state.history = { entries: list, index, base: start };
+    state.messages = reconstructRange(list, start, total, index);
+  }
+
+  /** Drop the oldest held messages once the window grows past its bound. */
+  function trimHistoryWindow() {
+    // Only what the branch can answer again may be dropped. A live message the
+    // host has not written yet exists nowhere else: the branch has nothing at
+    // that ordinal, so trimming it away would lose it from every later frame —
+    // the conversation would silently skip the messages it just streamed.
+    // The branch length must be the current one. The host appends to its own
+    // array, so the index built at hydration describes a shorter branch than
+    // exists now, and a floor capped by that stale length keeps messages in the
+    // window that the branch can already rebuild — the window grows with the
+    // conversation instead of staying bounded by it.
+    const current = currentHistoryIndex();
+    const branch = current ? current.entryOfMessage.length : 0;
+    const ideal = state.history.base + state.messages.length - HISTORY_WINDOW;
+    // The window may start no later than the branch's end: everything past it
+    // exists only here. When the live run outgrows the window, the window grows
+    // with it — a bounded window that drops unpersisted messages is not bounded,
+    // it is lossy.
+    const floor = Math.max(state.history.base, Math.min(ideal, branch));
+    const drop = floor - state.history.base;
+    if (drop <= 0) return;
+    state.messages = state.messages.slice(drop);
+    state.history.base = floor;
+  }
+
   function snapshot(limit) {
     const requested = Number.isInteger(limit) && limit > 0 ? limit : 80;
-    const size = Math.min(requested, state.messages.length);
-    const rawStart = Math.max(0, state.messages.length - size);
-    const start = alignToTurnStart(state.messages, rawStart);
+    const total = historyTotal();
+    const size = Math.min(requested, total);
+    const rawStart = Math.max(0, total - size);
+    // The alignment walk reaches back at most TURN_ALIGN_LIMIT messages, so the
+    // rebuild covers that floor. Asking for exactly the frame would cut the walk
+    // short and start the window inside a turn.
+    const floor = Math.max(0, rawStart - TURN_ALIGN_LIMIT);
+    const window = messagesInRange(floor, total);
+    const start = floor + alignToTurnStart(window, rawStart - floor);
     // Keep the whole turn-aligned window. A trailing slice here would undo the
     // alignment and can push the current turn's user message out of the window.
-    const messages = state.messages.slice(start).map(capMessage);
+    const messages = window.slice(start - floor).map(capMessage);
     const tools = Object.values(state.toolExecutions).slice(-32).map(capTool);
     const doc = {
       seq: state.seq ?? 0,
       session: { ...state.session },
       messages,
-      displayGroups: groupTranscriptForDisplay(messages),
+      // fitSnapshot derives displayGroups from the trimmed window; computing
+      // it here too would group the same window twice per frame.
       history: { hasMore: start > 0, oldestId: messages[0]?.id ?? null },
       artifacts: state.artifacts.slice(-16).map(capArtifact),
       todos: mapIfArray(state.todos),
@@ -331,7 +545,10 @@ export function createUiBridgeStation(options) {
       title: manager?.getSessionName?.() ?? null,
       cwd: ctx?.cwd ?? state.session.cwd,
     };
-    state.messages = reconstructTranscriptFromEntries(manager?.getBranch?.() ?? []);
+    // The branch is the source of truth and the host already holds it, so it is
+    // adopted by reference. Only its tail becomes messages; the rest is rebuilt
+    // when a page asks for it.
+    resetHistory(manager?.getBranch?.() ?? []);
     state.artifacts = [];
     state.streaming = null;
     state.toolExecutions = {};
@@ -344,10 +561,58 @@ export function createUiBridgeStation(options) {
     snapshot,
 
     historyPage(input) {
+      // The limit is answered before the cursor. An impossible page request is
+      // impossible whether or not the cursor exists, and calling it
+      // `stale_cursor` would send the client after a page it never asked for.
+      if (normalizeHistoryLimit(input?.limit) === null) {
+        return { ok: false, code: "invalid_limit" };
+      }
+      const index = currentHistoryIndex();
+      if (!index) {
+        const plan = planHistoryPage({
+          messages: state.messages,
+          before: input?.before,
+          limit: input?.limit,
+        });
+        if (!plan.ok) return plan;
+        return {
+          ok: true,
+          messages: plan.messages.map(capMessage),
+          history: plan.history,
+        };
+      }
+      // A cursor names a message. `idIndex` also holds entries that project to
+      // no message, so an id can be known there and still resolve to nothing —
+      // `messageOrdinalOfId` answers exactly what `findIndex` answered, which is
+      // what makes an unknown cursor stale.
+      const cursor = String(input?.before ?? "");
+      let ordinal = messageOrdinalOfId(index, cursor);
+      if (ordinal < 0) {
+        // A cursor can name a message the branch has not caught up with yet: a
+        // live message exists only in the window. It still has an ordinal — it
+        // sits past the branch, at its own position in the window — so paging
+        // from it is the same question as paging from any other message and
+        // takes the same path below.
+        //
+        // Planning inside the window instead would cut the page short: a reader
+        // at the start of a live run has fewer held messages before it than a
+        // page holds, while the branch still has all of them. The page would
+        // come back undersized and `hasMore` would describe history it never
+        // looked at.
+        const local = state.messages.findIndex((message) => message.id === cursor);
+        if (local < 0) return { ok: false, code: "stale_cursor" };
+        ordinal = state.history.base + local;
+      }
+      const floor = Math.max(0, ordinal - MAX_HISTORY_LIMIT - TURN_ALIGN_LIMIT);
+      // The strip must include the cursor itself: the planner resolves `before`
+      // against the messages it is given, and a strip that stops one short of it
+      // would report a cursor that certainly exists as stale.
+      const window = messagesInRange(floor, ordinal + 1);
       const plan = planHistoryPage({
-        messages: state.messages,
+        messages: window,
         before: input?.before,
         limit: input?.limit,
+        origin: floor,
       });
       if (!plan.ok) return plan;
       return {
@@ -494,13 +759,58 @@ export function createUiBridgeStation(options) {
 
     onSessionHydrate(session, entries) {
       state.session = { ...state.session, ...session };
-      state.messages = reconstructTranscriptFromEntries(entries ?? []);
-      state.artifacts = extractArtifacts(
-        state.messages.map((message) => ({
-          toolCall: message.blocks?.find((block) => block.type === "toolCall"),
-          toolResult: message.role === "toolResult" ? message : undefined,
-        })),
-      );
+      resetHistory(entries ?? []);
+      // Artifacts describe the whole branch, not the window: a file written an
+      // hour ago must still be listed. The branch is therefore read in chunks,
+      // and each chunk is released before the next one is built. Projecting the
+      // whole transcript here would hold every message body at once — for a long
+      // session that is the largest allocation the station ever makes — to
+      // answer a question about file paths.
+      // Only a message that carries a tool call can contribute, so only those
+      // are projected. The list is built from `block.type === "toolCall"`
+      // blocks, and a message's blocks come from its `content` array (through
+      // `blocksOf`, whose only tool-call branch is that exact type) or, for the
+      // three execution roles below, from somewhere else entirely. Projecting
+      // every message to find six file paths spent two thirds of hydration on a
+      // whole-transcript tour; projecting the ones that can answer costs the
+      // tool calls, which is what the answer is made of.
+      const collector = createArtifactCollector();
+      const list = entries ?? [];
+      const index = state.history.index;
+      const total = index ? index.entryOfMessage.length : 0;
+      // Project contiguous runs of candidate ordinals instead of one ordinal at
+      // a time. Each `reconstructRange` call allocates its pairing maps, so a
+      // whole-transcript tour paid two Maps per message; a run pays them once.
+      // The run is capped by HYDRATE_ARTIFACT_CHUNK so a long branch never holds
+      // a whole projection at once, and it stops at the first ordinal that
+      // cannot contribute, so a sparse branch still skips the messages between.
+      let runStart = -1;
+      const projectRun = (end) => {
+        const built = reconstructRange(list, runStart, end, index);
+        collector.add(
+          built
+            .filter(
+              (message) =>
+                message.role === "toolResult" ||
+                message.blocks?.some((block) => block.type === "toolCall"),
+            )
+            .map((message) => ({
+              toolCall: message.blocks?.find((block) => block.type === "toolCall"),
+              toolResult: message.role === "toolResult" ? message : undefined,
+            })),
+        );
+        runStart = -1;
+      };
+      for (let ordinal = 0; ordinal < total; ordinal += 1) {
+        if (!mayCarryToolCall(list[index.entryOfMessage[ordinal]])) {
+          if (runStart >= 0) projectRun(ordinal);
+          continue;
+        }
+        if (runStart >= 0 && ordinal - runStart >= HYDRATE_ARTIFACT_CHUNK) projectRun(ordinal);
+        if (runStart < 0) runStart = ordinal;
+      }
+      if (runStart >= 0) projectRun(total);
+      state.artifacts = collector.list();
       dispatch({ type: "snapshot", seq: state.seq ?? 0, payload: snapshot() });
       return { ok: true };
     },
@@ -532,6 +842,10 @@ export function createUiBridgeStation(options) {
       if (Object.keys(state.toolExecutions).length > 256) {
         state.toolExecutions = Object.fromEntries(Object.entries(state.toolExecutions).slice(-256));
       }
+      // A live append can push the window past its bound. Dropping from the head
+      // keeps the cost of a frame bounded by the window, not by the conversation;
+      // the dropped messages stay reachable through the branch.
+      trimHistoryWindow();
       state.meta = { ...state.meta, busy: event?.type !== "agent_end" };
       const delta = wireDelta(event, next);
       if (delta) {

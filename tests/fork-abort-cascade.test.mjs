@@ -61,6 +61,18 @@ function rootStation(ledger, registry, aborts = [], persisted = []) {
 }
 
 describe("abort cascade", () => {
+	test("preserves breadth-first discovery and leaf-first closure across siblings", () => {
+		const ledger = createBracketLedger();
+		fork(ledger, "a", "root");
+		fork(ledger, "b", "root");
+		fork(ledger, "a1", "a");
+		fork(ledger, "b1", "b");
+		fork(ledger, "a2", "a");
+		const result = abandonDescendants(ledger, "root", REASON);
+		expect(result.abandonedIds).toEqual(["b1", "a2", "a1", "b", "a"]);
+		expect(result.runningIds).toEqual(["b1", "a2", "a1", "b", "a"]);
+	});
+
 	test("closes every open descendant and reports the running ones", () => {
 		const { ledger, registry } = tree();
 		const aborts = [];

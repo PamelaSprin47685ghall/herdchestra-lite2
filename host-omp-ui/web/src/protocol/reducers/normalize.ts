@@ -22,17 +22,6 @@ import type {
 import { asNumber, asString, asStringArray, isRecord } from "../guards";
 import { basename } from "../tool-view";
 
-export function cloneMessages(messages: UiMessage[]): UiMessage[] {
-  // Structural sharing: only the message currently being streamed can change
-  // in this pass. Historical messages keep their identity so memoized
-  // derivations (buildSteps) do not recompute the whole transcript.
-  return messages.map((message) =>
-    message.streaming
-      ? { ...message, blocks: message.blocks?.map((block) => ({ ...block })) }
-      : message,
-  );
-}
-
 export function normalizeFrame(frame: ServerFrame): ServerFrame {
   if (!frame || typeof frame !== "object") return { type: "unknown" };
   const payload = isRecord(frame.payload) ? frame.payload : undefined;

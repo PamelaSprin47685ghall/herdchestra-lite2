@@ -19,7 +19,7 @@ import {
   put,
 } from "./state.mjs";
 import { isFreeTool, normalizeToolName } from "./turns.mjs";
-import { touchRecord } from "./ledger-cache.mjs";
+import { editRecord } from "./record-mutation.mjs";
 
 /**
  * How many recent admissions one record keeps in full.
@@ -47,13 +47,20 @@ function uniqueTools(entries) {
  * exactly right for the entries it holds.
  */
 function upgradeCounters(record) {
-  if (!Array.isArray(record.panhandles)) record.panhandles = [];
+  let changed = false;
+  if (!Array.isArray(record.panhandles)) {
+    record.panhandles = [];
+    changed = true;
+  }
   if (!Number.isInteger(record.panhandleTotal) || record.panhandleTotal < 0) {
     record.panhandleTotal = record.panhandles.length;
+    changed = true;
   }
   if (!Array.isArray(record.panhandleTools)) {
     record.panhandleTools = uniqueTools(record.panhandles);
+    changed = true;
   }
+  return changed;
 }
 
 /**
@@ -74,22 +81,33 @@ export function notePanhandled(record, tool, options = {}) {
   if (!isNonEmptyString(tool)) {
     return failure("INVALID_TOOL", "A panhandled call must name its tool.");
   }
-  upgradeCounters(record);
   const at = Number.isFinite(options.now) ? options.now : Date.now();
   const callId = typeof options.callId === "string" && options.callId !== "" ? options.callId : null;
   // One entry per call: a call that both ran past its turns and ended past
   // the deadline is one debt, not two.
-  if (callId !== null) {
-    const seen = record.panhandles.find((entry) => entry?.callId === callId);
-    if (seen) return { ok: true, count: record.panhandleTotal, tool };
-  }
-  record.panhandles.push(callId === null ? { at, tool } : { at, tool, callId });
-  record.panhandleTotal += 1;
-  if (!record.panhandleTools.includes(tool)) record.panhandleTools.push(tool);
-  if (record.panhandles.length > MAX_PANHANDLES) {
-    record.panhandles.splice(0, record.panhandles.length - MAX_PANHANDLES);
-  }
-  touchRecord(record);
+  //
+  // The whole step goes through the door, so the mark is part of the write
+  // rather than a call the next path has to remember. The callback returns
+  // false when it changed nothing — a duplicate admission of a record whose
+  // counters were already in place — and the door then marks nothing; a
+  // duplicate that had to seed legacy counters returns true, because that
+  // seeding is a real change a reload has to see.
+  //
+  // The callback receives the same object the caller holds, so a record
+  // reference taken elsewhere keeps observing these writes.
+  editRecord(record, (target) => {
+    const upgraded = upgradeCounters(target);
+    if (callId !== null && target.panhandles.some((entry) => entry?.callId === callId)) {
+      return upgraded;
+    }
+    target.panhandles.push(callId === null ? { at, tool } : { at, tool, callId });
+    target.panhandleTotal += 1;
+    if (!target.panhandleTools.includes(tool)) target.panhandleTools.push(tool);
+    if (target.panhandles.length > MAX_PANHANDLES) {
+      target.panhandles.splice(0, target.panhandles.length - MAX_PANHANDLES);
+    }
+    return true;
+  });
   return { ok: true, count: record.panhandleTotal, tool };
 }
 
@@ -190,31 +208,36 @@ export function grantBudget(record, request = {}, options = {}) {
     );
   }
 
-  if (!isPlainObject(record.budget)) record.budget = {};
-  if (!isPlainObject(record.remaining)) record.remaining = copyCounts(record.budget);
-  for (const tool of Object.keys(tools)) {
-    const added = tools[tool];
-    put(
-      record.budget,
-      tool,
-      (Object.hasOwn(record.budget, tool) ? record.budget[tool] : 0) + added,
-    );
-    put(
-      record.remaining,
-      tool,
-      (Object.hasOwn(record.remaining, tool) ? record.remaining[tool] : 0) + added,
-    );
-  }
-  if (seconds > 0) {
-    record.timeBudgetMs =
-      (Number.isFinite(record.timeBudgetMs) ? record.timeBudgetMs : 0) +
-      seconds * 1000;
-    if (Number.isFinite(record.deadlineAt)) {
-      record.deadlineAt += seconds * 1000;
+  // Validation is complete, so the whole mutation is one step behind the door:
+  // the mark cannot be skipped, and the callback writes into the very object
+  // the caller passed, so a budget map other modules already hold keeps
+  // observing the grant.
+  editRecord(record, (target) => {
+    if (!isPlainObject(target.budget)) target.budget = {};
+    if (!isPlainObject(target.remaining)) target.remaining = copyCounts(target.budget);
+    for (const tool of Object.keys(tools)) {
+      const added = tools[tool];
+      put(
+        target.budget,
+        tool,
+        (Object.hasOwn(target.budget, tool) ? target.budget[tool] : 0) + added,
+      );
+      put(
+        target.remaining,
+        tool,
+        (Object.hasOwn(target.remaining, tool) ? target.remaining[tool] : 0) + added,
+      );
     }
-    // A grant that moves the deadline back into the future ends overtime.
-    record.overtimeAt = null;
-  }
-  touchRecord(record);
+    if (seconds > 0) {
+      target.timeBudgetMs =
+        (Number.isFinite(target.timeBudgetMs) ? target.timeBudgetMs : 0) +
+        seconds * 1000;
+      if (Number.isFinite(target.deadlineAt)) {
+        target.deadlineAt += seconds * 1000;
+      }
+      // A grant that moves the deadline back into the future ends overtime.
+      target.overtimeAt = null;
+    }
+  });
   return { ok: true, tools: { ...tools }, seconds, record };
 }

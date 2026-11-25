@@ -33,9 +33,12 @@ import {
 	finishRequest,
 	markLedgerStructDirty,
 	normalizeTotals,
+	planAmendsEntry,
+	planLedgerEntry,
 	planStateEntry,
 	serializeState,
-	serializeStateShared,
+	serializeStateCore,
+	splitState,
 	forkOf,
 	unreceivedChildren,
 } from "../scope/index.mjs";
@@ -233,13 +236,24 @@ export class SessionStation {
 		// chain whose anchor fell outside the replay window, starts with a
 		// checkpoint instead.
 		const hasBase = hasPersistedBase(manager);
+		const baseId = hasBase ? persistedBaseId(manager) : null;
+		// Both halves of one serialization: the core anchors a state delta and
+		// the ledger half seeds the ledger snapshot, so the first write after a
+		// load subtracts from what the journal already holds instead of
+		// restating it. `serializeState` copies rather than sharing, which is
+		// what makes the seed safe against a record edited in place.
+		const base = baseId === null ? null : splitState(serializeState(this.state));
 		this.anchor = createPersistenceAnchor({
 			manager,
 			state: () => this.state,
-			initialState: hasBase ? serializeState(this.state) : null,
-			initialEntryId: hasBase ? persistedBaseId(manager) : null,
-			serialize: serializeStateShared,
+			initialState: base ? base.core : null,
+			initialLedger: base ? base.brackets : null,
+			initialEntryId: baseId,
+			serialize: serializeStateCore,
 			plan: planStateEntry,
+			planLedger: planLedgerEntry,
+			planAmends: planAmendsEntry,
+			split: splitState,
 			type: SESSION_STATE_TYPE,
 			noteError: (domain, error) => this.noteError(domain, error),
 		});
@@ -250,6 +264,10 @@ export class SessionStation {
 		this.nudged = new WeakSet();
 		this.lastError = null;
 		this.hostBoundaryKey = null;
+		// One boundary scan per projected array: see `cachedHostBoundaryKey`.
+		this.hostBoundaryScan = null;
+		// One projection per branch leaf: see `contextMessages`.
+		this.contextCache = null;
 		this.agentPolicy = null;
 		this.handoffReport = null;
 		this.relayState = true;
@@ -616,11 +634,34 @@ export class SessionStation {
 		return true;
 	}
 
+	/**
+	 * The live context messages, rebuilt by the host only when the branch
+	 * actually moved.
+	 *
+	 * `buildSessionContext()` walks the whole branch and projects every entry,
+	 * so a station that calls it on each assistant message, tool call and model
+	 * request pays Θ(entries) several times per turn and Θ(entries²) per
+	 * session. The leaf id is the branch's identity: every append, amend and
+	 * branch switch produces a new leaf, so an unchanged leaf id means the same
+	 * projection. Without a leaf id the cache is never used and every call
+	 * rebuilds, which is the old behavior rather than a guess.
+	 */
 	contextMessages() {
 		try {
-			const context = this.manager?.buildSessionContext?.();
-			return Array.isArray(context?.messages) ? context.messages : [];
+			const manager = this.manager;
+			const leafId =
+				typeof manager?.getLeafId === "function" ? manager.getLeafId() : null;
+			const cache = this.contextCache;
+			if (leafId !== null && leafId !== undefined && cache && cache.leafId === leafId) {
+				return cache.messages;
+			}
+			const context = manager?.buildSessionContext?.();
+			const messages = Array.isArray(context?.messages) ? context.messages : [];
+			this.contextCache =
+				leafId !== null && leafId !== undefined ? { leafId, messages } : null;
+			return messages;
 		} catch {
+			this.contextCache = null;
 			return [];
 		}
 	}

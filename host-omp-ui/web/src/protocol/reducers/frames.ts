@@ -19,6 +19,7 @@ import {
 } from "./normalize";
 import { sameModel } from "./stable";
 import { liveCommit } from "./live";
+import { MessageLog } from "../message-log";
 
 function appendNotification(
   state: WebState,
@@ -72,7 +73,14 @@ function reduceHistoryPage(state: WebState, frame: ServerFrame): WebState {
     return liveCommit(state, { history: nextHistory });
   }
   return liveCommit(state, {
-    messages: [...older, ...state.liveSession.messages],
+    // Prepending shifts every position, so the result carries no provenance of
+    // its own: a consumer regroups rather than reusing a prefix whose indices
+    // all moved. The log is still structure-shared, so this costs one build of
+    // the page plus the trie, not a copy per frame.
+    messages: MessageLog.from([
+      ...older,
+      ...state.liveSession.messages,
+    ]),
     history: nextHistory,
   });
 }

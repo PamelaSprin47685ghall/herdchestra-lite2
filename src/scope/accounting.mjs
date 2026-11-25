@@ -180,6 +180,8 @@ export function applyAmend(state, ledger, params = {}) {
   if (!beat || !isNonEmptyString(beat.key)) {
     return failure("INVALID_BEAT", "beat.key must be a non-empty string.");
   }
+  // The array is exposed to callers. Its contents can change without its
+  // identity or length changing, so a length-keyed set is not authoritative.
   if (!state.amends.includes(beat.key)) state.amends.push(beat.key);
   return refundBranch(state, ledger, { ownerId, toolCalls });
 }

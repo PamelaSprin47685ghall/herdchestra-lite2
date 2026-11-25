@@ -232,22 +232,42 @@ export function describeToolCall(toolCall, toolResult) {
   };
 }
 
-export function extractArtifacts(items) {
+/**
+ * The artifact list, fed one batch at a time.
+ *
+ * The rule is about order, not about holding the input: one path is listed once,
+ * and the first call that names it wins — a file written and then read later is
+ * still the write. A caller that cannot hold a whole transcript at once feeds
+ * this a chunk at a time and gets the same list, in the same order.
+ */
+export function createArtifactCollector() {
   const artifacts = [];
   const seen = new Set();
-  for (const item of items ?? []) {
-    if (!item?.toolCall) continue;
-    const view = describeToolCall(item.toolCall, item.toolResult);
-    if (!view.path || seen.has(view.path)) continue;
-    if (!["read", "write", "edit"].includes(view.kind)) continue;
-    seen.add(view.path);
-    artifacts.push({
-      path: view.path,
-      kind: view.kind,
-      language: view.language ?? "text",
-      content: view.artifact?.content ?? view.preview ?? "",
-      diff: view.diff ?? null,
-    });
-  }
-  return artifacts;
+  return {
+    add(items) {
+      for (const item of items ?? []) {
+        if (!item?.toolCall) continue;
+        const view = describeToolCall(item.toolCall, item.toolResult);
+        if (!view.path || seen.has(view.path)) continue;
+        if (!["read", "write", "edit"].includes(view.kind)) continue;
+        seen.add(view.path);
+        artifacts.push({
+          path: view.path,
+          kind: view.kind,
+          language: view.language ?? "text",
+          content: view.artifact?.content ?? view.preview ?? "",
+          diff: view.diff ?? null,
+        });
+      }
+    },
+    list() {
+      return artifacts;
+    },
+  };
+}
+
+export function extractArtifacts(items) {
+  const collector = createArtifactCollector();
+  collector.add(items);
+  return collector.list();
 }

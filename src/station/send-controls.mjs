@@ -9,7 +9,8 @@
 // Plain synchronous function. Every state change lands before the wake port is
 // called, so a woken scope never observes a half-written inbox.
 
-import { forkOf, touchFork } from "../scope/forkjoin.mjs";
+import { appendRootEnvelope, forkOf } from "../scope/forkjoin.mjs";
+import { editRecord } from "../scope/record-mutation.mjs";
 import { normalizeScopePath, resolveScopeTargets } from "../scope/path.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
@@ -107,9 +108,13 @@ function grantTurns(record, budget) {
 function restartClock(station, record) {
   const clock =
     typeof station.clockPort === "function" ? station.clockPort() : null;
-  if (!clock || typeof clock.start !== "function") return;
-  if (!Number.isFinite(record.timeBudgetMs)) return;
+  if (!clock || typeof clock.start !== "function") return false;
+  if (!Number.isFinite(record.timeBudgetMs)) return false;
   clock.start(record, record.timeBudgetMs, Date.now());
+  // Reporting whether the clock ran lets the mutation door skip a mark when a
+  // station has no clock port: nothing was written, and a mark would make the
+  // next snapshot re-copy a record that did not change.
+  return true;
 }
 
 function scopeEnvelope(senderPath, message) {
@@ -198,8 +203,7 @@ export function handleSendCall(station, call, _ctx = null) {
 
   for (const target of resolved.targets) {
     if (target.kind === "root") {
-      if (!Array.isArray(ledger.rootInbox)) ledger.rootInbox = [];
-      ledger.rootInbox.push({ from: senderPath, message, envelope });
+      appendRootEnvelope(ledger, { from: senderPath, message, envelope });
       delivered.push("/");
       const steer =
         typeof station.rootSteerPort === "function"
@@ -210,19 +214,37 @@ export function handleSendCall(station, call, _ctx = null) {
     }
     const record = forkOf(ledger, target.forkId);
     if (!record) continue;
-    if (!Array.isArray(record.inbox)) record.inbox = [];
-    record.inbox.push({ from: senderPath, message, envelope });
+    // Keep the mailbox, wake flag, clock and budget writes behind one mutation
+    // door so the caller cannot forget the record's dirty mark. The clock port
+    // is synchronous but may reenter; the door does not provide transaction
+    // isolation to a reentrant observer.
+    const wasRunning = record.status === "running";
+    editRecord(record, (writable) => {
+      if (!Array.isArray(writable.inbox)) writable.inbox = [];
+      writable.inbox.push({ from: senderPath, message, envelope });
+      if (!wasRunning) writable.woken = true;
+    });
+    // The clock port can synchronously reenter persistence. The mailbox and
+    // wake flag must already be marked before that external capability runs.
+    if (!wasRunning) {
+      // The injected clock may itself write to the record or throw after a
+      // partial write. Mark those changes on both paths. A station without a
+      // clock port writes nothing here, so the door reports no change and no
+      // mark is spent.
+      editRecord(record, (writable) => restartClock(station, writable));
+    }
+    if (budget !== null) {
+      editRecord(record, (writable) => {
+        const granted = grantTurns(writable, budget);
+        if (granted) budgetGranted = true;
+        return granted;
+      });
+    }
     delivered.push(target.path);
-    if (record.status !== "running") {
-      record.woken = true;
-      restartClock(station, record);
+    if (!wasRunning) {
       woken.push(target.path);
       wake.push(record.forkId);
     }
-    if (budget !== null && grantTurns(record, budget)) budgetGranted = true;
-    // The mailbox, the cursor and the wake flag are not fork annotations, so
-    // the record must be marked by hand or a shared snapshot can miss them.
-    if (ledger?.order) touchFork(ledger, record.forkId);
   }
 
   delivered.sort();

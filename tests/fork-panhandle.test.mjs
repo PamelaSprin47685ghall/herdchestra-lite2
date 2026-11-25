@@ -17,6 +17,8 @@ import {
 	registerFork,
 } from "../src/scope/index.mjs";
 import { onToolCall } from "../src/station/gates.mjs";
+import { notePanhandled } from "../src/scope/panhandle.mjs";
+import { planLedgerEntry, foldStateChain } from "../src/scope/persistence.mjs";
 
 const NOW = 1_700_000_000_000;
 
@@ -64,6 +66,22 @@ function gate(station) {
 }
 
 describe("a call that outruns its turns still runs", () => {
+	test("duplicate admission persists initialization of legacy counters", () => {
+		const ledger = createBracketLedger();
+		const record = branch(ledger);
+		record.panhandles = [{ at: NOW, tool: "read", callId: "same" }];
+		delete record.panhandleTotal;
+		delete record.panhandleTools;
+		const state = createState();
+		state.brackets = ledger;
+		const before = planLedgerEntry(state, null);
+		expect(notePanhandled(record, "read", { callId: "same", now: NOW })).toMatchObject({ ok: true, count: 1 });
+		const after = planLedgerEntry(state, before.brackets);
+		expect(after.entry).not.toBeNull();
+		const restored = foldStateChain([before.entry, after.entry]);
+		expect(restored.brackets.forks.worker.panhandleTotal).toBe(1);
+		expect(restored.brackets.forks.worker.panhandleTools).toEqual(["read"]);
+	});
 	test("the paid tool passes the gate, spends nothing, and lands in the panhandle count", () => {
 		const ledger = createBracketLedger();
 		const record = branch(ledger, { budget: { read: 0 } });

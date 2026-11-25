@@ -11,6 +11,8 @@ import {
   registerFork,
   serializeState,
   serializeStateShared,
+  serializeStateCore,
+  createState,
 } from "../src/scope/index.mjs";
 import {
   applyDelta,
@@ -18,6 +20,16 @@ import {
   foldStateChain,
   planStateEntry,
 } from "../src/scope/persistence.mjs";
+
+test("core serialization does not traverse the ledger", () => {
+  const state = createState();
+  const expected = serializeStateCore(state);
+  state.brackets = new Proxy({}, {
+    ownKeys() { throw new Error("ledger was traversed"); },
+    get() { throw new Error("ledger was read"); },
+  });
+  expect(serializeStateCore(state)).toEqual(expected);
+});
 
 function checkpointState() {
   return {

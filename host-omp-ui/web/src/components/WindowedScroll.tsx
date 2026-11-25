@@ -1,12 +1,16 @@
+import { useMemo } from "react";
 import type { ReactNode } from "react";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { useWindowedScroll } from "../hooks/use-windowed-scroll";
 import { sliceWindow } from "../lib/windowed-range";
+import type { WindowItems } from "../lib/windowed-range";
 
 interface WindowedScrollProps<T> {
-  items: readonly T[];
+  items: WindowItems<T>;
   getKey: (item: T) => string;
   renderItem: (item: T) => ReactNode;
+  /** Immutable leading items, shared by successive versions of items. */
+  stablePrefix?: WindowItems<T>;
   className?: string;
   contentClassName?: string;
   header?: ReactNode;
@@ -27,6 +31,7 @@ export function WindowedScroll<T>({
   items,
   getKey,
   renderItem,
+  stablePrefix,
   className = "",
   contentClassName = "",
   header,
@@ -52,7 +57,28 @@ export function WindowedScroll<T>({
     showAll,
     onNeedEarlier,
   });
-  const visibleItems = sliceWindow(items, state.range);
+  const start = state.range.start;
+  const end = start + state.range.count;
+  const prefixEnd = Math.min(end, stablePrefix?.length ?? 0);
+  // The caller promises `stablePrefix` is an immutable prefix of `items`. Its
+  // elements are memoised on that promise, so a tail-only update does not
+  // rebuild them — but they stay in the same child list, under the same
+  // parents and keys, so React reuses the mounted rows. Rendering them from a
+  // nested component instead would move them to a new parent and remount every
+  // expanded tool card, selection and scroll anchor on each seal.
+  const prefixRows = useMemo(
+    () =>
+      stablePrefix && start < prefixEnd
+        ? stablePrefix.slice(start, prefixEnd).map((item) => (
+            <div key={getKey(item)}>{renderItem(item)}</div>
+          ))
+        : [],
+    [stablePrefix, start, prefixEnd, getKey, renderItem],
+  );
+  const tailItems = sliceWindow(items, {
+    start: Math.max(start, prefixEnd),
+    count: end - Math.max(start, prefixEnd),
+  });
   const showJump = !state.atBottom && items.length > 0;
   const showLoad = Boolean(canLoadEarlier) && (showJump || !state.canScroll);
   const pillClass =
@@ -84,9 +110,12 @@ export function WindowedScroll<T>({
               : contentClassName
           }
         >
-          {visibleItems.map((item) => (
-            <div key={getKey(item)}>{renderItem(item)}</div>
-          ))}
+          {[
+            ...prefixRows,
+            ...tailItems.map((item) => (
+              <div key={getKey(item)}>{renderItem(item)}</div>
+            )),
+          ]}
           {items.length === 0 && empty ? (
             <div className="flex flex-1 items-center justify-center">{empty}</div>
           ) : null}

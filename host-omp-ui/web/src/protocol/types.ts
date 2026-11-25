@@ -10,6 +10,8 @@
  * guess which transport revision it is talking to.
  */
 
+import type { MessageLog } from "./message-log";
+
 export type MessageRole =
   | "user"
   | "assistant"
@@ -271,17 +273,62 @@ export type LiveHistory = {
 };
 
 export type LiveSessionState = {
-  messages: UiMessage[];
+  /**
+   * The message history as a persistent vector.
+   *
+   * A stream frame replaces one message. Holding the history as a plain array
+   * made that replacement copy one reference per message on every tick, so the
+   * price of a frame grew with the session. `MessageLog` shares structure
+   * instead: a replacement copies one path through a 32-way trie, and the type
+   * carries positional access so consumers keep reading `messages[i]`.
+   */
+  messages: MessageLog;
   session: SessionSummary | null;
   history?: LiveHistory;
 };
 
 export type WebState = {
   transcriptSeq: number;
+  /**
+   * Bumped whenever a streaming frame replaces the in-flight text.
+   *
+   * The message array is copied on such a frame, so its identity already
+   * changes; this counter is the explicit signal consumers can depend on
+   * instead of inferring "something moved" from array identity alone. It never
+   * stands in for immutability: a frame must not write into the state it was
+   * given, or the previous state would change under its readers.
+   */
+  streamRev: number;
+  /**
+   * The smallest index that differs between `messages` and the message list
+   * the previous state held.
+   *
+   * A frame that only rewrites the tail of the conversation records the exact
+   * index it touched, so a consumer that has grouped a prefix can ask whether
+   * that prefix is still valid in constant time. It replaces comparing the two
+   * lists element by element, which cost the length of the prefix on every
+   * tick — the cost this field exists to remove.
+   *
+   * It is only meaningful together with `streamRev`, and only because
+   * `liveCommit` advances `streamRev` on every transition that replaces the
+   * message sequence — including the ones that do not report an index, such as
+   * a snapshot or a prepended history page. That is what makes "exactly one
+   * behind" mean "exactly one transition behind": without it, a replacement
+   * could slip in without consuming a version and the next stream frame would
+   * arrive at `cached + 1` while the list underneath had already been swapped.
+   * Every transition that does not report an index sets this to 0, which claims
+   * the whole list moved and is always safe to act on.
+   */
+  streamDirtyFrom: number;
   commands: Record<string, CommandEntry>;
   session: SessionSummary | null;
   liveSession: LiveSessionState;
-  messages: UiMessage[];
+  /**
+   * The same sequence `liveSession.messages` holds, published on the state for
+   * consumers that read it without unwrapping the session. It is the same value,
+   * so a positional read and an identity comparison agree.
+   */
+  messages: MessageLog;
   streaming: boolean;
   todos: TodoItem[];
   todoPhases: TodoPhase[];

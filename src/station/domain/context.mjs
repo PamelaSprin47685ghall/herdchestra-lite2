@@ -132,9 +132,45 @@ export function projectContext(snapshot = {}, input = {}) {
 	// not a position in the branch. The economics compare a cache's
 	// `cachedUntilPos` against branch indexes, so record the highest branch
 	// position the provider actually saw.
+	//
+	// Every outbound entry is a reference from `original` (filtering only drops
+	// entries, and both occurrences of one message object share a drop
+	// decision), so one forward walk pairs each entry with its position. The
+	// old loop called `original.indexOf` once per entry, which made a single
+	// request quadratic in the transcript length — the reason a long session
+	// stalls. A message object that occurs twice keeps its earliest position,
+	// which is the answer `indexOf` gave.
 	let outboundFrontier = -1;
+	let cursor = 0;
+	const paired = new WeakSet();
+	const pairedPrimitives = new Map();
 	for (const message of messages) {
-		const at = original.indexOf(message);
+		const duplicate = message !== null && typeof message === "object"
+			? paired.has(message)
+			: pairedPrimitives.has(message);
+		while (cursor < original.length && original[cursor] !== message) cursor += 1;
+		if (cursor >= original.length || duplicate) {
+			// Fall back to the exact lookup. Not a subsequence is the plain case.
+			// A repeated entry is the guarded one: today both occurrences of one
+			// message share a drop decision, because `filterAmends` drops by beat
+			// key rather than by position, so a repeat's first pairing is already
+			// its first occurrence. This walk must not lean on that: if a drop
+			// ever became positional, one occurrence would be kept and another
+			// dropped, and the cursor would report the kept one where `indexOf`
+			// reported the first. The exact loop restores that answer at the cost
+			// of a quadratic pass over a list that repeats an object — which a
+			// real transcript does not.
+			outboundFrontier = -1;
+			for (const entry of messages) {
+				const at = original.indexOf(entry);
+				if (at > outboundFrontier) outboundFrontier = at;
+			}
+			break;
+		}
+		const at = cursor;
+		cursor += 1;
+		if (message !== null && typeof message === "object") paired.add(message);
+		else pairedPrimitives.set(message, at);
 		if (at > outboundFrontier) outboundFrontier = at;
 	}
 

@@ -7,10 +7,12 @@ import {
   createBracketLedger,
   forkOf,
   markReady,
+  markLedgerStructDirty,
   registerFork,
 } from "../src/scope/forkjoin.mjs";
 import { childScopePath, listActiveScopePaths, resolveScopeTargets } from "../src/scope/path.mjs";
 import { handleSendCall } from "../src/station/send-controls.mjs";
+import { createState, planLedgerEntry, foldStateChain } from "../src/scope/index.mjs";
 
 const STATE = {
   scopes: [],
@@ -134,6 +136,66 @@ describe("delivery", () => {
     });
     expect(out.isError).toBeUndefined();
     expect(record.remaining.read).toBe(3);
+  });
+
+  test("a root message survives a ledger persistence round trip", () => {
+    const state = createState();
+    const ledger = state.brackets;
+    fork(ledger, "f-api", "root", 0);
+    forkOf(ledger, "f-api").path = "/api";
+    const first = planLedgerEntry(state, null);
+    const child = stationFor(ledger, { forkId: "f-api", path: "/api" });
+
+    const result = handleSendCall(child, {
+      id: "send-root",
+      arguments: { target: "/", message: "please review" },
+    });
+    expect(result.isError).toBeUndefined();
+    const next = planLedgerEntry(state, first.brackets);
+    expect(next.entry).not.toBeNull();
+    const restored = foldStateChain([first.entry, next.entry]);
+    expect(restored.brackets.rootInbox.at(-1).message).toBe("please review");
+  });
+
+  test("repeated root messages retain order without rewriting earlier bodies", () => {
+    const state = createState();
+    const ledger = state.brackets;
+    fork(ledger, "f-api", "root", 0);
+    forkOf(ledger, "f-api").path = "/api";
+    const child = stationFor(ledger, { forkId: "f-api", path: "/api" });
+    let previous = planLedgerEntry(state, null);
+    const entries = [previous.entry];
+    for (const message of ["same", "same", "new"]) {
+      handleSendCall(child, { id: message, arguments: { target: "/", message } });
+      const next = planLedgerEntry(state, previous.brackets);
+      expect(next.entry.rootInboxAppend).toHaveLength(1);
+      expect(next.entry.head?.rootInbox).toBeUndefined();
+      entries.push(next.entry);
+      previous = next;
+    }
+    expect(foldStateChain(entries).brackets.rootInbox.map((item) => item.message))
+      .toEqual(["same", "same", "new"]);
+  });
+
+  test("root inbox reset and legacy head remain readable", () => {
+    const state = createState();
+    const ledger = state.brackets;
+    fork(ledger, "f-api", "root", 0);
+    const first = planLedgerEntry(state, null);
+    const oldMessage = { from: "/old", message: "old", envelope: "old" };
+    const legacy = { version: 3, kind: "ledger", set: {}, del: [], head: { rootInbox: [oldMessage] } };
+    expect(foldStateChain([first.entry, legacy]).brackets.rootInbox).toEqual([oldMessage]);
+
+    ledger.rootInbox = [{ from: "/new", message: "new", envelope: "new" }];
+    // Mutating through the public ledger needs the same structural mark as the send path.
+    markLedgerStructDirty(ledger);
+    const second = planLedgerEntry(state, first.brackets);
+    ledger.rootInbox = [{ from: "/replacement", message: "replacement", envelope: "replacement" }];
+    markLedgerStructDirty(ledger);
+    const third = planLedgerEntry(state, second.brackets);
+    expect(third.entry.rootInbox[0].message).toBe("replacement");
+    const restored = foldStateChain([first.entry, second.entry, third.entry]);
+    expect(restored.brackets.rootInbox.map((item) => item.message)).toEqual(["replacement"]);
   });
 
   test("a child replying to .. reaches the parent, and / reaches the root", () => {

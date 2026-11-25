@@ -6,6 +6,13 @@
 // clock, and performs no I/O.
 
 import { decideAbandon } from "./abandon.mjs";
+import {
+  adoptInbox,
+  createAppendOnlyInbox,
+  inboxVersion,
+  isAppendOnlyInbox,
+  markSharedPrefix,
+} from "./append-only-inbox.mjs";
 import { deadlineInfo } from "./clock.mjs";
 import { emptyTotals, normalizeTotals } from "./turn-stats.mjs";
 import { childScopePath } from "./path.mjs";
@@ -15,6 +22,7 @@ import {
   ledgerMeta,
   markLedgerStructDirty,
   markRecordDirty,
+  noteSnapshotStep,
   registerLedger,
   registerRecord,
 } from "./ledger-cache.mjs";
@@ -122,8 +130,10 @@ export function createBracketLedger() {
     queues: {},
     levels: {},
     // The root's mailbox. A branch addresses `/`, and the message lands here
-    // whether or not a root station is bound in this process.
-    rootInbox: [],
+    // whether or not a root station is bound in this process. It is closed to
+    // everything but appending, which is what lets a snapshot reuse the copies
+    // it already stored instead of re-reading them every frame.
+    rootInbox: createAppendOnlyInbox(),
     // Session-wide request timing. Shared by reference across scopes, so k
     // concurrent requests add k durations and k turns. Missing on old snapshots.
     totals: emptyTotals(),
@@ -170,6 +180,10 @@ export function registerFork(ledger, spec, options = {}) {
   const timeBudgetMs = typeof s.time === "number" ? Math.round(s.time * 1000) : null;
   const startedAt = Number.isFinite(s.startedAt) ? s.startedAt : null;
   ledger.seq += 1;
+  // The injected clock below may throw or synchronously persist before the
+  // fork is inserted. The sequence has already advanced in either case, so
+  // make that partial change visible to every persistence consumer now.
+  markLedgerStructDirty(ledger);
   const record = {
     forkId: s.forkId,
     scopeId: s.scopeId,
@@ -246,12 +260,16 @@ export function registerFork(ledger, spec, options = {}) {
     clockPausedAt: null,
     pausedMs: 0,
   };
+  registerRecord(ledger, record);
   if (clock && typeof clock.start === "function") {
     clock.start(record, timeBudgetMs, startedAt);
   }
-  registerRecord(ledger, record);
   put(ledger.forks, s.forkId, record);
   ledger.order.push(s.forkId);
+  // Registration creates a record as well as changing the ledger structure.
+  // Persistence consumers need the new id even when another consumer has
+  // already committed its own independent baseline.
+  markRecordDirty(ledger, s.forkId);
   markLedgerStructDirty(ledger);
   return { ok: true, fork: record };
 }
@@ -264,7 +282,12 @@ export function forkOf(ledger, forkId) {
 }
 
 function queueFor(ledger, ownerId) {
-  if (!Object.hasOwn(ledger.queues, ownerId)) put(ledger.queues, ownerId, []);
+  if (!Object.hasOwn(ledger.queues, ownerId)) {
+    put(ledger.queues, ownerId, []);
+    // An empty queue is still part of the ledger's serialized state. Creation
+    // may be followed by an early return, without any later structural mark.
+    markLedgerStructDirty(ledger);
+  }
   return ledger.queues[ownerId];
 }
 
@@ -282,17 +305,35 @@ export function markReady(ledger, forkId, outcome = {}) {
   ledger.receiveSeq += 1;
   record.status = READY;
   record.readySeq = ledger.receiveSeq;
+  // Reading the supplied outcome can execute user-defined getters. They may
+  // throw or reenter persistence after the state above has already changed.
+  // Make that partial transition visible before reading the first getter,
+  // without notifying listeners on this previously silent failure path.
+  markRecordDirty(ledger, forkId);
+  markLedgerStructDirty(ledger);
   record.outcome = outcome?.ok === false ? FAILED : "ok";
+  // An earlier getter can itself persist and consume the mark. Mark the
+  // outcome before invoking the next externally supplied getter.
+  markRecordDirty(ledger, forkId);
   record.reason =
     typeof outcome?.reason === "string" && outcome.reason !== ""
       ? outcome.reason
       : null;
   // The frozen record belongs to the bracket, not to the process. Keeping it
-  // here is what lets a reload join a result that was already ready.
+  // here is what lets a reload join a result that was already ready. Mark the
+  // reason before reading another potentially reentrant getter.
+  markRecordDirty(ledger, forkId);
   if (typeof outcome?.record === "string") record.record = outcome.record;
   const queue = queueFor(ledger, record.ownerId);
   queue.push(forkId);
   settleCharges(ledger, record);
+  // The bracket's own fields moved — status, readySeq, outcome, reason — and at
+  // least one of them always does here. Saying so is not redundant with
+  // `settleCharges`: that helper returns early when the record has no charges
+  // map, which is exactly the shape a restored record can have. A missed mark
+  // would make the next shared snapshot reuse the old copy of this record, and
+  // a restored child would look running while its result is already queued.
+  markRecordDirty(ledger, forkId);
   changed(ledger);
   return { ok: true, fork: record, position: queue.length - 1 };
 }
@@ -305,7 +346,13 @@ export function markReady(ledger, forkId, outcome = {}) {
 export function enqueueScopeMessage(ledger, forkId, message = {}) {
   const record = forkOf(ledger, forkId);
   if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (!Array.isArray(record.inbox)) record.inbox = [];
+  if (!Array.isArray(record.inbox)) {
+    record.inbox = [];
+    // Reading the message below may invoke a caller-provided getter. If that
+    // getter throws or reenters persistence, initialization has already
+    // happened and must not be lost from the next snapshot.
+    markRecordDirty(ledger, forkId);
+  }
   const from = typeof message.from === "string" && message.from !== "" ? message.from : "/";
   const text = typeof message.message === "string" ? message.message.trim() : "";
   const envelope =
@@ -313,6 +360,10 @@ export function enqueueScopeMessage(ledger, forkId, message = {}) {
       ? message.envelope
       : `[Message from ${from}]\n${text}`;
   record.inbox.push({ from, message: text, envelope });
+  // Delivery is already visible even if reading or validating the optional
+  // budget throws. Mark before that work so an intervening persistence pass
+  // does not reuse a snapshot from before the partial delivery.
+  markRecordDirty(ledger, forkId);
   const budget = message.budget;
   if (budget && typeof budget === "object" && Object.keys(budget).length > 0) {
     const granted = grantBudget(
@@ -320,11 +371,44 @@ export function enqueueScopeMessage(ledger, forkId, message = {}) {
       { tools: budget },
       { allowClockOff: true, scopeCap: true },
     );
-    if (!granted.ok) return granted;
+    if (!granted.ok) {
+      // The message is already queued even when the budget grant is refused.
+      // Preserve that existing partial-delivery behavior in the next snapshot.
+      markRecordDirty(ledger, forkId);
+      return granted;
+    }
   }
   if (record.status !== RUNNING) record.woken = true;
   markRecordDirty(ledger, forkId);
   return { ok: true, record, woken: record.woken === true };
+}
+
+/**
+ * Drop a delivered record's body from the ledger.
+ *
+ * A child's record is read exactly once: the parent renders the join receipt
+ * from it. After that take it has no reader — a woken scope answers by
+ * `scope_send`, and the return contract is `dafny`, not a second copy of the
+ * body. Keeping it meant every later ledger baseline re-serialized the whole
+ * delivered transcript, so a long session's journal grew with the square of
+ * its own history. Releasing it here is what keeps a baseline proportional to
+ * the work still in flight.
+ *
+ * Only the body goes. `fsm`, `targets`, `budget`, `inbox`, `woken` and the
+ * outcome stay: they are what a wake and a restart still read.
+ */
+export function releaseRecordText(ledger, forkId) {
+  const record = forkOf(ledger, forkId);
+  if (!record || record.status !== JOINED) return false;
+  if (typeof record.record !== "string") return false;
+  try {
+    delete record.record;
+  } finally {
+    // A partial mutation still has to reach the journal: the next baseline
+    // must not carry a body this function was asked to drop.
+    markRecordDirty(ledger, forkId);
+  }
+  return true;
 }
 
 /** Hand the branch every message it has not read yet, in order. */
@@ -340,6 +424,24 @@ export function takePendingInbox(ledger, forkId) {
   return pending;
 }
 
+/**
+ * Clear the wake flag without publishing a ledger event. The idle wake ticket
+ * uses this after its prompt finishes, including its failure path; notification
+ * and error handling remain the ticket's responsibility.
+ */
+export function clearWakeFlag(ledger, forkId, onlyIfWoken = false) {
+  const record = forkOf(ledger, forkId);
+  if (!record || (onlyIfWoken && record.woken !== true)) return false;
+  try {
+    record.woken = false;
+  } finally {
+    // A setter may partially mutate and then throw; the prior mutation door
+    // marked even on that path and allowed the exception to propagate.
+    markRecordDirty(ledger, forkId);
+  }
+  return true;
+}
+
 /** End a wake: the branch stops answering and leaves the active list again. */
 export function finishWokenScope(ledger, forkId) {
   const record = forkOf(ledger, forkId);
@@ -350,9 +452,30 @@ export function finishWokenScope(ledger, forkId) {
   return { ok: true, record };
 }
 
+/** Append an already prepared root envelope without notifying listeners. */
+export function appendRootEnvelope(ledger, entry) {
+  // Read the field once. A ledger rebuilt by hand (a legacy snapshot, a caller
+  // assembling its own object) gets the real mailbox here, so every later
+  // append is closed and no entry already in it is trusted.
+  const current = ledger.rootInbox;
+  if (!isAppendOnlyInbox(current)) {
+    ledger.rootInbox = mailboxFrom(current);
+    // Initialization remains visible even if a subsequent push throws.
+    markLedgerStructDirty(ledger);
+  }
+  ledger.rootInbox.push(entry);
+  markLedgerStructDirty(ledger);
+}
+
 /** Put one message in the root's mailbox; the root has no bracket record. */
 export function enqueueRootMessage(ledger, message = {}) {
-  if (!Array.isArray(ledger.rootInbox)) ledger.rootInbox = [];
+  const current = ledger.rootInbox;
+  if (!isAppendOnlyInbox(current)) {
+    ledger.rootInbox = mailboxFrom(current);
+    // A message getter can throw or persist synchronously after this mutation.
+    // Mark the initialized container without adding a listener notification.
+    markLedgerStructDirty(ledger);
+  }
   const from = typeof message.from === "string" && message.from !== "" ? message.from : "/";
   const text = typeof message.message === "string" ? message.message.trim() : "";
   const envelope =
@@ -387,11 +510,27 @@ export function takeReady(ledger, options = {}) {
       record.supersededAt
     ) {
       queue.splice(index, 1);
+      // This cleanup can be the only change when the remaining candidates are
+      // refused. Invalidate the snapshot without adding a listener notification
+      // to this previously silent cleanup path.
+      markLedgerStructDirty(ledger);
       index -= 1;
       continue;
     }
     if (admit) {
-      const verdict = admit(record);
+      // Admission is injected and receives the live record. It may change the
+      // record before returning or throwing, so make that change visible to
+      // persistence even when the candidate is refused. Mark before invoking
+      // it as well: the callback may synchronously persist while it runs. Keep
+      // the original lookup id; the callback can even change record.forkId.
+      const candidateId = queue[index];
+      markRecordDirty(ledger, candidateId);
+      let verdict;
+      try {
+        verdict = admit(record);
+      } finally {
+        markRecordDirty(ledger, candidateId);
+      }
       if (verdict && verdict.ok === false) {
         // Keep the candidate in place: it stays ready for a later context,
         // and a smaller sibling behind it may still be deliverable now.
@@ -419,6 +558,10 @@ export function takeReady(ledger, options = {}) {
     ledger.levels[levelKey].push(record.forkId);
     record.levelKey = levelKey;
     settleCharges(ledger, record);
+    // Status, closeSeq, closedOrder and levelKey all moved. `settleCharges`
+    // does not cover them: it answers only when the record carries a charges
+    // map, and a restore can hand back one that does not.
+    markRecordDirty(ledger, record.forkId);
     changed(ledger);
     return { ok: true, fork: record };
   }
@@ -478,6 +621,11 @@ export function adoptFork(ledger, forkId, toOwnerId) {
   record.reparentedFrom = record.ownerId;
   record.ownerId = toOwnerId;
   if (record.status === READY && !record.supersededAt) queueFor(ledger, toOwnerId).push(forkId);
+  // `reparentedFrom` and `ownerId` are record fields. Without this mark the
+  // snapshot cache can answer "that record did not move" for a record whose
+  // owner changed, and a reload would queue the result under the old owner —
+  // a result nobody drains.
+  markRecordDirty(ledger, forkId);
   changed(ledger);
   return { ok: true, record, adopted: true };
 }
@@ -501,6 +649,10 @@ export function rehomeReadyResults(ledger) {
     record.reparentedFrom = record.ownerId;
     record.ownerId = receiver;
     moved += 1;
+    // Rewriting an owner is a record change. The rebuild below also replaces
+    // every queue, which marks the structure; the record mark is what keeps a
+    // stale owner out of a shared snapshot when the record is what moved.
+    markRecordDirty(ledger, record.forkId);
   }
   ledger.queues = {};
   const ready = (ledger.order ?? [])
@@ -542,6 +694,8 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
     record.reparentedFrom = fromOwnerId;
     record.ownerId = receiverId;
     moved += 1;
+    // An orphan whose owner moved is a record change, not only a queue one.
+    markRecordDirty(ledger, forkId);
   }
   // Ready results already queued for the dying owner follow the same edge.
   // They append behind the dying owner's own result, so a grandparent always
@@ -557,6 +711,8 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
       record.ownerId = receiverId;
       target.push(forkId);
       transferred += 1;
+      // The transferred record's owner moved with its queue entry.
+      markRecordDirty(ledger, forkId);
       continue;
     }
     remaining.push(forkId);
@@ -582,6 +738,10 @@ export function abandon(ledger, forkId, reason = null) {
   record.reason = typeof reason === "string" && reason !== "" ? reason : null;
   removeFromQueues(ledger, forkId);
   settleCharges(ledger, record);
+  // The bracket closes here: status, closeSeq, outcome and reason all moved.
+  // `settleCharges` may return without marking (no charges map on a restored
+  // record), so the record-level mark is stated rather than inferred.
+  markRecordDirty(ledger, forkId);
   changed(ledger);
   return { ok: true, fork: record };
 }
@@ -599,19 +759,33 @@ export function abandonDescendants(ledger, ownerId, reason = null) {
   if (!ledger || typeof ledger !== "object") {
     return { abandonedIds: [], runningIds: [] };
   }
+  // Build the owner index once, before closing any record. The traversal order
+  // within each owner's children is still registration order; the breadth-first
+  // frontier and reverse close order below therefore retain their old semantics.
+  // Re-scanning the entire ledger for every descendant made a deep tree
+  // quadratic even though each record has only one owner.
+  const children = new Map();
+  for (const forkId of ledger.order) {
+    const record = forkOf(ledger, forkId);
+    if (!record) continue;
+    let owned = children.get(record.ownerId);
+    if (!owned) {
+      owned = [];
+      children.set(record.ownerId, owned);
+    }
+    owned.push({ forkId, status: record.status });
+  }
   const levels = [];
   const seen = new Set();
   let frontier = [typeof ownerId === "string" && ownerId !== "" ? ownerId : "root"];
   while (frontier.length > 0) {
     const next = [];
     for (const owner of frontier) {
-      for (const forkId of ledger.order) {
-        const record = forkOf(ledger, forkId);
-        if (!record || record.ownerId !== owner) continue;
-        if (seen.has(forkId)) continue;
-        seen.add(forkId);
-        levels.push({ forkId, status: record.status });
-        next.push(forkId);
+      for (const item of children.get(owner) ?? []) {
+        if (seen.has(item.forkId)) continue;
+        seen.add(item.forkId);
+        levels.push(item);
+        next.push(item.forkId);
       }
     }
     frontier = next;
@@ -707,6 +881,13 @@ export function levelOrder(ledger, levelKey) {
  * at the first, because a ledger is repaired from a full list.
  */
 export function assertPairing(ledger) {
+  return pairingProblems(ledger, null);
+}
+
+// Restored ledgers are private, validated plain data. Their queues can be
+// indexed once rather than searching the same queue for each ready record.
+// Public assertPairing retains its original access order for arbitrary inputs.
+function pairingProblems(ledger, queueIndex) {
   const problems = [];
   for (const forkId of ledger.order) {
     const record = forkOf(ledger, forkId);
@@ -733,7 +914,10 @@ export function assertPairing(ledger) {
     if (record.status === READY && !Number.isInteger(record.readySeq)) {
       problems.push(`ready fork "${forkId}" has no readySeq`);
     }
-    if (record.status === READY && !record.supersededAt && !(ledger.queues[record.ownerId] ?? []).includes(forkId)) {
+    if (record.status === READY && !record.supersededAt &&
+        !(queueIndex
+          ? (queueIndex.get(record.ownerId)?.has(forkId) ?? false)
+          : (ledger.queues[record.ownerId] ?? []).includes(forkId))) {
       problems.push(`ready fork "${forkId}" is not queued`);
     }
   }
@@ -802,6 +986,251 @@ const INTERRUPTED_REASON =
   "interrupted by a process restart before the result was received";
 const STATUSES = new Set([RUNNING, READY, JOINED, FAILED]);
 
+// A mailbox entry is `{ from, message, envelope }` — scalars only. Copying it
+// with `copyData` allocates nothing for the strings but still walks every entry
+// of the mailbox, and a long session holds a million of them: the walk, not the
+// bytes, is what a snapshot pays per frame. Freezing the field values is all the
+// comparison needs, so a flat entry gets a field-by-field copy and any entry
+// that carries a nested object keeps the deep copy it needs.
+function flatEntryCopy(entry) {
+  if (!isPlainObject(entry)) return null;
+  const out = {};
+  for (const key of Object.keys(entry)) {
+    const value = entry[key];
+    if (value === undefined) continue;
+    const kind = typeof value;
+    if (value !== null && kind !== "string" && kind !== "number" && kind !== "boolean") {
+      // Two reasons to take the deep path. A container needs the recursive
+      // copy. Anything else — a function, a symbol, a bigint — is not JSON
+      // data, and `copyData` drops the field instead of keeping it: a kept
+      // bigint would make the snapshot throw on `JSON.stringify`.
+      return null;
+    }
+    // `put` writes an own property, so a key named `__proto__` stays data.
+    put(out, key, value);
+  }
+  return out;
+}
+
+function copyInbox(entries) {
+  if (!Array.isArray(entries)) return copyData(entries);
+  const out = new Array(entries.length);
+  for (let index = 0; index < entries.length; index += 1) {
+    out[index] = copyInboxEntry(entries[index]);
+  }
+  return out;
+}
+
+function copyInboxEntry(entry) {
+  return flatEntryCopy(entry) ?? copyData(entry) ?? null;
+}
+
+/**
+ * Adopt an outside array as the root mailbox.
+ *
+ * A ledger can arrive from a legacy snapshot or be assembled by hand, and its
+ * mailbox then is a plain array whose entries nobody promised are stable. It is
+ * copied into a closed mailbox once, here, so that every append after this point
+ * is governed by the same boundary and the snapshot never has to read a prefix
+ * it did not itself freeze.
+ */
+function mailboxFrom(value) {
+  return adoptInbox(value);
+}
+
+/**
+ * The mailbox as the next snapshot holds it.
+ *
+ * A snapshot that repeated the whole copy paid the session's length on every
+ * frame, and the root's mailbox is where a long root-level conversation lives.
+ * The mailbox has one write surface and it only appends, so a live array that
+ * is still the array the previous snapshot was taken from shares that
+ * snapshot's copies for its prefix and copies only the tail. That makes the
+ * per-frame cost one pointer copy plus the entries that are actually new.
+ *
+ * Ownership boundary: this reuses a copy instead of re-reading an entry, so an
+ * in-place write to an entry that has already been snapshotted is not observed.
+ * No production caller writes one (`appendRootEnvelope` and `enqueueRootMessage`
+ * only push, replay writes into a fresh ledger), and the array itself may still
+ * be replaced wholesale — that path copies everything and sees a reorder or an
+ * empty list exactly as before. A future caller that needs to edit a delivered
+ * message must push a new entry, or replace the array.
+ */
+/**
+ * Does this live entry still hold what the stored copy holds?
+ *
+ * The comparison is deliberately narrow: scalars compare by value, `undefined`
+ * counts as absent because the copy drops it, and any container answers `false`.
+ * `false` is the safe answer — it sends the caller to the content comparison,
+ * which is slower and always right. It is used only for a mailbox that is not
+ * ours: a plain array handed in from outside, whose entries nobody promised are
+ * stable.
+ */
+function entryMatchesCopy(entry, copy) {
+  if (entry === copy) return true;
+  if (!isPlainObject(entry) || !isPlainObject(copy)) return false;
+  let count = 0;
+  for (const key of Object.keys(entry)) {
+    const value = entry[key];
+    if (value === undefined) continue;
+    count += 1;
+    if (value !== null && typeof value === "object") return false;
+    if (!Object.hasOwn(copy, key)) return false;
+    const stored = copy[key];
+    if (stored === value) continue;
+    if (
+      typeof value === "number" &&
+      typeof stored === "number" &&
+      !Number.isFinite(value) &&
+      !Number.isFinite(stored)
+    ) {
+      continue;
+    }
+    return false;
+  }
+  return count === Object.keys(copy).length;
+}
+
+/**
+ * True when `liveInbox` holds exactly the stored copies, in the stored order.
+ *
+ * This is the answer for an untrusted array, and it reads every stored entry.
+ * A mailbox that is one of ours never needs it: it cannot be reordered or
+ * edited, so its version says all of this in one comparison.
+ */
+function storedPrefixIntact(liveInbox, previousInbox) {
+  const limit = Math.min(liveInbox.length, previousInbox.length);
+  for (let index = 0; index < limit; index += 1) {
+    if (liveInbox[index] === previousInbox[index]) continue;
+    if (!entryMatchesCopy(liveInbox[index], previousInbox[index])) return false;
+  }
+  return true;
+}
+
+const INBOX_SAME = 0;
+const INBOX_APPENDED = 1;
+const INBOX_REWRITTEN = 2;
+
+/**
+ * How the live mailbox relates to the copies the last snapshot stored.
+ *
+ * A mailbox of ours cannot be reordered, shortened or edited: the object
+ * refuses those writes where they happen, and every stored entry is frozen. Its
+ * append counter therefore answers the whole question in one comparison — the
+ * boundary is in the object, not in this function.
+ *
+ * Any other array is untrusted, and untrusted means read: a reorder, a splice or
+ * an edit must still be seen, so it is compared entry by entry and, when it
+ * differs, copied whole. The cost is paid only by a ledger nobody built through
+ * the append path.
+ */
+function inboxRelation(liveInbox, previousInbox, previousVersion) {
+  if (isAppendOnlyInbox(liveInbox)) {
+    if (liveInbox.length < previousInbox.length) return INBOX_REWRITTEN;
+    const appended = inboxVersion(liveInbox) - previousVersion;
+    if (appended === 0) return INBOX_SAME;
+    if (appended > 0 && liveInbox.length - previousInbox.length === appended) {
+      return INBOX_APPENDED;
+    }
+    // The counter and the length disagree: the mailbox was replaced by another
+    // of ours, or entries were appended behind the snapshot's back. Read it.
+    return storedPrefixIntact(liveInbox, previousInbox) ? INBOX_APPENDED : INBOX_REWRITTEN;
+  }
+  if (liveInbox.length < previousInbox.length) return INBOX_REWRITTEN;
+  if (!storedPrefixIntact(liveInbox, previousInbox)) return INBOX_REWRITTEN;
+  return liveInbox.length === previousInbox.length ? INBOX_SAME : INBOX_APPENDED;
+}
+
+function inboxForSnapshot(meta, previous, liveInbox) {
+  const previousInbox = Array.isArray(previous?.rootInbox) ? previous.rootInbox : null;
+  const held = previousInbox !== null && meta.inboxRef === liveInbox;
+  const relation =
+    held && isAppendOnlyInbox(liveInbox)
+      ? inboxRelation(liveInbox, previousInbox, meta.inboxVersion ?? 0)
+      : null;
+  meta.inboxRef = liveInbox;
+  meta.inboxVersion = isAppendOnlyInbox(liveInbox) ? inboxVersion(liveInbox) : 0;
+  if (!held) return copyInbox(liveInbox);
+  const decided = relation ?? inboxRelation(liveInbox, previousInbox, 0);
+  if (decided === INBOX_REWRITTEN) return copyInbox(liveInbox);
+  if (decided === INBOX_SAME) return markSharedPrefix(previousInbox, previousInbox.length, previousInbox);
+  // Only the tail is new: an append cannot have moved what the last snapshot
+  // stored, and the object it came from cannot be edited or reordered. That is
+  // the proof the journal needs to skip its own prefix walk, so carry it — with
+  // the array it was proven against, not just a length.
+  const out = markSharedPrefix(previousInbox.slice(), previousInbox.length, previousInbox);
+  for (let index = previousInbox.length; index < liveInbox.length; index += 1) {
+    out.push(copyInboxEntry(liveInbox[index]));
+  }
+  return out;
+}
+
+/**
+ * Does a live record still equal the JSON-safe copy a snapshot stored?
+ *
+ * The previous form copied the record and serialized both sides, so one frame
+ * allocated two complete strings of the session's largest record and threw them
+ * away. This walks the live value against the stored one instead: no copy, no
+ * string, one traversal. It answers exactly what `JSON.stringify(copyData(live))
+ * === JSON.stringify(stored)` answered, including the cases that make that
+ * question awkward — a value `copyData` would drop counts as absent, an array
+ * hole counts as null, and two non-finite numbers are equal because JSON writes
+ * both as null.
+ */
+function sameStoredValue(live, stored) {
+  if (live === stored) return true;
+  if (live === undefined) return false;
+  if (Array.isArray(live)) {
+    if (!Array.isArray(stored) || stored.length !== live.length) return false;
+    for (let index = 0; index < live.length; index += 1) {
+      const child = live[index];
+      // `copyData` writes `copyData(item) ?? null`: an absent element and any
+      // value JSON cannot hold both become null, so an array of mixed content
+      // still compares equal to its stored copy instead of churning the record.
+      const wanted = isJsonValue(child) ? child : null;
+      if (!sameStoredValue(wanted, stored[index])) return false;
+    }
+    return true;
+  }
+  if (isPlainObject(live)) {
+    if (!isPlainObject(stored)) return false;
+    let count = 0;
+    for (const key of Object.keys(live)) {
+      const child = live[key];
+      // A value the JSON copy cannot hold is not part of the record.
+      if (!isJsonValue(child)) continue;
+      count += 1;
+      if (!Object.hasOwn(stored, key)) return false;
+      if (!sameStoredValue(child, stored[key])) return false;
+    }
+    return count === Object.keys(stored).length;
+  }
+  if (typeof live === "number" && !Number.isFinite(live)) {
+    // JSON writes every non-finite number as null. A stored copy therefore holds
+    // `null` where the live record holds NaN or Infinity, and the two are the
+    // same value to the journal — comparing them as different would mark the
+    // record dirty on every frame and rewrite it for nothing.
+    return stored === null || (typeof stored === "number" && !Number.isFinite(stored));
+  }
+  if (typeof live === "number" && typeof stored === "number") {
+    // JSON writes every non-finite number as null, so they are all one value.
+    if (!Number.isFinite(live) || !Number.isFinite(stored)) {
+      return !Number.isFinite(live) && !Number.isFinite(stored);
+    }
+  }
+  return false;
+}
+
+/** Whether `copyData` keeps this value, i.e. whether JSON can hold it. */
+function isJsonValue(value) {
+  if (value === null) return true;
+  const kind = typeof value;
+  if (kind === "string" || kind === "number" || kind === "boolean") return true;
+  if (kind !== "object") return false;
+  if (Array.isArray(value)) return true;
+  return isPlainObject(value);
+}
+
 function copyData(value) {
   if (value === undefined) return undefined;
   if (Array.isArray(value)) return value.map((item) => copyData(item) ?? null);
@@ -836,7 +1265,7 @@ function validNumberMap(value) {
   return true;
 }
 
-function validRecord(forkId, record) {
+export function validRecord(forkId, record) {
   if (!isPlainObject(record)) return false;
   if (record.forkId !== forkId) return false;
   if (!isNonEmptyString(record.ownerId)) return false;
@@ -884,6 +1313,30 @@ function validRecord(forkId, record) {
 
 /** True when a stored value can rebuild a bracket tree without guessing. */
 export function validLedger(value) {
+  if (!ledgerShapeOk(value)) return false;
+  for (const forkId of value.order) {
+    if (!validRecord(forkId, value.forks[forkId])) return false;
+  }
+  return true;
+}
+
+/**
+ * Everything `validLedger` checks except the per-record field validation.
+ *
+ * Container shape, counters, the mirror between `order` and `forks`, and the
+ * absence of duplicate ids — all in one walk that reads no record field. The
+ * per-record walk is the expensive half: a record carries task text, targets,
+ * and a return body, and validating each one on every write made a write cost
+ * the whole session's fork history.
+ *
+ * A caller may use this alone only when it also validates every record whose
+ * content could have changed. `serializeLedgerShared` does that for exactly
+ * the records the ledger names as unsettled, and a record changed without
+ * being named cannot reach the journal at all: the snapshot keeps the copy
+ * that was already accepted, so the live tree's corruption stays out of the
+ * stored history while the shape check still refuses a broken mirror.
+ */
+export function ledgerShapeOk(value) {
   if (!isPlainObject(value)) return false;
   if (value.version !== 2) return false;
   for (const key of ["seq", "closedSeq", "receiveSeq"]) {
@@ -896,13 +1349,14 @@ export function validLedger(value) {
     if (!isNonEmptyString(forkId) || seen.has(forkId)) return false;
     seen.add(forkId);
     if (!Object.hasOwn(value.forks, forkId)) return false;
-    if (!validRecord(forkId, value.forks[forkId])) return false;
   }
-  for (const key of Object.keys(value.forks)) {
-    // A record outside the order cannot be paired or joined; refuse the
-    // snapshot instead of restoring a half-addressable tree.
-    if (!seen.has(key)) return false;
-  }
+  // A record outside the order cannot be paired or joined; refuse the snapshot
+  // instead of restoring a half-addressable tree. The walk above proved every
+  // ordered id is a key of `forks`, and it refused a duplicate, so the ordered
+  // ids are a subset of the keys with the same cardinality as the ids. For
+  // finite sets, subset plus equal size is equality: the key count settles the
+  // reverse direction without a second walk and a hash lookup per fork.
+  if (Object.keys(value.forks).length !== seen.size) return false;
   if (value.levels !== undefined && !isPlainObject(value.levels)) return false;
   if (value.totals !== undefined && value.totals !== null) {
     if (!isPlainObject(value.totals)) return false;
@@ -912,6 +1366,66 @@ export function validLedger(value) {
     if (turns !== undefined && (!Number.isFinite(turns) || turns < 0)) return false;
   }
   return true;
+}
+
+/**
+ * The container half of `validLedger`, without the per-record walk.
+ *
+ * The fast path in `serializeLedgerShared` reaches here only while the ledger
+ * says its structure is clean and its fork id set matches the previous
+ * snapshot, so the records that are not listed as dirty were already validated
+ * when their copy was made. The records that are dirty still get the full
+ * check in the caller, which keeps the guard where the change is.
+ */
+function validLedgerShallow(value) {
+  if (!isPlainObject(value)) return false;
+  if (value.version !== 2) return false;
+  for (const key of ["seq", "closedSeq", "receiveSeq"]) {
+    if (!Number.isInteger(value[key]) || value[key] < 0) return false;
+  }
+  if (!isPlainObject(value.forks)) return false;
+  if (!Array.isArray(value.order)) return false;
+  if (value.levels !== undefined && !isPlainObject(value.levels)) return false;
+  if (value.totals !== undefined && value.totals !== null) {
+    if (!isPlainObject(value.totals)) return false;
+    const turnMs = value.totals.turnMs;
+    const turns = value.totals.turns;
+    if (turnMs !== undefined && (!Number.isFinite(turnMs) || turnMs < 0)) return false;
+    if (turns !== undefined && (!Number.isFinite(turns) || turns < 0)) return false;
+  }
+  return true;
+}
+
+/**
+ * Capture the explicitly changed fork records for a persistence consumer.
+ *
+ * `ids` must come from an authoritative change source for that consumer. This
+ * function does not infer changes or validate the ledger's containers; callers
+ * that cannot prove the id set complete must use the full serializer instead.
+ * Each returned record is an independent JSON-safe copy, so later changes to a
+ * live record cannot change an already planned write. An invalid record refuses
+ * the entire batch rather than turning it into a deletion.
+ */
+export function snapshotForkChanges(ledger, ids) {
+  if (!isPlainObject(ledger?.forks) || ids == null || typeof ids[Symbol.iterator] !== "function") {
+    return { ok: false, reason: "invalid-ledger-changes" };
+  }
+  const set = {};
+  const del = [];
+  const seen = new Set();
+  for (const id of ids) {
+    if (!isNonEmptyString(id)) return { ok: false, reason: "invalid-fork-id" };
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (!Object.hasOwn(ledger.forks, id)) {
+      del.push(id);
+      continue;
+    }
+    const record = ledger.forks[id];
+    if (!validRecord(id, record)) return { ok: false, reason: "invalid-record", forkId: id };
+    put(set, id, copyData(record));
+  }
+  return { ok: true, set, del };
 }
 
 /** A JSON-safe copy of the tree, safe to persist with the scope state. */
@@ -956,16 +1470,178 @@ function settledFields(copy, record) {
  */
 export function serializeLedgerShared(ledger) {
   const meta = ledgerMeta(ledger);
-  // Nothing moved since the last snapshot: hand back the same tree. This is
-  // the steady state, and it allocates nothing.
-  if (meta && meta.snapshot && !meta.structDirty && meta.dirtyForks.size === 0) {
-    return meta.snapshot;
+  // Live records and their nested values can also be changed through aliases
+  // held by callers. Dirty marks therefore do not prove that the previous copy
+  // is current. Compare a complete value copy before reusing any snapshot.
+  // This costs O(ledger size); replacing it requires an enforced ownership
+  // boundary, not merely a proxy around one of the aliases.
+  if (meta && meta.snapshot) {
+    // Compare record by record against a JSON-safe copy of that record alone.
+    // The former form copied the whole ledger first and compared the copy, so
+    // every snapshot held a second complete tree — the transcript included —
+    // alive at the same time as the live one. On a session whose history runs
+    // to gigabytes that allocation, not the comparison, is the pause the user
+    // feels; one record at a time keeps the peak at a record's size while
+    // answering exactly what the whole-tree copy answered.
+    const old = meta.snapshot;
+    const currentIds = Object.keys(ledger.forks);
+    const oldIds = Object.keys(old.forks);
+    let different = currentIds.length !== oldIds.length;
+    if (different || currentIds.some((id, index) => id !== oldIds[index])) {
+      meta.structDirty = true;
+      different = true;
+    }
+    // This loop is not an optimisation: it is the only thing that notices a
+    // record whose content moved without a record-level mark. A message
+    // append is marked as a structural change, not a record one — the tests
+    // in tests/ledger-record-diff.test.mjs pin that an append still arrives
+    // through this comparison. Skipping it when `structDirty` is already true
+    // looks free, because the full rebuild below copies every record anyway,
+    // but the diff against the previous snapshot is assembled from what this
+    // loop learns. Skipping it there lost an appended message.
+    for (const forkId of currentIds) {
+      // Compare against the stored copy in place. A record that cannot be
+      // edited through an alias is still compared, because the marks are not a
+      // proof of ownership — but the comparison no longer allocates a copy of
+      // the record and two strings of it.
+      if (!sameStoredValue(ledger.forks[forkId], old.forks[forkId])) {
+        meta.dirtyForks.add(forkId);
+        different = true;
+      }
+    }
+    // The mailbox is compared by its own rule, and the rule depends on what
+    // kind of array it is. One of ours cannot be reordered or edited, so its
+    // append counter settles it in a single comparison. A plain array handed to
+    // a hand-built ledger is untrusted: it is read and, when it differs, copied
+    // whole — the price a foreign object pays, not the price of the hot path.
+    const liveInbox = Array.isArray(ledger.rootInbox) ? ledger.rootInbox : [];
+    const previousInbox = Array.isArray(old.rootInbox) ? old.rootInbox : [];
+    const inboxHeld = meta.inboxRef === liveInbox;
+    const previousInboxVersion = meta.inboxVersion ?? 0;
+    const sameInbox =
+      inboxHeld && isAppendOnlyInbox(liveInbox)
+        ? inboxRelation(liveInbox, previousInbox, previousInboxVersion) === INBOX_SAME
+        : JSON.stringify(copyData(liveInbox)) === JSON.stringify(previousInbox);
+    if (!sameInbox) {
+      meta.structDirty = true;
+      different = true;
+    }
+    const currentKeys = [];
+    const topCopies = new Map();
+    for (const key of Object.keys(ledger)) {
+      // The mailbox was compared above by its own rule.
+      if (key === "rootInbox") continue;
+      if (key === "forks") {
+        currentKeys.push(key);
+        continue;
+      }
+      const copy = copyData(ledger[key]);
+      if (copy === undefined) continue;
+      currentKeys.push(key);
+      topCopies.set(key, copy);
+    }
+    const oldKeys = Object.keys(old).filter((key) => key !== "rootInbox");
+    let keysDiffer =
+      currentKeys.length !== oldKeys.length ||
+      currentKeys.some((key, index) => key !== oldKeys[index]);
+    if (!keysDiffer) {
+      for (const [key, copy] of topCopies) {
+        if (JSON.stringify(copy) !== JSON.stringify(old[key])) {
+          keysDiffer = true;
+          break;
+        }
+      }
+    }
+    if (keysDiffer) {
+      meta.structDirty = true;
+      different = true;
+    }
+    if (!different && !meta.structDirty && meta.dirtyForks.size === 0) {
+      return meta.snapshot;
+    }
+  }
+  const previous = meta?.snapshot ?? null;
+  // Record-level fast path. A clean `structDirty` is the ledger's own claim
+  // that no container field and no fork id set changed, so the container
+  // copies from the previous snapshot are still exact: reuse them by reference
+  // and re-copy only the records that moved. The set check below keeps the
+  // claim honest — a fork that appeared or vanished without the mark falls
+  // through to the full path instead of being silently dropped or resurrected.
+  if (meta && previous && !meta.structDirty) {
+    // One pass builds the next snapshot's fork map, so the two checks that
+    // used to be separate costs — enumerate the previous snapshot's keys to
+    // count them, and spread the old map to start a copy — disappear. The
+    // record count comes from the snapshot itself, and each record is either
+    // re-copied (it moved) or shared by reference (it did not). The check is
+    // exactly as strong as before: every live id must be present in the
+    // previous snapshot, and the counts must be equal.
+    const forks = {};
+    let seen = 0;
+    let setsMatch = true;
+    const liveKeys = Object.keys(ledger.forks);
+    for (const forkId of liveKeys) {
+      seen += 1;
+      if (meta.dirtyForks.has(forkId)) {
+        const record = ledger.forks[forkId];
+        if (!validRecord(forkId, record)) {
+          setsMatch = false;
+          break;
+        }
+        // A dirty record the previous snapshot never held is a fork that
+        // appeared. The fast path reuses the previous container fields, so
+        // accepting it would store a tree whose `order` does not name this
+        // fork — and a count match cannot see it, because one fork leaving
+        // while another arrives is the same number of records. `validLedger`
+        // rejects that tree on load and the whole fork history is discarded,
+        // so a record that is not in the previous snapshot ends the fast path
+        // and sends the write to the structural rebuild, which recomputes the
+        // containers from the live tree.
+        if (!Object.hasOwn(previous.forks, forkId)) {
+          setsMatch = false;
+          break;
+        }
+        put(forks, forkId, copyData(record));
+        meta.forkRefs.set(forkId, record);
+        continue;
+      }
+      if (!Object.hasOwn(previous.forks, forkId)) {
+        setsMatch = false;
+        break;
+      }
+      put(forks, forkId, previous.forks[forkId]);
+    }
+    if (setsMatch && seen === meta.snapshotForkCount && validLedgerShallow(ledger)) {
+      // Nothing changed, so the copy stands. Remember which live array it
+      // mirrors: the next append can then share this copy's prefix.
+      if (Array.isArray(ledger.rootInbox)) meta.inboxRef = ledger.rootInbox;
+      const next = {
+        version: ledger.version,
+        seq: ledger.seq,
+        closedSeq: ledger.closedSeq,
+        receiveSeq: ledger.receiveSeq,
+        forks,
+        order: previous.order,
+        queues: previous.queues,
+        levels: previous.levels,
+        rootInbox: previous.rootInbox,
+        totals: previous.totals,
+      };
+      const moved = new Set(meta.dirtyForks);
+      meta.snapshot = next;
+      meta.snapshotForkCount = seen;
+      noteSnapshotStep(ledger, next, previous, { set: moved, del: [] });
+      meta.dirtyForks.clear();
+      return next;
+    }
   }
   if (!validLedger(ledger)) return copyData(createBracketLedger());
   if (!meta) return copyData(ledger);
-  const previous = meta.snapshot;
   const forks = {};
   const live = new Set();
+  // The rebuild already visits every live id. Preserve its exact record-level
+  // result so each persistence baseline can consume it without another walk.
+  const set = new Set();
+  const del = new Set();
   for (const forkId of Object.keys(ledger.forks)) {
     const record = ledger.forks[forkId];
     live.add(forkId);
@@ -982,10 +1658,17 @@ export function serializeLedgerShared(ledger) {
       continue;
     }
     put(forks, forkId, copyData(record));
+    set.add(forkId);
     meta.forkRefs.set(forkId, record);
   }
-  // A fork that left the ledger keeps no copy and no reference.
-  for (const forkId of Array.from(meta.forkRefs.keys())) {
+  // The previous snapshot is the source of truth for removals. The live
+  // reference cache can be incomplete when a ledger was externally rebuilt.
+  if (previous) {
+    for (const forkId of Object.keys(previous.forks)) {
+      if (!live.has(forkId)) del.add(forkId);
+    }
+  }
+  for (const forkId of meta.forkRefs.keys()) {
     if (!live.has(forkId)) meta.forkRefs.delete(forkId);
   }
   const next = {
@@ -999,12 +1682,19 @@ export function serializeLedgerShared(ledger) {
     levels: copyData(ledger.levels),
     // The root's mailbox is ledger state like any other: a message addressed
     // to `/` must survive the same snapshot a record does, or a reload drops
-    // it while `serializeLedger` still reports it.
-    rootInbox: copyData(ledger.rootInbox ?? []),
+    // it while `serializeLedger` still reports it. It is also the field that
+    // grows with a root-level conversation, so an append reuses the prefix
+    // copies instead of repeating them.
+    rootInbox: inboxForSnapshot(meta, previous, Array.isArray(ledger.rootInbox) ? ledger.rootInbox : []),
     totals: copyData(ledger.totals),
   };
   meta.snapshot = next;
+  meta.snapshotForkCount = live.size;
   meta.structDirty = false;
+  // This step is exact even for structural changes: all newly copied records
+  // and all removals were recorded while building the snapshot. A first
+  // snapshot has no predecessor and therefore cannot serve a delta query.
+  noteSnapshotStep(ledger, next, previous, previous ? { set, del } : null);
   meta.dirtyForks.clear();
   return next;
 }
@@ -1027,6 +1717,12 @@ export function restoreLedgerChecked(value) {
     put(out.forks, forkId, copyData(value.forks[forkId]));
     out.order.push(forkId);
   }
+  // The root's mailbox is not a bracket record, so no loop above rebuilds it.
+  // The snapshot stores it for one reason — a message addressed to `/` has no
+  // record to live in, and a reload without it drops the message silently —
+  // so restoring everything else and leaving this field empty is the one way
+  // the snapshot can be read back worse than it was written.
+  out.rootInbox = mailboxFrom(Array.isArray(value.rootInbox) ? value.rootInbox : []);
   const storedLevels = isPlainObject(value.levels) ? copyData(value.levels) : {};
   for (const key of Object.keys(storedLevels)) {
     const list = Array.isArray(storedLevels[key])
@@ -1064,7 +1760,11 @@ export function restoreLedgerChecked(value) {
   // queue entry without a fork, or a joined level entry out of order, makes
   // every later take guess. Refuse the snapshot as a whole, exactly as a
   // malformed value is refused, so the session starts from a clean ledger.
-  if (!assertPairing(out).ok) return { ok: false, ledger: createBracketLedger() };
+  const queueIndex = new Map();
+  for (const ownerId of Object.keys(out.queues)) {
+    queueIndex.set(ownerId, new Set(out.queues[ownerId]));
+  }
+  if (!pairingProblems(out, queueIndex).ok) return { ok: false, ledger: createBracketLedger() };
   // The restored records are the live ones from now on; the clock and the
   // panhandle reach the snapshot cache through them.
   for (const forkId of out.order) registerRecord(out, out.forks[forkId]);
@@ -1194,9 +1894,13 @@ function accountOf(record) {
 export function applyCharge(ledger, forkId, charge = {}) {
   const record = forkOf(ledger, forkId);
   if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (!isPlainObject(record.remaining)) record.remaining = copyCounts(record.budget);
-  if (!isPlainObject(record.spent)) record.spent = {};
-  if (!isPlainObject(record.charges)) record.charges = {};
+  let initialized = false;
+  if (!isPlainObject(record.remaining)) { record.remaining = copyCounts(record.budget); initialized = true; }
+  if (!isPlainObject(record.spent)) { record.spent = {}; initialized = true; }
+  if (!isPlainObject(record.charges)) { record.charges = {}; initialized = true; }
+  // Validation and duplicate checks below may return before charging. Legacy
+  // field initialization is still a mutation and must survive that return.
+  if (initialized) markRecordDirty(ledger, forkId);
   const toolCallId = typeof charge.toolCallId === "string" ? charge.toolCallId : "";
   const tool = typeof charge.tool === "string" ? charge.tool : "";
   if (tool === "") {
@@ -1250,9 +1954,12 @@ export function applyCharge(ledger, forkId, charge = {}) {
 export function applyRefund(ledger, forkId, toolCallId) {
   const record = forkOf(ledger, forkId);
   if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (!isPlainObject(record.charges)) record.charges = {};
-  if (!isPlainObject(record.remaining)) record.remaining = copyCounts(record.budget);
-  if (!isPlainObject(record.spent)) record.spent = {};
+  let initialized = false;
+  if (!isPlainObject(record.charges)) { record.charges = {}; initialized = true; }
+  if (!isPlainObject(record.remaining)) { record.remaining = copyCounts(record.budget); initialized = true; }
+  if (!isPlainObject(record.spent)) { record.spent = {}; initialized = true; }
+  // A missing charge can return immediately after initializing legacy fields.
+  if (initialized) markRecordDirty(ledger, forkId);
   const charge = typeof toolCallId === "string" ? record.charges[toolCallId] : null;
   if (!charge) return { ok: true, refunded: 0, ...accountOf(record) };
   const tool = charge.tool;

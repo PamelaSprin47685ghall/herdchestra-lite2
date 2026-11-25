@@ -130,64 +130,302 @@ function messageFromEntry(entry) {
   return { ...base, blocks: blocksOf(message.content), text: textOf(message.content) };
 }
 
-export function reconstructTranscriptFromEntries(entries) {
-  const messages = [];
-  for (const entry of entries ?? []) {
+/**
+ * One entry as a display message, or null when it shows nothing.
+ *
+ * This is the same projection `reconstructTranscriptFromEntries` performs, per
+ * entry. A range rebuild needs it on its own, because it must be able to read a
+ * single entry that lies outside the page it is building.
+ */
+function messageOfEntry(entry) {
+  if (!entry) return null;
+  if (entry.type === "message") return messageFromEntry(entry);
+  if (entry.type === "custom_message") {
+    return {
+      id: entry.id,
+      role: "custom",
+      customType: entry.customType,
+      text: typeof entry.content === "string" ? entry.content : textOf(entry.content),
+      excludeFromContext: Boolean(entry.excludeFromContext),
+      timestamp: entry.timestamp,
+    };
+  }
+  if (entry.type === "branch_summary") {
+    return {
+      id: entry.id,
+      role: "branchSummary",
+      summary: entry.summary,
+      blocks: [{ type: "text", text: entry.summary ?? "" }],
+      timestamp: entry.timestamp,
+    };
+  }
+  if (entry.type === "compaction") {
+    return {
+      id: entry.id,
+      role: "compactionSummary",
+      summary: entry.summary,
+      blocks: [{ type: "text", text: entry.summary ?? "" }],
+      timestamp: entry.timestamp,
+    };
+  }
+  return null;
+}
+
+/**
+ * Whether an entry projects to a message at all.
+ *
+ * Not every entry does: an entry without a `message` payload, and any type this
+ * model does not display, contributes nothing. That is why a range cannot be
+ * addressed by entry position — entry 7 may be the fifth message — and why the
+ * index carries the entry position of each message instead.
+ *
+ * The branches below mirror `messageOfEntry`. Constructing each projection just
+ * to ask whether it exists would cost one full projection per entry — blocks,
+ * ANSI stripping, text joins — on every index build, which is the whole cost a
+ * long session cannot afford twice. The tests pin this predicate against that
+ * projection so the two cannot drift.
+ */
+function hasMessage(entry) {
+  if (!entry) return false;
+  if (entry.type === "message") return Boolean(entry.message);
+  return (
+    entry.type === "custom_message" ||
+    entry.type === "branch_summary" ||
+    entry.type === "compaction"
+  );
+}
+
+/**
+ * The index a branch has grown into.
+ *
+ * The host appends to its own array while the session runs, so a frame taken
+ * after an append used to rebuild the whole index — one tour of every entry, on
+ * every append. On a session of two hundred thousand entries that is tens of
+ * milliseconds per frame, spent to learn one new position.
+ *
+ * Only the tail is read here. The three maps keep the meaning they have in a
+ * full build: a first match wins for `idIndex`, `idOrdinals` names the first
+ * entry that shows, and `resultIndex` takes the last result for a call id —
+ * assignment order across the tail preserves all three, because every entry
+ * before it was already folded in.
+ *
+ * A shorter array, or a different one, is not a growth: the caller gets a full
+ * build. The returned object is new and the previous one keeps its own
+ * `entryCount`, so a holder of the old index sees a length it does not describe
+ * and rebuilds rather than reading a position past what it validated.
+ */
+export function extendHistoryIndex(index, entries) {
+  const list = entries ?? [];
+  if (!index || index.source !== list || list.length < index.entryCount) {
+    return buildHistoryIndex(list);
+  }
+  if (list.length === index.entryCount) {
+    // Equal length is not proof of no change. A branch can be rewound and
+    // re-appended to the same length — that is what switching branches does —
+    // and the result is a different conversation of the same size. Reusing the
+    // index then resolves ids that no longer exist and answers -1 for the ones
+    // that do, so a page request against a message that is right there reads as
+    // a stale cursor. The last entry is the cheap anchor: an append keeps the
+    // one it had, and a rewrite replaces it.
+    const tail = list.length > 0 ? list[list.length - 1] : null;
+    return index.tailRef === tail ? index : buildHistoryIndex(list);
+  }
+  for (let at = index.entryCount; at < list.length; at += 1) {
+    const entry = list[at];
     if (!entry) continue;
-    if (entry.type === "message") {
-      const message = messageFromEntry(entry);
-      if (message) messages.push(message);
-      continue;
+    if (entry.id != null && !index.idIndex.has(entry.id)) index.idIndex.set(entry.id, at);
+    if (entry.type === "message" && entry.message?.role === "toolResult") {
+      index.resultIndex.set(entry.message.toolCallId, at);
     }
-    if (entry.type === "custom_message") {
-      messages.push({
-        id: entry.id,
-        role: "custom",
-        customType: entry.customType,
-        text: typeof entry.content === "string" ? entry.content : textOf(entry.content),
-        excludeFromContext: Boolean(entry.excludeFromContext),
-        timestamp: entry.timestamp,
-      });
-      continue;
-    }
-    if (entry.type === "branch_summary") {
-      messages.push({
-        id: entry.id,
-        role: "branchSummary",
-        summary: entry.summary,
-        blocks: [{ type: "text", text: entry.summary ?? "" }],
-        timestamp: entry.timestamp,
-      });
-      continue;
-    }
-    if (entry.type === "compaction") {
-      messages.push({
-        id: entry.id,
-        role: "compactionSummary",
-        summary: entry.summary,
-        blocks: [{ type: "text", text: entry.summary ?? "" }],
-        timestamp: entry.timestamp,
-      });
+    if (hasMessage(entry)) {
+      if (entry.id != null && !index.idOrdinals.has(entry.id)) {
+        index.idOrdinals.set(entry.id, index.entryOfMessage.length);
+      }
+      index.entryOfMessage.push(at);
     }
   }
+  return {
+    ...index,
+    entryCount: list.length,
+    tailRef: list.length > 0 ? list[list.length - 1] : null,
+  };
+}
 
-  const results = new Map();
-  for (const message of messages) {
-    if (message.role === "toolResult") results.set(message.toolCallId, message);
+export function buildHistoryIndex(entries) {
+  const list = entries ?? [];
+  const idIndex = new Map();
+  // Cursor ordinals, keyed by id, for the first entry that actually shows.
+  //
+  // `idIndex` answers "is this id anywhere in the branch", which is a question
+  // about entries. A cursor asks a different one: "which message is this". An
+  // entry that projects to nothing takes no ordinal, so letting it own the id
+  // would resolve a cursor that `findIndex` over messages answers as missing —
+  // a page request reported stale while the message sits right there.
+  const idOrdinals = new Map();
+  const resultIndex = new Map();
+  // Message ordinal to entry position. The station speaks in messages — its
+  // window, its cursor and its slice bounds are all message indices — so this
+  // is the map that keeps an entry position from leaking into those bounds.
+  const entryOfMessage = [];
+  for (let at = 0; at < list.length; at += 1) {
+    const entry = list[at];
+    if (!entry) continue;
+    if (entry.id != null && !idIndex.has(entry.id)) idIndex.set(entry.id, at);
+    if (entry.type === "message" && entry.message?.role === "toolResult") {
+      resultIndex.set(entry.message.toolCallId, at);
+    }
+    if (hasMessage(entry)) {
+      // First entry that shows wins, which is what `findIndex` answers.
+      if (entry.id != null && !idOrdinals.has(entry.id)) {
+        idOrdinals.set(entry.id, entryOfMessage.length);
+      }
+      entryOfMessage.push(at);
+    }
+  }
+  // The array this index describes, so a caller cannot silently use it against
+  // another one. See the validity check in `reconstructRange`.
+  return {
+    idIndex,
+    idOrdinals,
+    resultIndex,
+    entryOfMessage,
+    source: list,
+    entryCount: list.length,
+    // The last entry this index was built against. It is a hint, not a proof:
+    // a tail that changed means the branch was rewritten, so the index cannot be
+    // reused; an unchanged tail only means nothing after the head moved. An edit
+    // in the middle of a branch whose tail still matches is not detectable here
+    // at O(1) — that case belongs to an explicit branch switch (`resetHistory`),
+    // which is where the host says the conversation changed. Without another
+    // owner of the array, a per-entry comparison is the only proof, and it costs
+    // the whole branch on every frame, which is exactly what this index exists
+    // to avoid.
+    tailRef: list.length > 0 ? list[list.length - 1] : null,
+  };
+}
+
+/**
+ * The message ordinal of an entry position, or -1 when that entry is not shown.
+ *
+ * The id and result maps hold *entry* positions, because that is the only unit
+ * the entries themselves have. Every bound the station applies — its window, its
+ * cursor, its page slice — is a message ordinal. This is the conversion between
+ * the two, and it uses the first match for a position exactly as `idIndex` keeps
+ * the first entry for an id.
+ */
+export function messageOrdinalOfEntry(index, entryIndex) {
+  const list = index?.entryOfMessage ?? [];
+  let low = 0;
+  let high = list.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const value = list[middle];
+    if (value === entryIndex) return middle;
+    if (value < entryIndex) low = middle + 1;
+    else high = middle - 1;
+  }
+  return -1;
+}
+
+/** The message ordinal for a message id, or -1 when no shown entry carries it. */
+export function messageOrdinalOfId(index, id) {
+  const ordinal = index?.idOrdinals?.get(id);
+  if (ordinal !== undefined) return ordinal;
+  // No entry that shows carries this id. `idIndex` may still know it — an entry
+  // that projects to nothing — and `findIndex` over messages answered -1 for
+  // exactly that shape, so a page request against it stays stale.
+  return -1;
+}
+
+/**
+ * Rebuild the display messages for entries `[from, to)` only.
+ *
+ * A page must show the same messages the whole-transcript rebuild would show for
+ * that range. The one thing a page cannot answer from itself is a tool call whose
+ * result sits on another page, so each call block is paired through
+ * `resultIndex` and the result entry is rebuilt on its own. That is the same
+ * entry the whole-transcript pass would have paired — the index keeps the last
+ * result per call id, exactly as that pass does — so a cross-page result reads
+ * the same as an in-page one.
+ */
+export function reconstructRange(entries, from, to, index) {
+  const list = entries ?? [];
+  // An index is only valid for the array it was built from. Accepting a stale one
+  // would answer from positions that no longer exist — a page taken from the
+  // wrong entry, with no error anywhere. A length change is the cheap signal; the
+  // identity check catches a replaced array that happens to have the same length.
+  const positions =
+    index && index.source === list && index.entryCount === list.length
+      ? index
+      : buildHistoryIndex(list);
+  // `from` and `to` are message ordinals, which is the only thing callers of
+  // this kernel bound: the station slices its window and its pages by message.
+  // An entry position would be the wrong unit here — an entry that projects to
+  // nothing would shift every later index, so a page could start inside a turn
+  // or skip a message that the whole rebuild shows.
+  const total = positions.entryOfMessage.length;
+  const start = Math.max(0, Math.min(Number.isInteger(from) ? from : 0, total));
+  const end = Math.max(start, Math.min(Number.isInteger(to) ? to : total, total));
+  const messages = [];
+  // Entry position to the message built from it on *this* page. A result that
+  // lands on the page must be the very object the page already holds, so a tool
+  // call's `result` blocks are the same array as that tool result message's —
+  // which is what the whole-transcript rebuild produces. Rebuilding the entry a
+  // second time would give equal contents and a different identity, and a reader
+  // that compares either way would see a difference the old code never had.
+  const builtByEntry = new Map();
+  // Results rebuilt from outside the page, kept per entry. Two tool calls can
+  // name the same call id — a retried call, or two blocks that reuse an id — and
+  // the whole-transcript pass gives every one of them the same `blocks` array,
+  // because it pairs one message object. Rebuilding that entry per call would
+  // give equal contents with different identities, and would pay the projection
+  // once per call on a page whose result lives elsewhere.
+  const rebuiltResults = new Map();
+  for (let ordinal = start; ordinal < end; ordinal += 1) {
+    const at = positions.entryOfMessage[ordinal];
+    const message = messageOfEntry(list[at]);
+    if (!message) continue;
+    messages.push(message);
+    builtByEntry.set(at, message);
   }
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const block of message.blocks) {
       if (block.type !== "toolCall") continue;
-      const result = results.get(block.id);
-      if (result) {
-        block.result = result.blocks;
-        block.resultText = result.text;
-        block.isError = result.isError;
+      const at = positions.resultIndex.get(block.id);
+      if (at === undefined) continue;
+      // A result on this page is the object the page already holds; one from
+      // another page is rebuilt on its own, once per entry. Both give the same
+      // contents, and the in-page case keeps the identity the whole-transcript
+      // pass produced.
+      let result = builtByEntry.get(at);
+      if (result === undefined) {
+        if (rebuiltResults.has(at)) {
+          result = rebuiltResults.get(at);
+        } else {
+          result = messageOfEntry(list[at]);
+          rebuiltResults.set(at, result);
+        }
       }
+      if (!result || result.role !== "toolResult") continue;
+      block.result = result.blocks;
+      block.resultText = result.text;
+      block.isError = result.isError;
     }
   }
   return messages;
+}
+
+/**
+ * The whole branch as display messages.
+ *
+ * This is the range rebuild over the whole branch. One projection, one
+ * implementation: a page and a full rebuild cannot drift apart, and the pairing
+ * rule a page relies on is the rule this path has always used.
+ */
+export function reconstructTranscriptFromEntries(entries) {
+  const list = entries ?? [];
+  return reconstructRange(list, 0, list.length);
 }
 
 function upsertBlock(blocks, type, text) {
@@ -229,6 +467,27 @@ function streamingFrom(event) {
   };
 }
 
+// Appending a finalized message used to scan the whole transcript by id, so a
+// long session paid O(n) per message. The map lives on the array itself, so a
+// replaced array (session switch) starts clean; it is a symbol, so no clone,
+// spread or JSON pass can see it.
+const MESSAGE_INDEX = Symbol("herd.messageIndex");
+
+// The holder carries the length it was built for: a message can be appended
+// without an id, and a map-only size check would then rebuild on every append.
+function messageIndex(messages) {
+  const existing = messages[MESSAGE_INDEX];
+  if (existing && existing.length === messages.length) return existing;
+  const ids = new Map();
+  for (let at = 0; at < messages.length; at += 1) {
+    const id = messages[at]?.id;
+    if (id != null && !ids.has(id)) ids.set(id, at);
+  }
+  const holder = { length: messages.length, ids };
+  Object.defineProperty(messages, MESSAGE_INDEX, { value: holder, configurable: true });
+  return holder;
+}
+
 export function applyAgentEvent(state, event) {
   const next = {
     messages: state.messages ?? [],
@@ -262,10 +521,18 @@ export function applyAgentEvent(state, event) {
       });
       next.blockIndex = next.streaming.blocks.length - 1;
     } else if (update.type === "toolcall_delta") {
-      const index = next.streaming.blocks.findIndex(
-        (item) => item.type === "toolCall" && item.id === update.toolCallId,
-      );
-      const block = next.streaming.blocks[index];
+      // Arguments arrive as many small deltas. A remembered block index keeps
+      // each delta O(1) instead of scanning every block of the message again;
+      // the id check falls back to a scan whenever the hint has gone stale.
+      const blocks = next.streaming.blocks;
+      const hint = next.blockIndex;
+      const hinted = Number.isInteger(hint) ? blocks[hint] : undefined;
+      const index = hinted?.type === "toolCall" && hinted.id === update.toolCallId
+        ? hint
+        : blocks.findIndex(
+          (item) => item.type === "toolCall" && item.id === update.toolCallId,
+        );
+      const block = blocks[index];
       if (block) {
         const current = typeof block.argsText === "string" ? block.argsText : "";
         const room = Math.max(0, MAX_ARGS_TEXT - current.length);
@@ -305,9 +572,16 @@ export function applyAgentEvent(state, event) {
         : next.streaming;
     if (finalized) {
       capMessageTexts(finalized);
-      const index = finalized.id == null ? -1 : next.messages.findIndex((message) => message.id === finalized.id);
-      if (index < 0) next.messages.push(finalized);
-      else next.messages[index] = finalized;
+      const messages = next.messages;
+      const holder = messageIndex(messages);
+      const index = finalized.id == null ? -1 : holder.ids.get(finalized.id) ?? -1;
+      if (index < 0) {
+        if (finalized.id != null) holder.ids.set(finalized.id, messages.length);
+        messages.push(finalized);
+        holder.length = messages.length;
+      } else {
+        messages[index] = finalized;
+      }
     }
     next.streaming = null;
     return next;
@@ -452,10 +726,18 @@ export function groupTranscriptForDisplay(items) {
     }
     if (steps.length > 0) {
       const group = { kind: "step_group", steps };
+      // One pass instead of scanning every step for every tool result, which
+      // is quadratic inside a turn with many tool calls.
+      // Keyed by whatever the step carries, `undefined` included: a tool result
+      // without a call id matched the first step without an id before this pass
+      // replaced the scan, and it still must.
+      const stepByToolCall = new Map();
+      for (const entry of steps) {
+        if (entry.kind !== "tool") continue;
+        if (!stepByToolCall.has(entry.id)) stepByToolCall.set(entry.id, entry);
+      }
       for (const result of toolResults) {
-        const step = steps.find(
-          (entry) => entry.kind === "tool" && entry.id === result.toolCallId,
-        );
+        const step = stepByToolCall.get(result.toolCallId);
         if (step) step.toolResult = result;
         else {
           group.items = group.items ?? [];

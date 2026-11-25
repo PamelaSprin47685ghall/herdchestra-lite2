@@ -10,4 +10,5 @@ host-omp-ui/bun.lock
 host-omp-ui/web/node_modules
 host-omp-ui/web/bun.lock
 host-omp-ui/web/dist/
+host-omp-ui/web/viewport-fixture/
 local-report-w1.md

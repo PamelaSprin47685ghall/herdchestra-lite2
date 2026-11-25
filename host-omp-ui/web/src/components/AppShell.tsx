@@ -467,6 +467,8 @@ export function AppShell() {
             hasMoreHistory={Boolean(state.liveSession.history?.hasMore)}
             historyOldestId={state.liveSession.history?.oldestId ?? null}
             messages={state.messages}
+            streamRev={state.streamRev ?? 0}
+            streamDirtyFrom={state.streamDirtyFrom ?? 0}
             toolExecutions={state.toolExecutions}
             streaming={state.streaming}
             onLoadHistory={loadHistory}

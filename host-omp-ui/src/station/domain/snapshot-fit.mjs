@@ -51,8 +51,26 @@ function capBlock(block) {
   return next;
 }
 
+// A snapshot frame reprocesses the same message objects turn after turn. The cap
+// is idempotent over an input object, so remember the shaped copy: a growing
+// transcript otherwise pays one deep clone of every block on every frame.
+const cappedMessages = new WeakMap();
+const cappedTools = new WeakMap();
+// The shaped copies above are immutable by construction, so their measured size
+// is too. Without this cache every frame walks the whole window again — up to
+// 128KB per message — to answer a number that cannot have changed.
+const measuredSizes = new WeakMap();
+
 export function capMessage(message) {
   if (!message || typeof message !== "object") return message;
+  const cached = cappedMessages.get(message);
+  if (cached) return cached;
+  const next = shapeMessage(message);
+  cappedMessages.set(message, next);
+  return next;
+}
+
+function shapeMessage(message) {
   const next = { ...message };
   if (Array.isArray(next.blocks)) next.blocks = next.blocks.map(capBlock);
   for (const key of ["text", "output", "content", "summary", "command"]) {
@@ -68,6 +86,14 @@ export function capMessage(message) {
 
 export function capTool(entry) {
   if (!entry || typeof entry !== "object") return entry;
+  const cached = cappedTools.get(entry);
+  if (cached) return cached;
+  const next = shapeTool(entry);
+  cappedTools.set(entry, next);
+  return next;
+}
+
+function shapeTool(entry) {
   const next = { ...entry };
   for (const key of ["result", "partialResult"]) {
     if (typeof next[key] === "string") {
@@ -100,24 +126,89 @@ function sizeOf(value) {
   return 0;
 }
 
+// Measure a shaped item once. A primitive is measured directly; an object is
+// cached by identity, exactly as `capMessage` caches its shaped copy.
+function measureSize(value) {
+  if (!value || typeof value !== "object") return sizeOf(value);
+  const cached = measuredSizes.get(value);
+  if (cached !== undefined) return cached;
+  const size = sizeOf(value);
+  measuredSizes.set(value, size);
+  return size;
+}
+
+function sum(values) {
+  let total = 0;
+  for (const value of values) total += value;
+  return total;
+}
+
 export function fitSnapshot(doc) {
   const requestedHasMore = doc.history?.hasMore === true;
   const initialMessageCount = doc.messages.length;
-  let messageLimit = doc.messages.length;
-  let toolLimit = Object.keys(doc.toolExecutions).length;
-  let artifactLimit = doc.artifacts.length;
+  // Measure each trimmable section once. The shrink loop only removes items
+  // from the front, so its remaining size follows by subtraction instead of a
+  // full document rescan per halving round.
+  const messageSizes = doc.messages.map(measureSize);
+  const toolKeys = Object.keys(doc.toolExecutions);
+  const toolSizes = toolKeys.map((key) => measureSize(doc.toolExecutions[key]));
+  const artifactSizes = doc.artifacts.map(measureSize);
+  let messageTotal = sum(messageSizes);
+  let toolTotal = sum(toolSizes);
+  let artifactTotal = sum(artifactSizes);
+  let messageLimit = messageSizes.length;
+  let toolLimit = toolKeys.length;
+  let artifactLimit = artifactSizes.length;
+  // The three sections above were measured item by item. Subtracting them from
+  // a second measurement of the whole document is the same number, but only
+  // while `sizeOf(doc)` walks exactly those three properties plus the rest —
+  // an assumption nothing states. Sum the remaining properties directly: the
+  // value is identical, and it no longer depends on a subtraction cancelling
+  // out. This walks the frame window the station hands in, not the session.
+  let restTotal = 0;
+  for (const [key, value] of Object.entries(doc)) {
+    if (key === "messages" || key === "toolExecutions" || key === "artifacts") continue;
+    restTotal += sizeOf(value);
+  }
+  let total = restTotal + messageTotal + toolTotal + artifactTotal;
+  // Each round removes a prefix, so the dropped items are consecutive. Track
+  // how far the prefix has advanced: subtracting from index 0 every round
+  // would subtract already-removed items again and under-count the document.
+  let messageDropped = 0;
+  let toolDropped = 0;
+  let artifactDropped = 0;
   while (
-    sizeOf(doc) > MAX_SNAPSHOT_CHARS &&
+    total > MAX_SNAPSHOT_CHARS &&
     (messageLimit > 1 || toolLimit > 1 || artifactLimit > 1)
   ) {
-    messageLimit = Math.max(1, Math.floor(messageLimit / 2));
-    toolLimit = Math.max(1, Math.floor(toolLimit / 2));
-    artifactLimit = Math.max(1, Math.floor(artifactLimit / 2));
-    doc.messages = doc.messages.slice(-messageLimit);
-    doc.toolExecutions = Object.fromEntries(Object.entries(doc.toolExecutions).slice(-toolLimit));
-    doc.artifacts = doc.artifacts.slice(-artifactLimit);
+    const nextMessageLimit = Math.max(1, Math.floor(messageLimit / 2));
+    const nextToolLimit = Math.max(1, Math.floor(toolLimit / 2));
+    const nextArtifactLimit = Math.max(1, Math.floor(artifactLimit / 2));
+    const messageKeepFrom = messageSizes.length - nextMessageLimit;
+    const toolKeepFrom = toolKeys.length - nextToolLimit;
+    const artifactKeepFrom = artifactSizes.length - nextArtifactLimit;
+    for (; messageDropped < messageKeepFrom; messageDropped += 1) {
+      messageTotal -= messageSizes[messageDropped];
+    }
+    for (; toolDropped < toolKeepFrom; toolDropped += 1) {
+      toolTotal -= toolSizes[toolDropped];
+    }
+    for (; artifactDropped < artifactKeepFrom; artifactDropped += 1) {
+      artifactTotal -= artifactSizes[artifactDropped];
+    }
+    messageLimit = nextMessageLimit;
+    toolLimit = nextToolLimit;
+    artifactLimit = nextArtifactLimit;
+    total = restTotal + messageTotal + toolTotal + artifactTotal;
   }
-  if (sizeOf(doc) > MAX_SNAPSHOT_CHARS) {
+  if (messageLimit < messageSizes.length) doc.messages = doc.messages.slice(-messageLimit);
+  if (toolLimit < toolKeys.length) {
+    doc.toolExecutions = Object.fromEntries(
+      toolKeys.slice(-toolLimit).map((key) => [key, doc.toolExecutions[key]]),
+    );
+  }
+  if (artifactLimit < artifactSizes.length) doc.artifacts = doc.artifacts.slice(-artifactLimit);
+  if (total > MAX_SNAPSHOT_CHARS) {
     doc.surface = capValue(doc.surface, MAX_MESSAGE_CHARS);
     doc.sessions = Array.isArray(doc.sessions) ? doc.sessions.slice(-50) : doc.sessions;
     doc.widgets = Array.isArray(doc.widgets)

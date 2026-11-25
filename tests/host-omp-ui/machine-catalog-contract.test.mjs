@@ -253,4 +253,51 @@ describe("machine session catalog", () => {
 		expect((await readdir(dirname(file))).sort()).toEqual(before.entries);
 		expect(existsSync(`${file}.lock`)).toBe(false);
 	});
+
+	test("stops scanning a headerless file after the byte budget", async () => {
+		const root = await tempRoot();
+		const file = join(root, "huge.jsonl");
+		await mkdir(dirname(file), { recursive: true });
+		// 8 MB of json lines with no session header: the scan must not reach EOF
+		// to answer `invalid_header`, and it must answer it all the same.
+		const chunk = `${JSON.stringify({ type: "message", message: { role: "user", content: "x".repeat(1000) } })}\n`;
+		await writeFile(file, chunk.repeat(8000), "utf8");
+
+		const { scanMachineSessions } = await load();
+		const { sessions, diagnostics } = await scanMachineSessions({ roots: [root] });
+
+		expect(sessions).toHaveLength(0);
+		expect(diagnostics).toEqual([
+			expect.objectContaining({ path: resolve(file), code: "invalid_header" }),
+		]);
+	});
+
+	test("reuses a cached header while mtime and size are unchanged", async () => {
+		const root = await tempRoot();
+		const file = await writeSession(join(root, "a.jsonl"), sessionHeader({ title: "first" }));
+		const fixed = new Date("2026-01-01T00:00:00.000Z");
+
+		const { scanMachineSessions } = await load();
+		const first = await scanMachineSessions({ roots: [root] });
+		expect(byId(first.sessions, "11111111-1111-4111-8111-111111111111").title).toBe("first");
+
+		// Same length, same mtime: no reader can tell the file changed, and the
+		// catalog must answer from its cached header rather than re-read.
+		const renamed = sessionHeader({ title: "other" });
+		const lines = [renamed, { type: "message", role: "user", content: "hello" }];
+		await writeFile(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`, "utf8");
+		await utimes(file, fixed, fixed);
+
+		const second = await scanMachineSessions({ roots: [root] });
+		expect(byId(second.sessions, "11111111-1111-4111-8111-111111111111").title).toBe("first");
+
+		// An appended line changes the size, so the cache is invalidated.
+		await writeFile(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n${chunkLine()}\n`, "utf8");
+		const third = await scanMachineSessions({ roots: [root] });
+		expect(byId(third.sessions, "11111111-1111-4111-8111-111111111111").title).toBe("other");
+	});
 });
+
+function chunkLine() {
+	return JSON.stringify({ type: "message", message: { role: "user", content: "again" } });
+}

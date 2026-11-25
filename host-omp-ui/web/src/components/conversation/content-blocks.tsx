@@ -170,7 +170,7 @@ export function OrphanToolResult({
 }: {
   message: UiMessage;
   tools: Record<string, ToolExecution>;
-  attachedToolIds: Set<string>;
+  attachedToolIds: ReadonlySet<string>;
 }) {
   const id = message.toolCallId ?? message.id;
   if (

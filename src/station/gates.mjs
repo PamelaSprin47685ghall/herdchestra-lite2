@@ -210,8 +210,27 @@ function onToolCall(station, event, ctx) {
 	}
 }
 
+/**
+ * The boundary key for this exact message array.
+ *
+ * `hostBoundaryKey` walks backwards until it finds a handoff marker, so a
+ * transcript with none costs Θ(entries). The projection is cached per leaf,
+ * which means the same array object arrives on every event of a turn; its
+ * length is the only thing an append changes, so identity plus length proves
+ * the scan would return the same answer.
+ */
+function cachedHostBoundaryKey(station, messages) {
+	const scan = station.hostBoundaryScan;
+	if (scan && scan.messages === messages && scan.length === messages.length) {
+		return scan.key;
+	}
+	const key = hostBoundaryKey(messages);
+	station.hostBoundaryScan = { messages, length: messages.length, key };
+	return key;
+}
+
 function observeHostBoundary(station, messages) {
-	const boundaryKey = hostBoundaryKey(messages);
+	const boundaryKey = cachedHostBoundaryKey(station, messages);
 	if (!boundaryKey || boundaryKey === station.hostBoundaryKey) return;
 	station.hostBoundaryKey = boundaryKey;
 	truncateForHostBoundary(station.state);
@@ -418,7 +437,7 @@ function onSessionSwitch(station, event, ctx) {
 function onSessionCompact(station, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return;
 	truncateForHostBoundary(station.state);
-	station.hostBoundaryKey = hostBoundaryKey(station.contextMessages()) ?? station.hostBoundaryKey;
+	station.hostBoundaryKey = cachedHostBoundaryKey(station, station.contextMessages()) ?? station.hostBoundaryKey;
 	station.resetUsageWatermark();
 	station.persist();
 	const restore = station.tickets.restoreScopedModel;

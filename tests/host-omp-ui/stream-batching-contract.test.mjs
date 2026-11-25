@@ -168,9 +168,18 @@ describe("delta structural sharing", () => {
       ]),
     );
 
+    // A streaming frame copies the array and replaces one slot, so the earlier
+    // state keeps exactly the contents it was read with. The contract this
+    // asserts: a new array, the touched message and its blocks are new objects,
+    // untouched messages keep their identity, the previous state is unchanged,
+    // and `streamRev` reports the frame.
     const before = initial.liveSession.messages;
     const next = reduceWebState(initial, textDelta("m3", " and four"));
     const after = next.liveSession.messages;
+
+    expect(after).not.toBe(before);
+    expect(before[2].blocks[0].text).toBe("three");
+    expect(next.streamRev).toBeGreaterThan(initial.streamRev ?? 0);
 
     expect(after).toHaveLength(3);
     expect(after[0]).toBe(before[0]);

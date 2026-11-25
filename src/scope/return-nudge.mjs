@@ -9,6 +9,7 @@
 // prompt. A bound that two paths can spend lives where both paths read.
 
 import { loadDoc } from "../prompts/index.mjs";
+import { editRecord } from "./record-mutation.mjs";
 
 const S = loadDoc("receipts/scope");
 
@@ -41,11 +42,21 @@ export function takeReturnNudge(record) {
 	if (!record || typeof record !== "object") return false;
 	const used = returnNudgesOf(record);
 	if (used >= MAX_RETURN_NUDGES) return false;
-	record.returnNudges = used + 1;
-	return true;
+	// Spending the allowance is a record change: the two paths that charge it
+	// read the same field, so a reload that missed this write would let a child
+	// be asked again past the bound.
+	return editRecord(record, (target) => {
+		target.returnNudges = used + 1;
+	});
 }
 
 /** A new requirement restarts the conversation, so it restarts the allowance. */
 export function resetReturnNudges(record) {
-	if (record && typeof record === "object") record.returnNudges = 0;
+	if (!record || typeof record !== "object") return;
+	// Written unconditionally rather than skipped when already zero: a reset is
+	// the start of a new requirement, and the journal has to hold that fact
+	// even when the value happens to match.
+	editRecord(record, (target) => {
+		target.returnNudges = 0;
+	});
 }

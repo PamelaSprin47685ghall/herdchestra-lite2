@@ -33,6 +33,7 @@ import {
   pickSnapshot,
 } from "./normalize";
 import { liveCommit } from "./live";
+import { MessageLog } from "../message-log";
 import type { LiveHistory, LiveSessionWithHistory } from "./live";
 
 export function surfacePatch(
@@ -87,18 +88,22 @@ export function reduceSnapshot(state: WebState, frame: ServerFrame): WebState {
     }
   }
   const tailIds = new Set(tail.map((message) => message.id));
-  let messages = tail;
+  // Everything below builds the visible sequence as a persistent vector, so a
+  // later single-message frame does not copy the history. The type carries
+  // positional access, so consumers keep reading `messages[i]` and no cast is
+  // needed to say so.
+  let messages = MessageLog.from(tail);
   if (sameSession && previous.length > 0) {
     if (anchor >= 0) {
-      messages = [
+      messages = MessageLog.from([
         ...previous.slice(0, anchor).filter((message) => !tailIds.has(message.id)),
         ...tail,
-      ];
+      ]);
     } else if (hasMore) {
-      messages = [
+      messages = MessageLog.from([
         ...previous.filter((message) => !tailIds.has(message.id)),
         ...tail,
-      ];
+      ]);
     }
   }
   const todos = normalizeTodos(snap.todos ?? snap.todoPhases);

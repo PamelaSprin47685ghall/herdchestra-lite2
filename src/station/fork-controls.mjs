@@ -20,6 +20,8 @@ import {
 } from "../scope/forkjoin.mjs";
 import { allocateSiblingScopeId, childScopePath } from "../scope/path.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
+import { setRecordFields } from "../scope/record-mutation.mjs";
+import { releaseRecordText } from "../scope/forkjoin.mjs";
 import { createClockOn } from "../scope/clock.mjs";
 import { deriveTimeBudgetSeconds, modelSamples } from "../scope/turn-stats.mjs";
 import {
@@ -793,6 +795,22 @@ export function renderJoinResult(station, record, options = {}) {
     reason: childReason,
     remaining: remaining.map((entry) => entry.scopeId),
 	});
+  // The body has now been read for the last time. Render it above, then hand
+  // it back: a delivered record has no reader after this receipt, and keeping
+  // it makes every later ledger baseline re-serialize the whole transcript.
+  // `renderJoinResult` runs before the station persists the join, so the write
+  // that follows already carries the smaller record.
+  //
+  // The release is conditional on the outcome table still holding the text, so
+  // a second render of the same join reproduces the identical receipt instead
+  // of an empty one. When the table has no copy there is nothing to fall back
+  // on, and the body stays: a correct receipt outranks a smaller write.
+  if (
+    typeof record.record === "string" &&
+    typeof outcome?.record === "string"
+  ) {
+    releaseRecordText(ledger, record.forkId);
+  }
   const persisted = options.persisted;
   const notes = [];
   if (persisted === false) {
@@ -837,7 +855,7 @@ export function handleReturnCall(station, call) {
       arguments: { target: "..", message: text },
     });
     if (forwarded?.isError === true) return forwarded;
-    record.woken = false;
+    setRecordFields(record, { woken: false });
     const where = Array.isArray(forwarded?.details?.delivered)
       ? forwarded.details.delivered.join(", ")
       : "the parent scope";

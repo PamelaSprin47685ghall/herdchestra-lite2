@@ -109,7 +109,7 @@ async function readRecord(path) {
 
 	let header;
 	try {
-		header = await readSessionHeader(path);
+		header = await readSessionHeader(path, info);
 	} catch (error) {
 		return { diagnostic: diagnostic(path, "unreadable", describe(error)) };
 	}
@@ -120,19 +120,60 @@ async function readRecord(path) {
 
 const HEADER_LOOKAHEAD_LINES = 16;
 const FALLBACK_TITLE_LENGTH = 60;
+// A session can reach gigabytes, and the header lives in its first few lines.
+// The scan therefore stops after a fixed byte budget: without it a file that
+// lost its header walks the whole transcript line by line.
+const HEADER_BYTE_BUDGET = 1024 * 1024;
+// One persisted state blob can be megabytes. It cannot be a header or a title,
+// so it is skipped without a parse; the byte budget counts it and bounds the scan.
+const MAX_HEADER_LINE_CHARS = 256 * 1024;
+// `listSessions` re-scans every root on each call. A file whose mtime and size
+// are unchanged has the same header, so the read is skipped; an in-place edit
+// changes mtime, and an append changes size.
+const headerCache = new Map();
+const HEADER_CACHE_LIMIT = 4096;
 
-async function readSessionHeader(path) {
+async function readSessionHeader(path, info) {
+	const cached = info ? headerCache.get(path) : undefined;
+	if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.header;
+	const header = await scanSessionHeader(path);
+	rememberHeader(path, info, header);
+	return header;
+}
+
+function rememberHeader(path, info, header) {
+	if (!info) return;
+	if (headerCache.size >= HEADER_CACHE_LIMIT) {
+		const oldest = headerCache.keys().next();
+		if (!oldest.done) headerCache.delete(oldest.value);
+	}
+	headerCache.set(path, { mtimeMs: info.mtimeMs, size: info.size, header });
+}
+
+async function scanSessionHeader(path) {
 	const stream = createReadStream(path, { encoding: "utf8" });
 	const lines = createInterface({ input: stream, crlfDelay: Infinity });
 
 	let pendingTitle;
 	let header;
 	let linesAfterHeader = 0;
+	let bytesRead = 0;
 
 	try {
 		for await (const line of lines) {
+			// `+ 1` accounts for the newline the reader dropped.
+			bytesRead += Buffer.byteLength(line, "utf8") + 1;
+			if (bytesRead > HEADER_BYTE_BUDGET) break;
 			const text = line.trim();
 			if (text.length === 0) continue;
+
+			if (text.length > MAX_HEADER_LINE_CHARS) {
+				if (header) {
+					linesAfterHeader += 1;
+					if (linesAfterHeader > HEADER_LOOKAHEAD_LINES) break;
+				}
+				continue;
+			}
 
 			let entry;
 			try {

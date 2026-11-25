@@ -69,6 +69,16 @@ export function prependWindow(
   return { start: safeTotal - count, count };
 }
 
-export function sliceWindow<T>(items: readonly T[], range: WindowRange): T[] {
+/**
+ * Anything the scroll list can render: a real array, or the persistent group
+ * sequence. Both answer `length`, `slice` and positional reads, which is the
+ * whole of what this module asks for; requiring an array would force the
+ * grouping to copy its settled prefix on every frame.
+ */
+export type WindowItems<T> =
+  | readonly T[]
+  | { readonly length: number; slice(from?: number, to?: number): T[] };
+
+export function sliceWindow<T>(items: WindowItems<T>, range: WindowRange): T[] {
   return items.slice(range.start, range.start + range.count);
 }

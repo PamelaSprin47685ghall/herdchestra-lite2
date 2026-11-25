@@ -386,6 +386,17 @@ export class SessionStation {
 		this.forkLedgerPort = () => ledger;
 		this.forkWaitPort = () => ({ registry, ledger });
 		this.forkIdentityPort = () => identity;
+		// A forked scope projects the parent's transcript, so it inherits the
+		// beats the parent had retired before the fork. Without them the child
+		// re-includes an amended beat and its request prefix stops matching the
+		// parent's. The keys land in this station's own array: an amend made here
+		// later never reaches the parent's ledger, and the reverse holds too.
+		if (this.state && Array.isArray(identity?.amends)) {
+			for (const key of identity.amends) {
+				if (typeof key !== "string" || key === "") continue;
+				if (!this.state.amends.includes(key)) this.state.amends.push(key);
+			}
+		}
 		this.forkOwnerId = () =>
 			typeof identity?.forkId === "string" && identity.forkId !== ""
 				? identity.forkId

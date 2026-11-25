@@ -14,17 +14,13 @@ const systemPromptEnd = "<!-- /herdchestra-lite2:system-prompt -->";
 
 export const persistentOperatingSkill = system["persistent-rules"];
 
-// The mode section is chosen per request, never cached into the session: the
-// user may toggle autopilot mid-session, and the next request must see the new
-// rules. Manual duty keeps the fork/join rules but none of the relay protocol.
-const autopilotRules = system["autopilot-rules"];
-const manualRules = system["manual-rules"];
-const childRules = system["child-rules"];
-
-function modeRulesBlock(options) {
-	if (options?.branch === true) return childRules;
-	return options?.autopilot === true ? autopilotRules : manualRules;
-}
+// The scope and relay section is one fixed text for every request. A forked
+// scope inherits the owner's prompt prefix, and the host clears the inherited
+// provider cache key whenever the system prompt changes, so a per-request
+// section would make every child's first request re-prefill the whole prompt.
+// The section states both duties instead of swapping them; the current mode
+// reaches the model through the receipt, never through this block.
+const scopeRules = system["scope-rules"];
 
 // The Simplified-Chinese reminder is one line inside the persistent rules.
 // Turning `chineseReminder` off removes that line and nothing else, so the
@@ -42,14 +38,17 @@ function persistentRulesBlock(options) {
 
 /**
  * Build the managed block: persistent rules, the inlined skill bodies, then
- * the mode-specific rules. The block is replaced between its markers on every
- * injection, so a second call returns the same bytes instead of appending.
+ * the one scope-and-relay section. Nothing in the block depends on the
+ * request, so an owner and a forked scope share the same bytes. The block is
+ * replaced between its markers on every injection, so a second call returns
+ * the same string instead of appending.
  */
 function managedBlock(options = {}) {
-	const sections = [persistentRulesBlock(options), inlinedSkillsSection];
-	const mode = modeRulesBlock(options);
-	if (mode !== "") sections.push(mode);
-	return `${systemPromptStart}\n${sections.join("\n\n")}\n${systemPromptEnd}`;
+	return `${systemPromptStart}\n${[
+		persistentRulesBlock(options),
+		inlinedSkillsSection,
+		scopeRules,
+	].join("\n\n")}\n${systemPromptEnd}`;
 }
 
 function replaceManaged(text, options = {}) {

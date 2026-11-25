@@ -320,21 +320,19 @@ describe("injectSystemPrompt", () => {
 		expect(injectSystemPrompt(null)).toBe(null);
 	});
 
-	test("keeps each mode's rules inside a skill element", () => {
-		for (const autopilot of [true, false]) {
-			const text = injectSystemPrompt("Host prompt.", { autopilot });
-			const modeAt = text.indexOf("### Close the work");
-			const lastOpen = text.lastIndexOf("<skill");
-			const lastClose = text.lastIndexOf("</skill>");
+	test("keeps the scope rules inside a skill element", () => {
+		const text = injectSystemPrompt("Host prompt.");
+		const modeAt = text.indexOf("### Close the work");
+		const lastOpen = text.lastIndexOf("<skill");
+		const lastClose = text.lastIndexOf("</skill>");
 
-			expect(modeAt).toBeGreaterThan(lastOpen);
-			expect(modeAt).toBeLessThan(lastClose);
-			expect((text.match(/<skill\b/g) ?? []).length).toBe(
-				(text.match(/<\/skill>/g) ?? []).length,
-			);
-			expect(text).toContain(persistentOperatingSkill);
-			expect(text.endsWith(`${END}\n\nHost prompt.`)).toBe(true);
-		}
+		expect(modeAt).toBeGreaterThan(lastOpen);
+		expect(modeAt).toBeLessThan(lastClose);
+		expect((text.match(/<skill\b/g) ?? []).length).toBe(
+			(text.match(/<\/skill>/g) ?? []).length,
+		);
+		expect(text).toContain(persistentOperatingSkill);
+		expect(text.endsWith(`${END}\n\nHost prompt.`)).toBe(true);
 	});
 });
 

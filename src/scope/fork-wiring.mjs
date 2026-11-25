@@ -203,6 +203,10 @@ function spawnPortFor(station, base, binder, options, wiring) {
 		// Prebind the generated host ID without changing the fork identity.
 		const identity = buildChildIdentity(spec, {
 			agentId,
+			// What the parent had retired before this fork. The child projects
+			// the same transcript, so it must drop the same beats or its outbound
+			// prefix stops matching the parent's.
+			amends: station.state?.amends ?? [],
 			display: binder.currentDisplay(),
 			displayHolder,
 			ledger: base.ledger,

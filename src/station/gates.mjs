@@ -447,10 +447,11 @@ function onSessionCompact(station, ctx) {
 
 function onBeforeAgentStart(station, event, ctx) {
 	const policy = station.policy(ctx);
+	// No mode or scope argument: the managed block is the same bytes for an
+	// owner and a forked scope, so an inherited prompt comes back untouched and
+	// the host keeps the provider cache key it handed to the branch.
 	const prompt = injectSystemPrompt(event?.systemPrompt, {
 		...station.portTable,
-		autopilot: station.state.autopilot === true,
-		branch: ownerIdOf(station) !== null,
 	});
 	const promptChanged = prompt !== event?.systemPrompt;
 	const result = promptChanged ? { systemPrompt: prompt } : undefined;

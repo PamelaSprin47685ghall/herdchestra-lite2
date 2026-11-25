@@ -16,6 +16,7 @@ import {
 	recordNaturalStop,
 } from "../src/station/handoff-state.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
+import { injectSystemPrompt } from "../src/prompts/inject.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 
 function relayState(overrides = {}) {
@@ -207,29 +208,35 @@ function promptText(station) {
 
 describe("a child's model-facing prompt", () => {
 	for (const autopilot of [true, false]) {
-		test(`does not advertise the root relay when autopilot is ${autopilot}`, () => {
-			const text = promptText(promptStation("fork_a", autopilot));
+		test(`matches the root prompt byte for byte when autopilot is ${autopilot}`, () => {
+			const child = promptText(promptStation("fork_a", autopilot));
+			const root = promptText(promptStation(null, autopilot));
 
-			expect(text).toContain("### Scope duties");
-			expect(text).toContain("Forked scope duty");
-			expect(text).toContain("scope_return");
-			expect(text).not.toContain("### Close the work");
-			expect(text).not.toContain("Only the user toggles autopilot");
-			expect(text).not.toContain("Autopilot is off by default");
-			expect(text).not.toContain("Any successful `todo` write");
-			expect(text).not.toContain("RELAY_HANDOFF_PENDING");
-			expect(text).not.toContain("natural stop is a ledger submission");
+			expect(child).toBe(root);
+			expect(child).toContain("### Scope duties");
+			expect(child).toContain("Forked scope duty");
+			expect(child).toContain("scope_return");
+			expect(child).toContain("### Close the work");
+			expect(child).toContain("Only the user toggles autopilot");
 		});
 	}
+});
 
-	test("still gives the root the autopilot mode rules", () => {
-		const text = promptText(promptStation(null, true));
+describe("the prompt gate on an inherited prompt", () => {
+	for (const autopilot of [true, false]) {
+		test(`is a no-op for a child when autopilot is ${autopilot}`, () => {
+			const station = promptStation("fork_a", autopilot);
+			// The owner's live prompt, already injected: a child inherits it.
+			const inherited = injectSystemPrompt(["Host instructions"]);
 
-		expect(text).toContain("### Close the work");
-		expect(text).toContain("Only the user toggles autopilot");
-		expect(text).toContain("Any successful `todo` write");
-		expect(text).not.toContain("### Scope duties");
-	});
+			const out = onBeforeAgentStart(station, { systemPrompt: inherited }, {});
+
+			// No result means no `setSystemPrompt`, so the provider cache key the
+			// host handed to the branch survives the child's first request.
+			expect(out).toBeUndefined();
+			expect(injectSystemPrompt(inherited)).toBe(inherited);
+		});
+	}
 });
 
 const childBranch = {

@@ -41,19 +41,22 @@ for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 	});
 }
 
-test("the operating rules keep the relay section out of manual duty", () => {
-	const manual = injectSystemPrompt("Host instructions", { autopilot: false });
-	const manualText = Array.isArray(manual) ? manual.join("\n") : manual;
-	expect(manualText).toContain("Autopilot is off by default");
-	expect(manualText).not.toContain("Any successful `todo` write");
-	expect(manualText).not.toContain("A non-empty root ledger forbids a final reply");
+test("one scope-and-relay section serves root and child, manual and autopilot", () => {
+	const base = injectSystemPrompt("Host instructions");
+	const baseText = Array.isArray(base) ? base.join("\n") : base;
+	expect(baseText).toContain("Forked scope duty");
+	expect(baseText).toContain("Only the user toggles autopilot");
+	expect(baseText).toContain("Any successful `todo` write");
+	expect(baseText).toContain("A non-empty root ledger forbids a final reply");
 
-	const auto = injectSystemPrompt("Host instructions", { autopilot: true });
-	const autoText = Array.isArray(auto) ? auto.join("\n") : auto;
-	expect(autoText).toContain("Only the user toggles autopilot");
-	expect(autoText).not.toContain("Autopilot is off by default");
-	expect(autoText).toContain("Any successful `todo` write");
-	expect(autoText).toContain("A non-empty root ledger forbids a final reply");
+	// The managed block never varies with the request: a forked scope inherits
+	// the owner's prompt prefix, and a changed system prompt drops the inherited
+	// provider cache key.
+	for (const autopilot of [true, false]) {
+		for (const branch of [true, false]) {
+			expect(injectSystemPrompt("Host instructions", { autopilot, branch })).toEqual(base);
+		}
+	}
 });
 
 test("reinjecting a prompt converted from text to an array retains only the host repo rules", () => {
@@ -356,19 +359,16 @@ for (const resultVisible of [true, false]) {
 	});
 }
 
-test("a child prompt carries child duty instead of either mode line", () => {
+test("a child prompt is byte-identical to the root prompt", () => {
 	for (const autopilot of [true, false]) {
 		const child = injectSystemPrompt("Host instructions", { autopilot, branch: true });
+		const root = injectSystemPrompt("Host instructions", { autopilot });
+		expect(child).toEqual(root);
 		const text = Array.isArray(child) ? child.join("\n") : child;
 		expect(text).toContain("### Scope duties");
 		expect(text).toContain("Forked scope duty");
 		expect(text).toContain("scope_return");
-		expect(text).not.toContain("Autopilot is on");
-		expect(text).not.toContain("Autopilot is off by default");
+		expect(text).toContain("### Close the work");
+		expect(text).toContain("Only the user toggles autopilot");
 	}
-
-	const manual = injectSystemPrompt("Host instructions", { autopilot: false });
-	const auto = injectSystemPrompt("Host instructions", { autopilot: true });
-	expect(manual).toContain("Autopilot is off by default");
-	expect(auto).toContain("Only the user toggles autopilot");
 });

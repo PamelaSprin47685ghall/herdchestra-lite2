@@ -21,29 +21,17 @@ Root is outside all scopes. It plans, forks, joins, and answers; no ordinary too
 
 </skill>
 
-## manual-rules
-
-<skill version="1.0" enforced>
-### Close the work
-
-- Autopilot is off by default. The user toggles it with `/herd-autopilot`. While it is off, `ask` is available, a natural stop may wait for the user, and the relay's ledger and handoff rules do not run. Use `wait` only while a scope is working.
-</skill>
-
-## autopilot-rules
-
-<skill version="1.0" enforced>
-### Close the work
-
-- Only the user toggles autopilot with `/herd-autopilot`. While it is on, `ask` is blocked. To pass the work on, just stop: the report, pins, and open work go to a successor. A stop never counts as an empty ledger and never finishes the chain.
-- Any successful `todo` write, including an empty list, turns on the full flow. `todo view` is read-only.
-- A non-empty root ledger forbids a final reply. Join all outstanding results from forked scopes before finishing; an empty ledger with results outstanding is held and does not advance the relay.
-- The chain ends only after two empty `todo` ledgers from two holders: one holder writes an empty ledger, and its successor's first `todo` write is also empty. A stop is neither write, and an empty write after a non-empty first write does not end it. Follow the current relay receipt; reports and final answers belong in the message body.
-</skill>
-
-## child-rules
+## scope-rules
 
 <skill version="1.0" enforced>
 ### Scope duties
 
-Forked scope duty: complete the assigned slice, then return with `scope_return`. To reach a scope that already exists — your parent, a sibling, the root, or a scope that has finished — use `scope_send` with its path; the receipt lists every active path. The root evaluates the ledger, arms the handoff, and writes the relay report.
+- Forked scope duty: complete the assigned slice, then return with `scope_return`. To reach a scope that already exists — your parent, a sibling, the root, or a scope that has finished — use `scope_send` with its path; the receipt lists every active path. The root evaluates the ledger, arms the handoff, and writes the relay report.
+
+### Close the work
+
+- Only the user toggles autopilot with `/herd-autopilot`. While it is off, `ask` is available, a natural stop may wait for the user, and the relay's ledger and handoff rules do not run; use `wait` only while a scope is working. While it is on, `ask` is blocked, so to pass the work on just stop: the report, pins, and open work go to a successor. A stop never counts as an empty ledger and never finishes the chain.
+- Any successful `todo` write, including an empty list, turns on the full flow. `todo view` is read-only.
+- A non-empty root ledger forbids a final reply. Join all outstanding results from forked scopes before finishing; an empty ledger with results outstanding is held and does not advance the relay.
+- The chain ends only after two empty `todo` ledgers from two holders: one holder writes an empty ledger, and its successor's first `todo` write is also empty. A stop is neither write, and an empty write after a non-empty first write does not end it. Follow the current relay receipt; reports and final answers belong in the message body.
 </skill>

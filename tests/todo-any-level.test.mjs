@@ -636,17 +636,18 @@ describe("manual duty (autopilot off)", () => {
 		expect(relayOf(ctx).handoffPending).toBe(true);
 		expect(textOf(emptied)).toContain("handoff report");
 
+		const source = session.agent.state.systemPrompt;
+		const sourceText = Array.isArray(source) ? source.join("\n") : source ?? "";
 		const prepared = await emit(
 			host.handlers,
 			"before_agent_start",
-			{ systemPrompt: session.agent.state.systemPrompt },
+			{ systemPrompt: source },
 			ctx,
 		);
-		const prompt = Array.isArray(prepared?.systemPrompt)
-			? prepared.systemPrompt.join("\n")
-			: prepared?.systemPrompt ?? "";
-		expect(prompt).toContain("Any successful `todo` write");
-		expect(prompt).not.toContain("Autopilot is off by default");
+		// The managed block is the same bytes in both modes, so the gate leaves
+		// an inherited prompt untouched and the relay text was already there.
+		expect(prepared).toBeUndefined();
+		expect(sourceText).toContain("Any successful `todo` write");
 	});
 });
 

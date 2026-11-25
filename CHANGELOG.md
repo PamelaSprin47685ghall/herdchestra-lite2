@@ -6,6 +6,39 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [4.1.2] — 2026-11-25
+
+### Fixed — a forked scope's first request reuses the owner's prompt cache
+
+`before_agent_start` chose the managed block's rule section per request: a
+child got `child-rules`, a root got `autopilot-rules` or `manual-rules`. `omp`
+compares the incoming system prompt against the digest it recorded for the
+session and clears the inherited `providerPromptCacheKey` on any mismatch, so a
+child's first request re-prefilled the whole prompt — 26 329 tokens and about
+8.4 s to first token in one measured session — while every later request hit
+again. A second child with the same variant then hit immediately, which is what
+made the first request look like a cold cache rather than a changed prefix.
+
+- The three sections are one fixed `scope-rules` section that states the scope
+  duty and both autopilot states. The managed block no longer depends on the
+  request at all: root and child, manual and autopilot produce the same bytes,
+  `injectSystemPrompt` hands back the array it was given, the gate returns no
+  result, and the inherited cache key survives.
+- The mode is still announced, in the receipt: `skillReceiptText` keeps
+  rendering the current autopilot state and the scope's identity per message.
+
+### Fixed — a forked scope inherits the beats its parent had retired
+
+`projectContext` drops the beats listed in `state.amends`, but a child station
+started with an empty list, so beats the parent had already amended came back
+into the child's outbound messages and its request prefix stopped matching the
+parent's.
+
+- The keys now travel as data on the child identity: `fork-wiring` copies the
+  parent's list into `buildChildIdentity`, the registry keeps a string-only
+  copy, and `bindForkPorts` merges them into the child's own array once. Later
+  amends on either side stay local.
+
 ## [4.1.1] — 2026-11-25
 
 ### Added — one URL is now a working install

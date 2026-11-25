@@ -101,6 +101,7 @@ describe("buildChildIdentity", () => {
 			time: null,
 			targets: null,
 			childDepth: null,
+			amends: [],
 			agentId: null,
 			display: null,
 			displayHolder: null,

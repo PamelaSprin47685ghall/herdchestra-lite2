@@ -6,6 +6,101 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [4.1.0] — 2026-11-25
+
+### Changed — a long session pays for the frame, not for its history
+
+A conversation that ran for days grew to gigabytes on disk and stalled for
+about a second at a time. Neither symptom was a timer: `src/` and `host-omp/`
+hold no interval, and the stall was the cost of whole-history work repeated on
+every assistant message, tool call and model request. The work is now bounded
+by what the event changed.
+
+- **A delivered record body leaves the ledger.** A child's record has exactly
+  one reader: the parent's join receipt. `releaseRecordText` drops the body
+  once that receipt is rendered, and only when the station's outcome table
+  still holds a copy, so a second render reproduces the receipt byte for byte.
+  Before this, every later ledger baseline re-serialized every delivered
+  transcript, and a baseline's size grew with the session's own history.
+  `fsm`, `targets`, `budget`, `inbox`, and the outcome stay: a wake and a
+  restart read those, and neither reads the body.
+- **`contextMessages()` projects once per branch leaf.** It returned
+  `buildSessionContext()?.messages` on every call, and the station calls it
+  three to four times per assistant message, once or twice per tool call, and
+  six to eight times per model request — each a full walk of the branch. The
+  leaf id is the branch's identity, so an unchanged leaf answers from the
+  cached projection; a manager without `getLeafId` never caches, which is the
+  old behavior rather than a guess. A throwing rebuild clears the cache
+  instead of serving it.
+- **The boundary scan runs once per projected array.** `hostBoundaryKey` walks
+  backwards to the last handoff marker, so a transcript with none cost a full
+  scan per turn. It is now memoized on the array's identity and length, which
+  an append is the only thing to change.
+- **Character counting stops copying.** `messageChars` and `prefixChars` count
+  a message and a sequence prefix without building the prefix array;
+  `usage-ledger` had allocated `messages.slice(0, index)` per assistant
+  message only to discard it.
+- **Boundary frames write through the persistent sequence.** `message_start`,
+  `message_end`, `agent_end` and the tool frames used to copy the history into
+  an array, mutate it, and rebuild the whole trie and its render indexes —
+  three passes over the session per event, plus `streamDirtyFrom: 0`, which
+  forced the view to regroup every message. They now derive a new `MessageLog`
+  by replacing only the messages they touch, layer the new indexes over the
+  prior ones, and report the exact first index they changed.
+- **Snapshot and catalog work is bounded.** `snapshot-fit` remembers the
+  measured size of a shaped message; `onSessionHydrate` projects artifacts in
+  contiguous runs of at most 256 ordinals instead of allocating a pairing map
+  pair per message; `machine-catalog` reads a session header under a 1 MiB
+  byte budget with a 256 KiB single-line ceiling and reuses it while `mtime`
+  and size are unchanged, so a multi-gigabyte JSONL can neither block the scan
+  to EOF nor have a multi-megabyte `scope.state` line parsed as a header.
+- **The append digest is streamed.** `digestText` had re-hashed the whole
+  growing prefix on every write — O(L) hashing and a 2L buffer allocation per
+  persist, O(L^2) over a session. `digestAppend` keeps the un-terminated hash
+  state beside the digest and extends it with the new suffix, so a write pays
+  for its tail. The emitted `append` operation carries the same `digest` and
+  the same `text`, so replay and restore are byte-identical.
+
+### Added
+
+- `src/scope/append-only-inbox.mjs`, `src/scope/record-mutation.mjs`: a
+  structurally shared, frozen inbox and the single door through which a fork
+  record is edited, so a delta's base cannot be invalidated by a writable
+  reference escaping.
+- `src/scope/ledger-cache.mjs`: revision tracking over the ledger, so an
+  unchanged fork is a reused pointer instead of a deep compare and a copy.
+- `src/station/persistence-anchor.mjs`: anchored baselines with patch replay,
+  so a restart replays the entries after the newest anchor rather than the
+  whole branch.
+- `tools/compact-session-jsonl.mjs`: offline reclamation for sessions already
+  on disk. An older `scope.state` entry under the newest state checkpoint,
+  full ledger baseline, and amends prefix is replaced by a tombstone — the
+  entry's id, parents, and position are kept, so the session tree, its
+  branches, and every fold are untouched. `analyze`, `compact`, and `verify`
+  are separate commands, and `verify` compares the folded state before and
+  after.
+- 100 new test files, including `tests/joined-record-release.test.mjs`,
+  `tests/hot-path-context-cache.test.mjs`,
+  `tests/host-omp-ui/boundary-structural-sharing.test.mjs`,
+  `tests/restore-long-session.test.mjs`, and `tests/persistence-v3-safety.test.mjs`.
+
+### Fixed
+
+- A boundary frame that reused a message id recorded the position of the
+  first occurrence, as `findIndex` did, instead of remapping it; the later
+  message is now recorded as a duplicate so the streaming marker cannot land
+  on the wrong message.
+- `machine-catalog` no longer parses a line larger than 256 KiB, which a
+  persisted state blob can easily exceed.
+
+### Migration
+
+- Existing sessions keep working unchanged: the release only stops new writes
+  from carrying bodies nobody reads, and no snapshot version moved. Sessions
+  that have already grown past a comfortable size need
+  `bun tools/compact-session-jsonl.mjs analyze <file>` followed by `compact`;
+  the host refuses to rewrite a live journal, so run it on a closed session.
+
 ## [4.0.0] — 2026-11-24
 
 ### Changed — `scope_fork` only creates; `scope_send` carries every later exchange (breaking for callers)

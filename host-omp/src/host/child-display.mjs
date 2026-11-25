@@ -379,18 +379,20 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 		else queue.push(show);
 	}
 
+	function fuller(current, incoming) {
+		return partsText(incoming).length >= partsText(current).length ? incoming : current;
+	}
+
 	function updateLive(stream, parts) {
-		const signature = partsSignature(parts);
+		const next = fuller(stream.row?.details?.parts ?? [], parts);
+		const signature = partsSignature(next);
 		if (stream.row === null || stream.signature === signature) return;
-		const text = partsText(parts);
+		const text = partsText(next);
 		stream.signature = signature;
 		stream.row.content = `${stream.label}\n${text}`;
 		stream.row.details.body = text;
-		stream.row.details.parts = parts;
-		stream.row.details.syncParts?.(parts);
-		// This is a custom row, not an assistant frame. Omp's message_end
-		// handler requests a repaint without touching the assistant slot.
-		rootEvent({ type: "message_end", message: stream.row });
+		stream.row.details.parts = next;
+		stream.row.details.syncParts?.(next);
 	}
 
 	function finish(source, event) {
@@ -437,12 +439,16 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 			const active = tray.end(source, event);
 			const completed = {
 				...event,
+				toolCallId: source === ROOT ? event.toolCallId : `herd:${label ?? "child"}:${event.toolCallId ?? event.toolName}`,
 				args: active?.args ?? event.args,
 				definition: active?.definition ?? resolveTool(session, event.toolName),
 				builtIn: active?.builtIn ?? isBuiltInTool(session, event.toolName),
 				cwd: active?.cwd ?? resolveCwd(session),
 			};
-			block(() => row(root ? null : label, toolSummaryText(event), completed));
+			block(() => {
+				rootEvent({ ...completed, type: "tool_execution_start" });
+				rootEvent(completed);
+			});
 			return;
 		}
 		if (message?.role === "assistant") {

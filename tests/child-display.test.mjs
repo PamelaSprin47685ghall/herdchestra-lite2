@@ -168,10 +168,8 @@ test("unsettled root and child tools stay in the one-row active area and never l
 	expect(bashCard.disposed).toBe(true);
 
 	const completedRows = seen.filter((event) => event.message?.customType === CHILD_ACTIVITY_TYPE);
-	expect(completedRows.map((event) => event.message.details.tool?.toolName ?? event.message.details.body)).toEqual([
-		"Grandchild done",
-		"bash",
-	]);
+	expect(completedRows.map((event) => event.message.details.body)).toEqual(["Grandchild done"]);
+	expect(seen.at(-1)).toMatchObject({ type: "tool_execution_end", toolName: "bash", args: { command: "sleep 10" } });
 
 	// Detaching grandchild clears its unsettled return from the active area.
 	detachGrand();
@@ -188,9 +186,8 @@ test("unsettled root and child tools stay in the one-row active area and never l
 	expect(display.activeTools).toBe(0);
 	expect(host.widgets.has(ACTIVE_TOOLS_WIDGET_KEY)).toBe(false);
 	const rootJoinRow = seen.at(-1);
-	expect(rootJoinRow.message.customType).toBe(CHILD_ACTIVITY_TYPE);
-	expect(rootJoinRow.message.details.label).toBeNull();
-	expect(rootJoinRow.message.details.tool.toolName).toBe("scope_join");
+	expect(rootJoinRow.type).toBe("tool_execution_end");
+	expect(rootJoinRow.toolName).toBe("scope_join");
 
 	detachChild();
 });

@@ -455,6 +455,41 @@ test("output that follows an input is isolated instead of treated as queued inpu
 	});
 });
 
+test("a persisted assistant snapshot can precede its still-live tool frame", () => {
+	const user = { role: "user", content: "start" };
+	const emitted = {
+		role: "assistant",
+		timestamp: 10,
+		provider: "host",
+		model: "m",
+		stopReason: "toolUse",
+		content: [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "ls" } }],
+	};
+	const persisted = { ...emitted, completedAt: 11, contextSnapshot: { promptTokens: 1 } };
+	const result = { role: "toolResult", timestamp: 12, toolName: "bash", toolCallId: "bash-1", content: "listed" };
+	assert.deepEqual(splitRequestHistory([user, emitted, result], [user, persisted]), {
+		prefix: [user, emitted],
+		pending: [],
+		recovered: [result],
+		frameInFlight: true,
+	});
+	const stray = { role: "toolResult", timestamp: 13, toolName: "bash", toolCallId: "other", content: "no" };
+	assert.throws(() => splitRequestHistory([user, emitted, stray], [user, persisted]), {
+		code: "CONTEXT_PREPARATION_HISTORY_MISMATCH",
+	});
+	const different = { ...emitted, content: [{ type: "text", text: "different content" }] };
+	const missingTime = { ...emitted, timestamp: undefined };
+	assert.throws(() => splitRequestHistory([user, different], [user, persisted]), {
+		code: "CONTEXT_PREPARATION_HISTORY_MISMATCH",
+	});
+	assert.throws(() => splitRequestHistory([user, missingTime], [user, persisted]), {
+		code: "CONTEXT_PREPARATION_HISTORY_MISMATCH",
+	});
+	assert.throws(() => splitRequestHistory([user, emitted, emitted], [user, persisted]), {
+		code: "CONTEXT_PREPARATION_HISTORY_MISMATCH",
+	});
+});
+
 test("a tool result whose frame is already committed is deferred, not refused", () => {
 	const user = { role: "user", content: "start" };
 	const call = { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }] };

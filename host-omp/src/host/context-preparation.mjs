@@ -43,6 +43,30 @@ function toolCallIds(message) {
 	return ids;
 }
 
+// AgentSession persists an enriched snapshot of the emitted message. Its
+// persistence key is the host's stable identity for that separate object.
+function samePersistedMessage(live, committed) {
+	if (sameAssistantFrame(live, committed) || isDeepStrictEqual(live, committed)) return true;
+	if (live?.role !== committed?.role) return false;
+	const sameContent = Array.isArray(live.content) && Array.isArray(committed.content) &&
+		isDeepStrictEqual(live.content, committed.content);
+	if (!sameContent) return false;
+	if (live.role === "assistant") {
+		return Number.isFinite(committed.timestamp) &&
+			live.timestamp === committed.timestamp &&
+			live.provider === committed.provider &&
+			live.model === committed.model &&
+			(live.responseId ?? "") === (committed.responseId ?? "") &&
+			live.stopReason === committed.stopReason;
+	}
+	if (live.role === "toolResult") {
+		return live.timestamp === committed.timestamp &&
+			live.toolCallId === committed.toolCallId &&
+			live.toolName === committed.toolName;
+	}
+	return false;
+}
+
 function committedToolCallIds(prefix) {
 	for (let index = prefix.length - 1; index >= 0; index -= 1) {
 		const message = prefix[index];
@@ -62,7 +86,9 @@ function committedToolCallIds(prefix) {
  * A tool result whose assistant frame is still in the committed prefix is a
  * half-committed frame. Its request cannot take a receipt between the call and
  * the result, so it is reported through `frameInFlight`; the caller defers
- * preparation instead of aborting. A tool result that belongs to neither the
+ * preparation instead of aborting. The host can persist an enriched snapshot
+ * before copying the result into Agent state, so the loop tail may still hold
+ * both members of that frame. A tool result that belongs to neither the
  * pending frame nor the committed one is corruption and still throws.
  */
 function partitionPending(pending, prefix) {
@@ -85,7 +111,7 @@ function partitionPending(pending, prefix) {
 				recovered.push(message);
 				continue;
 			}
-			if (frame === null && !sawInput) {
+			if (!sawInput) {
 				committedIds ??= committedToolCallIds(prefix);
 				if (typeof id === "string" && committedIds.has(id)) {
 					frameInFlight = true;
@@ -127,7 +153,7 @@ export function splitRequestHistory(messages, committed) {
 		if (end < 0) {
 			let matches = 0;
 			for (let index = messages.length - 1; index >= 0; index -= 1) {
-				if (sameAssistantFrame(messages[index], tail) || isDeepStrictEqual(messages[index], tail)) {
+				if (samePersistedMessage(messages[index], tail)) {
 					end = index;
 					matches += 1;
 				}

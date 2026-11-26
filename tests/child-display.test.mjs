@@ -93,6 +93,26 @@ afterEach(() => {
 	FakeToolCard.instances.length = 0;
 });
 
+test("an active tool tray requests render on its own clock and stops after disposal", async () => {
+	const root = new Session();
+	const child = new Session();
+	const host = uiHost();
+	const display = childDisplayFor(root, host.ui);
+	display.attach("Ls", child);
+	child.emit({ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "ls" } });
+	const before = host.renders;
+	await Bun.sleep(300);
+	expect(host.renders).toBeGreaterThan(before);
+	const running = host.renders;
+	child.emit({ type: "tool_execution_end", toolCallId: "bash-1", toolName: "bash", result: { content: [] }, isError: false });
+	await Bun.sleep(300);
+	expect(host.renders).toBe(running);
+	child.emit({ type: "tool_execution_start", toolCallId: "bash-2", toolName: "bash", args: { command: "pwd" } });
+	await Bun.sleep(300);
+	expect(host.renders).toBeGreaterThan(running);
+	child.emit({ type: "tool_execution_end", toolCallId: "bash-2", toolName: "bash", result: { content: [] }, isError: false });
+});
+
 test("unsettled root and child tools stay in the one-row active area and never leave open transcript cards", () => {
 	registerToolCardComponent(FakeToolCard);
 	const root = new Session();
@@ -106,9 +126,6 @@ test("unsettled root and child tools stay in the one-row active area and never l
 	const detachChild = display.attach("Oh My Pie", child);
 	const detachGrand = display.attach("Sub Sub Scope", grandchild);
 
-	// Root assistant message carries a scope_join toolCall: the display copy
-	// strips toolCall blocks so the host never creates an unfinalized card,
-	// while the session's original message object stays untouched.
 	const originalAssistant = {
 		role: "assistant",
 		content: [
@@ -122,8 +139,6 @@ test("unsettled root and child tools stay in the one-row active area and never l
 	const rootAssistantShown = seen.find((event) => event.type === "message_end" && event.message?.role === "assistant");
 	expect(rootAssistantShown.message.content).toEqual([{ type: "text", text: "Waiting on child." }]);
 
-	// Root join, child join, child slow bash, grandchild return all stay active
-	// simultaneously without emitting raw tool_execution_start into the transcript.
 	root.emit({ type: "tool_execution_start", toolCallId: "join-1", toolName: "scope_join", args: {} });
 	child.emit({ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "sleep 10" } });
 	grandchild.emit({ type: "tool_execution_start", toolCallId: "ret-1", toolName: "scope_return", args: {} });
@@ -137,10 +152,8 @@ test("unsettled root and child tools stay in the one-row active area and never l
 		" Sub Sub Scope ⠋ scope_return · running",
 	]);
 	expect(FakeToolCard.instances.every((card) => card.allocations.at(-1)?.rows === 1)).toBe(true);
-	// ToolExecutionComponent measures elapsed time with performance.now(), not Date.now().
 	expect(FakeToolCard.instances[0].allocations.at(-1).frame.now).toBeLessThan(1e12);
 
-	// Live partial updates refresh the single-row card in place without adding rows.
 	const rendersBefore = host.renders;
 	child.emit({
 		type: "tool_execution_update",
@@ -151,8 +164,6 @@ test("unsettled root and child tools stay in the one-row active area and never l
 	expect(host.renders).toBeGreaterThan(rendersBefore);
 	expect(host.renderActive(80)[1]).toBe(" Oh My Pie ⠋ bash · step 2/5");
 
-	// Completed child work and completed tools append into the main transcript
-	// at full size while the root join is still running.
 	grandchild.emit(answer("Grandchild done"));
 	child.emit({
 		type: "tool_execution_end",
@@ -167,15 +178,17 @@ test("unsettled root and child tools stay in the one-row active area and never l
 	expect(bashCard.sealed).toBe(true);
 	expect(bashCard.disposed).toBe(true);
 
-	const completedRows = seen.filter((event) => event.message?.customType === CHILD_ACTIVITY_TYPE);
-	expect(completedRows.map((event) => event.message.details.body)).toEqual(["Grandchild done"]);
+	const header = seen.find((event) => event.message?.customType === CHILD_ACTIVITY_TYPE);
+	expect(header.message.details.label).toBe("Sub Sub Scope");
+	const grandEnd = seen.find(
+		(event) => event.type === "message_end" && event.message?.role === "assistant" && event.message.model === "Sub Sub Scope",
+	);
+	expect(grandEnd.message.content).toEqual([{ type: "text", text: "Grandchild done" }]);
 	expect(seen.at(-1)).toMatchObject({ type: "tool_execution_end", toolName: "bash", args: { command: "sleep 10" } });
 
-	// Detaching grandchild clears its unsettled return from the active area.
 	detachGrand();
 	expect(display.activeTools).toBe(1);
 
-	// Finishing root join removes the widget completely and appends the full card.
 	root.emit({
 		type: "tool_execution_end",
 		toolCallId: "join-1",
@@ -185,39 +198,204 @@ test("unsettled root and child tools stay in the one-row active area and never l
 	});
 	expect(display.activeTools).toBe(0);
 	expect(host.widgets.has(ACTIVE_TOOLS_WIDGET_KEY)).toBe(false);
-	const rootJoinRow = seen.at(-1);
-	expect(rootJoinRow.type).toBe("tool_execution_end");
-	expect(rootJoinRow.toolName).toBe("scope_join");
+	expect(seen.at(-1)).toMatchObject({ type: "tool_execution_end", toolName: "scope_join" });
 
 	detachChild();
 });
 
-test.each(["root", "child"])("%s takes the free stream slot and the other stream falls back to one block", (first) => {
+test("child thinking streams on the native assistant channel with a settled label header and zero usage", () => {
 	const root = new Session();
 	const child = new Session();
 	const seen = [];
-	root.subscribe((event) => seen.push([event.type, event.message?.role, event.message?.content]));
+	root.subscribe((event) => seen.push(event));
+	childDisplayFor(root).attach("Worker", child);
+
+	child.emit({ type: "message_start", message: { role: "assistant", content: [] } });
+	// Cumulative snapshot + delta arriving together (omp 19.2 wire shape) must
+	// never double-append the delta on top of the cumulative snapshot.
+	child.emit({
+		type: "message_update",
+		message: { role: "assistant", content: [{ type: "thinking", thinking: "先看源码" }] },
+		assistantMessageEvent: {
+			type: "thinking_delta",
+			contentIndex: 0,
+			delta: "源码",
+			partial: { role: "assistant", content: [{ type: "thinking", thinking: "先看源码" }] },
+		},
+	});
+	child.emit({
+		type: "message_update",
+		message: { role: "assistant", content: [{ type: "thinking", thinking: "先看源码再改" }] },
+		assistantMessageEvent: {
+			type: "thinking_delta",
+			contentIndex: 0,
+			delta: "再改",
+			partial: { role: "assistant", content: [{ type: "thinking", thinking: "先看源码再改" }] },
+		},
+	});
+	child.emit({
+		type: "message_end",
+		message: {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "先看源码再改" },
+				{ type: "text", text: "已完成分析。" },
+			],
+		},
+	});
+
+	expect(seen.map((event) => [event.type, event.message?.role, event.message?.customType ?? null])).toEqual([
+		["message_start", "custom", CHILD_ACTIVITY_TYPE],
+		["message_start", "assistant", null],
+		["message_update", "assistant", null],
+		["message_update", "assistant", null],
+		["message_end", "assistant", null],
+	]);
+	expect(seen[0].message.details.label).toBe("Worker");
+	expect(seen[2].message.content).toEqual([{ type: "thinking", thinking: "先看源码" }]);
+	expect(seen[2].assistantMessageEvent).toMatchObject({ type: "thinking_delta", delta: "先看源码" });
+	expect(seen[3].message.content).toEqual([{ type: "thinking", thinking: "先看源码再改" }]);
+	expect(seen[3].assistantMessageEvent).toMatchObject({ type: "thinking_delta", delta: "再改" });
+	expect(seen[4].message.content).toEqual([
+		{ type: "thinking", thinking: "先看源码再改" },
+		{ type: "text", text: "已完成分析。" },
+	]);
+	expect(seen[4].message.usage.input).toBe(0);
+	expect(seen[4].message.usage.output).toBe(0);
+	expect(seen[4].message.stopReason).toBe("stop");
+});
+
+test("pure RPC delta frames append across a start shell and end block is authoritative", () => {
+	const root = new Session();
+	const child = new Session();
+	const seen = [];
+	root.subscribe((event) => seen.push(event));
 	childDisplayFor(root).attach("Child", child);
-	const a = first === "root" ? root : child;
-	const b = a === root ? child : root;
-	const aText = answer("first partial").message;
-	const bText = answer("second partial").message;
-	a.emit({ type: "message_start", message: { role: "assistant", content: [] } });
-	a.emit({ type: "message_update", message: aText });
-	b.emit({ type: "message_start", message: { role: "assistant", content: [] } });
-	b.emit({ type: "message_update", message: bText });
-	b.emit(answer("second complete"));
-	expect(JSON.stringify(seen)).toContain("first partial");
-	expect(JSON.stringify(seen)).not.toContain("second");
-	a.emit(answer("first complete"));
-	const output = JSON.stringify(seen);
-	expect(output).not.toContain("second partial");
-	expect(output.indexOf("first complete")).toBeLessThan(output.indexOf("second complete"));
-	if (b === root) {
-		expect(seen.slice(-2).map(([type]) => type)).toEqual(["message_start", "message_end"]);
-	} else {
-		expect(seen.at(-1)).toEqual(["message_start", "custom", "Child\nsecond complete"]);
-	}
+	const shell = { role: "assistant", content: [] };
+	child.emit({ type: "message_start", message: shell });
+	child.emit({
+		type: "message_update",
+		message: shell,
+		assistantMessageEvent: { type: "start", partial: shell },
+	});
+	child.emit({
+		type: "message_update",
+		message: { role: "assistant", content: [] },
+		assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "先", partial: { role: "assistant", content: [] } },
+	});
+	child.emit({
+		type: "message_update",
+		message: { role: "assistant", content: [] },
+		assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "思考", partial: { role: "assistant", content: [] } },
+	});
+	child.emit({
+		type: "message_update",
+		message: { role: "assistant", content: [] },
+		assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "先思考完整", partial: { role: "assistant", content: [] } },
+	});
+	child.emit({ type: "message_end", message: { role: "assistant", content: [] } });
+
+	const updates = seen.filter((event) => event.type === "message_update");
+	expect(updates.map((event) => event.message.content)).toEqual([
+		[{ type: "thinking", thinking: "先" }],
+		[{ type: "thinking", thinking: "先思考" }],
+		[{ type: "thinking", thinking: "先思考完整" }],
+	]);
+	// Empty message_end preserves accumulated thinking instead of wiping it.
+	const end = seen.find((event) => event.type === "message_end");
+	expect(end.message.content).toEqual([{ type: "thinking", thinking: "先思考完整" }]);
+});
+
+test("concurrent child streams hand off the live assistant lease seamlessly when the owner ends", () => {
+	const root = new Session();
+	const first = new Session();
+	const second = new Session();
+	const seen = [];
+	root.subscribe((event) => seen.push(event));
+	const display = childDisplayFor(root);
+	display.attach("First", first);
+	display.attach("Second", second);
+
+	first.emit({ type: "message_start", message: { role: "assistant", content: [] } });
+	first.emit({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "first step 1" }] } });
+
+	// Second starts streaming while First still owns the live assistant slot.
+	second.emit({ type: "message_start", message: { role: "assistant", content: [] } });
+	second.emit({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "second draft" }] } });
+
+	// While First is live, Second's updates are buffered rather than overwriting First.
+	expect(seen.some((event) => JSON.stringify(event).includes("second draft"))).toBe(false);
+
+	// The moment First finishes, Second is promoted into the live assistant slot
+	// immediately with its accumulated thinking, and continues streaming live.
+	first.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "thinking", thinking: "first complete" }] } });
+	expect(seen.some((event) => event.type === "message_update" && event.message?.model === "Second"
+		&& event.message.content[0]?.thinking === "second draft")).toBe(true);
+
+	second.emit({
+		type: "message_update",
+		message: { role: "assistant", content: [{ type: "thinking", thinking: "second draft continued" }] },
+	});
+	const latestSecond = seen.filter((event) => event.type === "message_update" && event.message?.model === "Second").at(-1);
+	expect(latestSecond.message.content).toEqual([{ type: "thinking", thinking: "second draft continued" }]);
+
+	second.emit({
+		type: "message_end",
+		message: { role: "assistant", content: [{ type: "thinking", thinking: "second final" }] },
+	});
+	expect(seen.at(-1)).toMatchObject({
+		type: "message_end",
+		message: { role: "assistant", model: "Second", content: [{ type: "thinking", thinking: "second final" }] },
+	});
+});
+
+test("finished root and child todo tools emit settled custom checklist cards instead of unsettled displaceable todo tool events", () => {
+	const root = new Session();
+	const child = new Session();
+	const seen = [];
+	root.subscribe((event) => seen.push(event));
+	const display = childDisplayFor(root);
+	display.attach("Worker", child);
+
+	const phases = [
+		{ name: "诊断", tasks: [{ content: "定位根因", status: "in_progress" }, { content: "已完项", status: "completed" }] },
+	];
+	root.emit({ type: "tool_execution_start", toolCallId: "todo-1", toolName: "todo", args: { op: "init" } });
+	root.emit({
+		type: "tool_execution_end",
+		toolCallId: "todo-1",
+		toolName: "todo",
+		args: { op: "init" },
+		result: { content: [{ type: "text", text: "ok" }], details: { op: "init", phases } },
+		isError: false,
+	});
+	// Root's persisted toolResult message_end still passes through so host TodoHud refreshes.
+	root.emit({
+		type: "message_end",
+		message: { role: "toolResult", toolCallId: "todo-1", toolName: "todo", isError: false, details: { op: "init", phases } },
+	});
+
+	child.emit({ type: "tool_execution_start", toolCallId: "todo-2", toolName: "todo", args: { op: "init" } });
+	child.emit({
+		type: "tool_execution_end",
+		toolCallId: "todo-2",
+		toolName: "todo",
+		args: { op: "init" },
+		result: { content: [{ type: "text", text: "ok" }], details: { op: "init", phases } },
+		isError: false,
+	});
+
+	// Never emit raw todo tool_execution_start/end that would trigger omp's
+	// unsettled displaceable-todo tracker or pollute root's TodoHud from a child.
+	expect(seen.some((event) => event.type.startsWith("tool_execution_") && event.toolName === "todo")).toBe(false);
+	const todoCards = seen.filter((event) => event.message?.customType === CHILD_ACTIVITY_TYPE && event.message.details?.todo);
+	expect(todoCards).toHaveLength(2);
+	expect(todoCards[0].message.details.label).toBeNull();
+	expect(todoCards[0].message.details.todo.closed).toBe(1);
+	expect(todoCards[0].message.details.todo.total).toBe(2);
+	expect(todoCards[1].message.details.label).toBe("Worker");
+	// Root's toolResult message_end still reaches listeners for dock TodoHud sync.
+	expect(seen.some((event) => event.type === "message_end" && event.message?.role === "toolResult" && event.message.toolName === "todo")).toBe(true);
 });
 
 test("the native working row follows the latest requester and omits Root", () => {
@@ -225,9 +403,6 @@ test("the native working row follows the latest requester and omits Root", () =>
 	registerFork(ledger, { forkId: "opaque|id", ownerId: "root", scopeId: "oh-my-pie", fsm: "parent", depth: 0 });
 	registerFork(ledger, { forkId: "nested|id", ownerId: "opaque|id", scopeId: "sub_sub_scope", fsm: "child", depth: 1 });
 	registerFork(ledger, { forkId: "plan", ownerId: "root", scopeId: "plan", fsm: "deferred", depth: 0 });
-	// A scope that has handed in its record is idle, not busy: the retired
-	// checkpoint state has no successor, and a finished scope is what an
-	// unwoken plan now is.
 	markReady(ledger, "plan");
 	const root = new Session();
 	root.isStreaming = true;
@@ -247,81 +422,29 @@ test("the native working row follows the latest requester and omits Root", () =>
 	bindScopeView(null);
 });
 
-test("child thinking streams with host thinkingText italic style and stays distinct from prose", () => {
-	const root = new Session();
-	const child = new Session();
-	const seen = [];
-	root.subscribe((event) => seen.push(event));
-	childDisplayFor(root).attach("Oh My Pie", child);
-
-	const created = [];
-	class FakeContainer {
-		children = [];
-		addChild(childComponent) { this.children.push(childComponent); }
-		clear() { this.children.length = 0; }
-	}
-	class FakeText {
-		constructor(text) { this.text = text; }
-	}
-	class FakeSpacer {
-		constructor(lines) { this.lines = lines; }
-	}
-	class FakeMarkdown {
-		constructor(text, _px, _py, _mdTheme, style) {
-			this.text = text;
-			this.style = style ?? null;
-			created.push(this);
-		}
-		setText(text) { this.text = text; }
-	}
-	const theme = { fg: (color, text) => `<${color}>${text}</${color}>` };
-	const ui = {
-		Container: FakeContainer,
-		Markdown: FakeMarkdown,
-		Spacer: FakeSpacer,
-		Text: FakeText,
-		getMarkdownTheme: () => ({}),
+test("renderChildActivity builds a one-line scope header and a settled checklist card", () => {
+	const tui = {
+		jsx(kind, props = {}) {
+			return { kind, props: () => props, children: () => props.children ?? [] };
+		},
 	};
+	const header = renderChildActivity({ details: { label: "Oh My Pie" } }, {}, {}, tui);
+	expect(header.kind).toBe("text");
+	expect(header.props().spans).toEqual([{ t: "Oh My Pie", s: "accent" }]);
 
-	child.emit({ type: "message_start", message: { role: "assistant", content: [] } });
-	child.emit({
-		type: "message_update",
-		message: { role: "assistant", content: [{ type: "thinking", thinking: "checking frontier" }] },
-	});
-	const rowMessage = seen[0].message;
-	const frame = renderChildActivity(ui, rowMessage, { expanded: false }, theme);
-	expect(frame.children[0].text).toBe("<muted>Oh My Pie</muted>");
-	expect(created).toHaveLength(1);
-	expect(created[0].text).toBe("checking frontier");
-	expect(created[0].style?.italic).toBe(true);
-	expect(created[0].style?.color("dimmed")).toBe("<thinkingText>dimmed</thinkingText>");
-
-	// Thinking grows and prose starts in the same message: thinking updates in
-	// place with its style intact, prose appends as a separate normal block.
-	child.emit({
-		type: "message_update",
-		message: {
-			role: "assistant",
-			content: [
-				{ type: "thinking", thinking: "checking frontier done" },
-				{ type: "text", text: "Final answer." },
-			],
+	const todoNode = renderChildActivity({
+		details: {
+			label: null,
+			todo: {
+				closed: 1,
+				total: 2,
+				phases: [{ id: "p0", title: "Phase 1", items: [{ id: "p0.0", text: "Task", status: "active" }], collapsed: false }],
+			},
 		},
-	});
-	expect(created).toHaveLength(2);
-	expect(created[0].text).toBe("checking frontier done");
-	expect(created[1].text).toBe("Final answer.");
-	expect(created[1].style).toBeNull();
-	child.emit({
-		type: "message_end",
-		message: {
-			role: "assistant",
-			content: [
-				{ type: "thinking", thinking: "checking frontier done" },
-				{ type: "text", text: "Final answer." },
-			],
-		},
-	});
+	}, {}, {}, tui);
+	expect(todoNode.kind).toBe("col");
+	expect(todoNode.children()[1].kind).toBe("checklist");
+	expect(todoNode.children()[1].props().mode).toBe("full");
 });
 
 test("a late child cannot write into the replacement root conversation", () => {
@@ -336,7 +459,10 @@ test("a late child cannot write into the replacement root conversation", () => {
 	child.emit(answer("late output"));
 	childDisplayFor(root).attach("new", child);
 	child.emit(answer("current output"));
-	expect(seen.map(({ message }) => message.content)).toEqual(["new\ncurrent output"]);
+	const headers = seen.filter((event) => event.message?.customType === CHILD_ACTIVITY_TYPE);
+	const ends = seen.filter((event) => event.type === "message_end" && event.message?.role === "assistant");
+	expect(headers.map((event) => event.message.details.label)).toEqual(["new"]);
+	expect(ends.map((event) => event.message.content)).toEqual([[{ type: "text", text: "current output" }]]);
 });
 
 function approvalRunner() {
@@ -369,22 +495,18 @@ test("approval preview suppression lives for exactly one display lease", () => {
 	expect(runner.events[0].kind).toBe("install");
 	expect(typeof runner.installed).toBe("function");
 
-	// The same manager and session id reuse the lease without reinstalling.
 	expect(childDisplayFor(root)).toBe(display);
 	expect(runner.events).toHaveLength(1);
 
-	// Root tool events route through the installed suppression, not a new one.
 	root.emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} });
 	root.emit({ type: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: {} });
 	expect(runner.events).toHaveLength(1);
 
-	// A replacement lease detaches the old suppression before installing its own.
 	root.sessionManager = { getSessionId: () => "two" };
 	childDisplayFor(root);
 	expect(runner.events.map((event) => event.kind)).toEqual(["install", "detach", "install"]);
 	expect(runner.events[1].matched).toBe(true);
 	expect(runner.events[1].installed).toBeNull();
-	// The stable no-op keeps one identity while the detach clears only its slot.
 	expect(runner.events[2].waiter).toBe(runner.events[0].waiter);
 });
 
@@ -404,7 +526,6 @@ test("releasing the plugin suppression never resurrects an earlier host waiter",
 	childDisplayFor(root);
 	const detach = runner.events.find((event) => event.kind === "detach");
 	expect(detach).toMatchObject({ matched: true, installed: null });
-	// The host's original waiter is cleared, never restored.
 	expect(runner.installed).not.toBe(hostWaiter);
 	expect(runner.events.at(-1).kind).toBe("install");
 });

@@ -289,17 +289,36 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 	// handle the ticket registered, and the cascade deletes each entry before
 	// it runs, so one child is stopped once.
 	if (station && typeof station === "object") {
-		station.abortChildrenPort = (forkIds) => {
+		station.abortChildrenPort = (forkIds, abandonedIds = []) => {
 			const running = runningMapOf(base);
+			const idle = idleMapOf(base);
 			for (const forkId of forkIds ?? []) {
 				const abort = running.get(forkId);
-				if (typeof abort !== "function") continue;
-				running.delete(forkId);
-				try {
-					abort();
-				} catch (error) {
-					host.report?.("fork", error, { forkId, phase: "cascade" });
+				if (typeof abort === "function") {
+					running.delete(forkId);
+					try {
+						abort();
+					} catch (error) {
+						host.report?.("fork", error, { forkId, phase: "cascade" });
+					}
 				}
+				// A returned or joined child woken by `scope_send` still owns a
+				// live prompt loop. Stop it too and remove the idle entry.
+				const entry = idle.get(forkId);
+				const idleAbort = entry?.abort;
+				if (typeof idleAbort === "function") {
+					idle.delete(forkId);
+					try {
+						idleAbort();
+					} catch (error) {
+						host.report?.("fork", error, { forkId, phase: "cascade-idle" });
+					}
+				}
+			}
+			// Drop stale idle handles for abandoned (now FAILED) branches so a
+			// cancelled scope cannot later be woken through a leftover entry.
+			for (const forkId of abandonedIds ?? []) {
+				idle.delete(forkId);
 			}
 		};
 	}

@@ -91,6 +91,7 @@ import {
 } from "./handoff-state.mjs";
 import {
 	cancelDescendants,
+	cancelTree,
 	onAssistantMessage,
 	onBeforeAgentStart,
 	onContext,
@@ -1151,10 +1152,27 @@ export class SessionStation {
 		return onSessionStop(this, ctx, evidence);
 	}
 
+	onAgentEnd() {
+		// omp 19.2 may settle Esc as a pause, suppress session_stop, or omit the
+		// aborted assistant message entirely. None of those shapes is a user
+		// decision the scope domain may act on. USER_ABORT enters only through
+		// the typed gate at the host abort entry.
+		return undefined;
+	}
+
 	/**
-	 * End every descendant this level still owes a receive. Called by the
-	 * session-stop gate when the user aborts the turn, and safe to call again:
-	 * a second pass finds no open descendant and changes nothing.
+	 * The typed user-abort gate. Esc/Stop is a decision about the conversation
+	 * branch, not about the station whose host observed it, so the cascade is
+	 * anchored at the conversation ledger root regardless of depth.
+	 */
+	onUserAbort(ctx, evidence = null) {
+		return cancelTree(this, "root", evidence?.reason ?? undefined);
+	}
+
+	/**
+	 * End every descendant this level still owes a receive. Internal cascade
+	 * helper; safe to call again: a second pass finds no open descendant and
+	 * changes nothing.
 	 */
 	cancelDescendants() {
 		return cancelDescendants(this);

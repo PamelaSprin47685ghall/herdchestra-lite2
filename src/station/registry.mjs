@@ -193,6 +193,13 @@ export function createStationRegistry(options = {}) {
 		forkWiring() {
 			return forkWiring;
 		},
+		hasStation(ctx) {
+			const key = host.session?.managerOf?.(ctx) ?? ctx ?? null;
+			if (!key || (typeof key !== "object" && typeof key !== "function")) {
+				return orphanStation !== null;
+			}
+			return stations.has(key);
+		},
 		stationFor(ctx) {
 			const key = host.session?.managerOf?.(ctx) ?? ctx ?? null;
 			if (!key || (typeof key !== "object" && typeof key !== "function")) {

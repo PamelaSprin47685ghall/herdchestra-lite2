@@ -13,7 +13,6 @@ import {
 import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
 import { abandonDescendants } from "../scope/forkjoin.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
-import { TOOL_INTERRUPT_ABORT_REASON } from "../tools/tickets.mjs";
 import { beatKey, toolCalls } from "../transcript/index.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
@@ -322,7 +321,7 @@ function onContext(station, messages, ctx, firstTurn = null) {
 }
 
 /**
- * Cancel every descendant this level still owes a receive.
+ * Cancel open descendants from one owner down.
  *
  * Esc ends the whole branch, not only the station that saw it. The ledger
  * closes each descendant before the live agent is stopped, so the reason the
@@ -333,44 +332,49 @@ function onContext(station, messages, ctx, firstTurn = null) {
 const CANCELLED_BY_PARENT = "cancelled by the parent scope";
 
 export function cancelDescendants(station, reason = CANCELLED_BY_PARENT) {
+	return cancelTree(station, ownerIdOf(station) ?? "root", reason);
+}
+
+/**
+ * Cancel the conversation's whole open fork tree, independent of which
+ * station received the user's abort. USER_ABORT is a decision about the
+ * branch, not about the agent whose host happened to observe it.
+ */
+export function cancelTree(station, rootOwnerId = "root", reason = CANCELLED_BY_PARENT) {
 	const ledger =
 		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
 	if (!ledger || typeof ledger !== "object") {
 		return { abandonedIds: [], runningIds: [] };
 	}
-	const ownerId = ownerIdOf(station) ?? "root";
-	const { abandonedIds, runningIds } = abandonDescendants(ledger, ownerId, reason);
-	if (abandonedIds.length === 0) return { abandonedIds, runningIds };
+	const { abandonedIds, runningIds } = abandonDescendants(ledger, rootOwnerId, reason);
+	if (abandonedIds.length === 0 && runningIds.length === 0) {
+		return { abandonedIds, runningIds };
+	}
 	const wait =
 		typeof station.forkWaitPort === "function" ? station.forkWaitPort() : null;
-	// A join parked on this level wakes now: its child is gone, so waiting for
-	// a return that will never come is a deadlock.
+	// A join parked anywhere in this tree wakes now: its child is gone, so
+	// waiting for a return that will never come is a deadlock.
 	notifyWaiters(wait?.registry);
 	// `persistLedger` is the station's own seam: a child's identity points it
 	// at the root branch, and a bare station falls back to its own persist.
 	if (typeof station.persistLedger === "function") station.persistLedger();
 	else if (typeof station.persist === "function") station.persist();
 	// Tail position: every state commit above lands before the agents stop.
-	if (runningIds.length > 0 && typeof station.abortChildrenPort === "function") {
-		station.abortChildrenPort(runningIds);
+	if ((runningIds.length > 0 || abandonedIds.length > 0) && typeof station.abortChildrenPort === "function") {
+		station.abortChildrenPort(runningIds, abandonedIds);
 	}
 	return { abandonedIds, runningIds };
 }
 
 function onSessionStop(station, ctx, evidence = null) {
-	// The host reports three kinds of stop. A user abort (Esc) ends the scope
-	// tree: it is a decision about the branch, not about one turn. An errored
-	// turn and a tool-interrupt steer leave the children alive and retryable,
-	// so they bypass every relay decision without cancelling anything.
-	const signal = evidence?.signal ?? null;
-	const aborted =
-		evidence?.reason === "aborted" ||
-		(Boolean(signal?.aborted) && signal?.reason !== TOOL_INTERRUPT_ABORT_REASON);
-	if (aborted) {
-		if (typeof station.cancelDescendants === "function") station.cancelDescendants();
-		return undefined;
-	}
-	if (evidence?.signal?.aborted || evidence?.reason === "error") {
+	// Host stop evidence never proves USER_ABORT. omp 19.2 may suppress
+	// session_stop on Esc, settle it as a pause, or omit the aborted assistant
+	// message entirely; inferring the user's decision from those shapes both
+	// misses real aborts and cancels on tool interruptions. USER_ABORT enters
+	// only through the typed gate at the abort entry. An errored turn and a
+	// tool-interrupt steer leave the children alive and retryable, so they
+	// bypass every relay decision without cancelling anything.
+	if (evidence?.signal?.aborted || evidence?.reason === "error" || evidence?.reason === "aborted") {
 		return undefined;
 	}
 	const ledger =

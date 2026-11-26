@@ -13,6 +13,16 @@ import { captureTranscriptSubscriptions } from "./child-display.mjs";
 const STATE_KEY = Symbol.for("herdchestra-lite2.session-capture.v2");
 const VIBE_PATCH = Symbol.for("herdchestra-lite2.vibe-tools.v2");
 const RUNNER_GETTER_PATCH = Symbol.for("herdchestra-lite2.runner-getter.v2");
+const ABORT_PATCH = Symbol.for("herdchestra-lite2.session-abort.v1");
+// Upstream interrupt labels from pi-coding-agent/src/session/transcript/messages.ts.
+// Native TUI Esc, Web UI ctx.abort(), ACP cancel, and parent kill all enter
+// AgentSession.prototype.abort with one of these labels. Internal lifecycle
+// aborts (/compact, /new, /switch, dispose) omit the reason, and queued-message
+// redirect sets `deliverQueuedMessages: true`.
+const USER_INTERRUPT_REASONS = new Set([
+	"Interrupted by user",
+	"Stopped by parent agent",
+]);
 // The retired `amend` and `pin` stay here so an older transcript is still
 // recognized as carrying scope tools.
 const SCOPE_TOOLS = ["scope_fork", "scope_join", "scope_return", "scope_context", "amend", "pin", "todo"];
@@ -49,6 +59,7 @@ function state() {
 		if (!existing.seams) existing.seams = freshSeams();
 		if (!existing.managerSessions) existing.managerSessions = new WeakMap();
 		if (!existing.sessionRefs) existing.sessionRefs = new WeakMap();
+		if (!existing.abortListeners) existing.abortListeners = new Set();
 		return existing;
 	}
 	const created = {
@@ -59,6 +70,7 @@ function state() {
 		sessions: new WeakMap(),
 		managerSessions: new WeakMap(),
 		sessionRefs: new WeakMap(),
+		abortListeners: new Set(),
 		builtinSlashExecutor: null,
 		seams: freshSeams(),
 	};
@@ -68,6 +80,58 @@ function state() {
 		configurable: true,
 	});
 	return created;
+}
+
+/**
+ * Whether `AgentSession.prototype.abort(options)` represents an explicit user
+ * (or parent-kill) abort rather than an internal lifecycle teardown or a
+ * steer/follow-up redirect.
+ */
+export function isUserAbortOptions(options) {
+	if (!options || typeof options !== "object") return false;
+	if (options.deliverQueuedMessages === true) return false;
+	return USER_INTERRUPT_REASONS.has(options.reason);
+}
+
+/**
+ * Subscribe to synchronous user-abort notifications fired from the entry of
+ * `AgentSession.prototype.abort` before the host awaits idle unwind.
+ */
+export function registerUserAbortListener(listener) {
+	if (typeof listener !== "function") return () => {};
+	const listeners = state().abortListeners;
+	listeners.add(listener);
+	return () => listeners.delete(listener);
+}
+
+function notifyUserAbort(session, evidence) {
+	for (const listener of [...state().abortListeners]) {
+		try {
+			listener(session, evidence);
+		} catch {
+			// A listener error must never block the host's own abort unwind.
+		}
+	}
+}
+
+export function installAbortCapture(AgentSession) {
+	return patchMethod(
+		AgentSession?.prototype,
+		"abort",
+		ABORT_PATCH,
+		(original) =>
+			function abort(options, ...rest) {
+				remember(this);
+				if (isUserAbortOptions(options)) {
+					notifyUserAbort(this, {
+						kind: "USER_ABORT",
+						source: "session-abort",
+						reason: options.reason,
+					});
+				}
+				return Reflect.apply(original, this, [options, ...rest]);
+			},
+	);
 }
 
 /** The three host seams this extension patches, and their last verdict. */
@@ -316,6 +380,7 @@ export function setAgentMessages(context, messages) {
  */
 export function installRunnerCapture(AgentSession) {
 	installVibeTools(AgentSession);
+	installAbortCapture(AgentSession);
 	const captured = state();
 	if (captured.installed) return captureDiagnosis();
 	captured.installed = true;

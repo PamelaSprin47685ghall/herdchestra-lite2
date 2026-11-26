@@ -7,6 +7,43 @@ import { wireProviderObservation } from "../host/provider-observer.mjs";
 import { installToolDispatch } from "../host/tool-dispatch.mjs";
 
 
+const USER_ABORT_CAPTURE = Symbol.for("herdchestra-lite2.user-abort-capture.v1");
+
+/**
+ * Wrap one context's abort method once. The host invokes the same function for
+ * native Esc and for programmatic cancellation; the scope domain needs the
+ * user's intent before the host's terminal events become ambiguous.
+ */
+function captureContextAbort(ctx, userAbort) {
+	if (!ctx || typeof ctx !== "object") return;
+	if (typeof ctx.abort !== "function") return;
+	if (ctx[USER_ABORT_CAPTURE]) return;
+	const original = ctx.abort;
+	const wrapped = function (...args) {
+		userAbort(ctx);
+		return original.apply(this, args);
+	};
+	Object.defineProperty(ctx, USER_ABORT_CAPTURE, {
+		value: wrapped,
+		enumerable: false,
+		configurable: true,
+	});
+	ctx.abort = wrapped;
+}
+
+function installUserAbortCapture(pi, userAbort) {
+	for (const event of ["session_start", "before_agent_start", "context"]) {
+		try {
+			pi.on(event, (_payload, ctx) => {
+				captureContextAbort(ctx, userAbort);
+				return undefined;
+			});
+		} catch {
+			// A host that refuses one event still captures the others.
+		}
+	}
+}
+
 /**
  * The capture map is keyed by the session manager. A forked child has its own
  * manager proxy, so the identity must agree before the seam is installed. An
@@ -39,6 +76,20 @@ export function wireHooks(pi, engine, sharedFirstTurn = null) {
 	// A wiring may hand a full engine or a station-shaped double.
 	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
 	const stationForStop = (ctx) => (engine.stationForStop ?? engine.stationFor)(ctx);
+	// Native Esc is consumed by the host before any terminal event is emitted.
+	// Capture the user's own ctx.abort at the entry point and turn it into the
+	// same typed USER_ABORT gate the web stop button uses. USER_ABORT must never
+	// be reconstructed later from assistant stopReason or missing session_stop.
+	const userAbortOf = (ctx) => {
+		const typed = engine.userAbort;
+		if (typeof typed !== "function") return;
+		try {
+			typed(ctx, { kind: "USER_ABORT", source: "host" });
+		} catch (error) {
+			record("hooks", error, { phase: "user-abort" });
+		}
+	};
+	installUserAbortCapture(pi, userAbortOf);
 	const bindDispatch = (ctx) => {
 		const station = stationOf(ctx);
 		const session = dispatchSession(ctx);
@@ -118,6 +169,14 @@ export function wireHooks(pi, engine, sharedFirstTurn = null) {
 	pi.on("before_agent_start", (event, ctx) =>
 		bindDispatch(ctx).onBeforeAgentStart(event, ctx),
 	);
+	pi.on("agent_end", (_event, ctx) => {
+		// USER_ABORT never enters here. omp 19.2 may settle Esc as a pause,
+		// suppress session_stop, or omit the aborted assistant message entirely,
+		// so inferring the user's decision from this frame both misses real
+		// aborts and cancels on the wrong evidence. The typed gate is fired by
+		// the host abort entry before/with ctx.abort().
+		stationForStop(ctx).onAgentEnd(ctx, null);
+	});
 	pi.on("session_stop", (event, ctx) =>
 		stationForStop(ctx).onSessionStop(ctx, {
 			signal: event?.signal ?? null,

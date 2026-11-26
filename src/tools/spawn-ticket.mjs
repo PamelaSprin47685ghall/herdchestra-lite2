@@ -138,6 +138,17 @@ export async function spawnChildTicket(spec, ports) {
 		writeFrozenOutcome(registry, spec.forkId, outcome);
 	};
 	try {
+		// Create-in-flight registration: a cancellation that lands while the
+		// host is still assembling the session must already know how to stop it.
+		// If the abort arrives before createSession settles, `abortedInFlight`
+		// ensures the newly created session is aborted immediately on arrival.
+		let liveSession = null;
+		let abortedInFlight = false;
+		ports.registerRunning?.(spec.forkId, () => {
+			abortedInFlight = true;
+			if (liveSession) ports.abortChild?.(liveSession);
+		});
+		unregisterRunning = () => ports.unregisterRunning?.(spec.forkId);
 		created = await createSession(spec);
 		if (!created || created.ok !== true || !created.session) {
 			failed = true;
@@ -163,15 +174,14 @@ export async function spawnChildTicket(spec, ports) {
 			return finish();
 		}
 		session = created.session;
-		// Register the host handle before the first prompt. A cancellation that
-		// lands while this ticket is still assembling must be able to stop the
-		// agent, and must win over the prompt below.
-		ports.registerRunning?.(spec.forkId, () => ports.abortChild?.(session));
-		unregisterRunning = () => ports.unregisterRunning?.(spec.forkId);
+		liveSession = session;
 		// The parent may have cancelled this fork while the host was creating
 		// the session. The ledger holds the reason; starting a prompt after
 		// that would resurrect work the user already ended.
-		if (isCancelled(ledger, spec.forkId)) return finish();
+		if (abortedInFlight || isCancelled(ledger, spec.forkId)) {
+			ports.abortChild?.(session);
+			return finish();
+		}
 		// The host UI subscribes to the root session only. Attach the child's
 		// presentation stream before its first prompt so text and tool progress
 		// are visible while the child works, not only when the parent joins.
@@ -276,7 +286,11 @@ export async function spawnChildTicket(spec, ports) {
 		// idle. The parent's ready or joined record is never touched, and no
 		// second return is invented.
 		if (!failed && !unpublished) {
-			ports.registerIdle?.(spec.forkId, { prompt, drain: deliverInbox });
+			ports.registerIdle?.(spec.forkId, {
+				prompt,
+				drain: deliverInbox,
+				abort: () => ports.abortChild?.(session),
+			});
 		}
 		const text = unpublished ? "" : renderChildRecord(added, { start: 0 });
 		// An empty record is not a silent success. The parent cannot tell a

@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { activate } from "../host-omp/src/main.mjs";
+import { CHILD_ACTIVITY_TYPE } from "../host-omp/src/host/child-display.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
 import { installVibeTools } from "../host-omp/src/host/index.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
@@ -115,14 +116,19 @@ function toolResult(id, name, text, isError = false) {
 test("broadcast renderer displays the complete message", async () => {
 	const host = makeHost();
 	let renderer;
-	host.pi.pi = { Text: class { constructor(text) { this.text = text; } } };
+	host.pi.tui = {
+		jsx: (kind, props) => ({ kind, text: props.text, props: () => props }),
+	};
+	const renderers = new Map();
 	host.pi.registerMessageRenderer = (type, render) => {
+		renderers.set(type, render);
 		if (type === "fission.broadcast") renderer = render;
 	};
 	await activate(host.pi);
 	const message = { content: "(broadcast to 2 flows)\n\noperator note" };
-	expect(renderer(message).text).toBe(message.content);
-	expect(renderer({ content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] }).text).toBe("first\nsecond");
+	expect(renderers.get(CHILD_ACTIVITY_TYPE)).not.toBeUndefined();
+	expect(renderer(message).props().text).toBe(message.content);
+	expect(renderer({ content: [{ type: "text", text: "first" }, { type: "text", text: "second" }] }).props().text).toBe("first\nsecond");
 });
 
 async function start(manager, options = {}) {

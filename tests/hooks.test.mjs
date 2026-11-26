@@ -13,6 +13,7 @@ const STATION = {
 	onToolCall() {},
 	onBeforeAgentStart() {},
 	onSessionStop() {},
+	onAgentEnd() {},
 	onSessionSwitch() {},
 	onSessionCompact() {},
 };
@@ -99,6 +100,20 @@ describe("hook wiring", () => {
 
 		handler({ last_assistant_message: { stopReason: "error" } }, {});
 		expect(seen[1]).toEqual({ signal: null, reason: "error" });
+	});
+
+	test("agent_end never infers a user abort from assistant message shape", () => {
+		const seen = [];
+		const station = { ...STATION, onAgentEnd: (_ctx, evidence) => seen.push(evidence) };
+		const pi = fakePi();
+		wireHooks(pi, { stationFor: () => station, stationForStop: () => station });
+
+		pi.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }, { role: "assistant", stopReason: "aborted" }] }, {});
+		pi.handlers.get("agent_end")({ willContinue: true, awaitingAsyncWork: true, messages: [{ role: "assistant", stopReason: "aborted" }] }, {});
+
+		// The hook still forwards the frame; the clean break is that evidence is
+		// null, so no stopReason-derived cascade can start downstream.
+		expect(seen).toEqual([null, null]);
 	});
 
 	test("is ok when both message events register", () => {

@@ -113,6 +113,7 @@ export function createHostTickets({
 	getEditor,
 	getTui,
 	getReconciler,
+	userAbort,
 } = {}) {
 	const fail = (domain, error) => {
 		diagnostics?.record?.(domain, error);
@@ -252,6 +253,19 @@ export function createHostTickets({
 		async abortSessionTicket() {
 			try {
 				if (typeof ctx?.abort !== "function") return { ok: false, code: "unsupported" };
+				// USER_ABORT is a first-class typed intent, not a post-hoc guess
+				// from assistant stopReason. Fire the scope gate in the same beat,
+				// then let the host end the root loop. Cascade correctness must
+				// not depend on which terminal shape omp 19.2 later emits.
+				const typedAbort =
+					userAbort ?? globalThis[Symbol.for("herdchestra-lite2.user-abort.v1")];
+				if (typeof typedAbort === "function") {
+					try {
+						typedAbort(ctx, { kind: "USER_ABORT", source: "web" });
+					} catch (error) {
+						return fail("abort-gate", error);
+					}
+				}
 				ctx.abort();
 				return { ok: true };
 			} catch (error) {

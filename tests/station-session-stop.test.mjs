@@ -22,9 +22,12 @@ function station(recorded) {
 
 describe("session stop evidence", () => {
 	const cases = [
-		["an aborted stop reason", { reason: "aborted" }, ["cancelled"]],
+		// Host stop evidence is never a user-abort proof. USER_ABORT is a typed
+		// first-class input at the abort entry; these frames only describe how
+		// the model loop ended.
+		["an aborted stop reason", { reason: "aborted" }, []],
 		["an error stop reason", { reason: "error" }, []],
-		["an aborted signal", { signal: { aborted: true }, reason: "stop" }, ["cancelled"]],
+		["an aborted signal", { signal: { aborted: true }, reason: "stop" }, []],
 		["a tool interrupt", { signal: { aborted: true, reason: Symbol.for("pi-agent-core.tool-interrupt") }, reason: "stop" }, []],
 		["a normal stop", { reason: "stop", signal: { aborted: false } }, ["stopped"]],
 		["no evidence at all", null, ["stopped"]],

@@ -735,6 +735,7 @@ export function abandon(ledger, forkId, reason = null) {
   record.status = FAILED;
   record.closeSeq = ledger.seq;
   record.outcome = FAILED;
+  record.woken = false;
   record.reason = typeof reason === "string" && reason !== "" ? reason : null;
   removeFromQueues(ledger, forkId);
   settleCharges(ledger, record);
@@ -773,7 +774,7 @@ export function abandonDescendants(ledger, ownerId, reason = null) {
       owned = [];
       children.set(record.ownerId, owned);
     }
-    owned.push({ forkId, status: record.status });
+    owned.push({ forkId, status: record.status, woken: record.woken === true });
   }
   const levels = [];
   const seen = new Set();
@@ -793,11 +794,21 @@ export function abandonDescendants(ledger, ownerId, reason = null) {
   const abandonedIds = [];
   const runningIds = [];
   for (let index = levels.length - 1; index >= 0; index -= 1) {
-    const { forkId, status } = levels[index];
-    // Already closed: a second cancel is a no-op, and the record keeps the
-    // reason its first cancel wrote.
-    if (status === FAILED || status === JOINED) continue;
-    if (status === RUNNING) runningIds.push(forkId);
+    const { forkId, status, woken } = levels[index];
+    if (status === FAILED) continue;
+    if (status === JOINED) {
+      // A joined fork is already delivered and keeps its joined status, but if
+      // `scope_send` woke it back into a live prompt loop, Esc must still stop
+      // that active loop and clear its wake flag.
+      if (woken) {
+        finishWokenScope(ledger, forkId);
+        runningIds.push(forkId);
+      }
+      continue;
+    }
+    // RUNNING is actively executing; a READY fork is only live in the host when
+    // `scope_send` woke it back into a prompt loop.
+    if (status === RUNNING || woken) runningIds.push(forkId);
     const decided = abandon(ledger, forkId, reason);
     if (decided.ok) abandonedIds.push(forkId);
   }

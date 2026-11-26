@@ -2,13 +2,27 @@
 // Running tools live in a one-row-per-tool active area above the editor so an
 // unsettled call (scope_join, scope_return, or any slow tool) never pins the
 // transcript retirement frontier; finished tools append at full size.
+//
+// In omp 19.2+, custom transcript messages settle immediately at mount time,
+// which causes a live-mutated custom block to retire into scrollback (or drop
+// reactive watchers in native mode) mid-stream. Live child thinking and prose
+// therefore stream on the host's native `role: "assistant"` channel (headed by
+// a settled one-line scope label), so thinking stays live with progressive
+// stable-head retirement until `message_end`. Finished `todo` snapshots render
+// as settled checklist cards so omp's displaceable-todo tracker never pins the
+// transcript scrollback frontier across long fork/join turns.
 import { record } from "./diagnostics.mjs";
+import { getHostTui } from "./tui-runtime.mjs";
 import {
 	stripToolCalls,
 	textBlocks,
-	toolSummaryText,
 	formatFallbackLine,
 	assistantParts,
+	updateAssistantStream,
+	finalizeAssistantStream,
+	buildChildAssistantMessage,
+	buildChildAssistantDelta,
+	buildTodoSnapshot,
 	partsText,
 	partsSignature,
 } from "./activity.mjs";
@@ -68,7 +82,6 @@ export function captureTranscriptSubscriptions(prototype) {
 	};
 }
 
-
 function resolveTool(session, toolName) {
 	try {
 		return session?.getToolByName?.(toolName);
@@ -101,60 +114,72 @@ function buildToolCard(Card, tool, tui) {
 	return card;
 }
 
-function buildMarkdownBlock(Markdown, getMarkdownTheme, theme, part) {
-	if (part.kind === "thinking") {
-		return new Markdown(part.text, 1, 0, getMarkdownTheme(), {
-			color: (value) => theme.fg("thinkingText", value),
-			italic: true,
-		});
-	}
-	return new Markdown(part.text, 1, 0, getMarkdownTheme());
+function normalizeParts(parts) {
+	return Array.isArray(parts)
+		? parts.filter((part) => (part?.kind === "thinking" || part?.kind === "text") && typeof part.text === "string")
+		: [];
 }
 
-export function renderChildActivity(ui, message, options, theme, ToolExecutionComponent = toolCardCtor) {
-	const { Container, Markdown, Spacer, Text, getMarkdownTheme } = ui ?? {};
-	if (![Container, Markdown, Text, getMarkdownTheme].every((value) => typeof value === "function")) return undefined;
-	const frame = new Container();
-	const { label, body, parts, tool } = message.details ?? {};
-	const header = label ? new Text(theme.fg("muted", label), 1, 0) : null;
-	if (header) frame.addChild(header);
-	if (tool?.type === "tool_execution_end" && typeof ToolExecutionComponent === "function") {
-		const card = buildToolCard(ToolExecutionComponent, tool, noopRepaint);
-		card.setExpanded?.(options?.expanded === true);
-		card.updateResult({ ...(tool.result ?? { content: [] }), isError: tool.isError === true }, false, tool.toolCallId);
-		card.seal?.();
-		frame.addChild(card);
-		return frame;
+function renderStaticPart(tui, part) {
+	if (part.kind === "thinking") {
+		return tui.jsx("section", {
+			role: "omp.thinking",
+			collapsible: false,
+			collapsed: false,
+			children: [tui.jsx("md", { text: part.text })],
+		});
 	}
-	const slots = [];
-	const syncParts = (nextParts) => {
-		const list = Array.isArray(nextParts) && nextParts.length > 0
-			? nextParts
-			: [{ kind: "text", text: body ?? message.content ?? "" }];
-		let compatible = list.length >= slots.length;
-		for (let i = 0; compatible && i < slots.length; i += 1) {
-			if (slots[i].kind !== list[i].kind) compatible = false;
-		}
-		if (!compatible) {
-			frame.clear?.();
-			slots.length = 0;
-			if (header) frame.addChild(header);
-		}
-		for (let i = 0; i < list.length; i += 1) {
-			const part = list[i];
-			if (i < slots.length) {
-				slots[i].md.setText(part.text);
-				continue;
-			}
-			if (slots.length > 0 && typeof Spacer === "function") frame.addChild(new Spacer(1));
-			const md = buildMarkdownBlock(Markdown, getMarkdownTheme, theme, part);
-			slots.push({ kind: part.kind, md });
-			frame.addChild(md);
-		}
-	};
-	syncParts(parts);
-	if (message.details) message.details.syncParts = syncParts;
-	return frame;
+	return tui.jsx("md", { text: part.text });
+}
+
+function renderTodoCard(tui, label, todo) {
+	const spans = [];
+	if (label) spans.push({ t: `${label} · `, s: "muted" });
+	spans.push({ t: "Todo", s: "accent strong" });
+	if (todo.total > 0) spans.push({ t: ` ${todo.closed}/${todo.total}`, s: "dim" });
+	const header = tui.jsx("text", { spans, wrap: true });
+	if (Array.isArray(todo.phases) && todo.phases.length > 0) {
+		return tui.jsx("col", {
+			children: [
+				header,
+				tui.jsx("checklist", { mode: "full", phases: todo.phases }),
+			],
+		});
+	}
+	const fallback = typeof todo.text === "string" && todo.text ? todo.text : "No todos";
+	return tui.jsx("col", {
+		children: [header, tui.jsx("text", { text: fallback, wrap: true })],
+	});
+}
+
+/**
+ * Render static, settled `herd.fork-activity` custom messages:
+ * - scope header labels (1-line tag introducing a child's native assistant stream),
+ * - settled todo checklists (preventing omp 19.2's displaceable-todo card from pinning scrollback),
+ * - fallback static parts snapshots (for replayed or non-streamed entries).
+ */
+export function renderChildActivity(message, _options, _theme, tui = getHostTui()) {
+	if (typeof tui?.jsx !== "function" || message?.details?.tool) return undefined;
+	const details = message.details ?? {};
+	const label = typeof details.label === "string" ? details.label : "";
+	if (details.todo) {
+		return renderTodoCard(tui, label, details.todo);
+	}
+	const parts = normalizeParts(details.parts);
+	if (parts.length === 0) {
+		return label
+			? tui.jsx("text", { spans: [{ t: label, s: "accent" }], wrap: true })
+			: undefined;
+	}
+	const assistant = tui.jsx("col", {
+		role: "omp.assistant",
+		children: parts.map((part) => renderStaticPart(tui, part)),
+	});
+	return tui.jsx("col", {
+		children: label
+			? [tui.jsx("text", { spans: [{ t: label, s: "accent" }], wrap: true }), assistant]
+			: [assistant],
+	});
 }
 
 function publish(state, event) {
@@ -168,14 +193,12 @@ function publish(state, event) {
 	}
 }
 
-
-
-
 function createActiveToolTray(getUi, current) {
 	const entries = new Map();
 	let mounted = false;
 	let hostTui = null;
 	let hostTheme = null;
+	let activeWidget = null;
 	let tick = 0;
 
 	function entryKey(source, toolCallId, toolName) {
@@ -232,9 +255,14 @@ function createActiveToolTray(getUi, current) {
 	}
 
 	function buildWidget(tui, theme) {
+		const previous = activeWidget;
+		activeWidget = null;
+		previous?.dispose?.();
 		hostTui = tui;
 		hostTheme = theme;
-		return {
+		const clock = setInterval(() => hostTui?.requestRender?.(), 250);
+		clock.unref?.();
+		const widget = {
 			render(width) {
 				tick += 1;
 				const frame = { tick, now: performance.now() };
@@ -250,13 +278,17 @@ function createActiveToolTray(getUi, current) {
 				}
 			},
 			dispose() {
+				clearInterval(clock);
 				for (const map of entries.values()) {
 					for (const entry of map.values()) disposeCard(entry);
 				}
+				if (activeWidget === widget) activeWidget = null;
 				hostTui = null;
 				hostTheme = null;
 			},
 		};
+		activeWidget = widget;
+		return widget;
 	}
 
 	function syncWidget() {
@@ -266,6 +298,9 @@ function createActiveToolTray(getUi, current) {
 		if (count === 0) {
 			if (!mounted) return;
 			mounted = false;
+			const widget = activeWidget;
+			activeWidget = null;
+			widget?.dispose?.();
 			try {
 				ui.setWidget(ACTIVE_TOOLS_WIDGET_KEY, undefined);
 			} catch (error) {
@@ -346,11 +381,7 @@ function createActiveToolTray(getUi, current) {
 	};
 }
 
-
 const ROOT = Symbol("root");
-
-
-
 
 function displayArbiter(state, tray, suppressApprovalPreview) {
 	let owner = null;
@@ -358,41 +389,109 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 	const streams = new Map();
 	const rootEvent = (event) => publish(state, event);
 
-	function row(label, text, tool = null, parts = null) {
+	function nextTimestamp() {
 		state.timestamp = Math.max(Date.now(), state.timestamp + 1);
+		return state.timestamp;
+	}
+
+	function emitCustom(label, content, details) {
 		const message = {
-			role: "custom", customType: CHILD_ACTIVITY_TYPE, attribution: "agent",
-			content: label ? `${label}\n${text}` : text, display: true, excludeFromContext: true,
-			timestamp: state.timestamp, details: { label, body: text, parts, tool },
+			role: "custom",
+			customType: CHILD_ACTIVITY_TYPE,
+			attribution: "agent",
+			content,
+			display: true,
+			excludeFromContext: true,
+			timestamp: nextTimestamp(),
+			details,
 		};
 		rootEvent({ type: "message_start", message });
 		return message;
 	}
 
+	function emitLabelHeader(label) {
+		if (!label) return;
+		emitCustom(label, label, { label, body: "", parts: null, tool: null });
+	}
+
+	function emitTodoCard(label, todo) {
+		const content = label ? `${label}\n${todo.text}` : todo.text;
+		emitCustom(label, content, { label, body: todo.text, parts: null, tool: null, todo });
+	}
+
+	function emitChildAssistantStart(stream, parts) {
+		emitLabelHeader(stream.label);
+		stream.started = true;
+		stream.timestamp = nextTimestamp();
+		stream.emittedParts = parts;
+		stream.signature = partsSignature(parts);
+		const message = buildChildAssistantMessage(parts, {
+			label: stream.label,
+			timestamp: stream.timestamp,
+		});
+		rootEvent({ type: "message_start", message });
+		rootEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: buildChildAssistantDelta([], parts, message),
+		});
+	}
+
+	function emitChildAssistantUpdate(stream, parts) {
+		const signature = partsSignature(parts);
+		if (signature === stream.signature) return;
+		const previous = stream.emittedParts;
+		stream.emittedParts = parts;
+		stream.signature = signature;
+		const message = buildChildAssistantMessage(parts, {
+			label: stream.label,
+			timestamp: stream.timestamp,
+		});
+		rootEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: buildChildAssistantDelta(previous, parts, message),
+		});
+	}
+
+	function emitChildAssistantComplete(label, parts) {
+		if (parts.length === 0) return;
+		emitLabelHeader(label);
+		const message = buildChildAssistantMessage(parts, {
+			label,
+			timestamp: nextTimestamp(),
+		});
+		rootEvent({ type: "message_start", message });
+		rootEvent({ type: "message_end", message });
+	}
+
+	function promoteNextLive() {
+		if (owner !== null || streams.size === 0) return;
+		// Prefer a waiting root stream so root prose regains the live slot first;
+		// otherwise hand the lease to the earliest still-streaming child.
+		const nextSource = streams.has(ROOT) ? ROOT : streams.keys().next().value;
+		const next = streams.get(nextSource);
+		if (!next) return;
+		owner = nextSource;
+		next.live = true;
+		if (nextSource === ROOT) {
+			rootEvent(next.start);
+			if (next.lastUpdate) rootEvent(next.lastUpdate);
+			return;
+		}
+		const parts = next.accumulated.parts;
+		if (parts.length > 0) emitChildAssistantStart(next, parts);
+	}
+
 	function flush() {
 		if (owner !== null) return;
 		for (const show of queue.splice(0)) show();
+		promoteNextLive();
 	}
 
 	function block(show) {
 		if (owner === null) show();
 		else queue.push(show);
-	}
-
-	function fuller(current, incoming) {
-		return partsText(incoming).length >= partsText(current).length ? incoming : current;
-	}
-
-	function updateLive(stream, parts) {
-		const next = fuller(stream.row?.details?.parts ?? [], parts);
-		const signature = partsSignature(next);
-		if (stream.row === null || stream.signature === signature) return;
-		const text = partsText(next);
-		stream.signature = signature;
-		stream.row.content = `${stream.label}\n${text}`;
-		stream.row.details.body = text;
-		stream.row.details.parts = next;
-		stream.row.details.syncParts?.(next);
 	}
 
 	function finish(source, event) {
@@ -410,11 +509,22 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 				else block(show);
 			}
 		} else {
-			const parts = assistantParts(event?.message ?? stream.last);
-			const text = partsText(parts);
-			if (stream.live && stream.row !== null && parts.length > 0) updateLive(stream, parts);
-			else if (stream.live && text) row(stream.label, text, null, parts);
-			else if (text) block(() => row(stream.label, text, null, parts));
+			const finalStream = finalizeAssistantStream(
+				stream.accumulated,
+				event?.message ?? stream.last,
+				event?.assistantMessageEvent,
+			);
+			const parts = finalStream.parts;
+			if (stream.live && stream.started) {
+				const message = buildChildAssistantMessage(parts, {
+					label: stream.label,
+					timestamp: stream.timestamp,
+				});
+				rootEvent({ type: "message_end", message });
+			} else if (parts.length > 0) {
+				if (stream.live) emitChildAssistantComplete(stream.label, parts);
+				else block(() => emitChildAssistantComplete(stream.label, parts));
+			}
 		}
 		if (owner === source) {
 			owner = null;
@@ -437,9 +547,14 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 		}
 		if (type === "tool_execution_end") {
 			const active = tray.end(source, event);
+			const todo = buildTodoSnapshot(event);
+			if (todo) {
+				block(() => emitTodoCard(root ? null : label, todo));
+				return;
+			}
 			const completed = {
 				...event,
-				toolCallId: source === ROOT ? event.toolCallId : `herd:${label ?? "child"}:${event.toolCallId ?? event.toolName}`,
+				toolCallId: root ? event.toolCallId : `herd:${label ?? "child"}:${event.toolCallId ?? event.toolName}`,
 				args: active?.args ?? event.args,
 				definition: active?.definition ?? resolveTool(session, event.toolName),
 				builtIn: active?.builtIn ?? isBuiltInTool(session, event.toolName),
@@ -457,25 +572,39 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 				finish(source);
 				const live = owner === null;
 				if (live) owner = source;
-				const stream = { label, live, start: shown, last: shown.message, row: null, signature: "" };
+				const accumulated = updateAssistantStream(null, shown.message, event.assistantMessageEvent);
+				const stream = {
+					label,
+					live,
+					started: false,
+					start: shown,
+					last: shown.message,
+					lastUpdate: null,
+					accumulated,
+					emittedParts: [],
+					signature: "",
+					timestamp: 0,
+				};
 				streams.set(source, stream);
 				if (root && live) rootEvent(shown);
+				else if (!root && live && accumulated.parts.length > 0) {
+					emitChildAssistantStart(stream, accumulated.parts);
+				}
 				return;
 			}
 			const stream = streams.get(source);
 			if (type === "message_update" && stream) {
 				stream.last = shown.message;
+				if (root) {
+					stream.lastUpdate = shown;
+					if (stream.live) rootEvent(shown);
+					return;
+				}
+				stream.accumulated = updateAssistantStream(stream.accumulated, message, event.assistantMessageEvent);
 				if (stream.live) {
-					if (root) rootEvent(shown);
-					else {
-						const parts = assistantParts(message);
-						if (stream.row === null && parts.length > 0) {
-							stream.row = row(label, partsText(parts), null, parts);
-							stream.signature = partsSignature(parts);
-						} else if (parts.length > 0) {
-							updateLive(stream, parts);
-						}
-					}
+					const parts = stream.accumulated.parts;
+					if (!stream.started && parts.length > 0) emitChildAssistantStart(stream, parts);
+					else if (stream.started && parts.length > 0) emitChildAssistantUpdate(stream, parts);
 				}
 				return;
 			}
@@ -497,8 +626,10 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 			if (owner === ROOT) rootEvent(event);
 			else block(() => rootEvent(event));
 		} else if (type === "message_end" && message?.role === "assistant") {
-			const parts = assistantParts(message);
-			if (parts.length > 0) block(() => row(label, partsText(parts), null, parts));
+			const parts = assistantParts(message, event.assistantMessageEvent);
+			if (parts.length > 0) {
+				block(() => emitChildAssistantComplete(label, parts));
+			}
 		}
 	}
 

@@ -6,6 +6,8 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [6.0.0] — 2026-11-27
+
 ### Changed — the language reminder prints as an output comment
 
 The per-turn probe closes with a plain output line `# System Requirement: ...`,

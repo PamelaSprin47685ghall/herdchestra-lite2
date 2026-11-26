@@ -48,6 +48,53 @@ Each turn's `<additional-system-instructions>` carries three sibling `<skill>` e
 
 There is no table, and no constant in `src/scope/turns.mjs` holds one. A scope is sized by the work in hand: `resources/prompts/system.md` §Run scopes gives the turns for the `n` a scope declares and why the multiplier is ten, and that text sits in every worker's prefix, so this page points at it instead of repeating it. Fork as much as the work allows, and tell every child to fork again — a scope that cannot fork has rebuilt the bottleneck the fork removed. Nothing caps a scope's turns, the items in one call, or the depth of the tree; the over-budget and over-fanout warnings went out with the constants that fed them.
 
+## Context pressure
+
+A scope's outbound request carries one extra `skill` when the scope has
+outgrown the midpoint between its own birth context and the model's input
+limit: `(window - baseline) / 2 + baseline`. The decision is arithmetic, so it
+lives in `src/scope/context-nudge.mjs`; the measured facts live on the usage
+ledger in `src/scope/usage-ledger.mjs`; the text is the `context.nudge` section
+of `resources/prompts/receipts/scope.md`.
+
+The owner of each input is fixed:
+
+- **Baseline** — the input the provider reported for the scope's first measured
+  request. A fork's first request is the first request of its own session, so
+  this is the birth context without an estimate. `resetWatermark()` clears it,
+  which is why a rewind or a reborn scope re-baselines; a fold (`rebase`) keeps
+  it, because a fold changes the context, not the birth.
+- **Occupancy** — `lastTotalInput + lastOutputTokens`: where the last response
+  ended. Pending messages are excluded on purpose; the contract arms on what
+  the last request returned.
+- **Window** — `Station.contextWindowTokens()`, the single resolution order:
+  the fork window port, then the live model object the host resolved, then the
+  catalog entry for the persisted base key. `fork-controls.mjs` reads the same
+  method, so admission and pressure cannot disagree about the limit.
+
+Three states refuse to arm: an unmeasured baseline, an unmeasured occupancy,
+and an unknown window. An unknown never produces a nudge, and it never reaches
+the division. A window at or below the baseline arms at once: the scope has no
+room left, and no midpoint exists to cross. The comparison is strict — equality
+means continuing still pays.
+
+The skill rides the per-turn trailing injection, never the system prompt. The
+`<additional-system-instructions>` block is rebuilt for every request and is
+not part of the cached prefix, so arming and disarming cost the provider
+nothing; a nudge in the prefix would force a full re-prefill of the whole
+conversation each time a scope crossed the midpoint. `injectSystemPrompt`
+produces the same bytes it produced before this feature, and
+`tests/context-nudge.test.mjs` asserts that.
+
+The producer is `Station.skillReceipt`, which calls
+`skillReceiptText(state, branch, openCount, child, clock, chineseReminder,
+contextNudge)`: the nudge is one more `<skill>` between the scope tree and the
+Chinese reminder, built from `contextNudgeArmed()`. That flag is refreshed
+synchronously by `observeActualModel`, `onMessage`, `resetWatermark` and
+`rebase`, so the block a request carries always describes the last measured
+response. `onBeforeAgentStart` is untouched by this feature — it injects and
+dispatches exactly as before, because nothing on that path reads the flag.
+
 ## Terms
 
 Two names, two senses, orthogonal:

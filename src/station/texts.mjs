@@ -37,6 +37,7 @@ export function skillReceiptText(
 	child = false,
 	clock = null,
 	chineseReminder = "on",
+	contextNudge = false,
 ) {
 	const isChild = child || branch !== null;
 	const lines = [];
@@ -67,10 +68,16 @@ export function skillReceiptText(
 	}
 	const tree = scopeTreeText(state, branch);
 	const status = `<skill version="1.0" enforced>${lines.join(" ")}</skill>`;
+	// The context nudge rides this per-turn trailing block, never the system
+	// prompt: the block is rebuilt for every request and is not part of the
+	// cached prefix, so arming and disarming it costs the provider nothing.
+	const nudge = contextNudge
+		? ` <skill version="1.0" enforced>${T["context.nudge"]}</skill>`
+		: "";
 	const reminder = chineseReminder !== "off"
 		? ` <skill version="1.0" enforced>${T["language"]}</skill>`
 		: "";
-	return `<additional-system-instructions>${status}${tree}${reminder}</additional-system-instructions>`;
+	return `<additional-system-instructions>${status}${tree}${nudge}${reminder}</additional-system-instructions>`;
 }
 
 function scopeTreeText(state, branch) {

@@ -12,6 +12,7 @@
 // without inverting a dependency.
 
 import { modelCacheFor, touchModelCache } from "./state.mjs";
+import { contextNudgeArmed } from "./context-nudge.mjs";
 import { messageChars, prefixChars, sliceChars, toolCalls } from "../transcript/index.mjs";
 import { createHash } from "node:crypto";
 
@@ -311,6 +312,7 @@ export function createUsageLedger(options) {
 		actualModelOf,
 		usage,
 		pricing,
+		window: windowCapability,
 	} = options;
 
 	// Host facts arrive as capabilities. Without them the ledger still counts
@@ -332,6 +334,24 @@ export function createUsageLedger(options) {
 		}));
 	const charsToTokens =
 		pricing?.charsToTokens ?? ((chars, ratio) => Math.ceil(chars * ratio));
+
+	// The model's input limit arrives as a capability: the ledger knows the
+	// usage facts, and the station alone can resolve the live model or the
+	// catalog entry behind it. A host that answers null leaves the window
+	// unknown, which never arms the nudge.
+	const resolveWindow =
+		typeof windowCapability === "function" ? windowCapability : () => null;
+
+	function contextWindowOf() {
+		try {
+			const value = resolveWindow();
+			return typeof value === "number" && Number.isFinite(value) && value > 0
+				? value
+				: null;
+		} catch {
+			return null;
+		}
+	}
 
 	const ledger = {
 		// Measured usage baseline. Populated from live messages and restored
@@ -363,7 +383,38 @@ export function createUsageLedger(options) {
 		// measurement with a number that is wrong by 2.5x would only halve the
 		// error, so smoothing starts with the second sample.
 		slopeKeys: new Set(),
+		// The occupancy this scope's first measured request carried. It is the
+		// only honest reading of "the context the scope was born with": a fork
+		// mints its own session, so its first response's input *is* the birth
+		// context, and no estimate is involved. `null` until a provider reports
+		// usage, which is what keeps an unmeasured scope from arming a nudge.
+		baselineTokens: null,
+		// Whether the *next* request should carry the return nudge. Recomputed
+		// after every measured response and after every watermark change, so a
+		// scope that folds or rewinds below its midpoint is left alone again.
+		contextNudge: false,
 	};
+
+	/**
+	 * Recompute the arming flag from the facts already on the ledger.
+	 *
+	 * The occupancy is where the *last response* ended: the input the provider
+	 * reported plus the output it produced. Pending messages that arrived since
+	 * are not counted, because the contract arms on what the last request
+	 * returned, not on what the next one will carry. Every input is already
+	 * measured or already absent, so an unmeasured scope cannot arm here.
+	 */
+	function refreshContextNudge() {
+		const occupancy = Number.isFinite(ledger.lastTotalInput)
+			? ledger.lastTotalInput +
+				(Number.isFinite(ledger.lastOutputTokens) ? ledger.lastOutputTokens : 0)
+			: null;
+		ledger.contextNudge = contextNudgeArmed({
+			occupancy,
+			baseline: ledger.baselineTokens,
+			window: contextWindowOf(),
+		});
+	}
 
 	/** Record one prepared request without retaining its message bodies. */
 	function noteSentContext({ key, messages, frontier, header }) {
@@ -470,9 +521,15 @@ export function createUsageLedger(options) {
 			ledger.lastOutputTokens = snap.output;
 			ledger.lastUsageCost = message.usage.cost ?? null;
 			ledger.lastUsageSnapshot = tokenFields(snap);
+			// The first measured request is this scope's birth context. A scope
+			// that lost its ledger and reloaded re-baselines here on its first
+			// response, which is the only honest reading of a session the host
+			// rebuilt without the scope's own history.
+			if (ledger.baselineTokens === null) ledger.baselineTokens = tIn;
 			// Output arrives on every measured turn, cached or not, so this
 			// average needs no alignment proof.
 			ledger.avgOutputTokens = smooth(ledger.avgOutputTokens, snap.output);
+			refreshContextNudge();
 			if (key) {
 				const messages = contextMessages();
 				const index = messages.findLastIndex(
@@ -688,6 +745,12 @@ export function createUsageLedger(options) {
 	function resetWatermark() {
 		ledger.lastTotalInput = null;
 		ledger.lastOutputTokens = 0;
+		// A rewind or a reborn scope starts a new birth: the old baseline
+		// measured a context that no longer exists, so the next measured
+		// request becomes the baseline and the nudge is disarmed until it
+		// crosses its own midpoint.
+		ledger.baselineTokens = null;
+		ledger.contextNudge = false;
 		ledger.contextRevision += 1;
 		ledger.sentContext = null;
 		ledger.lastSample = null;
@@ -713,6 +776,9 @@ export function createUsageLedger(options) {
 		if (Number.isFinite(ledger.lastTotalInput)) {
 			ledger.lastTotalInput = Math.max(0, ledger.lastTotalInput - saved);
 		}
+		// The fold reclaimed room, so the scope may now sit below its midpoint
+		// again. Base is untouched: a fold changes the context, not the birth.
+		refreshContextNudge();
 	}
 
 	return Object.assign(ledger, {
@@ -727,5 +793,6 @@ export function createUsageLedger(options) {
 		pricingHint,
 		resetWatermark,
 		rebase,
+		refreshContextNudge,
 	});
 }

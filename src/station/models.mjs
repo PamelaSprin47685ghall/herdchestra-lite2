@@ -78,6 +78,11 @@ export function observeActualModel(station, ctx) {
 	if (!key) return;
 	station.usage.lastCtxModel = live;
 	const { state } = station;
+	// A model switch moves the input limit, so the nudge decision is re-read
+	// against the new window before the next request is assembled. Without this
+	// the scope would keep the verdict of a limit it no longer runs under until
+	// its next measured response.
+	station.usage.refreshContextNudge?.();
 	if (state.modelRecovery || station.modelSwitchInFlight || station.pendingModelSwitch) return;
 	const spec = liveSelector(ctx, key, host);
 	if (state.baseModelKey === key && (spec === key || state.baseModelSpec === spec)) return;
@@ -130,7 +135,12 @@ export function reconcileActualModel(station, ctx, req, outcome) {
 	const key = modelKey(live) ?? req.fallbackKey;
 	if (station.modelSwitchInFlight === req) station.modelSwitchInFlight = null;
 	if (station.state.epoch !== req.epoch) return key;
-	if (live) station.usage.lastCtxModel = live;
+	if (live) {
+		station.usage.lastCtxModel = live;
+		// The switch landed on a different limit, so the nudge verdict follows
+		// the model that is actually running.
+		station.usage.refreshContextNudge?.();
+	}
 	const observedSpec = key ? liveSelector(ctx, key, station.host) : null;
 	const spec = observedSpec && observedSpec !== key ? observedSpec :
 		outcome?.ok ? req.targetSpec : key === req.fallbackKey ? req.fallbackSpec : key;

@@ -6,6 +6,36 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added — a scope that outgrows its context midpoint is asked to return
+
+`(window - baseline) / 2 + baseline` is the midpoint between the context a
+scope was born with and the model's input limit. When the occupancy the last
+response ended at is strictly above that midpoint, the next request carries one
+more `skill` in the per-turn trailing injection — the
+`<additional-system-instructions>` block this session already receives at the
+end of every turn — that weighs the record against another turn and urges
+`scope_return` with a fresh `dafny`. Below or at the midpoint the skill is
+absent, so a scope is not nagged forever.
+
+- Baseline is measured, never estimated: it is the input the provider reported
+  for the scope's first measured request, which for a fork is the first request
+  of its own session. A rewind or a reborn scope re-baselines there, and a fold
+  keeps the birth it already had.
+- Occupancy is `lastTotalInput + lastOutputTokens`, the end of the last
+  response, not the projected size of the next one.
+- Every unknown refuses to arm: an unmeasured baseline, an unmeasured
+  occupancy, or an unknown window. A window at or below the baseline arms at
+  once instead, because the scope has no room left to grow into.
+- The boundary is strict. Equality is the point where continuing still pays.
+- The nudge never enters the system prompt. `injectSystemPrompt` produces the
+  same bytes it produced before this feature, so arming and disarming cost the
+  provider nothing: the trailing block is rebuilt per turn and is not part of
+  the cached prefix. The text lives in `resources/prompts/receipts/scope.md`
+  under `context.nudge`, rendered by `skillReceiptText`.
+- `contextWindowTokens()` on the station is now the one owner of the window
+  resolution order, and the fork admission reads it instead of resolving the
+  catalog a second time.
+
 ## [5.0.0] — 2026-11-26
 
 ### Changed — `scope_return` rewinds unless the oath hands off (breaking for callers)

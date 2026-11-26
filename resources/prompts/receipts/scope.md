@@ -60,6 +60,22 @@ Use the `scope_return` oath to submit your record. Without the oath, the call re
 
 Your record is still unpublished. Call `scope_return` with the oath to hand it to the scope that forked this one, or omit the oath to rewind and continue.
 
+## context.nudge
+
+Context pressure: this scope's last response ended past the midpoint between
+the context it was born with and the model's input limit. Every further turn
+spends the room that is left at twice the price, and the handoff you owe still
+has to fit.
+
+Weigh the two sides once. What does the record still owe the scope that forked
+this one: a slice it cannot recover from the transcript, evidence it has not
+received, a decision it is blocked on? What does another turn here still buy: a
+check you can run, a file you can finish, a question you can settle?
+
+If the marginal turn no longer pays for the room it takes, call `scope_return`
+alone in its batch with a fresh `dafny`. If the work genuinely needs the room,
+fork the rest into a fresh scope and return the part that is finished.
+
 ## language
 
 （宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。

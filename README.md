@@ -105,6 +105,27 @@ A bare `/herd-autopilot` flips the mode and sends nothing to the model: the next
 
 A rewind retains relevant working context as pins and the latest return report. Read important pinned documents in full rather than relying on grep excerpts.
 
+## Context pressure
+
+A scope is asked to return when it outgrows half of its own headroom. The
+midpoint is `(window - baseline) / 2 + baseline`, where the baseline is the
+input the provider reported for the scope's first request and the window is the
+model's input limit. When the occupancy the last response ended at is strictly
+above that midpoint, the next request carries one more `skill` in the per-turn
+trailing injection that weighs the record against another turn and urges
+`scope_return` with a fresh `dafny`. Below the midpoint the skill is gone again,
+so a scope settles rather than hears the same sentence every turn.
+
+The nudge never touches the system prompt: the trailing block is rebuilt for
+every request and is not part of the cached prefix, so arming and disarming it
+costs the provider nothing. `injectSystemPrompt` is byte-identical to what it
+produced before this feature.
+
+Every unknown refuses to arm: no measured baseline, no measured occupancy, or
+no known window means no nudge. A scope born at or past its window arms at
+once, since it has no room left to grow into. A rewind re-baselines at the new
+birth; a fold keeps the baseline and simply reclaims room.
+
 ## Root return and review
 
 At root, a small return (no oath) uses compaction to rewind and continue. Root keeps verbatim user prompts and steers as actual messages, plus pins and the new `dafny` report. Do not repeat those user messages in the report. The old report is replaced, not appended: carry forward any evidence a later turn still needs.

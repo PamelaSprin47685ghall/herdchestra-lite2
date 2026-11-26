@@ -337,6 +337,7 @@ export class SessionStation {
 			actualModelOf: (ctx) => actualModel(ctx, this.host),
 			usage: this.host?.accounting?.usage ?? null,
 			pricing: this.host?.accounting?.pricing ?? null,
+			window: () => this.contextWindowTokens(),
 		});
 		this.usage.restoreFromBranch(this.manager);
 		// The composition root builds one complete bundle; bind each
@@ -706,6 +707,38 @@ export class SessionStation {
 		return this.usage.tokensPerCharFor(key);
 	}
 
+	/**
+	 * The live model's input limit, or null when no exact window is known.
+	 *
+	 * One owner for the window. The nudge arithmetic, the join admission and
+	 * the receipt projection all read this method instead of each resolving
+	 * the catalog in its own order.
+	 */
+	contextWindowTokens() {
+		if (typeof this.forkWindowPort === "function") {
+			const window = this.forkWindowPort();
+			if (Number.isFinite(window) && window > 0) return window;
+		}
+		const live = this.usage?.lastCtxModel;
+		if (Number.isFinite(live?.contextWindow) && live.contextWindow > 0) {
+			return live.contextWindow;
+		}
+		const key = this.state?.baseModelKey;
+		const catalog = this.pricingCatalog;
+		if (catalog && typeof key === "string" && key !== "") {
+			const entry =
+				catalog.byFullId?.get?.(key) ?? catalog.byId?.get?.(key) ?? null;
+			const window = entry?.contextWindow;
+			if (Number.isFinite(window) && window > 0) return window;
+		}
+		return null;
+	}
+
+	/** True when the next request must carry the return nudge. */
+	contextNudgeArmed() {
+		return this.usage?.contextNudge === true;
+	}
+
 	/** Live outbound watermark from the last usage plus fresh pending messages. */
 	currentContextTokens(messages, key) {
 		return this.usage.currentContextTokens(messages, key);
@@ -1012,6 +1045,10 @@ export class SessionStation {
 			ownerId !== null,
 			this.clockPort(),
 			this.portTable.chineseReminder,
+			// The nudge is a per-turn trailing skill, so the flag is read where
+			// the block is built. It never enters the system prompt, whose bytes
+			// the provider caches.
+			this.contextNudgeArmed(),
 		);
 		return {
 			role: "user",

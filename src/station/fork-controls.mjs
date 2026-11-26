@@ -115,11 +115,18 @@ function recordTextOf(station, record) {
 /**
  * The live model's input limit, or null when no exact window is known.
  *
- * A guessed alias window is not an exact fact, so it is not used. The live
- * model object is, because the host resolved it, and a catalog entry by the
- * persisted base key is the next best exact identity.
+ * A guessed alias window is not an exact fact, so it is not used. The station
+ * owns the resolution order; this reader keeps a station double that predates
+ * the method working, and returns null the same way.
  */
 function windowOf(station) {
+  if (typeof station.contextWindowTokens === "function") {
+    const window = station.contextWindowTokens();
+    return Number.isFinite(window) && window > 0 ? window : null;
+  }
+  // A station double predates the method, so this branch repeats the same
+  // order the station uses. Keeping it here is the price of allowing a double
+  // that was never wired to a host; the live path has one owner.
   if (typeof station.forkWindowPort === "function") {
     const window = station.forkWindowPort();
     if (Number.isFinite(window) && window > 0) return window;

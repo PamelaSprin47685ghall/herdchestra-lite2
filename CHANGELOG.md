@@ -6,6 +6,8 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [5.1.0] — 2026-11-26
+
 ### Added — a scope that outgrows its context midpoint is asked to return
 
 `(window - baseline) / 2 + baseline` is the midpoint between the context a

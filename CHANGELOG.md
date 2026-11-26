@@ -6,6 +6,43 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [5.0.0] — 2026-11-26
+
+### Changed — `scope_return` rewinds unless the oath hands off (breaking for callers)
+
+The relay ledger is gone, and `scope_return` becomes the one verb that both
+continues and hands off. `todo` leaves the tool surface: it is host-side
+working notes, and this extension neither reads nor drives it.
+
+- `scope_return({ dafny })` without the oath rewinds the calling scope through
+  compaction and continues it. The scope keeps its birth instructions, its
+  pins, and its latest return report; a new report replaces the previous one
+  instead of stacking generations, and the record's `handoffCount` counts these
+  small self-handoffs.
+- Root follows the same shape behind a review gate: the first oath rewinds it
+  for an independent review against the user's own prompts, and the second
+  consecutive oath promotes it to write the final answer without a rewind. A
+  fork that starts new work on Root clears the streak synchronously, and a
+  small handoff resets it.
+- Root must receive every outstanding child before an oath; the refusal is a
+  tool error, not a silent drop. A host that cannot rewind the Root session
+  refuses the rewind before any state moves, so Root never holds a pending
+  rewind that can never land.
+- `scope_return` must be alone in its batch. A sibling tool call in the same
+  message is refused, because a competing call could race the rewind boundary.
+- The relay shrinks to rewind prompts: `ledger`, `policy`, and `texts` are
+  deleted, and `receipts/relay.md` keeps only the `reborn` sections. The
+  successor handoff, the verbatim user-prompt archive, the `Flow:` receipt, and
+  the two-empty-ledger evaluation stop existing.
+- A child's record starts at the latest birth receipt rather than the first
+  message carrying the marker, so a scope that returned and was reborn no
+  longer replays an older generation's inherited transcript.
+
+### Removed
+
+- The `todo` tool, `todoTicket`, and its prompt document. `resources/prompts/`
+  no longer carries `tools/todo.md`, and no receipt reports ledger state.
+
 ## [4.2.0] — 2026-11-26
 
 ### Changed — child activity uses the native assistant stream

@@ -6,6 +6,22 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — the language reminder prints as an output comment
+
+The per-turn probe closes with a plain output line `# System Requirement: ...`,
+with no `> ` input prefix, so it reads as a YAML comment under the state block
+rather than as a command line.
+
+### Changed — scope copy speaks in location, and the split guidance is two rules
+
+The model in a forked scope is the same self at another path, so model-facing
+text no longer calls scopes parents, children or siblings. It says "the scope
+above you", "a scope you started", "`..` for the scope above you". Split
+guidance is two rules: forking stops two levels below you, and the count is
+about `sqrt(n)` for an `n`-turn estimate. The per-scope sizing formula and the
+paragraphs on batching, blocked items, and dependency scheduling are gone; the
+tool mechanics are unchanged.
+
 ### Changed — the REPL probe and js results print block YAML
 
 The probe used to end with one `util.inspect` line, and a js result used the

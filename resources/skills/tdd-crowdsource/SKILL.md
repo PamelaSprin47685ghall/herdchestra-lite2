@@ -29,11 +29,9 @@ Do not run Red. The dispatch record states the written contract and authorizes G
 
 As soon as a slice has a red contract and its real prerequisites, include it in the next dispatch. Red and Green may run in parallel on different slices. Record a new dispatch before each new Green batch; an older record does not authorize a new one.
 
-A batch of one names the overlap or dependency that made it one. If you cannot name it, run the slices together. A batch of one that cannot name its dependency is a queue with better manners.
-
 The design record states module boundaries, consumer contracts, and failure isolation. Each slice builds against that record, not a private design; if the boundary is unknown, the slice is not ready.
 
-In the next message, dispatch all Green slices named in the record with scope_fork. Give every worker the contract path, ownership, acceptance goal, and verification assignment. When new work becomes ready, record the updated plan in a fresh `dafny` and dispatch it without waiting for unrelated work. A subtree lead follows the same sequence within its time limit and keeps the contract it received intact. Escalate a needed contract change before implementing it.
+In the next message, dispatch all Green slices named in the record with scope_fork. Give every worker the contract path, ownership, acceptance goal, and verification assignment. When new work becomes ready, record the updated plan in a fresh `dafny` and dispatch it without waiting for unrelated work. Escalate a needed contract change before implementing it.
 
 ## Green, acceptance, and record
 

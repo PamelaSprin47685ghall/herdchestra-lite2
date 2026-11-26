@@ -56,7 +56,9 @@ test("one scope-and-relay section serves root and child, manual and autopilot", 
 	expect(baseText).toContain("Forked scope duty");
 	expect(baseText).toContain("Only the user toggles autopilot");
 	expect(baseText).toContain("exactly one tool: `js`");
-	expect(baseText).toContain("At root, join every outstanding child before taking the oath");
+	expect(baseText).toContain("At root, join every scope you forked before taking the oath");
+	expect(baseText).toContain("Split into about `sqrt(n)` scopes");
+	expect(baseText).not.toContain("sqrt(2n)");
 
 	// The managed block never varies with the request: a forked scope inherits
 	// the owner's prompt prefix, and a changed system prompt drops the inherited
@@ -199,7 +201,7 @@ test("the scope_return documentation explains the return-only script and fresh r
 test("the scope_fork documentation renames a repeated sibling name instead of amending", () => {
 	const doc = Object.values(loadDoc("tools/fork-join")).join("\n");
 	expect(doc).toMatch(/lowest free numeric suffix/i);
-	expect(doc).toMatch(/unique among its siblings only/i);
+	expect(doc).toMatch(/unique among the scopes at the same level only/i);
 	expect(doc).toMatch(/state machine/i);
 	expect(doc).not.toMatch(/blocked/i);
 });
@@ -321,7 +323,7 @@ test("the language reminder ends every request receipt and follows its port", as
 			const off = await latestReceipt(disabled);
 			// The reminder is the last line of the newest receipt; with the port
 			// off, the rest of the probe is byte-identical.
-			const reminderLine = "\n> // System Requirement:";
+			const reminderLine = "\n# System Requirement:";
 			expect(on).toContain(reminderLine);
 			expect(on.endsWith(probeRequirement)).toBe(true);
 			expect(off).not.toContain("强制以简体中文");

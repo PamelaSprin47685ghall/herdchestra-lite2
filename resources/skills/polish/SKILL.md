@@ -19,13 +19,13 @@ Write a one-line paraphrase of each sentence's claim before you touch the wordin
 
 The best polish often adds a layer of explanation: why the original claim is true. Use economics when the claim is about choice: scarcity, opportunity cost, marginal cost, option value, coordination cost, information cost, incentives, comparative advantage, critical path. If the original has no economic logic, use its own logic. Do not import a mechanism the author did not write.
 
-A blocked item is a good example. "List blocked items as well. Consider and prepare for the future, not only now." The second sentence is the reason for the first. Do not turn them into two parallel actions. Explain the reason: recording a blocked item is cheap now and buys option value later; it prevents a blind step or an unnecessary serialization. That keeps the causal link and adds why it holds.
+A dispatch rule is a good example. "Do not run Red. The dispatch record states the written contract and authorizes Green; a red run spends a turn to prove what the test already states, and proves nothing about the implementation." The second sentence gives the reason for the first. Do not turn them into two parallel actions. Explain the reason: the contract already states what the test asserts, so a red run buys no information and spends a turn. That keeps the causal link and adds why it holds.
 
-Do not replace the author's ontology with yours. "A blocked item is a checkpoint, not a queue" is a mechanism claim; the original was a planning instruction. Explain the instruction, not the implementation. If the mechanism matters, put it in the tool document, not in the polished text.
+Do not replace the author's ontology with yours. "Do not run Red" is a judgment about what a turn buys; it is not a claim that the runner forbids red tests. Explain the instruction, not the implementation. If the mechanism matters, put it in the tool document, not in the polished text.
 
 ## Keep the voice
 
-Keep the author's rhythm, edge, and allusions. If the original says "Be a good leader", do not replace it with a checklist; explain what good leadership buys. If it says "hiring is free to you", do not silently change it to "free to your attention"; explain the sense in which it is free, and only add the sense in which it is not if the original needs it. Do not flatten a rebellion into human resources, and do not inflate a calm sentence into a manifesto.
+Keep the author's rhythm, edge, and allusions. If the original says "Blockers are all paper tigers", do not replace it with a checklist; explain what makes the claim hold. If it says "Blame is a tax on the next bad news", do not silently change it to "blame slows reporting"; explain the sense in which it is a tax, and only add the sense in which it is not if the original needs it. Do not flatten a rebellion into human resources, and do not inflate a calm sentence into a manifesto.
 
 ## The fidelity check
 

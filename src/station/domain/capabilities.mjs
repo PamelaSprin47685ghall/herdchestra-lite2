@@ -181,7 +181,7 @@ export function forkRemaining(record, now = Date.now(), clock = null) {
 
 const PROBE_COMMAND = "> ({ api: Object.keys(api), ...state })";
 const CHINESE_REMINDER_LINE =
-	"> // System Requirement: 强制以简体中文思考，以简体中文词开头，简体中文回答。";
+	"# System Requirement: 强制以简体中文思考，以简体中文词开头，简体中文回答。";
 
 /**
  * Render the per-turn REPL probe committed as the trailing user message.

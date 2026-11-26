@@ -209,7 +209,7 @@ interface ScopeRequestResult {
 }
 
 interface ScopeAbandonArgs {
-	/** Exact path of one child this scope forked, never a wildcard. */
+	/** Exact path of a scope this scope forked, never a wildcard. */
 	target: string;
 }
 

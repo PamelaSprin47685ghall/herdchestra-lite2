@@ -42,7 +42,7 @@ Snapshot version goes to `2`. `validRecord` requires a non-empty `record.fsm`, w
 
 | Key | Value | Sends |
 |---|---|---|
-| `fresh` | `childReceiptText(...)` for this fork's own data | first receipt to a new child |
+| `fresh` | `childReceiptText(...)` for this fork's own data | first receipt to a newly started scope |
 | `revive` | `childReceiptText(...)` for the blocked **target's** fsm, `budget`, and targets | receipt to a woken checkpoint |
 | `generation` | `generationReceiptText(...)` including `priorRecordText(target)` | receipt to the next generation; the largest text in the system and unbounded in length |
 | any path that sends nothing (running amendment, queued item, blocked item) | `0` for all three keys | — |
@@ -71,7 +71,7 @@ S1 also owns the paragraph in `.agent/skills/scope-orchestration/SKILL.md` that 
 ## Acceptance
 
 - A refused fork reports `FORK_CONTEXT_EXCEEDED` with numbers that contain no `600`.
-- A reused `scopeId` whose prior record does not fit the window is refused at registration, instead of letting the child hit the wall on its first request.
+- A reused `scopeId` whose prior record does not fit the window is refused at registration, instead of letting the started scope hit the wall on its first request.
 - `git grep '\bintent\b' src/ resources/` returns only the whitelist above.
 
 Every later slice reads this record and invents no third naming.

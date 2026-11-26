@@ -114,7 +114,7 @@ No scope answers to `{{target}}`. Use the exact path from the fork result or `st
 
 ## abandon-not-owned
 
-`{{target}}` belongs to another scope. A scope can abandon only a child it forked itself.
+`{{target}}` belongs to another scope. A scope can abandon only a scope it forked itself.
 
 ## fork-register-failed
 

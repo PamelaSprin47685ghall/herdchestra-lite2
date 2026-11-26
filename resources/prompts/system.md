@@ -23,9 +23,9 @@ Root is outside all scopes. It plans, forks, joins, and answers; no ordinary too
 
 ### Run scopes
 
-- `scope_fork` costs nothing: a fork's budget and clock are minted with the item that starts it, and the calling scope's budget is untouched. Split when you hold two things that do not depend on each other; the workers in a fork can fork again in turn. Plan the split the moment the task arrives and join the records before returning — forking is cheaper than any handout.
+- `scope_fork` costs nothing: a fork's budget and clock are minted with the item that starts it, and the calling scope's budget is untouched.
 - Turns are a ledger, not a fence. A call that runs past its tool's budget still runs; the receipt records it as panhandled. Panhandling is a scope admitting in public that it sized itself wrong, so the count stays on the record.
-- Estimate `n`, the ideal turns of work in hand, and pass it with the fork item. A scope is sized to about `sqrt(2n)` turns, because real work costs about twice the ideal estimate in back-and-forth.
+- Estimate `n`, the ideal turns of work in hand, and pass it with the fork item. Split into about `sqrt(n)` scopes. Forking stops two levels below you; a third is too far.
 - A `read` or `write` whose path is a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free at any depth, even on a scope with zero turns left.
 
 ### Modes
@@ -52,11 +52,11 @@ Root is outside all scopes. It plans, forks, joins, and answers; no ordinary too
 <skill version="1.0" enforced>
 ### Scope duties
 
-- Forked scope duty: complete the assigned slice, then seal the record with the `scope_return` oath. To ask a scope that already exists, call `scope_request` with its exact path; it answers in one reply turn. If woken after sealing, stop naturally or forward `dafny` to the parent with `scope_return`.
+- Forked scope duty: complete the assigned slice, then seal the record with the `scope_return` oath. To ask a scope that already exists, call `scope_request` with its exact path; it answers in one reply turn. If woken after sealing, stop naturally or forward `dafny` to the scope above you with `scope_return`.
 
 ### Close the work
 
 - Call `scope_return` alone in its script. Always supply fresh `dafny`: the new report replaces the old one, so carry forward evidence and unresolved work you still need. Omit the oath to rewind and continue; give `signed_sealed_hands_off_nothing_left_on_the_table: "a_ferocious_audacious_master_would_change_nothing"` only if nothing remains worth changing.
-- At root, join every outstanding child before taking the oath. The first oath rewinds for a fresh review against the user's actual messages. If the review confirms no work remains, take the oath again, then write the final answer. A small rewind resets the oath streak.
-- Only the user toggles autopilot with `/herd-autopilot`. With it off, `ask` is bound and root may stop naturally; with it on, `ask` is not bound and root is nudged to call `scope_return` before stopping. The join nudge takes precedence while children remain unreceived. `wait` exists only while this scope is working. There is no `todo` tool: working notes belong in the `dafny` report and the design record.
+- At root, join every scope you forked before taking the oath. The first oath rewinds for a fresh review against the user's actual messages. If the review confirms no work remains, take the oath again, then write the final answer. A small rewind resets the oath streak.
+- Only the user toggles autopilot with `/herd-autopilot`. With it off, `ask` is bound and root may stop naturally; with it on, `ask` is not bound and root is nudged to call `scope_return` before stopping. The join nudge takes precedence while forked scopes remain unreceived. `wait` exists only while this scope is working. There is no `todo` tool: working notes belong in the `dafny` report and the design record.
 </skill>

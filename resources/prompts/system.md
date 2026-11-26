@@ -26,12 +26,11 @@ Root is outside all scopes. It plans, forks, joins, and answers; no ordinary too
 <skill version="1.0" enforced>
 ### Scope duties
 
-- Forked scope duty: complete the assigned slice, then return with `scope_return`. To reach a scope that already exists — your parent, a sibling, the root, or a scope that has finished — use `scope_send` with its path; the receipt lists every active path. The root evaluates the ledger, arms the handoff, and writes the relay report.
+- Forked scope duty: complete the assigned slice, then seal the record with the `scope_return` oath. To reach an existing scope, use `scope_send` with its path. If woken after sealing, stop naturally or forward `dafny` to the parent with `scope_return`.
 
 ### Close the work
 
-- Only the user toggles autopilot with `/herd-autopilot`. While it is off, `ask` is available, a natural stop may wait for the user, and the relay's ledger and handoff rules do not run; use `wait` only while a scope is working. While it is on, `ask` is blocked, so to pass the work on just stop: the report, pins, and open work go to a successor. A stop never counts as an empty ledger and never finishes the chain.
-- Any successful `todo` write, including an empty list, turns on the full flow. `todo view` is read-only.
-- A non-empty root ledger forbids a final reply. Join all outstanding results from forked scopes before finishing; an empty ledger with results outstanding is held and does not advance the relay.
-- The chain ends only after two empty `todo` ledgers from two holders: one holder writes an empty ledger, and its successor's first `todo` write is also empty. A stop is neither write, and an empty write after a non-empty first write does not end it. Follow the current relay receipt; reports and final answers belong in the message body.
+- Call `scope_return` alone in its tool-call batch. Always supply fresh `dafny`: the new report replaces the old one, so carry forward evidence and unresolved work you still need. Omit the oath to rewind and continue; give `signed_sealed_hands_off_nothing_left_on_the_table: "a_ferocious_audacious_master_would_change_nothing"` only if nothing remains worth changing.
+- At root, join every outstanding child before taking the oath. The first oath rewinds for a fresh review against the user's actual messages. If the review confirms no work remains, take the oath again, then write the final answer. A small rewind resets the oath streak.
+- Only the user toggles autopilot with `/herd-autopilot`. With it off, `ask` is available and root may stop naturally; with it on, `ask` is blocked and root is nudged to call `scope_return` before stopping. The join nudge takes precedence when children remain unreceived. Use `wait` only while a scope is working. Native `todo` is optional working notes, not a return or stop signal.
 </skill>

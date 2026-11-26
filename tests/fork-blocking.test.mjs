@@ -10,6 +10,9 @@ import { executeJoin, executeReturn } from "../src/station/execute.mjs";
 import { renderJoinResult } from "../src/station/fork-controls.mjs";
 import { createProcessedLedger } from "../src/station/processed-ledger.mjs";
 import { joinTicket, returnTicket } from "../src/tools/tickets.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+
+const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 import { createForkWiring } from "../src/scope/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
@@ -140,7 +143,7 @@ describe("scope_return as a ticket", () => {
 
     // Nothing parks: the ticket returns the accepted receipt at once, and the
     // record waits in the parent's queue for whatever join comes later.
-    const result = await returnTicket(station, "call-r1", { dafny: "the child returns its record" }, {});
+    const result = await returnTicket(station, "call-r1", { dafny: "the child returns its record", ...OATH }, {});
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain("has been handed to Root");
     expect(result.details.accepted).toBe(true);
@@ -161,7 +164,7 @@ describe("scope_return as a ticket", () => {
     opened(ledger, "c2", "root");
 
     const controller = new AbortController();
-    const pending = returnTicket(station, "call-r2", { dafny: "the child returns before the wait is cancelled" }, {}, controller.signal);
+    const pending = returnTicket(station, "call-r2", { dafny: "the child returns before the wait is cancelled", ...OATH }, {}, controller.signal);
     await tick();
     controller.abort();
 

@@ -1,15 +1,11 @@
-// Relay prompts: keep the user's own words across a handoff.
+// Relay prompts: keep the user's own words across a rewind.
 //
-// A handoff commits a compaction, and the successor starts from that summary.
-// Any user prompt the summary omits is gone. The archive collected here is the
-// requirement record that survives every generation. Pure. No I/O.
+// A Root rewind compacts the branch to a clean rebirth. Any user prompt or
+// user steer that only lived in the discarded transcript would vanish unless
+// archived here and restored as real user messages after the compaction.
+// Pure. No I/O.
 
-function promptText(message) {
-	if (!message || message.role !== "user") return "";
-	// A skill receipt is a user-role message the host appends itself. It is
-	// not the user's words, so it never enters the requirement archive.
-	if (message.herdSkill === true || message.excludeFromContext === true) return "";
-	const content = message.content;
+function textOfContent(content) {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	const parts = [];
@@ -19,20 +15,33 @@ function promptText(message) {
 	return parts.join("\n");
 }
 
+/** True only for a genuine user-authored prompt or user steer. */
+export function isRealUserMessage(message) {
+	if (!message || message.role !== "user") return false;
+	if (message.herdSkill === true || message.excludeFromContext === true) return false;
+	if (message.attribution === "agent" || message.synthetic === true) return false;
+	return true;
+}
+
+function promptText(message) {
+	if (!isRealUserMessage(message)) return "";
+	return textOfContent(message.content);
+}
+
 /**
- * The user's own prompts in `messages`, oldest first.
+ * The user's own prompts and steers in `messages`, oldest first.
  *
- * options.exclude names texts the relay itself delivered (the handoff demand,
- * the blocked-tool reason). They are instructions for one generation, not
- * requirements, so a successor must not inherit them as user prompts.
+ * Agent-authored messages (`attribution: "agent"`, `synthetic: true`,
+ * `herdSkill: true`, `excludeFromContext: true`) are excluded automatically.
+ * `options.exclude` may additionally filter legacy texts that lacked metadata.
  */
 export function collectUserPrompts(messages, options = {}) {
 	const source = Array.isArray(messages) ? messages : [];
 	const exclude = options.exclude instanceof Set ? options.exclude : new Set();
 	const prompts = [];
 	for (const message of source) {
-		const text = promptText(message).trim();
-		if (text === "" || exclude.has(text)) continue;
+		const text = promptText(message);
+		if (text.trim() === "" || exclude.has(text) || exclude.has(text.trim())) continue;
 		prompts.push(text);
 	}
 	return prompts;
@@ -42,8 +51,7 @@ function cleanPrompts(values) {
 	const out = [];
 	for (const value of Array.isArray(values) ? values : []) {
 		if (typeof value !== "string") continue;
-		const text = value.trim();
-		if (text !== "") out.push(text);
+		if (value.trim() !== "") out.push(value);
 	}
 	return out;
 }
@@ -52,10 +60,10 @@ function cleanPrompts(values) {
  * Merge the archive with the prompts still visible in the current context.
  *
  * The visible list is normally a suffix of the archive (older prompts were
- * compacted away). Matching that suffix first keeps one chronological order
- * and never duplicates a prompt that is both archived and still present.
- * Without a shared suffix the archive stays first, and only prompts whose
- * occurrence the archive does not already hold are appended.
+ * compacted away, or replayed verbatim after a rewind). Matching the longest
+ * suffix-prefix overlap keeps one chronological order without duplicating a
+ * prompt that is both archived and live, while still preserving genuine
+ * repeated user prompts.
  */
 export function mergeUserPrompts(archive, fresh) {
 	const kept = cleanPrompts(archive);
@@ -84,4 +92,15 @@ export function mergeUserPrompts(archive, fresh) {
 		out.push(text);
 	}
 	return out;
+}
+
+/** Build persisted user messages from the verbatim user-prompt archive. */
+export function rebornUserMessages(userPrompts, timestamp = Date.now()) {
+	const prompts = cleanPrompts(userPrompts);
+	return prompts.map((text, index) => ({
+		role: "user",
+		content: [{ type: "text", text }],
+		attribution: "user",
+		timestamp: timestamp + index,
+	}));
 }

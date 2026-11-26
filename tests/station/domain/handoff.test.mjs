@@ -1,337 +1,275 @@
+// Pure decision contracts for `scope_return` oath, small/big handoff,
+// generation report formatting, and reborn prompts.
+
 import { describe, expect, test } from "bun:test";
 
+import { createRelay } from "../../../src/relay/index.mjs";
 import {
-	beginGenerationAfterHandoff,
-	createRelay,
-} from "../../../src/relay/index.mjs";
-import {
-	decideHandoffAdvance,
-	decideHandoffArm,
-	decideHandoffReport,
-	decideInheritedLedgerViewed,
-	decideNaturalStop,
-	decideRelayEvaluation,
-	decideRetirement,
-	decideSelfHandoff,
+	RETURN_OATH_KEY,
+	RETURN_OATH_VALUE,
+	decideScopeReturn,
+	formatGenerationReport,
+	formatRebornPrompt,
+	parseReturnOath,
+	rebornStartPrompt,
+	resetRootPromotion,
 } from "../../../src/station/domain/handoff.mjs";
 
-const WORK = Object.freeze([{ phase: "Work", items: ["one"] }]);
-const EMPTY = Object.freeze([]);
+const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 
-function relay(overrides = {}) {
-	return Object.freeze({ ...createRelay(), ...overrides });
-}
-
-describe("decideRelayEvaluation", () => {
-	test("none owes nothing and keeps the shared answer shape", () => {
-		const before = relay();
-		const result = decideRelayEvaluation({
-			relay: before,
-			owesLedger: false,
-			phases: WORK,
-			op: "init",
-		});
-		expect(result).toEqual({
-			relay: before,
-			stats: { empty: true, open: 0, total: 0 },
-			action: null,
-			changed: false,
-			commit: false,
-		});
+describe("parseReturnOath", () => {
+	test("omitted or undefined oath is a small handoff", () => {
+		expect(parseReturnOath({})).toEqual({ ok: true, big: false });
+		expect(parseReturnOath({ [RETURN_OATH_KEY]: undefined })).toEqual({ ok: true, big: false });
 	});
 
-	test("an empty ledger with an unreceived child is held", () => {
-		const before = relay();
-		const result = decideRelayEvaluation({
-			relay: before,
-			owesLedger: true,
-			phases: EMPTY,
-			op: "init",
-			unreceived: 2,
-			options: { at: 10 },
-		});
-		expect(result.action).toBe("held");
-		expect(result.changed).toBe(false);
-		expect(result.unreceived).toBe(2);
-		expect(result.commit).toBe(false);
-		expect(result.relay).toBe(before);
-		expect(before.handoffPending).toBe(false);
+	test("exact singleton oath value is a big handoff", () => {
+		expect(parseReturnOath(OATH)).toEqual({ ok: true, big: true });
 	});
 
-	test("generation 0 empty ledger hands off and commits", () => {
-		const before = relay();
-		const result = decideRelayEvaluation({
-			relay: before,
-			owesLedger: true,
-			phases: EMPTY,
-			op: "init",
-			options: { at: 10 },
-		});
-		expect(result.action).toBe("handoff");
-		expect(result.relay.handoffPending).toBe(true);
-		expect(result.changed).toBe(true);
-		expect(result.commit).toBe(true);
-		expect(before.handoffPending).toBe(false);
-	});
-
-	test("view and errors do not advance but still commit the copy", () => {
-		const before = relay();
-		const result = decideRelayEvaluation({
-			relay: before,
-			owesLedger: true,
-			phases: WORK,
-			op: "view",
-			options: { at: 10 },
-		});
-		expect(result.action).toBeNull();
-		expect(result.changed).toBe(false);
-		expect(result.commit).toBe(true);
-		expect(result.relay).not.toBe(before);
-		expect(result.relay.lastLedger).toBeNull();
+	test("any non-matching value is strictly refused (never coerced)", () => {
+		for (const bad of [false, true, null, "", " ", "a_master_would_change_nothing", 1, {}]) {
+			expect(parseReturnOath({ [RETURN_OATH_KEY]: bad })).toEqual({
+				ok: false,
+				code: "INVALID_RETURN_OATH",
+			});
+		}
 	});
 });
 
-describe("decideRetirement", () => {
-	test("none never retires", () => {
-		expect(decideRetirement({ relay: relay(), owesLedger: false })).toBeNull();
+describe("decideScopeReturn", () => {
+	const childRecord = Object.freeze({ forkId: "f1", status: "running", ownerId: "root", woken: false });
+
+	test("refuses invalid oath, blank dafny, and mixed tool batches before touching state", () => {
+		expect(
+			decideScopeReturn({ isRoot: true, args: { dafny: "ok", [RETURN_OATH_KEY]: false } }),
+		).toEqual({ ok: false, code: "INVALID_RETURN_OATH" });
+		expect(
+			decideScopeReturn({ isRoot: true, args: { dafny: "   " } }),
+		).toEqual({ ok: false, code: "MISSING_DAFNY" });
+		expect(
+			decideScopeReturn({ isRoot: true, mixedToolCalls: true, args: { dafny: "ok" } }),
+		).toEqual({ ok: false, code: "MIXED_RETURN_TOOL_CALLS" });
+		expect(
+			decideScopeReturn({ isRoot: false, identityForkId: "f1", record: childRecord, mixedToolCalls: true, args: { dafny: "ok", ...OATH } }),
+		).toEqual({ ok: false, code: "MIXED_RETURN_TOOL_CALLS" });
 	});
 
-	test("a non-empty ledger retires and requires the view", () => {
-		const result = decideRetirement({
-			relay: relay({
-				lastLedger: { empty: false, open: 1, total: 1, at: 1 },
-			}),
-			owesLedger: true,
+	test("child small handoff (oath omitted) rewinds and stops the loop", () => {
+		const decision = decideScopeReturn({
+			isRoot: false,
+			identityForkId: "f1",
+			record: childRecord,
+			args: { dafny: "discovered cache mismatch; next try patching" },
 		});
-		expect(result.action).toBe("retire");
-		expect(result.changed).toBe(true);
-		expect(result.relay.handoffPending).toBe(true);
-		expect(result.relay.viewRequired).toBe(true);
-	});
-
-	test("a stoppable relay does not retire twice", () => {
-		const result = decideRetirement({
-			relay: relay({ canStop: true }),
-			owesLedger: true,
+		expect(decision).toEqual({
+			ok: true,
+			kind: "rewind",
+			scope: "child",
+			big: false,
+			dafny: "discovered cache mismatch; next try patching",
+			stopLoop: true,
 		});
-		expect(result.action).toBeNull();
-		expect(result.changed).toBe(false);
 	});
-});
 
-describe("decideHandoffArm", () => {
-	test("arms only a handoff degree on a non-stoppable relay", () => {
-		const before = relay({ canStop: false });
-		const result = decideHandoffArm({
+	test("child big handoff (oath present) delivers to receiver", () => {
+		const decision = decideScopeReturn({
+			isRoot: false,
+			identityForkId: "f1",
+			record: childRecord,
+			receiverId: "root",
+			orphans: ["c2"],
+			args: { dafny: "verified fix", ...OATH },
+		});
+		expect(decision).toEqual({
+			ok: true,
+			kind: "deliver",
+			scope: "child",
+			big: true,
+			dafny: "verified fix",
+			receiverId: "root",
+			orphans: ["c2"],
+			stopLoop: true,
+		});
+	});
+
+	test("woken child forwards dafny regardless of oath", () => {
+		const woken = { ...childRecord, status: "ready", woken: true };
+		for (const extra of [{}, OATH]) {
+			const decision = decideScopeReturn({
+				isRoot: false,
+				identityForkId: "f1",
+				record: woken,
+				args: { dafny: "follow-up answer", ...extra },
+			});
+			expect(decision).toEqual({
+				ok: true,
+				kind: "forward",
+				scope: "child",
+				dafny: "follow-up answer",
+				stopLoop: true,
+			});
+		}
+	});
+
+	test("root small handoff rewinds, increments generation, and resets bigStreak", () => {
+		const before = Object.freeze({ ...createRelay(), generation: 2, bigStreak: 1, canStop: false });
+		const decision = decideScopeReturn({
+			isRoot: true,
 			relay: before,
-			isChild: false,
-			canHandoff: true,
+			canRewindRoot: true,
+			unreceived: 2, // allowed for small handoff
+			args: { dafny: "still need to inspect tests" },
+			callId: "c-small",
 		});
-		expect(result.arm).toBe(true);
-		expect(result.relay.handoffPending).toBe(true);
-		expect(before.handoffPending).toBe(false);
-	});
-
-	test("children, ledger-only relays, and stoppable relays never arm", () => {
-		expect(
-			decideHandoffArm({ relay: relay(), isChild: true, canHandoff: true }).arm,
-		).toBe(false);
-		expect(
-			decideHandoffArm({ relay: relay(), isChild: false, canHandoff: false }).arm,
-		).toBe(false);
-		expect(
-			decideHandoffArm({
-				relay: relay({ canStop: true }),
-				isChild: false,
-				canHandoff: true,
-			}).arm,
-		).toBe(false);
-	});
-});
-
-describe("decideHandoffAdvance", () => {
-	test("advances one generation when the expected generation matches", () => {
-		const before = relay({ generation: 2, handoffPending: true, canStop: false });
-		const result = decideHandoffAdvance({
-			relay: before,
-			isChild: false,
-			canHandoff: true,
-			expectedGeneration: 2,
-			at: 100,
+		expect(decision.ok).toBe(true);
+		expect(decision.kind).toBe("rewind");
+		expect(decision.scope).toBe("root");
+		expect(decision.big).toBe(false);
+		expect(decision.stopLoop).toBe(true);
+		expect(decision.relay.generation).toBe(3);
+		expect(decision.relay.bigStreak).toBe(0);
+		expect(decision.relay.canStop).toBe(false);
+		expect(decision.relay.pendingRewind).toEqual({
+			report: "",
+			big: false,
+			generation: 3,
+			id: "c-small",
 		});
-		expect(result.advance).toBe(true);
-		expect(result.relay.generation).toBe(3);
-		expect(result.relay.handoffPending).toBe(false);
-		expect(result.relay.lastHandoff.at).toBe(100);
 		expect(before.generation).toBe(2);
 	});
 
-	test("a stale generation, a child, or a ledger-only relay never advances", () => {
-		const before = relay({ generation: 2, handoffPending: true });
-		expect(
-			decideHandoffAdvance({
-				relay: before,
-				isChild: false,
-				canHandoff: true,
-				expectedGeneration: 1,
-			}).advance,
-		).toBe(false);
-		expect(
-			decideHandoffAdvance({
-				relay: before,
-				isChild: true,
-				canHandoff: true,
-			}).advance,
-		).toBe(false);
-		expect(
-			decideHandoffAdvance({
-				relay: before,
-				isChild: false,
-				canHandoff: false,
-			}).advance,
-		).toBe(false);
+	test("root big handoff refuses while unreceived children remain", () => {
+		const decision = decideScopeReturn({
+			isRoot: true,
+			relay: createRelay(),
+			canRewindRoot: true,
+			unreceived: 2,
+			args: { dafny: "done", ...OATH },
+		});
+		expect(decision).toEqual({
+			ok: false,
+			code: "UNRECEIVED_CHILDREN",
+			unreceived: 2,
+		});
+	});
+
+	test("root first big handoff rewinds for review; second consecutive promotes without rewind", () => {
+		const first = decideScopeReturn({
+			isRoot: true,
+			relay: createRelay(),
+			canRewindRoot: true,
+			args: { dafny: "everything verified", ...OATH },
+			callId: "c-big-1",
+		});
+		expect(first.ok).toBe(true);
+		expect(first.kind).toBe("rewind");
+		expect(first.big).toBe(true);
+		expect(first.stopLoop).toBe(true);
+		expect(first.relay.generation).toBe(1);
+		expect(first.relay.bigStreak).toBe(1);
+		expect(first.relay.canStop).toBe(false);
+
+		const second = decideScopeReturn({
+			isRoot: true,
+			relay: { ...first.relay, pendingRewind: null },
+			canRewindRoot: true,
+			args: { dafny: "independent review confirms nothing left", ...OATH },
+			callId: "c-big-2",
+		});
+		expect(second.ok).toBe(true);
+		expect(second.kind).toBe("promote");
+		expect(second.stopLoop).toBe(false);
+		expect(second.relay.generation).toBe(1);
+		expect(second.relay.bigStreak).toBe(2);
+		expect(second.relay.canStop).toBe(true);
+		expect(second.relay.pendingRewind).toBeNull();
+	});
+
+	test("root small handoff between two oaths resets streak so another two oaths are required", () => {
+		const firstBig = decideScopeReturn({
+			isRoot: true,
+			relay: createRelay(),
+			canRewindRoot: true,
+			args: { dafny: "first big", ...OATH },
+		});
+		const small = decideScopeReturn({
+			isRoot: true,
+			relay: { ...firstBig.relay, pendingRewind: null },
+			canRewindRoot: true,
+			args: { dafny: "found edge case during review" },
+		});
+		expect(small.relay.bigStreak).toBe(0);
+
+		const nextBig = decideScopeReturn({
+			isRoot: true,
+			relay: { ...small.relay, pendingRewind: null },
+			canRewindRoot: true,
+			args: { dafny: "edge case fixed", ...OATH },
+		});
+		expect(nextBig.kind).toBe("rewind");
+		expect(nextBig.relay.bigStreak).toBe(1);
+		expect(nextBig.relay.canStop).toBe(false);
+	});
+
+	test("root rewind refuses when host cannot rewind", () => {
+		const decision = decideScopeReturn({
+			isRoot: true,
+			relay: createRelay(),
+			canRewindRoot: false,
+			args: { dafny: "report" },
+		});
+		expect(decision).toEqual({ ok: false, code: "ROOT_REWIND_UNAVAILABLE" });
 	});
 });
 
-describe("decideNaturalStop", () => {
-	test("no obligation, manual stop, or child has no plan", () => {
-		expect(decideNaturalStop({ relay: relay(), owesLedger: false, autopilot: true })).toBeNull();
-		expect(decideNaturalStop({ relay: relay(), owesLedger: true, autopilot: false })).toBeNull();
-		expect(decideNaturalStop({ relay: relay(), owesLedger: true, autopilot: true, isChild: true })).toBeNull();
+describe("formatting helpers", () => {
+	test("formatGenerationReport includes assistant text, tool calls with args, skips amended beats, and appends dafny", () => {
+		const messages = [
+			{ role: "user", content: "old user" },
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "checked parser" },
+					{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.mjs" } },
+				],
+			},
+			{ role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "file body" }] },
+		];
+		const out = formatGenerationReport(messages, [], 0, "deduction: parser is clean");
+		expect(out).toBe('checked parser\nread(path="a.mjs")\n\ndeduction: parser is clean');
 	});
 
-	test("a pending or stoppable relay has no plan", () => {
-		expect(
-			decideNaturalStop({
-				relay: relay({ handoffPending: true }),
-				owesLedger: true,
-				autopilot: true,
-			}),
-		).toBeNull();
-		expect(
-			decideNaturalStop({
-				relay: relay({ canStop: true }),
-				owesLedger: true,
-				autopilot: true,
-			}),
-		).toBeNull();
-	});
-
-	test("generation 0 and a fresh successor take the small handoff", () => {
-		expect(
-			decideNaturalStop({ relay: relay(), owesLedger: true, autopilot: true }),
-		).toEqual({ kind: "retire" });
-		const successor = beginGenerationAfterHandoff(relay(), {
-			at: 1,
-			fromGeneration: 0,
+	test("formatRebornPrompt renders birth, pins, report, and review vs continue guidance", () => {
+		const cont = formatRebornPrompt({
+			birth: "You are now in the scope /api,",
+			pins: ["**Finding:** cache key stable"],
+			report: "read(path=\"a.mjs\")\n\nstill patching",
+			big: false,
 		});
-		expect(
-			decideNaturalStop({ relay: successor, owesLedger: true, autopilot: true }),
-		).toEqual({ kind: "retire" });
-	});
+		expect(cont.startsWith("You are now in the scope /api,")).toBe(true);
+		expect(cont).toContain("Pinned Context");
+		expect(cont).toContain("**Finding:** cache key stable");
+		expect(cont).toContain("Latest Return Report");
+		expect(cont).toContain('read(path="a.mjs")');
 
-	test("an unreceived child withholds every natural-stop submission", () => {
-		expect(
-			decideNaturalStop({
-				relay: relay(),
-				owesLedger: true,
-				autopilot: true,
-				unreceived: 1,
-			}),
-		).toBeNull();
-		const inherited = relay({
-			generation: 1,
-			firstEvaluation: "nonempty",
-			lastLedger: { empty: false, open: 1, total: 1, at: 1 },
+		const review = formatRebornPrompt({
+			report: "all verified",
+			pins: [],
+			big: true,
 		});
-		expect(
-			decideNaturalStop({
-				relay: inherited,
-				owesLedger: true,
-				autopilot: true,
-				unreceived: 1,
-			}),
-		).toBeNull();
+		expect(review).not.toContain("Pinned Context");
+		expect(review).toContain("all verified");
+		expect(review).toMatch(/review/i);
+		expect(rebornStartPrompt().length).toBeGreaterThan(0);
 	});
 
-	test("a known non-empty inheritance retires", () => {
-		const inherited = relay({
-			generation: 1,
-			firstEvaluation: "nonempty",
-			lastLedger: { empty: false, open: 1, total: 1, at: 1 },
-		});
-		expect(
-			decideNaturalStop({ relay: inherited, owesLedger: true, autopilot: true }),
-		).toEqual({ kind: "retire" });
-	});
-});
-
-describe("decideInheritedLedgerViewed", () => {
-	test("clears the view requirement without mutating the input", () => {
-		const before = relay({ viewRequired: true });
-		const result = decideInheritedLedgerViewed({ relay: before });
-		expect(result.relay.viewRequired).toBe(false);
-		expect(before.viewRequired).toBe(true);
-	});
-
-	test("does nothing when no view is required", () => {
-		expect(decideInheritedLedgerViewed({ relay: relay() })).toBeNull();
-	});
-});
-
-describe("decideHandoffReport", () => {
-	test("captures a non-empty report only while a handoff is pending", () => {
-		const result = decideHandoffReport({
-			relay: relay({ handoffPending: true }),
-			isChild: false,
-			text: "  report body  ",
-		});
-		expect(result).toEqual({ capture: true, text: "report body" });
-	});
-
-	test("children, no pending handoff, and an empty report do not capture", () => {
-		expect(
-			decideHandoffReport({
-				relay: relay({ handoffPending: true }),
-				isChild: true,
-				text: "body",
-			}).capture,
-		).toBe(false);
-		expect(
-			decideHandoffReport({ relay: relay(), isChild: false, text: "body" }).capture,
-		).toBe(false);
-		expect(
-			decideHandoffReport({
-				relay: relay({ handoffPending: true }),
-				isChild: false,
-				text: "   ",
-			}).capture,
-		).toBe(false);
-	});
-});
-
-describe("decideSelfHandoff", () => {
-	test("is legal only on a pending, stoppable relay", () => {
-		expect(
-			decideSelfHandoff({
-				relay: relay({ handoffPending: true }),
-				isChild: false,
-			}),
-		).toBe(true);
-		expect(
-			decideSelfHandoff({
-				relay: relay({ handoffPending: true }),
-				isChild: true,
-			}),
-		).toBe(false);
-		expect(
-			decideSelfHandoff({ relay: relay(), isChild: false }),
-		).toBe(false);
-		expect(
-			decideSelfHandoff({
-				relay: relay({ handoffPending: true, canStop: true }),
-				isChild: false,
-			}),
-		).toBe(false);
+	test("resetRootPromotion clears bigStreak and canStop without mutating input", () => {
+		const before = Object.freeze({ ...createRelay(), bigStreak: 2, canStop: true });
+		const reset = resetRootPromotion(before);
+		expect(reset.changed).toBe(true);
+		expect(reset.relay.bigStreak).toBe(0);
+		expect(reset.relay.canStop).toBe(false);
+		expect(before.canStop).toBe(true);
 	});
 });

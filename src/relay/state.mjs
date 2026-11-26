@@ -1,11 +1,13 @@
 // Relay state: creation, copying, and validation. Pure data. No I/O.
 //
-// The invariant: a natural stop is a small handoff. It transfers the holder
-// and the record but never counts as an empty evaluation; only empty todo
-// writes advance the two-empty-ledger protocol, and ending a chain takes two
-// of them across generations.
-
-const FIRST_EVALUATIONS = new Set(["empty", "nonempty"]);
+// Root handoff is unified with `scope_return`:
+// - A small handoff (oath omitted) rewinds Root to its user prompts + pins + report,
+//   increments `generation`, and resets `bigStreak` to 0.
+// - A first big handoff (oath present, `bigStreak === 0`) rewinds Root for an
+//   independent review pass (`generation += 1`, `bigStreak = 1`, `canStop = false`).
+// - A second consecutive big handoff (oath present, `bigStreak >= 1`) promotes
+//   without rewinding (`bigStreak = 2`, `canStop = true`) so Root may write the
+//   final user-facing answer.
 
 function isPlainObject(value) {
 	if (typeof value !== "object" || value === null) return false;
@@ -21,134 +23,70 @@ function finiteNumber(value) {
 	return typeof value === "number" && Number.isFinite(value);
 }
 
+function copyPendingRewind(value) {
+	if (!isPlainObject(value)) return null;
+	if (typeof value.report !== "string") return null;
+	if (!nonNegativeInteger(value.generation)) return null;
+	return {
+		report: value.report,
+		big: value.big === true,
+		generation: value.generation,
+		...(typeof value.id === "string" && value.id !== "" ? { id: value.id } : {}),
+	};
+}
+
+function isValidPendingRewind(value) {
+	if (value === null || value === undefined) return true;
+	if (!isPlainObject(value)) return false;
+	if (typeof value.report !== "string") return false;
+	if (typeof value.big !== "boolean") return false;
+	if (!nonNegativeInteger(value.generation)) return false;
+	if (value.id !== undefined && typeof value.id !== "string") return false;
+	return true;
+}
+
 export function createRelay() {
 	return {
 		generation: 0,
-		firstEvaluation: null,
+		bigStreak: 0,
 		canStop: false,
-		handoffPending: false,
-		promotionInvalidated: false,
-		handoffError: null,
-		lastLedger: null,
-		lastHandoff: null,
-		viewRequired: false,
-		fullFlow: false,
-		// The user's own prompts, oldest first. A handoff compacts the branch,
-		// so this archive is the only requirement record the successor keeps.
+		// Verbatim user-authored prompts and steers, oldest first. Preserved
+		// across Root rewinds and reloads so the reborn Root always starts from
+		// the complete user requirement record.
 		userPrompts: [],
+		pendingRewind: null,
 	};
-}
-
-function legacyFullFlow(source) {
-	if (typeof source.fullFlow === "boolean") return source.fullFlow;
-	// Older snapshots had no switch. A promoted holder had already finished its
-	// line; any line that started a generation, armed a handoff, or submitted a
-	// ledger was in the full flow.
-	if (source.canStop === true) return false;
-	return (
-		(nonNegativeInteger(source.generation) && source.generation > 0) ||
-		source.handoffPending === true ||
-		FIRST_EVALUATIONS.has(source.firstEvaluation)
-	);
-}
-
-function copyLedger(ledger) {
-	if (!isPlainObject(ledger)) return null;
-	return {
-		empty: ledger.empty === true,
-		open: nonNegativeInteger(ledger.open) ? ledger.open : 0,
-		blocked: nonNegativeInteger(ledger.blocked) ? ledger.blocked : 0,
-		completed: nonNegativeInteger(ledger.completed) ? ledger.completed : 0,
-		abandoned: nonNegativeInteger(ledger.abandoned) ? ledger.abandoned : 0,
-		total: nonNegativeInteger(ledger.total) ? ledger.total : 0,
-		at: finiteNumber(ledger.at) ? ledger.at : 0,
-	};
-}
-
-function copyLastHandoff(lastHandoff) {
-	if (!isPlainObject(lastHandoff)) return null;
-	const copied = {
-		at: finiteNumber(lastHandoff.at) ? lastHandoff.at : 0,
-		fromGeneration: nonNegativeInteger(lastHandoff.fromGeneration)
-			? lastHandoff.fromGeneration
-			: 0,
-		ok: lastHandoff.ok === true,
-	};
-	if (typeof lastHandoff.error === "string") copied.error = lastHandoff.error;
-	return copied;
 }
 
 export function copyRelay(relay) {
 	const source = isPlainObject(relay) ? relay : createRelay();
 	return {
 		generation: nonNegativeInteger(source.generation) ? source.generation : 0,
-		fullFlow: legacyFullFlow(source),
-		firstEvaluation: FIRST_EVALUATIONS.has(source.firstEvaluation)
-			? source.firstEvaluation
-			: null,
+		bigStreak: nonNegativeInteger(source.bigStreak) ? source.bigStreak : 0,
 		canStop: source.canStop === true,
-		handoffPending: source.handoffPending === true,
-		promotionInvalidated: source.promotionInvalidated === true,
-		handoffError:
-			typeof source.handoffError === "string" ? source.handoffError : null,
-		lastLedger: copyLedger(source.lastLedger),
-		lastHandoff: copyLastHandoff(source.lastHandoff),
-		viewRequired: source.viewRequired === true,
 		userPrompts: Array.isArray(source.userPrompts)
 			? source.userPrompts.filter(
 					(text) => typeof text === "string" && text.trim() !== "",
 				)
 			: [],
+		pendingRewind: copyPendingRewind(source.pendingRewind),
 	};
 }
 
 export function isValidRelay(value) {
 	if (!isPlainObject(value)) return false;
 	if (!nonNegativeInteger(value.generation)) return false;
-	if (value.fullFlow !== undefined && typeof value.fullFlow !== "boolean") {
-		return false;
-	}
-	if (
-		value.firstEvaluation !== null &&
-		!FIRST_EVALUATIONS.has(value.firstEvaluation)
-	) {
+	if (value.bigStreak !== undefined && !nonNegativeInteger(value.bigStreak)) {
 		return false;
 	}
 	if (typeof value.canStop !== "boolean") return false;
-	if (typeof value.handoffPending !== "boolean") return false;
-	if (typeof value.promotionInvalidated !== "boolean") return false;
-	if (value.viewRequired !== undefined && typeof value.viewRequired !== "boolean") {
-		return false;
-	}
 	if (value.userPrompts !== undefined) {
 		if (!Array.isArray(value.userPrompts)) return false;
 		for (const text of value.userPrompts) {
 			if (typeof text !== "string") return false;
 		}
 	}
-	if (
-		value.handoffError !== null &&
-		typeof value.handoffError !== "string"
-	) {
-		return false;
-	}
-	if (value.lastLedger !== null) {
-		const ledger = value.lastLedger;
-		if (!isPlainObject(ledger)) return false;
-		if (typeof ledger.empty !== "boolean") return false;
-		for (const field of ["open", "blocked", "completed", "abandoned", "total"]) {
-			if (!nonNegativeInteger(ledger[field])) return false;
-		}
-		if (!finiteNumber(ledger.at)) return false;
-	}
-	if (value.lastHandoff !== null) {
-		const last = value.lastHandoff;
-		if (!isPlainObject(last)) return false;
-		if (!finiteNumber(last.at)) return false;
-		if (!nonNegativeInteger(last.fromGeneration)) return false;
-		if (typeof last.ok !== "boolean") return false;
-		if (last.error !== undefined && typeof last.error !== "string") return false;
-	}
+	if (!isValidPendingRewind(value.pendingRewind)) return false;
 	return true;
 }
 

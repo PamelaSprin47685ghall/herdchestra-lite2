@@ -1,5 +1,6 @@
 // Activation hooks: bind each host event to its station gatekeeper.
 
+import { releaseScopeReturnDrain, stopAfterScopeReturn } from "../host/branch-context.mjs";
 import { sessionFor } from "../host/capture.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { installContextPreparation } from "../host/context-preparation.mjs";
@@ -75,18 +76,18 @@ function dispatchSession(ctx) {
 export function wireHooks(pi, engine, sharedFirstTurn = null) {
 	// A wiring may hand a full engine or a station-shaped double.
 	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
-	const stationForStop = (ctx) => (engine.stationForStop ?? engine.stationFor)(ctx);
 	// Native Esc is consumed by the host before any terminal event is emitted.
 	// Capture the user's own ctx.abort at the entry point and turn it into the
 	// same typed USER_ABORT gate the web stop button uses. USER_ABORT must never
 	// be reconstructed later from assistant stopReason or missing session_stop.
 	const userAbortOf = (ctx) => {
 		const typed = engine.userAbort;
-		if (typeof typed !== "function") return;
 		try {
-			typed(ctx, { kind: "USER_ABORT", source: "host" });
+			if (typeof typed === "function") typed(ctx, { kind: "USER_ABORT", source: "host" });
 		} catch (error) {
 			record("hooks", error, { phase: "user-abort" });
+		} finally {
+			releaseScopeReturnDrain(dispatchSession(ctx));
 		}
 	};
 	installUserAbortCapture(pi, userAbortOf);
@@ -99,7 +100,10 @@ export function wireHooks(pi, engine, sharedFirstTurn = null) {
 			(id, name, toolCtx, receipt) =>
 				station.admitToolDispatch(id, name, toolCtx, receipt),
 		);
-		if (session) installContextPreparation(session, { station, ctx });
+		if (session) {
+			stopAfterScopeReturn(session.agent, session);
+			installContextPreparation(session, { station, ctx });
+		}
 		return station;
 	};
 	wireProviderObservation(pi, engine);
@@ -166,31 +170,37 @@ export function wireHooks(pi, engine, sharedFirstTurn = null) {
 		(event, ctx) =>
 			bindDispatch(ctx).onContext(event?.messages, ctx, sharedFirstTurn),
 	);
-	pi.on("before_agent_start", (event, ctx) =>
-		bindDispatch(ctx).onBeforeAgentStart(event, ctx),
-	);
-	pi.on("agent_end", (_event, ctx) => {
-		// USER_ABORT never enters here. omp 19.2 may settle Esc as a pause,
-		// suppress session_stop, or omit the aborted assistant message entirely,
-		// so inferring the user's decision from this frame both misses real
-		// aborts and cancels on the wrong evidence. The typed gate is fired by
-		// the host abort entry before/with ctx.abort().
-		stationForStop(ctx).onAgentEnd(ctx, null);
+	pi.on("before_agent_start", (event, ctx) => {
+		releaseScopeReturnDrain(dispatchSession(ctx));
+		return bindDispatch(ctx).onBeforeAgentStart(event, ctx);
+	});
+	pi.on("agent_end", (event, ctx) => {
+		// Only the typed abort entry proves USER_ABORT. This frame says what
+		// ended and whether the host is already continuing it.
+		try {
+			stationOf(ctx).onAgentEnd(ctx, { messages: event?.messages, willContinue: event?.willContinue });
+		} finally {
+			// A rewind ticket claims its own queue hold synchronously. A pause
+			// or a stale/cancelled plan must not leave the original hold armed.
+			releaseScopeReturnDrain(dispatchSession(ctx));
+		}
 	});
 	pi.on("session_stop", (event, ctx) =>
-		stationForStop(ctx).onSessionStop(ctx, {
+		stationOf(ctx).onSessionStop(ctx, {
 			signal: event?.signal ?? null,
 			reason: event?.last_assistant_message?.stopReason ?? null,
 		}),
 	);
 	pi.on("session_switch", (event, ctx) => {
-		const result = stationForStop(ctx).onSessionSwitch(event, ctx);
+		releaseScopeReturnDrain(dispatchSession(ctx));
+		const result = stationOf(ctx).onSessionSwitch(event, ctx);
 		bindDispatch(ctx);
 		return result;
 	});
-	pi.on("session_compact", (_event, ctx) =>
-		stationOf(ctx).onSessionCompact(ctx),
-	);
+	pi.on("session_compact", (_event, ctx) => {
+		releaseScopeReturnDrain(dispatchSession(ctx));
+		return stationOf(ctx).onSessionCompact(ctx);
+	});
 	return {
 		ok: transitionsBound,
 		missing: transitionsBound ? [] : ["assistant_message", "message_end"],

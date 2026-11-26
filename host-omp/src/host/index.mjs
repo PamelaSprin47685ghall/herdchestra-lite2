@@ -39,7 +39,6 @@ export {
 export {
 	sendSteerTicket,
 	sendUserMessageTicket,
-	activateToolsTicket,
 	switchModelTicket,
 	restoreScopedModelTicket,
 } from "./host-tickets.mjs";

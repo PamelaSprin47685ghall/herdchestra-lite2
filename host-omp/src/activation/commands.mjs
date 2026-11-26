@@ -17,9 +17,8 @@ function compactDetail(detail) {
 export function wireCommands(pi, engine) {
 	// A wiring may hand a full engine or a station-shaped double.
 	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
-	const stationForStop = (ctx) => (engine.stationForStop ?? engine.stationFor)(ctx);
 	pi.registerCommand?.("herd-autopilot", {
-		description: "Toggle autopilot: off is manual duty with ask; on is the fully automatic relay",
+		description: "Toggle autopilot: when on, natural stops prompt the root to review or finish",
 		handler: async (args, ctx) => stationOf(ctx).onAutopilotCommand(args),
 	});
 	pi.registerCommand?.("herd-diag", {

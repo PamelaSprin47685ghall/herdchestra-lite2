@@ -557,14 +557,18 @@ describe("owner queries", () => {
     expect(early.isError).toBe(true);
     expect(early.content[0].text).toContain("No forked scope has returned yet");
 
+    const { RETURN_OATH_KEY, RETURN_OATH_VALUE } = await import("../src/station/domain/handoff.mjs");
     const child = {
-      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
+      state: { scopes: [], autopilot: false, relay: { generation: 0 } },
       forkLedgerPort: () => ledger,
       forkIdentityPort: () => ({ forkId: "call-f1", parentOwnerId: "root" }),
     };
     const returned = handleReturnCall(child, {
       id: "call-r1",
-      arguments: { dafny: "the child returns its record" },
+      arguments: {
+        dafny: "the child returns its record",
+        [RETURN_OATH_KEY]: RETURN_OATH_VALUE,
+      },
     });
     expect(returned.isError).toBeUndefined();
     // The station seals the record and answers in the same beat.
@@ -691,9 +695,13 @@ describe("owner queries", () => {
         ownScopeId: "call-p",
       }),
     };
+    const { RETURN_OATH_KEY, RETURN_OATH_VALUE } = await import("../src/station/domain/handoff.mjs");
     const returned = handleReturnCall(child, {
       id: "call-rp",
-      arguments: { dafny: "the child hands its own children to the parent first" },
+      arguments: {
+        dafny: "the child hands its own children to the parent first",
+        [RETURN_OATH_KEY]: RETURN_OATH_VALUE,
+      },
     });
     expect(returned.content[0].text).toContain("has been handed to Root");
     expect(returned.content[0].text).toContain("scope-2");
@@ -729,10 +737,11 @@ describe("owner queries", () => {
       setChildOutcome: () => {},
     };
     fork(ledger, "call-p", "root", 0);
+    const { RETURN_OATH_KEY, RETURN_OATH_VALUE } = await import("../src/station/domain/handoff.mjs");
     const table = "| a | b |\n|---|---|\n| 1 | 2 |";
     const returned = handleReturnCall(child, {
       id: "call-rp",
-      arguments: { dafny: table },
+      arguments: { dafny: table, [RETURN_OATH_KEY]: RETURN_OATH_VALUE },
     });
     expect(returned.details.accepted).toBe(true);
     const station = {
@@ -747,21 +756,25 @@ describe("owner queries", () => {
     expect(text.indexOf(table)).toBeGreaterThan(text.indexOf("found the leak"));
   });
 
-  test("refuses scope_return outside a forked child", async () => {
+  test("refuses root scope_return without dafny or without rewind capability", async () => {
     const { handleReturnCall } = await import("../src/station/fork-controls.mjs");
     const station = {
-      state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
+      state: { scopes: [], autopilot: false, relay: { generation: 0, bigStreak: 0, canStop: false, userPrompts: [], pendingRewind: null } },
       forkLedgerPort: () => createBracketLedger(),
     };
-    const out = handleReturnCall(station, {
+    const missing = handleReturnCall(station, {
       id: "call-x",
       arguments: {},
     });
-    expect(out.isError).toBe(true);
-    const text = out.content[0].text;
-    expect(text).toContain("NOT_A_CHILD");
-    expect(text).toContain("scope_return");
-    expect(text).toContain("scope_join");
+    expect(missing.isError).toBe(true);
+    expect(missing.details.code).toBe("MISSING_DAFNY");
+
+    const unavailable = handleReturnCall(station, {
+      id: "call-y",
+      arguments: { dafny: "root report without manager" },
+    });
+    expect(unavailable.isError).toBe(true);
+    expect(unavailable.details.code).toBe("ROOT_REWIND_UNAVAILABLE");
   });
 
   test("parks a join until a child returns, then takes it", async () => {

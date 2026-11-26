@@ -236,6 +236,8 @@ export function registerFork(ledger, spec, options = {}) {
     // Return nudges already given. One field, because the station's in-turn
     // steer and the spawn ticket's out-of-turn prompt both spend it.
     returnNudges: 0,
+    // Small self-handoff count on this scope (omitted-oath `scope_return`).
+    handoffCount: 0,
     supersededAt: null,
     openSeq: ledger.seq,
     closeSeq: null,
@@ -1298,6 +1300,9 @@ export function validRecord(forkId, record) {
   // none, and the readers treat that as zero.
   if (record.returnNudges !== null && record.returnNudges !== undefined) {
     if (!Number.isInteger(record.returnNudges) || record.returnNudges < 0) return false;
+  }
+  if (record.handoffCount !== null && record.handoffCount !== undefined) {
+    if (!Number.isInteger(record.handoffCount) || record.handoffCount < 0) return false;
   }
   // Address and mailbox: absent in older snapshots, but a present value must
   // be the shape the sender and the resolver both assume.

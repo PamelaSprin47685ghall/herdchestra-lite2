@@ -87,11 +87,27 @@ Still unreceived: {{remaining}}.
 
 ## return.tool
 
-Hand the record to the calling scope; it receives the record with `scope_join`. Any unreceived work from scopes you forked transfers to it, or to the nearest live receiver above it when the calling scope has already returned. Put your conclusions in your text: the record keeps what you said plus every tool call you made with its arguments, so a result you never state is lost. The last receipt at your level is sealed in full.
+Call alone in its tool-call batch. Omit the oath to rewind and continue. A child taking the oath seals its record for the parent to receive with `scope_join`. Unreceived descendants move to the parent or nearest live receiver above it. A woken scope forwards `dafny` to its parent instead of sealing or rewinding.
 
 ## return.dafny
 
-Required. The record is submitted only with it; a return without this field is refused. The string is appended to the record after trimming, for what text cannot carry: tool results reach the caller only here, aiming at a Dafny-style dense pseudo code. Never restate your text. Tell reliable deductions so the reader do not need your chronicle. Never tell the chronicle. When the work left nothing the replay drops, say that in one line rather than leaving the field empty.
+Required. Write a fresh, dense report of reliable deductions, verification evidence, unresolved work, and results the caller or next context cannot recover. The new report replaces the old one on a rewind; carry forward evidence that still matters. On a child seal, this text is trimmed and appended to the published record; do not restate what the replay already carries.
+
+## return.oath
+
+Optional. Give only `a_ferocious_audacious_master_would_change_nothing` when nothing remains worth changing; omit this field for a small rewind. At root, receive every outstanding child before taking the oath.
+
+## return.rewind
+
+Rewinding to continue with your latest report and pins. This resets the root oath streak.
+
+## return.review
+
+Rewinding for an independent review. Check the work against the user's requirements; take the oath again only if nothing remains worth changing.
+
+## return.finish
+
+The second consecutive oath permits the final reply. Answer the user now.
 
 ## return.pending
 

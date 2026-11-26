@@ -4,9 +4,9 @@ import { createTestStation } from "./helpers/station-ports.mjs";
 import { injectSystemPrompt, persistentOperatingSkill } from "../src/prompts/inject.mjs";
 import { inlinedSkills } from "../src/prompts/skills.mjs";
 import { wireTools } from "../src/tools/catalog.mjs";
-import { handoffDemand, applyLedgerEvaluation, beginGenerationAfterHandoff, createRelay } from "../src/relay/index.mjs";
+
 import { installContextPreparation } from "../host-omp/src/host/context-preparation.mjs";
-import { todoTicket } from "../src/tools/todo.mjs";
+
 import { skillReceiptText } from "../src/station/texts.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
@@ -46,8 +46,8 @@ test("one scope-and-relay section serves root and child, manual and autopilot", 
 	const baseText = Array.isArray(base) ? base.join("\n") : base;
 	expect(baseText).toContain("Forked scope duty");
 	expect(baseText).toContain("Only the user toggles autopilot");
-	expect(baseText).toContain("Any successful `todo` write");
-	expect(baseText).toContain("A non-empty root ledger forbids a final reply");
+	expect(baseText).toContain("Native `todo` is optional working notes");
+	expect(baseText).toContain("At root, join every outstanding child before taking the oath");
 
 	// The managed block never varies with the request: a forked scope inherits
 	// the owner's prompt prefix, and a changed system prompt drops the inherited
@@ -68,14 +68,11 @@ test("reinjecting a prompt converted from text to an array retains only the host
 	expect(injectSystemPrompt(prompt)).toEqual(prompt);
 });
 
-test("a promoted successor is ready to answer without reevaluating its ledger", () => {
-	const predecessor = applyLedgerEvaluation(createRelay(), []).relay;
-	const successor = beginGenerationAfterHandoff(predecessor);
-	const promoted = applyLedgerEvaluation(successor, []);
-	expect(promoted.relay.canStop).toBe(true);
-	const text = skillReceiptText({ autopilot: true, relay: promoted.relay });
+test("a root with two consecutive oaths is ready to answer", () => {
+	const state = { autopilot: true, relay: { bigStreak: 2 } };
+	const text = skillReceiptText(state);
 	expect(text).toMatch(/ready to answer/i);
-	expect(text).not.toMatch(/no ledger|evaluat/i);
+	expect(text).not.toContain("Call `scope_return` before stopping");
 });
 
 test("routine scope status keeps local turns and pending work without repeating the assignment", () => {
@@ -89,7 +86,7 @@ test("routine scope status keeps local turns and pending work without repeating 
 		deadlineAt: 24000,
 		timeBudgetMs: 24000,
 	};
-	const pending = skillReceiptText(state, true, branch, 3);
+	const pending = skillReceiptText(state, branch, 3, true);
 	const root = skillReceiptText(state);
 	for (const text of [pending, root]) {
 		// The reminder closes the receipt as its own skill element inside the
@@ -113,7 +110,7 @@ test("a forked scope with no ledger record still learns that its turns are unava
 	const state = { autopilot: true, startedAt: 0 };
 	// The bearer runs inside a scope, yet the ledger holds no fork record for
 	// it. Saying nothing would read as "turns are fine"; say it is unknown.
-	const missing = skillReceiptText(state, true, null, 0, false, true);
+	const missing = skillReceiptText(state, null, 0, true);
 	expect(missing).toContain("Scope budget:");
 	expect(missing).toMatch(/no record|unavailable/i);
 	expect(missing).not.toMatch(/remaining\s+\d/);
@@ -130,7 +127,7 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 	};
 	const launch = (scopeId, fsmText) => handleForkCall(station, {
 		id: `call-${scopeId}`,
-		arguments: { forks: [{ scopeId, fsm: fsmText, profession: "You are a careful observer of tides and harbor lights", blocked: false, budget: { read: 1 }, time: 30, targets: [`${scopeId}.mjs`] }] },
+		arguments: { forks: [{ scopeId, fsm: fsmText, profession: "You are a careful observer of tides and harbor lights", n: 1, budget: { read: 1 }, targets: [`${scopeId}.mjs`] }] },
 	});
 	const prior = launch("earlier", "Measure the tide");
 	expect(prior.isError).toBeUndefined();
@@ -143,32 +140,18 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 	expect(text).toContain("Unreceived work: earlier, latest.");
 });
 
-test("the registered scope_return explains the sealed final receipt and the digest rule", () => {
+test("the registered scope_return explains the return-only batch and fresh report", () => {
 	const tools = new Map();
 	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
 	const returning = tools.get("scope_return");
 	expect(returning.parameters.required).toEqual(["dafny"]);
-	expect(returning.parameters.properties.dafny.type).toBe("string");
-	expect(returning.parameters.properties.dafny.description).toMatch(
-		/^Required\. The record is submitted only with it/,
-	);
-	expect(returning.parameters.properties.dafny.description).toMatch(
-		/appended to the record after trimming/i,
-	);
-	expect(returning.parameters.properties.dafny.description).toMatch(
-		/never restate your text/i,
-	);
-	expect(returning.parameters.properties.dafny.description).toMatch(
-		/for what text cannot carry/,
-	);
-	expect(returning.parameters.properties.dafny.description).toMatch(
-		/Tell reliable deductions/i,
-	);
-	expect(returning.description).toMatch(/(?:last|latest|final)[^.]*receipt[^.]*seal/i);
-	expect(returning.description).toContain(
-		"every tool call you made with its arguments",
-	);
-	expect(returning.description).not.toContain("elder_report");
+	const { dafny } = returning.parameters.properties;
+	expect(dafny.type).toBe("string");
+	expect(dafny.description).toMatch(/replaces the old one on a rewind/);
+	expect(dafny.description).toMatch(/carry forward evidence/);
+	expect(dafny.description).toMatch(/appended to the published record/);
+	expect(returning.description).toContain("Call alone in its tool-call batch");
+	expect(returning.description).toContain("A woken scope forwards");
 });
 
 test("the registered scope_fork renames a repeated sibling name instead of amending", () => {
@@ -223,15 +206,7 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 			},
 		},
 	};
-	const sent = [];
-	const station = createTestStation(SessionStation, manager, {}, {
-		canPrompt: true,
-		prompt: (text) => sent.push({ role: "user", content: text }),
-		invokeTool: () => ({
-			content: [{ type: "text", text: "Ledger empty." }],
-			details: { op: "init", phases: [] },
-		}),
-	}, registry, null);
+	const station = createTestStation(SessionStation, manager, {}, {}, registry, null);
 	station.state.autopilot = true;
 	const remove = installContextPreparation(session, { station, ctx });
 	function commit(message) {
@@ -247,7 +222,7 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 			if (!keepHook) remove();
 		}
 	}
-	return { station, ctx, sent, commit, request, remove, manager };
+	return { station, commit, request, remove, manager };
 }
 
 function receiptTextOf(message) {
@@ -325,39 +300,6 @@ test("the language reminder ends every request receipt and follows its port", as
 		disabled.remove();
 	}
 });
-
-function demandCount(messages) {
-	return messages.flatMap(({ content }) => Array.isArray(content)
-		? content.filter((block) => block.type === "text").map((block) => block.text)
-		: [content]).join("\n").split(handoffDemand()).length - 1;
-}
-
-for (const promptVisible of [true, false]) {
-	test(`natural stop supplies one complete handoff demand when the queued prompt is ${promptVisible ? "visible" : "missing"}`, async () => {
-		const { station, ctx, sent, request } = relayRequest();
-		station.recordNaturalStop(ctx);
-		expect(sent.map((message) => message.content)).toEqual([handoffDemand()]);
-		const messages = await request(...(promptVisible ? sent : []));
-		expect(messages.filter((message) => message.herdSkill)).toHaveLength(1);
-		expect(demandCount(messages)).toBe(1);
-	});
-}
-
-for (const resultVisible of [true, false]) {
-	test(`todo transfer supplies one complete handoff demand when the tool result is ${resultVisible ? "visible" : "missing"}`, async () => {
-		const { station, ctx, commit, request } = relayRequest();
-		const params = { op: "init", list: [] };
-		const result = await todoTicket(station, params, ctx);
-		expect(demandCount([result])).toBe(1);
-		if (resultVisible) {
-			commit({ role: "assistant", content: [{ type: "toolCall", id: "todo-1", name: "todo", arguments: params }] });
-			commit({ role: "toolResult", toolCallId: "todo-1", toolName: "todo", ...result });
-		}
-		const messages = await request();
-		expect(messages.filter((message) => message.herdSkill)).toHaveLength(1);
-		expect(demandCount(messages)).toBe(1);
-	});
-}
 
 test("a child prompt is byte-identical to the root prompt", () => {
 	for (const autopilot of [true, false]) {

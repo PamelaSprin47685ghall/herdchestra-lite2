@@ -1,21 +1,20 @@
 // Pure tool-call decision for the Station.
 //
 // The Station owns the side effects: it processes the carrying message's
-// controls, charges a branch, persists, grants `todo`, and turns a refusal
-// into a host block. This module owns only the decision. It takes plain
-// snapshots, returns a plain result, never mutates its inputs, and imports no
-// Station or host module.
+// controls, charges a branch, persists, and turns a refusal into a host block.
+// This module owns only the decision. It takes plain snapshots, returns a
+// plain result, never mutates its inputs, and imports no Station or host
+// module.
 //
 // `charge` is an intent. The Station calls `chargeBranch` with the request and
 // converts `{ ok: false }` into a block; the accounting refusal stays in the
 // scope layer.
 
-import { handoffToolBlockedReason } from "../../relay/index.mjs";
 import { loadDoc } from "../../prompts/index.mjs";
 import { CONTROL_TOOLS, parseArgs } from "../messages.mjs";
 
 const E = loadDoc("errors");
-// `host/policy.mjs` owns the classifier; this module must not import host.
+// `core/policy.mjs` owns the classifier; this module must not import host.
 // The persisted policy values are stable public strings.
 const READ_ONLY_POLICY = "read-only-subagent";
 
@@ -51,12 +50,12 @@ function blocked(reason, controls = ALLOW.controls) {
  * Decide one tool call from plain data.
  *
  * @param {object} input
- * @param {{autopilot?: boolean, relay?: {handoffPending?: boolean}, charges?: object}} input.state
+ * @param {{autopilot?: boolean, charges?: object}} input.state
  * @param {{handled?: boolean, hasCall?: boolean}} input.processed
  * @param {{found?: boolean, groupKey?: string, beatTools?: Array<{name: string, free: boolean}>}} input.dispatch
  * @param {{toolName: string, toolCallId: string, input?: unknown}} input.call
  * @param {string} input.policy
- * @param {{ownerId?: string|null, handoffPending?: boolean, owesLedger?: boolean, timeLimitMs?: number|null}} input.relay
+ * @param {{ownerId?: string|null, timeLimitMs?: number|null}} input.relay
  * @returns {{
  *   verdict: "allow"|"block"|"readonly"|"wait",
  *   controls: {process: boolean, directAmend: {args: object}|null},
@@ -88,24 +87,7 @@ export function decideToolCall({
 		};
 	}
 
-	// The pending-handoff gate belongs to the root. A child may share the
-	// root's relay state, but its tools are its own work. `scope_join` is the
-	// one exception: a restored or raced ready record must remain receivable,
-	// and a gate that blocks the join would leave the child parked forever.
-	if (
-		relay.ownerId === null &&
-		state.autopilot === true &&
-		state.relay?.handoffPending === true &&
-		toolName !== "scope_join"
-	) {
-		return blocked(handoffToolBlockedReason(), {
-			process: false,
-			directAmend: null,
-		});
-	}
-
-	// `todo` is free at every level. The grant lives in `ensureTools`; this
-	// decision only says the call is free and persists.
+	// Native `todo` stays free at every level (never overrides host behavior).
 	if (toolName === "todo") {
 		return allow({
 			todo: { free: true, persist: true, grant: false },

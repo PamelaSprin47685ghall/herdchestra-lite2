@@ -4,7 +4,7 @@
  */
 
 import { createEngine } from "herdchestra-lite2";
-import { agentIdOf, conversationKeyOf, sameManager, selectStopStation } from "../host/identity-adapters.mjs";
+import { agentIdOf, conversationKeyOf, sameManager } from "../host/identity-adapters.mjs";
 import {
 	capabilities,
 	contextHeaderOf,
@@ -28,7 +28,8 @@ import { buildTickets } from "./tickets.mjs";
 import { installCapture } from "./capture.mjs";
 import { wireHooks } from "./hooks.mjs";
 import { bindScopeView } from "../host/child-display.mjs";
-import { stopAfterScopeReturn } from "../host/branch-context.mjs";
+import { releaseScopeReturnDrain } from "../host/branch-context.mjs";
+import { canRewindRoot } from "../host/host-tickets.mjs";
 
 export { installCapture };
 
@@ -118,6 +119,8 @@ function registerProcessUserAbortEngine(engine) {
 			engine.userAbort?.(session, evidence);
 		} catch (error) {
 			record("activation", error, { phase: "session-user-abort" });
+		} finally {
+			releaseScopeReturnDrain(session);
 		}
 	});
 }
@@ -152,21 +155,13 @@ export function createHostBag(pi) {
 			return [];
 		}
 	};
-	const activeTools = () => {
-		try {
-			const active = pi?.getActiveTools?.();
-			return Array.isArray(active) ? active : [];
-		} catch {
-			return [];
-		}
-	};
 	return Object.freeze({
 		session: Object.freeze({
 			managerOf,
 			conversationKey: conversationKeyOf,
 			branch: branchOf,
 			agent: (ctx) => ctx?.agent ?? null,
-			activeTools,
+			canRewindRoot: (ctx) => canRewindRoot(pi, ctx),
 			header: contextHeaderOf,
 			setMessages: setAgentMessages,
 			appendHistory: appendHistoryMessage,
@@ -191,7 +186,6 @@ export function createHostBag(pi) {
 			// ledger, and waiters. The first wiring wins.
 			wiring: globalForkWiring,
 			agentIdOf,
-			selectStopStation,
 			sameManager,
 		}),
 		report: Object.freeze({ record }),
@@ -223,7 +217,6 @@ export function wireExtension(
 			binding = resolveStationBinding(station, ctx, forkWiring, {
 				stationFor: (childCtx) => engine.station(childCtx),
 				refresh: attachStation,
-				stopAfterReturn: (agent) => stopAfterScopeReturn(agent),
 				abortChild: abortChildSession,
 			});
 		} catch (error) {

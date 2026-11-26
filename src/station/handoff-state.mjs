@@ -1,24 +1,22 @@
 // Station handoff state transitions. Pure synchronous functions.
+//
+// Owns Root rewind commit (atomic compaction + verbatim user prompt restoration
+// + epoch/watermark/cache reset) and shared `finishRewind` cleanup used by both
+// Root and Child rewinds. Never awaits; the async scheduling ticket lives in
+// the host wiring.
 
 import { appendHandoffCompaction } from "../handoff/session.mjs";
-import { truncateForHostBoundary, unreceivedChildren } from "../scope/index.mjs";
+import { truncateForHostBoundary } from "../scope/index.mjs";
 import { childReturnNudge } from "../scope/return-nudge.mjs";
 import {
 	collectUserPrompts,
-	handoffDemand,
-	handoffToolBlockedReason,
 	mergeUserPrompts,
-	successorOpeningText,
+	rebornUserMessages,
 } from "../relay/index.mjs";
 import {
-	decideHandoffAdvance,
-	decideHandoffArm,
-	decideHandoffReport,
-	decideInheritedLedgerViewed,
-	decideNaturalStop,
-	decideRelayEvaluation,
-	decideRetirement,
-	decideSelfHandoff,
+	formatRebornPrompt,
+	rebornStartPrompt,
+	resetRootPromotion,
 } from "./domain/handoff.mjs";
 
 function isChild(station) {
@@ -26,174 +24,147 @@ function isChild(station) {
 }
 
 /**
- * The resolved relay policy for this station.
+ * Shared state reset after either a Root or Child rewind rewrote the live branch.
  *
- * The station holds the one resolved object port; the registry name table is
- * not consulted. A station double passes the same object through `relayPort`.
+ * `keepAmends` preserves inherited parent amends on a Child rewind; Root passes
+ * an empty list because its compaction supersedes all prior beats.
  */
-function relayPolicyOf(station) {
-	return station.relayPort();
-}
-
-function armHandoff(station, _ctx) {
-	// Only the `handoff` degree may arm a transfer. `ledger` owes a ledger but
-	// never hands off, and `none` owes nothing at all.
-	const decision = decideHandoffArm({
-		relay: station.state.relay,
-		isChild: isChild(station),
-		canHandoff: relayPolicyOf(station).canHandoff(),
-	});
-	if (!decision.arm) return false;
-	station.handoffReport = null;
-	station.state.relay = decision.relay;
-	station.persist();
-	station.markPending();
-	return true;
-}
-
-function advanceRelayForHandoff(station, options = {}) {
-	const decision = decideHandoffAdvance({
-		relay: station.state.relay,
-		isChild: isChild(station),
-		canHandoff: relayPolicyOf(station).canHandoff(),
-		expectedGeneration: options.expectedGeneration,
-		at: Number.isFinite(options.at) ? options.at : Date.now(),
-	});
-	if (!decision.advance) return false;
-	station.state.relay = decision.relay;
-	station.persist();
-	return true;
-}
-
-/**
- * How many fork results this station still owes a receive. A running child and
- * a returned child that no join has taken are both unreceived. A child branch
- * never evaluates the relay, so only the root counts here.
- */
-function unreceivedRootChildren(station) {
-	const ownerId =
-		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
-	if (ownerId !== null) return 0;
-	const ledger =
-		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
-	if (!ledger) return 0;
-	return unreceivedChildren(ledger, "root").length;
-}
-
-function recordLedgerEvaluation(station, phases, op, options = {}) {
-	const decision = decideRelayEvaluation({
-		relay: station.state.relay,
-		owesLedger: relayPolicyOf(station).owesLedger(),
-		phases,
-		op,
-		options,
-		unreceived: unreceivedRootChildren(station),
-	});
-	const { commit, ...applied } = decision;
-	if (commit) {
-		station.state.relay = applied.relay;
-		station.persist();
+export function finishRewind(station, { keepAmends = [], rebaseAnchor = false } = {}) {
+	truncateForHostBoundary(station.state);
+	station.state.amends = Array.isArray(keepAmends)
+		? keepAmends.filter((key) => typeof key === "string" && key !== "")
+		: [];
+	station.contextCache = null;
+	station.hostBoundaryScan = null;
+	station.resetUsageWatermark?.();
+	if (rebaseAnchor && typeof station.anchor?.rebase === "function") {
+		station.anchor.rebase();
+	} else {
+		station.persist?.();
 	}
-	return applied;
 }
 
 /**
- * Record one small handoff: the holder is exhausted, the ledger on record is
- * inherited, and the next generation continues the work. It never promotes;
- * it only arms the handoff.
+ * Archive any new real user prompts/steers visible in the live Root context.
+ * When genuine new user input arrived after a promotion (or first big handoff),
+ * reset `bigStreak` and `canStop` so the new requirement goes through its own
+ * two-oath verification cycle.
  */
-function recordRetirement(station) {
-	// `none` owes nothing, so a retirement must not arm a handoff either.
-	const applied = decideRetirement({
-		relay: station.state.relay,
-		owesLedger: relayPolicyOf(station).owesLedger(),
-	});
-	if (!applied) return null;
-	station.state.relay = applied.relay;
-	station.persist();
-	return applied;
+export function syncRootUserPrompts(station, messages = null) {
+	if (isChild(station) || !station?.state?.relay) return false;
+	const source = Array.isArray(messages)
+		? messages
+		: typeof station.contextMessages === "function"
+			? station.contextMessages()
+			: [];
+	const current = Array.isArray(station.state.relay.userPrompts)
+		? station.state.relay.userPrompts
+		: [];
+	const exclude = new Set([childReturnNudge()]);
+	const fresh = collectUserPrompts(source, { exclude });
+	const merged = mergeUserPrompts(current, fresh);
+	if (merged.length === current.length && merged.every((text, i) => text === current[i])) {
+		return false;
+	}
+	const reset = resetRootPromotion({ ...station.state.relay, userPrompts: merged });
+	station.state.relay = reset.relay;
+	station.persist?.();
+	return true;
 }
 
 /**
- * Record one natural stop outside every scope.
+ * Build the immutable Root rewind plan for the host ticket, or null when no
+ * Root rewind is pending.
+ */
+export function pendingRootRewindPlan(station) {
+	if (isChild(station)) return null;
+	const pending = station?.state?.relay?.pendingRewind;
+	if (!pending || typeof pending !== "object") return null;
+	return {
+		pending,
+		generation: pending.generation,
+		big: pending.big === true,
+		id: pending.id ?? null,
+		startPrompt: rebornStartPrompt(),
+	};
+}
+
+/**
+ * Clear a pending Root rewind (either unconditionally on user abort / external
+ * session transition, or only when matching `plan` if a host rewind ticket
+ * aborted/skipped before commit).
+ */
+export function clearPendingRootRewind(station, plan = null) {
+	if (isChild(station)) return false;
+	const relay = station?.state?.relay;
+	const pending = relay?.pendingRewind ?? null;
+	if (plan !== null && plan !== undefined) {
+		const sameRef = pending !== null && plan.pending === pending;
+		const sameMeta =
+			pending !== null &&
+			plan.generation === pending.generation &&
+			(plan.id ?? null) === (pending.id ?? null);
+		if (station.rewindDispatching === plan.pending) station.rewindDispatching = null;
+		if (!sameRef && !sameMeta) return false;
+	} else {
+		station.rewindDispatching = null;
+	}
+	station.rewoundThisTurn = false;
+	if (!pending) return false;
+	station.state.relay = {
+		...relay,
+		pendingRewind: null,
+	};
+	station.persist?.();
+	return true;
+}
+
+/**
+ * Commit a pending Root rewind after the host confirms the agent loop is idle
+ * and in-flight message persistence has settled.
  *
- * A stop is a small handoff, never a submission. It transfers the holder and
- * the ledger on record, but it counts no empty evaluation: only a `todo` write
- * advances the two-empty-ledger protocol. A non-empty inherited ledger still
- * requires the successor to view it before writing. The transition decides,
- * and a handoff it arms sends the one demand as a user prompt.
+ * Validates `plan` against the live `station.state.relay.pendingRewind` first
+ * so a stale or duplicate ticket call is an atomic no-op (`false`).
+ *
+ * Writes:
+ * 1. Merge real user prompts/steers into `state.relay.userPrompts`.
+ * 2. Append one handoff compaction entry carrying pins + formatted generation
+ *    report + continuation/review directive.
+ * 3. Append verbatim user prompts & steers as real `role: "user"` entries right
+ *    after the compaction boundary so the reborn Root inherits them verbatim.
+ * 4. Clear `pendingRewind`, bump `epoch`, clear `charges`/`amends`, reset usage
+ *    watermark, persist, and replace live `agent.state.messages` with the fresh
+ *    projection from `manager.buildSessionContext()`.
  */
-function recordNaturalStop(station, ctx) {
-	const plan = decideNaturalStop({
-		relay: station.state.relay,
-		isChild: isChild(station),
-		autopilot: station.state.autopilot,
-		owesLedger: relayPolicyOf(station).owesLedger(),
-		unreceived: unreceivedRootChildren(station),
-	});
-	if (!plan) return null;
-	const applied = recordRetirement(station);
-	if (!applied || applied.action === null) return applied;
-	if (applied.action !== "handoff" && applied.action !== "retire") return applied;
-	if (!armHandoff(station, ctx)) return applied;
-	// The demand rides the prompt. If the next request cannot see it, the
-	// context receipt supplies it instead.
-	if (!station.deliverUserMessage(handoffDemand())) {
-		(station.host?.report?.record ?? station.host?.record)?.("handoff", new Error("the handoff demand could not be sent as a prompt"), {
-			stage: "natural-stop-prompt",
-		});
+export function commitRootRewind(station, ctx, plan = null) {
+	if (isChild(station)) return false;
+	const relay = station?.state?.relay;
+	const pending = relay?.pendingRewind;
+	if (!pending || typeof pending !== "object") return false;
+	if (plan !== null && plan !== undefined) {
+		const sameRef = plan.pending === pending;
+		const sameMeta =
+			plan.generation === pending.generation &&
+			(plan.id ?? null) === (pending.id ?? null);
+		if (!sameRef && !sameMeta) return false;
 	}
-	return applied;
-}
 
-/** Clear the inherited-ledger requirement once the successor has looked. */
-function markInheritedLedgerViewed(station) {
-	const decision = decideInheritedLedgerViewed({ relay: station.state.relay });
-	if (!decision) return false;
-	station.state.relay = decision.relay;
-	station.persist();
-	return true;
-}
-
-function captureHandoffReport(station, text) {
-	const decision = decideHandoffReport({
-		relay: station.state.relay,
-		isChild: isChild(station),
-		text,
-	});
-	if (!decision.capture) return false;
-	station.handoffReport = decision.text;
-	return true;
-}
-
-function commitSelfHandoff(station, ctx, report) {
-	const relay = station.state.relay;
-	if (!decideSelfHandoff({ relay, isChild: isChild(station) })) {
-		return { ok: false };
-	}
-	// A handoff compacts the branch: the successor reads the summary, not the
-	// transcript. The archive keeps the user's own prompts across generations
-	// and a reload, so the report never has to restate them.
 	const messages =
 		typeof station.contextMessages === "function" ? station.contextMessages() : [];
 	const userPrompts = mergeUserPrompts(
 		relay.userPrompts ?? [],
-		collectUserPrompts(messages, {
-			exclude: new Set([handoffDemand(), handoffToolBlockedReason(), childReturnNudge()]),
-		}),
+		collectUserPrompts(messages, { exclude: new Set([childReturnNudge()]) }),
 	);
-	station.state.relay = { ...relay, userPrompts };
-	const opening = successorOpeningText(
-		station.state.relay,
-		report,
-		station.state.pins,
-		userPrompts,
-	);
+	const summary = formatRebornPrompt({
+		report: pending.report,
+		pins: station.state.pins ?? [],
+		big: pending.big === true,
+	});
 	const manager = station.manager ?? null;
 	const compacted = appendHandoffCompaction(
 		manager,
-		opening,
-		station.usage.lastTotalInput ?? 0,
+		summary,
+		station.usage?.lastTotalInput ?? 0,
 	);
 	if (!compacted && manager) {
 		station.host?.session?.appendHistory?.(
@@ -201,50 +172,36 @@ function commitSelfHandoff(station, ctx, report) {
 			{
 				role: "custom",
 				customType: "herd-relay-handoff",
-				content: [{ type: "text", text: opening }],
+				content: [{ type: "text", text: summary }],
 				timestamp: Date.now(),
 			},
 			ctx,
 		);
 	}
-	truncateForHostBoundary(station.state);
-	station.resetUsageWatermark();
-	station.handoffReport = null;
-	const advanced = advanceRelayForHandoff(station, {
-		expectedGeneration: relay.generation,
-		at: Date.now(),
-	});
-	station.clearPending();
-	if (manager && typeof manager.buildSessionContext === "function") {
-		try {
-			// One rebuild, read through the station's branch projection: the
-			// compaction above already moved the leaf, so this is a fresh
-			// projection rather than the pre-handoff cache.
-			const rebuilt = station.contextMessages();
-			station.host?.session?.setMessages?.(ctx, rebuilt);
-			// The host now owns a different message list; the next projection
-			// must come from the branch, not from the object cached above.
-			station.contextCache = null;
-		} catch (error) {
-			// Keep existing agent messages if the rebuild fails, but record it:
-			// a silent miss leaves the successor reading the pre-handoff
-			// transcript while the branch already holds the compacted one.
-			(station.host?.report?.record ?? station.host?.record)?.("handoff", error, { stage: "rebuild-context" });
+	if (manager && typeof manager.appendMessage === "function") {
+		const restoredUsers = rebornUserMessages(userPrompts, Date.now());
+		for (const userMessage of restoredUsers) {
+			try {
+				manager.appendMessage(userMessage);
+			} catch (error) {
+				station.noteError?.("handoff", error, { stage: "restore-user-prompts" });
+			}
 		}
 	}
-	return {
-		ok: advanced,
-		opening,
-		relay: station.state.relay,
+	station.state.relay = {
+		...relay,
+		userPrompts,
+		pendingRewind: null,
 	};
+	finishRewind(station, { keepAmends: [], rebaseAnchor: false });
+	if (manager && typeof manager.buildSessionContext === "function") {
+		try {
+			const rebuilt = station.contextMessages();
+			station.host?.session?.setMessages?.(ctx, rebuilt);
+			station.contextCache = null;
+		} catch (error) {
+			station.noteError?.("handoff", error, { stage: "rebuild-context" });
+		}
+	}
+	return true;
 }
-
-export {
-	armHandoff,
-	captureHandoffReport,
-	commitSelfHandoff,
-	advanceRelayForHandoff,
-	recordLedgerEvaluation,
-	recordNaturalStop,
-	markInheritedLedgerViewed,
-};

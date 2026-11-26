@@ -12,9 +12,7 @@ import { wireCommands } from "../host-omp/src/activation/commands.mjs";
 import { createState, deserializeState, serializeState } from "../src/scope/index.mjs";
 
 const PORT_ENV = {
-	folding: "HERD_FOLDING",
 	clock: "HERD_CLOCK",
-	relay: "HERD_RELAY",
 	pin: "HERD_PIN",
 	amend: "HERD_AMEND",
 	herd: "HERD_HERD",
@@ -246,20 +244,20 @@ test("one bare command toggles autopilot and sends optional text once", () => {
 test("a refused port switch throws at the composition root", () => {
 	// An empty table would wire every port to its fallback and hide the typo.
 	// The engine owns port resolution now, so the refusal surfaces there.
-	expect(() => createEngine({ host: {}, tickets: {}, env: { HERD_RELAY: "bogus" } })).toThrow(
-		/PORT_UNAVAILABLE port=relay wanted=bogus/,
+	expect(() => createEngine({ host: {}, tickets: {}, env: { HERD_CLOCK: "bogus" } })).toThrow(
+		/PORT_UNAVAILABLE port=clock wanted=bogus/,
 	);
 });
 
 test("the registry accepts one wiring shape and refuses a flat name table", () => {
-	const tickets = { activateTools() {}, steer() {}, prompt() {} };
+	const tickets = { steer() {}, prompt() {} };
 	expect(() =>
-		createStationRegistry({ tickets, relay: "handoff" }),
+		createStationRegistry({ tickets, clock: "on" }),
 	).toThrow(/LEGACY_PORTS_SHAPE/);
 });
 
 test("implementations() returns one frozen object, not a copy per read", () => {
-	const tickets = { activateTools() {}, steer() {}, prompt() {} };
+	const tickets = { steer() {}, prompt() {} };
 	const built = buildPorts({});
 	const registry = createStationRegistry({ tickets,
 		ports: built.names,
@@ -268,6 +266,5 @@ test("implementations() returns one frozen object, not a copy per read", () => {
 	const first = registry.implementations();
 	expect(first).toBe(registry.implementations());
 	expect(Object.isFrozen(first)).toBe(true);
-	expect(first.folding).toBe(built.implementations.folding);
 	expect(first.clock).toBe(built.implementations.clock);
 });

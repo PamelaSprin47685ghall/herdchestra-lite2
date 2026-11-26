@@ -295,8 +295,15 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 		expect((await settleRace(j1, 5)).state).toBe("waiting");
 		expect((await settleRace(j2, 5)).state).toBe("waiting");
 
+		const { RETURN_OATH_KEY, RETURN_OATH_VALUE } = await import("../src/station/domain/handoff.mjs");
 		// Child returns through the synchronous station handler directly (no manual ticket notify).
-		const ret = handleReturnCall(child, { id: "call-ret-1", arguments: { dafny: "the child returns before the join settles" } });
+		const ret = handleReturnCall(child, {
+			id: "call-ret-1",
+			arguments: {
+				dafny: "the child returns before the join settles",
+				[RETURN_OATH_KEY]: RETURN_OATH_VALUE,
+			},
+		});
 		// One return closes the bracket in the same beat; nothing parks.
 		expect(ret.details?.accepted).toBe(true);
 		expect(ret.details?.awaitingReceipt).toBeUndefined();

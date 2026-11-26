@@ -56,10 +56,9 @@ function assistant(text = "done") {
 
 function nudgeStation(ledger, ownerId) {
 	const station = Object.create(SessionStation.prototype);
-	station.state = { autopilot: false };
+	station.state = { autopilot: false, relay: { canStop: false, pendingRewind: null } };
 	station.nudged = new WeakSet();
 	station.delivered = [];
-	station.relayOn = () => false;
 	station.forkLedgerPort = () => ledger;
 	station.forkOwnerId = () => ownerId;
 	station.deliverSteer = (text) => station.delivered.push(text) > 0;
@@ -68,13 +67,9 @@ function nudgeStation(ledger, ownerId) {
 
 function stopStation(ownerId, ledger) {
 	return {
-		state: { autopilot: false, relay: { canStop: false, handoffPending: false } },
+		state: { autopilot: false, relay: { canStop: false, pendingRewind: null } },
 		forkOwnerId: () => ownerId,
 		forkLedgerPort: () => ledger,
-		relayOn: () => false,
-		recordNaturalStop: () => {
-			throw new Error("a child must never record a relay stop");
-		},
 	};
 }
 
@@ -110,7 +105,7 @@ describe("nudgeDecision", () => {
 		).toEqual({ kind: "none" });
 	});
 
-	test("the root never earns a return steer, only the join steer", () => {
+	test("the root earns a join steer with open children, a return steer under autopilot, and none in manual duty", () => {
 		const ledger = childLedger();
 
 		// The root has a running child; that is the receive obligation.
@@ -118,9 +113,29 @@ describe("nudgeDecision", () => {
 			nudgeDecision({ hasToolCalls: false, ledger })?.text,
 		).toContain("scope_join");
 
-		// The root owes no record of its own.
+		// Manual duty: root may stop naturally.
 		expect(
-			nudgeDecision({ hasToolCalls: false, ledger: createBracketLedger() }),
+			nudgeDecision({ hasToolCalls: false, ledger: createBracketLedger(), autopilot: false }),
+		).toEqual({ kind: "none" });
+
+		// Autopilot without canStop: root must call scope_return.
+		const auto = nudgeDecision({
+			hasToolCalls: false,
+			ledger: createBracketLedger(),
+			autopilot: true,
+			relay: { canStop: false, pendingRewind: null },
+		});
+		expect(auto.kind).toBe("steer");
+		expect(auto.text).toContain("scope_return");
+
+		// Autopilot after two consecutive oaths: root may stop naturally.
+		expect(
+			nudgeDecision({
+				hasToolCalls: false,
+				ledger: createBracketLedger(),
+				autopilot: true,
+				relay: { canStop: true, pendingRewind: null },
+			}),
 		).toEqual({ kind: "none" });
 	});
 

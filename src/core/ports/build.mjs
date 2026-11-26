@@ -9,7 +9,6 @@ import { resolvePorts } from "./resolve.mjs";
 import { createAmendOff, createAmendOn } from "../../features/amend/index.mjs";
 import { createHerdOff, createHerdOn } from "../../features/herd/index.mjs";
 import { createPinOff, createPinOn } from "../../features/pin/index.mjs";
-import { relayImplementations } from "../../relay/policy.mjs";
 import { createClockOff, createClockOn } from "../../scope/clock.mjs";
 
 function detailOf(refusal) {
@@ -31,7 +30,6 @@ export function buildPorts(env = process.env) {
 	const names = { ...resolved.ports };
 	const implementations = {
 		clock: names.clock === "off" ? createClockOff() : createClockOn(),
-		relay: relayImplementations[names.relay],
 		pin: {
 			name: names.pin,
 			bindState(store) {

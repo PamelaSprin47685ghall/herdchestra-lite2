@@ -14,24 +14,72 @@ import { installContextPreparation } from "./context-preparation.mjs";
 import { record } from "./diagnostics.mjs";
 
 const TERMINAL_RESULT = Symbol.for("pi-agent-core.terminal-tool-result");
+const RETURN_STOP = Symbol.for("herdchestra-lite2.scope-return-stop.v1");
 
-/** Stop only the child loop, at the same seam the host uses for native yield. */
-export function stopAfterScopeReturn(agent) {
+export function hasScopeReturnStop(agent) {
+	return Boolean(agent?.[RETURN_STOP] && agent.afterToolCall === agent[RETURN_STOP].hook);
+}
+
+export function releaseScopeReturnDrain(session) {
+	session?.agent?.[RETURN_STOP]?.releaseDrain?.();
+}
+
+/** Stop at the host's native terminal-result seam, after the result is accepted. */
+export function stopAfterScopeReturn(agent, session = null) {
+	if (typeof agent?.abort !== "function") return;
+	const existing = agent[RETURN_STOP];
+	if (existing) {
+		if (session) existing.session = session;
+		return;
+	}
 	const original = agent.afterToolCall;
+	const binding = { session, hook: null, releaseDrain: null };
+	const holdDrain = () => {
+		const owner = binding.session;
+		if (typeof owner?.withQueueDrainPaused !== "function" || binding.releaseDrain) return;
+		let release;
+		const held = new Promise((resolve) => { release = resolve; });
+		const releaseHold = () => {
+			binding.releaseDrain = null;
+			release();
+		};
+		binding.releaseDrain = releaseHold;
+		// The host schedules stranded queue delivery before its final agent_end.
+		// Keep that delivery parked until the rewind ticket takes over the hold.
+		const failed = (error) => {
+			if (binding.releaseDrain === releaseHold) releaseHold();
+			record("hooks", error, { phase: "scope-return-queue" });
+		};
+		try {
+			const pending = Promise.resolve(owner.withQueueDrainPaused(() => held));
+			pending.catch(failed);
+		} catch (error) {
+			failed(error);
+		}
+	};
 	const hook = function (ctx, signal) {
 		const after = original?.call(this, ctx, signal);
-		if (ctx.toolCall.name !== "scope_return" || ctx.isError || ctx.result?.details?.accepted !== true) return after;
+		if (ctx.toolCall.name !== "scope_return") return after;
 		const finish = (override) => {
-			if (override?.isError !== true && (override?.details ?? ctx.result.details)?.accepted === true) {
+			const details = override?.details ?? ctx.result?.details;
+			// The per-tool signal also covers steers. An accepted return still
+			// ends the loop when a steer raced it; only an Agent abort wins.
+			if (!agent.isAborting && !(override?.isError ?? ctx.isError) && details?.stopLoop === true) {
+				if (details.scope === "root" && details.rewind === true) holdDrain();
 				agent.abort(TERMINAL_RESULT);
 			}
 			return override;
 		};
 		return typeof after?.then === "function" ? after.then(finish) : finish(after);
 	};
+	binding.hook = hook;
 	agent.afterToolCall = hook;
+	Object.defineProperty(agent, RETURN_STOP, { value: binding, configurable: true });
 	return () => {
+		if (agent[RETURN_STOP] !== binding) return;
+		binding.releaseDrain?.();
 		if (agent.afterToolCall === hook) agent.afterToolCall = original;
+		delete agent[RETURN_STOP];
 	};
 }
 
@@ -94,8 +142,9 @@ export function prepareChildContext(session, stationFor, options = {}) {
 		}
 	}
 	try {
+		stopAfterScopeReturn(session.agent, session);
 		installContextPreparation(session, { station, ctx });
-		return { ok: true };
+		return { ok: true, station, ctx };
 	} catch (error) {
 		record("fork", error, { phase: "child-context" });
 		return failure("INSTALL_FAILED", error);

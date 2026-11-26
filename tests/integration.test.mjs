@@ -9,6 +9,9 @@ import { CHILD_ACTIVITY_TYPE } from "../host-omp/src/host/child-display.mjs";
 import { skillReceiptText } from "../src/station/texts.mjs";
 import { installVibeTools } from "../host-omp/src/host/index.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
+import { buildTickets } from "../host-omp/src/activation/tickets.mjs";
+import { createHostBag } from "../host-omp/src/activation/index.mjs";
+import { wireHooks } from "../host-omp/src/activation/hooks.mjs";
 
 function makeManager() {
 	const entries = [];
@@ -217,6 +220,123 @@ test("before_agent_start installs preparation before the first context projectio
 	expect(ctx.agentMessages.at(-1)).toBe(receipt);
 	expect(manager.getBranch().filter((entry) => entry.message?.herdSkill)).toHaveLength(1);
 });
+describe("root rewind host lifecycle", () => {
+	function bindRewind() {
+		const manager = {
+			...makeManager(),
+			getSessionId: () => "test-session",
+			appendCompaction() {},
+		};
+		const host = makeHost();
+		const ctx = { sessionManager: manager };
+		const events = [];
+		const queue = ["operator steer"];
+		const plan = { startPrompt: "Continue from the compacted report." };
+		let paused = 0;
+		let settle;
+		const persistence = new Promise((resolve) => { settle = resolve; });
+		const session = {
+			sessionManager: manager,
+			transcriptEpoch: 0,
+			agent: { abort: (reason) => events.push(reason) },
+			async withQueueDrainPaused(callback) {
+				paused += 1;
+				try {
+					await callback();
+				} finally {
+					paused -= 1;
+				}
+			},
+			async waitForIdle() {
+				events.push("idle");
+			},
+			settleInFlightMessagePersistence() {
+				events.push("persistence");
+				return persistence;
+			},
+			async prompt(text, options) {
+				events.push({ text, paused, synthetic: options.synthetic, attribution: options.attribution });
+				options.onPromptAdmitted();
+				return queue.shift();
+			},
+		};
+		attachRequestPreparation(session, ctx);
+		const tickets = buildTickets(host.pi);
+		const capabilities = createHostBag(host.pi);
+		let ticket;
+		const station = {
+			manager,
+			prepareRequest() {
+				return null;
+			},
+			onAgentEnd(endedCtx, event) {
+				expect(endedCtx).toBe(ctx);
+				if (event.willContinue !== true) ticket = tickets.rewindRoot(this, endedCtx, plan);
+			},
+			commitRootRewind(endedCtx, pending) {
+				expect(endedCtx).toBe(ctx);
+				expect(pending).toBe(plan);
+				expect(paused).toBe(1);
+				events.push("commit");
+				return true;
+			},
+			abortRootRewind(pending) {
+				expect(pending).toBe(plan);
+				events.push("stale");
+			},
+		};
+		wireHooks(host.pi, { stationFor: () => station });
+		return {
+			host, ctx, session, plan, events, queue, capabilities, settle,
+			paused: () => paused,
+			ticket: () => ticket,
+			async terminalReturn() {
+				await session.agent.afterToolCall({
+					toolCall: { name: "scope_return" },
+					result: { details: { stopLoop: true, scope: "root", rewind: true } },
+				}, AbortSignal.abort("tool interrupted by steer"));
+			},
+		};
+	}
+
+	test("hands the queue hold from the terminal tool result to the detached rewind ticket", async () => {
+		const { host, ctx, session, plan, events, queue, capabilities, settle, paused, ticket, terminalReturn } = bindRewind();
+		expect(capabilities.session.canRewindRoot(ctx)).toBe(false);
+		await emit(host.handlers, "session_start", {}, ctx);
+		const stop = session.agent.afterToolCall;
+		await emit(host.handlers, "session_start", {}, ctx);
+		expect(session.agent.afterToolCall).toBe(stop);
+		expect(capabilities.session.canRewindRoot(ctx)).toBe(true);
+		await terminalReturn();
+		expect(paused()).toBe(1);
+
+		await emit(host.handlers, "agent_end", { messages: [] }, ctx);
+		expect(events).toEqual([Symbol.for("pi-agent-core.terminal-tool-result"), "idle", "persistence"]);
+		expect(paused()).toBe(1);
+		expect(queue).toEqual(["operator steer"]);
+		settle();
+		await ticket();
+		expect(queue).toEqual([]);
+		expect(events.slice(-2)).toEqual([
+			"commit",
+			{ text: plan.startPrompt, paused: 1, synthetic: true, attribution: "agent" },
+		]);
+		expect(paused()).toBe(0);
+	});
+
+	test("rejects a replaced transcript after waiting and releases the queue", async () => {
+		const { host, ctx, session, events, settle, paused, ticket, terminalReturn } = bindRewind();
+		await emit(host.handlers, "session_start", {}, ctx);
+		await terminalReturn();
+		await emit(host.handlers, "agent_end", { messages: [] }, ctx);
+		session.transcriptEpoch += 1;
+		settle();
+		await ticket();
+		expect(events).toEqual([Symbol.for("pi-agent-core.terminal-tool-result"), "idle", "persistence", "stale"]);
+		expect(paused()).toBe(0);
+	});
+});
+
 describe("vibe mode", () => {
 	test("keeps registered scope tools when entering vibe mode", async () => {
 		class Session {

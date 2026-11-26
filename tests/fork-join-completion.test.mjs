@@ -7,6 +7,9 @@ import { describe, expect, test } from "bun:test";
 import { SessionStation } from "../src/station/station.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { handleJoinCall, handleReturnCall } from "../src/station/fork-controls.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+
+const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 import {
 	createBracketLedger,
 	forkOf,
@@ -104,7 +107,7 @@ describe("adoption keeps the parent ahead of its children", () => {
 
 		const out = handleReturnCall(childStation(ledger, "p"), {
 			id: "return-p",
-			arguments: { dafny: "the child did the work; record carries its text" },
+			arguments: { dafny: "the child did the work; record carries its text", ...OATH },
 		});
 		expect(out.isError).toBeUndefined();
 		expect(forkOf(ledger, "c1").ownerId).toBe("root");
@@ -134,7 +137,7 @@ describe("adoption keeps the parent ahead of its children", () => {
 		// A second return cannot mark the same bracket ready again.
 		const out = handleReturnCall(childStation(ledger, "p"), {
 			id: "return-p-again",
-			arguments: { dafny: "second return attempt: the bracket is already ready" },
+			arguments: { dafny: "second return attempt: the bracket is already ready", ...OATH },
 		});
 		expect(out.isError).toBe(true);
 		expect(forkOf(ledger, "c1").ownerId).toBe("p");
@@ -160,7 +163,7 @@ describe("adoption files the result at the receiver's level", () => {
 			depth: 1,
 		});
 		markReady(ledger, "c1");
-		handleReturnCall(childStation(ledger, "p"), { id: "return-p", arguments: { dafny: "p returns so two children queue" } });
+		handleReturnCall(childStation(ledger, "p"), { id: "return-p", arguments: { dafny: "p returns so two children queue", ...OATH } });
 
 		const root = rootStation(ledger, state);
 		const first = handleJoinCall(root, { id: "j1", arguments: {} });
@@ -188,7 +191,7 @@ describe("a child record is frozen before the parent can take it", () => {
 		]);
 		station.setChildOutcome = (forkId, outcome) => outcomes.set(forkId, outcome);
 
-		const out = handleReturnCall(station, { id: "return-p", arguments: { dafny: "p returns: the child did the work" } });
+		const out = handleReturnCall(station, { id: "return-p", arguments: { dafny: "p returns: the child did the work", ...OATH } });
 		expect(out.isError).toBeUndefined();
 		expect(outcomes.get("p")?.record).toContain("the child did the work");
 		expect(outcomes.get("p")?.failed).toBe(false);

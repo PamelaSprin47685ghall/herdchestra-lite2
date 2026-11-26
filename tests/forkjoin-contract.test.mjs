@@ -18,6 +18,9 @@ import {
   handleJoinCall,
   handleReturnCall,
 } from "../src/station/fork-controls.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+
+const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 
 function state() {
   return { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
@@ -43,7 +46,7 @@ describe("adoption follows the current receiver", () => {
 
     const out = handleReturnCall(
       stationFor(ledger, { forkId: "p", parentOwnerId: "root" }),
-      { id: "r", arguments: { dafny: "p returns through the station handler" } },
+      { id: "r", arguments: { dafny: "p returns through the station handler", ...OATH } },
     );
     expect(out.isError).toBeUndefined();
     expect(out.details.receiver).toBe("g");
@@ -84,7 +87,7 @@ describe("a batch projects one item into each child", () => {
     expect(specs[0].receipt).toContain("You are now in the scope /one");
     expect(specs[0].receipt).toContain("State machine: one");
     expect(specs[0].receipt).toContain("User messages go to the stable root");
-    expect(specs[0].receipt).toContain("Only scope_return submits your full record");
+    expect(specs[0].receipt).toContain("Use the `scope_return` oath to submit your record");
     expect(specs[0].receipt).not.toContain("State machine: two");
     expect(specs[1].receipt).toContain("You are now in the scope /two");
     expect(specs[1].receipt).toContain("State machine: two");
@@ -122,10 +125,10 @@ describe("repeated right brackets do not double-count", () => {
     registerFork(ledger, { forkId: "p", ownerId: "root", fsm: "parent", depth: 0 });
     registerFork(ledger, { forkId: "c", ownerId: "p", fsm: "child", depth: 1 });
     const station = stationFor(ledger, { forkId: "p", parentOwnerId: "root" });
-    const first = handleReturnCall(station, { id: "r1", arguments: { dafny: "first return makes the bracket ready" } });
+    const first = handleReturnCall(station, { id: "r1", arguments: { dafny: "first return makes the bracket ready", ...OATH } });
     expect(first.isError).toBeUndefined();
     expect(forkOf(ledger, "p").status).toBe("ready");
-    const second = handleReturnCall(station, { id: "r2", arguments: { dafny: "second return: the bracket already moved" } });
+    const second = handleReturnCall(station, { id: "r2", arguments: { dafny: "second return: the bracket already moved", ...OATH } });
     expect(second.isError).toBe(true);
     expect(second.details.code).toBe("FORK_NOT_RUNNING");
     // The still-running child was not handed over twice.

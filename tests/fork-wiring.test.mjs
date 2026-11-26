@@ -496,52 +496,19 @@ describe("two-phase attach", () => {
 });
 
 describe("termination hook binding", () => {
-  test("resolveStationBinding forwards stopAfterReturn into the binding", async () => {
-    // The host passes the hook, the core spawn ticket reads it, and this
-    // binding is the only place the two meet. When the field was dropped here,
-    // an accepted scope_return no longer ended the child at the tool-result
-    // boundary and the host paid for one more model request.
+  test("prepareChildContext installs stopAfterScopeReturn on the child agent instead of forwarding via spawn ports", async () => {
     const { resolveStationBinding } = await import(
       "../host-omp/src/host/activation-binding.mjs"
     );
     const wiring = createForkWiring();
-    const stop = () => {};
     const binding = resolveStationBinding(
       { forkIdentityPort: () => null },
       {},
       wiring,
-      { stopAfterReturn: stop },
+      {},
     );
-    expect(binding.stopAfterReturn).toBe(stop);
-  });
-
-  test("the binding's hook reaches the child ticket ports", () => {
-    const wiring = createForkWiring();
-    const station = stationOf();
-    const stop = () => {};
-    let seen = null;
-    wiring.spawn = (spec, ports) => {
-      seen = ports;
-      return Promise.resolve();
-    };
-    wiring.bind(station, {
-      display: null,
-      identity: null,
-      conversationKey: "hook",
-      ownerSession: null,
-      prepareChild: null,
-      createSession: async () => ({ ok: true, session: sessionOf("done") }),
-      stopAfterReturn: stop,
-    });
-    registerFork(station.forkLedgerPort(), {
-      forkId: "f-hook",
-      ownerId: "root",
-      levelKey: "L",
-      fsm: "x",
-      depth: 0,
-    });
-    station.childSpawnPort()(specFor("f-hook"));
-    expect(seen.stopAfterReturn).toBe(stop);
+    expect(binding.stopAfterReturn).toBeUndefined();
+    expect(typeof binding.prepareChild).toBe("function");
   });
 });
 
@@ -1037,53 +1004,46 @@ describe("spawnChildTicket directly", () => {
     expect(outcomeOf(wiring.registry, "d3").record).toBe("the child's own record");
   });
 
-  test("a natural stop is not a return: the child is told to return, then published", async () => {
-    const wiring = createForkWiring();
-    const ledger = ledgerFor(wiring.registry, "natural-stop");
-    registerFork(ledger, { forkId: "n1", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
-    const messages = [];
-    const prompts = [];
-    const session = {
-      messages,
-      prompt: async (text) => {
-        prompts.push(text);
-        messages.push(assistant(prompts.length === 1 ? "did the work" : "returning"));
-        if (prompts.length === 2) {
-          // The stop before this turn published nothing: the bracket is still
-          // running and no outcome exists while the child is being scolded.
-          expect(ledger.forks.n1.status).toBe(RUNNING);
-          expect(outcomeOf(wiring.registry, "n1")).toBeNull();
-          // Exactly what handleReturnCall writes from the child side.
-          setOutcome(wiring.registry, "n1", {
-            record: "the child's own record",
-            failed: false,
-            reason: null,
-          });
-          markReady(ledger, "n1", { ok: true, record: "the child's own record" });
-        }
-      },
-      agent: { state: { messages, stopReason: "stop" } },
-    };
-    const result = await spawnChildTicket(specFor("n1"), {
-      registry: wiring.registry,
-      ledger,
-      createSession: async () => ({ ok: true, session }),
-    });
-    // The first stop handed over nothing; the second turn is the scold.
-    expect(prompts).toHaveLength(2);
-    expect(prompts[0]).toBe(specFor("n1").receipt);
-    expect(prompts[1]).toBe(childReturnNudge());
-    // A missing doc key returns undefined, which would make the identity
-    // assertion above pass vacuously. Pin the contract's words too.
-    expect(prompts[1]).toContain("scope_return");
-    expect(prompts[1]).toContain("still unpublished");
-    expect(prompts[1]).toContain("hand it to the scope that forked this one");
-    expect(result.failed).toBe(false);
-    expect(ledger.forks.n1.status).toBe("ready");
-    expect(outcomeOf(wiring.registry, "n1").record).toBe("the child's own record");
-    const taken = await waitForReady(wiring.registry, ledger, { ownerId: "root", levelKey: "L" });
-    expect(taken.fork.forkId).toBe("n1");
-  });
+	test("a natural stop is not a return: the child is told to return, then published", async () => {
+		const wiring = createForkWiring();
+		const ledger = ledgerFor(wiring.registry, "natural-stop");
+		registerFork(ledger, { forkId: "n1", ownerId: "root", levelKey: "L", fsm: "x", depth: 0 });
+		const messages = [];
+		const prompts = [];
+		const session = {
+			messages,
+			prompt: async (text) => {
+				prompts.push(text);
+				messages.push(assistant(prompts.length === 1 ? "did the work" : "returning"));
+				if (prompts.length === 2) {
+					expect(ledger.forks.n1.status).toBe(RUNNING);
+					expect(outcomeOf(wiring.registry, "n1")).toBeNull();
+					setOutcome(wiring.registry, "n1", {
+						record: "the child's own record",
+						failed: false,
+						reason: null,
+					});
+					markReady(ledger, "n1", { ok: true, record: "the child's own record" });
+				}
+			},
+			agent: { state: { messages, stopReason: "stop" } },
+		};
+		const result = await spawnChildTicket(specFor("n1"), {
+			registry: wiring.registry,
+			ledger,
+			createSession: async () => ({ ok: true, session }),
+		});
+		expect(prompts).toHaveLength(2);
+		expect(prompts[0]).toBe(specFor("n1").receipt);
+		expect(prompts[1]).toBe(childReturnNudge());
+		expect(prompts[1]).toContain("scope_return");
+		expect(prompts[1]).toContain("still unpublished");
+		expect(result.failed).toBe(false);
+		expect(ledger.forks.n1.status).toBe("ready");
+		expect(outcomeOf(wiring.registry, "n1").record).toBe("the child's own record");
+		const taken = await waitForReady(wiring.registry, ledger, { ownerId: "root", levelKey: "L" });
+		expect(taken.fork.forkId).toBe("n1");
+	});
 
   test("two natural stops are scolded, and the third turn returns once", async () => {
     const wiring = createForkWiring();

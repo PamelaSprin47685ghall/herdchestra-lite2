@@ -53,7 +53,6 @@ const ENV_NAME = {
 	herd: "HERD_HERD",
 	clock: "HERD_CLOCK",
 	folding: "HERD_FOLDING",
-	relay: "HERD_RELAY",
 };
 
 function implementationsComplete(implementations) {
@@ -89,7 +88,6 @@ function builtFor(names, env = {}) {
 export function bindStationPorts(state, env = {}) {
 	const implementations = builtFor(null, env).implementations;
 	return Object.freeze({
-		relay: implementations.relay,
 		clock: implementations.clock,
 		folding: implementations.folding,
 		pin: implementations.pin.bindState(state),

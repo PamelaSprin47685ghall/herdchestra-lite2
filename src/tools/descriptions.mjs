@@ -4,6 +4,7 @@
  */
 
 import { loadDoc } from "../prompts/index.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../station/domain/handoff.mjs";
 const notes = loadDoc("tools/notes");
 
 // `scope_context` is the one working-level control tool. The retired tool
@@ -33,6 +34,8 @@ const FORK_PROFESSION_DESCRIPTION = forkJoin["fork.profession"];
 export const JOIN_DESCRIPTION = forkJoin["join.tool"];
 export const RETURN_DESCRIPTION = forkJoin["return.tool"];
 export const RETURN_DAFNY_DESCRIPTION = forkJoin["return.dafny"];
+export const RETURN_OATH_DESCRIPTION = forkJoin["return.oath"];
+export { RETURN_OATH_KEY, RETURN_OATH_VALUE };
 
 export const SEND_DESCRIPTION = forkJoin["send.tool"];
 export const SEND_TARGET_DESCRIPTION = forkJoin["send.target"];
@@ -133,21 +136,22 @@ export const joinParameters = {
 };
 
 // `dafny` is required: a return without it is an incomplete handoff, because
-// a tool's result is dropped from the record, so this field is the only path
-// those facts have to the caller. The
-// station trims it and refuses a blank value (MISSING_DAFNY), and `\S` states
-// the same rule here so a field of spaces cannot pass the schema while the
-// station would reject it. The name is the
-// instruction: a Dafny-style specification is the form it invites, and
-// `fork-join.md` owns the wording the model reads. A returning child does not
-// summarize the parent's elder: the last receipt of its own level has no
-// later sibling to archive it, so it is sealed instead of being reported.
+// tool results are dropped from the formatted record, so this field is the
+// only path those facts have to the next generation or the calling scope.
+// Omitting the oath performs a small rewind handoff to a fresh self; supplying
+// the exact oath value seals a final delivery (or, at Root, advances the
+// two-oath review chain).
 export const returnParameters = {
 	type: "object",
 	additionalProperties: false,
 	required: ["dafny"],
 	properties: {
 		dafny: { type: "string", pattern: "\\S", description: RETURN_DAFNY_DESCRIPTION },
+		[RETURN_OATH_KEY]: {
+			type: "string",
+			enum: [RETURN_OATH_VALUE],
+			description: RETURN_OATH_DESCRIPTION,
+		},
 	},
 };
 

@@ -2,19 +2,14 @@
 // default.
 //
 // A switch names an implementation of a port; it never says whether the port
-// exists. Two-implementation ports use the names `on` and `off`, so the older
-// boolean variable keeps one meaning. `relay` carries three, and its names
-// describe the obligation rather than a switch position.
+// exists. Ports use the names `on` and `off`, so the older boolean variable
+// keeps one meaning.
 //
 // Pure data, frozen. Resolution lives in resolve.mjs so this table stays the
 // single source for both the resolver and the documentation.
 
 /** Port name -> { implementations: readonly string[], fallback: string }. */
 export const PORTS = Object.freeze({
-	relay: Object.freeze({
-		implementations: Object.freeze(["none", "ledger", "handoff"]),
-		fallback: "handoff",
-	}),
 	clock: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	chineseReminder: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	vibeCompat: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
@@ -39,12 +34,6 @@ export function switchName(port) {
 export function disableName(port) {
 	return `HERD_DISABLE_${snakeName(port)}`;
 }
-
-/**
- * Ports whose switch takes an implementation name. Every other port keeps the
- * boolean form `HERD_DISABLE_<PORT>=1`, which means "choose off".
- */
-export const NAMED_SWITCHES = Object.freeze(new Set(["relay"]));
 
 /** Every port name, in table order. */
 export const PORT_NAMES = Object.freeze(Object.keys(PORTS));

@@ -5,14 +5,12 @@
 // this module owns the argument validation and the resulting text.
 
 import { applyAmend } from "../scope/index.mjs";
-import { filterAmends } from "../transcript/index.mjs";
-import { invalidatePromotion } from "../relay/index.mjs";
 import { PIN_INTERNAL_ERROR, PIN_UNAVAILABLE } from "../features/pin/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs, trimText } from "./messages.mjs";
 import { amendText, PIN_SAVED_TEXT } from "./texts.mjs";
 
-import { loadDoc, render } from "../prompts/index.mjs";
+import { loadDoc } from "../prompts/index.mjs";
 
 const E = loadDoc("errors");
 

@@ -198,11 +198,12 @@ export function commitSkillReceipt(manager, messages, source = null) {
 			const sameTurn = typeof persisted.herdSkillTurn === "string"
 				? persisted.herdSkillTurn === key
 				: sameTurnMessage(lastTurnMessage(journal), lastTurnMessage(prefix));
-			// A mode or branch toggle regenerates the receipt for the same
+			// A mode, branch, or canStop change regenerates the receipt for the same
 			// turn. Its committed bytes must not win over the new mode.
 			const modeChanged =
 				(proposed.autopilot ?? null) !== (persisted.autopilot ?? null) ||
-				(proposed.branch ?? null) !== (persisted.branch ?? null);
+				(proposed.branch ?? null) !== (persisted.branch ?? null) ||
+				(proposed.canStop ?? null) !== (persisted.canStop ?? null);
 			const replace = hasNewNote || (modeChanged && sameTurn);
 			const matches = sameMessage(proposed, persisted) || sameTurn;
 			if (!matches && !replace) {

@@ -18,7 +18,7 @@ import {
 import { createStatusRuntime } from "../host-omp/src/host/status.mjs";
 import { wireHooks } from "../host-omp/src/activation/hooks.mjs";
 import { wireCommands } from "../host-omp/src/activation/commands.mjs";
-import { commitSelfHandoff } from "../src/station/handoff-state.mjs";
+import { commitRootRewind } from "../src/station/handoff-state.mjs";
 import { createState } from "../src/scope/index.mjs";
 import { createRelay } from "../src/relay/state.mjs";
 
@@ -164,13 +164,21 @@ describe("herd-diag rendering", () => {
 	});
 });
 
-describe("self handoff", () => {
-	test("a failed context rebuild is recorded while the handoff still commits", () => {
+describe("root rewind", () => {
+	test("a failed context rebuild is recorded while the rewind still commits", () => {
 		const state = createState();
-		state.relay = { ...createRelay(), handoffPending: true, canStop: false };
+		state.relay = {
+			...createRelay(),
+			generation: 1,
+			pendingRewind: { report: "carry on", big: false, generation: 1, id: "r1" },
+		};
+		let calls = 0;
 		const manager = {
 			appendCompaction() {},
+			appendMessage() {},
 			buildSessionContext() {
+				calls += 1;
+				if (calls === 1) return { messages: [] };
 				throw new Error("context builder moved");
 			},
 		};
@@ -178,18 +186,21 @@ describe("self handoff", () => {
 			state,
 			manager,
 			usage: { lastTotalInput: 0 },
+			contextMessages: () => {
+				return manager.buildSessionContext().messages;
+			},
 			persist() {},
 			resetUsageWatermark() {},
-			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
-			registry: { clearPending() {} },
-			markPending() {},
-			clearPending() {},
-			host: { record },
+			noteError(domain, error, detail) {
+				record(domain, error, detail);
+			},
+			host: { report: { record } },
 		};
 
-		const result = commitSelfHandoff(station, {}, "carry on");
+		const committed = commitRootRewind(station, {}, { pending: state.relay.pendingRewind });
 
-		expect(result.ok).toBe(true);
+		expect(committed).toBe(true);
+		expect(state.relay.pendingRewind).toBeNull();
 		expect(entries("handoff")).toHaveLength(1);
 		expect(entries("handoff")[0].detail).toEqual({ stage: "rebuild-context" });
 	});

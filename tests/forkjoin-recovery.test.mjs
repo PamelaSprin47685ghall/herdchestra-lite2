@@ -28,6 +28,9 @@ import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { ledgerFor } from "../src/scope/fork-registry.mjs";
 import { handleReturnCall } from "../src/station/fork-controls.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+
+const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 
 function running(ledger, forkId, ownerId = "root", extra = {}) {
   const out = registerFork(ledger, {
@@ -196,7 +199,7 @@ describe("the scope state owns the tree", () => {
         persisted += 1;
       },
     };
-    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: "persisted return" } });
+    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: "persisted return", ...OATH } });
     expect(out.isError).toBeUndefined();
     expect(persisted).toBe(1);
     expect(out.content[0].text).not.toContain("Persistence warning");
@@ -218,7 +221,7 @@ describe("the scope state owns the tree", () => {
       persistLedger: () => false,
       noteError: () => {},
     };
-    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: "persisted return" } });
+    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: "persisted return", ...OATH } });
     expect(out.isError).toBeUndefined();
     expect(out.content[0].text).toContain("Persistence warning");
     // The domain fact still stands: the parent can take it this run.

@@ -16,6 +16,8 @@ import { pathToFileURL } from "node:url";
 import { installContextPreparation, splitRequestHistory } from "../host-omp/src/host/context-preparation.mjs";
 import { contextHeaderOf } from "../host-omp/src/host/adapter.mjs";
 import { stopAfterScopeReturn } from "../host-omp/src/host/branch-context.mjs";
+import { activate } from "../host-omp/src/main.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
 import { borrowStaleAddon } from "./host-native.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
@@ -186,6 +188,7 @@ async function exerciseHost(host, start) {
 async function checkReturnStop({ Agent, createMockModel, type }) {
 	const mock = createMockModel({ responses: [
 		{ content: [{ type: "toolCall", id: "refused-return", name: "scope_return", arguments: {} }] },
+		{ content: [{ type: "toolCall", id: "promoted-return", name: "scope_return", arguments: {} }] },
 		{ content: [{ type: "toolCall", id: "accepted-return", name: "scope_return", arguments: {} }] },
 		{ content: ["this request must never be sent"] },
 	] });
@@ -198,9 +201,15 @@ async function checkReturnStop({ Agent, createMockModel, type }) {
 				label: "Return",
 				description: "Return the child's work.",
 				parameters: type({}),
-				execute: async (id) => id === "accepted-return"
-					? { content: [{ type: "text", text: "Parent accepted" }], details: { accepted: true } }
-					: { content: [{ type: "text", text: "Not accepted" }], details: {}, isError: true },
+				execute: async (id) => {
+					if (id === "refused-return") {
+						return { content: [{ type: "text", text: "Not accepted" }], details: {}, isError: true };
+					}
+					return {
+						content: [{ type: "text", text: "Accepted" }],
+						details: { accepted: true, stopLoop: id === "accepted-return" },
+					};
+				},
 			}],
 		},
 		streamFn: mock.stream,
@@ -208,7 +217,7 @@ async function checkReturnStop({ Agent, createMockModel, type }) {
 	const detach = stopAfterScopeReturn(agent);
 	try {
 		await agent.prompt({ role: "user", content: "Return this result.", timestamp: Date.now() });
-		assert.equal(mock.calls.length, 2, "a refused return must continue; an accepted return must stop");
+		assert.equal(mock.calls.length, 3, "a refusal or promotion must continue; a terminal return must stop");
 		assert.equal(agent.state.error, undefined);
 		assert.equal(agent.state.messages.at(-1)?.role, "toolResult");
 		assert.equal(agent.state.messages.at(-1)?.toolCallId, "accepted-return");
@@ -234,6 +243,87 @@ async function checkMarkerControl(host) {
 	console.log("PASS marker control: the real runner marks a context-only addition as per-call");
 }
 
+async function checkRootRewindE2E({ createMockModel }) {
+	const [{ createAgentSession }, { SessionManager }] = await Promise.all([
+		hostModule("packages/coding-agent/src/sdk.ts"),
+		hostModule("packages/coding-agent/src/session/session-manager.ts"),
+	]);
+	const oath = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
+	const mock = createMockModel({
+		responses: [
+			{
+				content: [
+					{ type: "text", text: "Gen 0 investigating." },
+					{ type: "toolCall", id: "root-ret-0", name: "scope_return", arguments: { dafny: "gen 0 report: narrowed root cause" } },
+				],
+			},
+			{
+				content: [
+					{ type: "text", text: "Gen 1 completing fix." },
+					{ type: "toolCall", id: "root-ret-1", name: "scope_return", arguments: { dafny: "gen 1 report: fix and tests pass", ...oath } },
+				],
+			},
+			{
+				content: [
+					{ type: "text", text: "Gen 2 reviewing independently." },
+					{ type: "toolCall", id: "root-ret-2", name: "scope_return", arguments: { dafny: "gen 2 review: nothing left on the table", ...oath } },
+				],
+			},
+			{
+				content: ["All done! Final user-facing answer."],
+			},
+		],
+	});
+	const manager = SessionManager.inMemory();
+	const extPath = resolve(import.meta.dir, "../host-omp/src/main.mjs");
+	let wired = null;
+	const created = await createAgentSession({
+		sessionManager: manager,
+		cwd: resolve(import.meta.dir, ".."),
+		model: mock.model,
+		bindProcessState: false,
+		disableExtensionDiscovery: true,
+		preloadedPreparedExtensions: [
+			{
+				path: extPath,
+				resolvedPath: extPath,
+				factory: async (pi) => {
+					wired = await activate(pi);
+				},
+				error: null,
+			},
+		],
+		systemPrompt: ["You are Root."],
+	});
+	const session = created.session;
+	session.modelRegistry.getApiKey = async () => "mock-key";
+	session.agent.streamFn = mock.stream;
+	const station = wired.engine.station({ sessionManager: manager, session });
+	station.onAutopilotCommand("");
+	const userPrompt = "Refactor handoff with verbatim spacing:   keep-me  ";
+	await session.prompt(userPrompt);
+	for (let i = 0; i < 150; i += 1) {
+		await new Promise((r) => setTimeout(r, 20));
+		if (!session.isStreaming && station.state.relay.canStop === true && mock.calls.length >= 4) {
+			await session.waitForIdle();
+			break;
+		}
+	}
+	assert.equal(mock.calls.length, 4, "expected 4 LLM requests across Gen 0 -> Gen 1 -> Gen 2 -> Final answer");
+	assert.equal(station.state.relay.generation, 2);
+	assert.equal(station.state.relay.bigStreak, 2);
+	assert.equal(station.state.relay.canStop, true);
+	assert.equal(station.state.relay.pendingRewind, null);
+	assert.deepEqual(station.state.relay.userPrompts, [userPrompt]);
+	const finalMessages = manager.buildSessionContext().messages;
+	assert.equal(finalMessages[0]?.role, "compactionSummary");
+	assert.ok(finalMessages[0].summary.includes("gen 1 report: fix and tests pass"));
+	assert.ok(!finalMessages[0].summary.includes("gen 0 report"));
+	assert.ok(finalMessages.some((m) => m.role === "user" && !m.herdSkill && !m.synthetic));
+	assert.equal(finalMessages.some((m) => m.stopReason === "aborted"), false);
+	console.log("PASS root rewind E2E: real AgentSession + SessionManager compaction + verbatim user prompts + 2-oath promotion");
+}
+
 try {
 	if (typeof Bun === "undefined") throw new Error("This check requires Bun and the host's installed dependencies.");
 	const [{ Agent }, { createMockModel }, { ExtensionRunner }, { isPerCallContextMessage }, { type }] = await Promise.all([
@@ -251,6 +341,7 @@ try {
 	await exerciseHost(host, "prompt");
 	await exerciseHost(host, "continue");
 	await checkReturnStop(host);
+	await checkRootRewindE2E(host);
 	console.log("PASS context smoke: real host loop and runner; no network API or cache-hit claim");
 } catch (error) {
 	console.error(`FAIL context smoke: ${error?.stack ?? error}`);

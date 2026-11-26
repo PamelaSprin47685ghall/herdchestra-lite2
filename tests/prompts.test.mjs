@@ -4,7 +4,6 @@ import { readdirSync, readFileSync } from "node:fs";
 import { wireTools } from "../src/tools/catalog.mjs";
 import { loadDoc, placeholderNames, render } from "../src/prompts/index.mjs";
 import * as scopeTools from "../src/tools/descriptions.mjs";
-import * as todoTools from "../src/tools/todo-description.mjs";
 import {
 	injectSystemPrompt,
 	persistentOperatingSkill,
@@ -18,7 +17,6 @@ import {
 const DOCS = [
 	"tools/fork-join",
 	"tools/notes",
-	"tools/todo",
 	"system",
 	"receipts/scope",
 	"receipts/relay",
@@ -82,6 +80,13 @@ describe("tool contracts map to their documents", () => {
 		expect(scopeTools.joinParameters.required).toBeUndefined();
 		expect(scopeTools.joinParameters.properties).not.toHaveProperty("elder_report");
 		expect(scopeTools.RETURN_DESCRIPTION).toBe(doc["return.tool"]);
+		const oath = scopeTools.returnParameters.properties.signed_sealed_hands_off_nothing_left_on_the_table;
+		expect(oath).toMatchObject({
+			type: "string",
+			enum: ["a_ferocious_audacious_master_would_change_nothing"],
+			description: doc["return.oath"],
+		});
+		expect(scopeTools.returnParameters.required).toEqual(["dafny"]);
 		// The retired working-level container has no description and no
 		// schema; amend and pin live in their own document.
 		expect(scopeTools.SCOPE_DESCRIPTION).toBeUndefined();
@@ -97,15 +102,17 @@ describe("tool contracts map to their documents", () => {
 		expect(scopeTools.PIN_CONCLUSION_DESCRIPTION).toBe(notes["pin.conclusion"]);
 	});
 
-	test("todo", () => {
-		const doc = loadDoc("tools/todo");
-		expect(todoTools.TODO_DESCRIPTION).toBe(doc.tool);
-		expect(todoTools.TODO_OP_DESCRIPTION).toBe(doc.op);
-		expect(todoTools.TODO_LIST_DESCRIPTION).toBe(doc.list);
-		expect(todoTools.TODO_TASK_DESCRIPTION).toBe(doc.task);
-		expect(todoTools.TODO_PHASE_DESCRIPTION).toBe(doc.phase);
-		expect(todoTools.TODO_ITEMS_DESCRIPTION).toBe(doc.items);
-		expect(todoTools.TODO_REASON_DESCRIPTION).toBe(doc.reason);
+	test("return rewind receipts carry only the latest report and pins", () => {
+		const relay = loadDoc("receipts/relay");
+		for (const [key, vars] of Object.entries({
+			"reborn.continue": [],
+			"reborn.review": [],
+			"reborn.report": ["report"],
+			"reborn.pins": ["pins"],
+			"reborn.start": [],
+		})) {
+			expect(placeholderNames(relay[key])).toEqual(vars);
+		}
 	});
 
 	test("the registered scope name rules prevent case-only collisions and reserved names", () => {
@@ -135,10 +142,6 @@ describe("tool contracts map to their documents", () => {
 		expect(scopeTools.scopeContextParameters.properties.amend.properties.reflection.description).toBe(
 			loadDoc("tools/notes")["amend.reflection"],
 		);
-		const todo = loadDoc("tools/todo");
-		expect(
-			todoTools.TODO_PARAMETERS.properties.list.items.properties.items.description,
-		).toBe(todo["list.item"]);
 	});
 });
 
@@ -201,11 +204,9 @@ describe("system prompts map to their documents", () => {
 		}
 	});
 
-	test("the task-nature menu stays out of both the rules and todo", () => {
-		const todo = loadDoc("tools/todo");
+	test("the task-nature menu stays out of the rules", () => {
 		expect(persistentOperatingSkill).not.toContain("Choose by task nature.");
 		expect(persistentOperatingSkill).not.toContain("A refactor counts as development:");
-		expect(todo.tool).not.toContain("Choose by task nature.");
 	});
 
 	test("every level hears the free-fork tip before the handout", () => {

@@ -74,14 +74,13 @@ describe("pin persistence (legacy transcript scan)", () => {
     expect(station.state.pins[0]).toContain("**Finding:**");
   });
 
-  test("the saved receipt sends the caller to the todo ledger now", () => {
+  test("the saved receipt confirms the pin and recommends amending the beat", () => {
     const station = stationWith();
     const out = handlePinCall(station, pinCall({ conclusion: "ship the smaller fix" }));
     expect(out.isError).toBeUndefined();
     const text = out.content[0].text;
-    expect(text).toMatch(/^OK\./);
-    expect(text).toContain("`todo`");
-    expect(text).toContain("now");
+    expect(text).toContain("Pin saved");
+    expect(text).toContain("scope_context({ amend })");
   });
 
   test("persist() === false rolls the note back and refuses", () => {

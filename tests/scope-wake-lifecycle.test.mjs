@@ -13,6 +13,9 @@ import {
 } from "../src/scope/forkjoin.mjs";
 import { listActiveScopePaths } from "../src/scope/path.mjs";
 import { handleReturnCall } from "../src/station/fork-controls.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+
+const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 import { handleSendCall } from "../src/station/send-controls.mjs";
 import { createState, planLedgerEntry, foldStateChain } from "../src/scope/index.mjs";
 
@@ -64,7 +67,7 @@ describe("the first return does not park", () => {
     fork(ledger, "f-c1", "root", 0, "/worker");
     const out = handleReturnCall(child(ledger, "f-c1", "/worker"), {
       id: "call-r1",
-      arguments: { dafny: "the parser leaks" },
+      arguments: { dafny: "the parser leaks", ...OATH },
     });
     expect(out.isError).toBeUndefined();
     expect(out.details.accepted).toBe(true);

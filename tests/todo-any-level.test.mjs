@@ -1,34 +1,12 @@
-/**
- * todo at every branch level, and skill reads in a child that holds turns.
- *
- * The consumer is the model and the host: every assertion reads a tool result
- * or the relay state. The ledger itself stays the host's native todo; this
- * suite proves only the seam this extension owns — the root write evaluates
- * the relay, a fork child's write is free and never touches it, and a
- * skill:// read is free wherever it runs.
- */
+// Native todo and skill reads stay free at every scope level.
 
 import { describe, expect, test } from "bun:test";
 import { activate } from "../host-omp/src/main.mjs";
 import {
 	createBracketLedger,
-	markReady,
 	registerFork,
-	takeReady,
 } from "../src/scope/index.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
-
-// The live station comes from the registry that `start()` just built. A
-// module-wide accessor keeps the test bodies focused on relay behavior.
-let activeStation = null;
-function stateFor() {
-	if (!activeStation) throw new Error("start() has not run");
-	return activeStation;
-}
-
-function clone(value) {
-	return JSON.parse(JSON.stringify(value));
-}
 
 function makeManager() {
 	const entries = [];
@@ -132,54 +110,21 @@ function toolResult(id, name, text, isError = false) {
 	};
 }
 
-function makeNativeTodo() {
-	let phases = [];
-	const find = (content) => {
-		for (const phase of phases) {
-			const task = phase.tasks.find((item) => item.content === content);
-			if (task) return task;
-		}
-		return null;
-	};
-	return {
-		get phases() {
-			return phases;
-		},
-		execute(params) {
-			const op = params.op ?? (Array.isArray(params.list) ? "init" : "view");
-			if (op === "init") {
-				phases = (params.list ?? []).map((entry) => ({
-					name: String(entry.phase ?? "Phase"),
-					tasks: (entry.items ?? []).map((content) => ({
-						content: String(content),
-						status: "pending",
-					})),
-				}));
-			} else if (op === "done") {
-				const task = find(params.task);
-				if (task) task.status = "completed";
-			}
-			return {
-				content: [{ type: "text", text: `todo ${op}` }],
-				details: { op, phases: clone(phases), storage: "memory" },
-			};
-		},
-	};
-}
-
 async function start() {
 	const manager = makeManager();
 	const host = makeHost();
-	const native = makeNativeTodo();
-	host.tools.set("todo", {
+	const nativeTodo = {
 		name: "todo",
-		execute: async () => ({ content: [{ type: "text", text: "host builtin" }] }),
-	});
+		execute: async (_id, { op, list }) => ({
+			content: [{ type: "text", text: "host builtin" }],
+			details: { op, phases: list },
+		}),
+	};
+	host.tools.set("todo", nativeTodo);
 	const wired = await activate(host.pi, {});
 	const ctx = {
 		sessionManager: manager,
 		mode: "rpc",
-		invokeTool: (params) => native.execute(params),
 	};
 	const session = {
 		sessionManager: manager,
@@ -206,11 +151,9 @@ async function start() {
 		ctx,
 	);
 	if (prepared?.systemPrompt) session.agent.state.systemPrompt = prepared.systemPrompt;
-	activeStation = wired.engine.station(ctx);
-	// Every case in this file exercises the relay; manual duty has its own
-	// cases at the end and flips the flag off explicitly.
-	activeStation.state.autopilot = true;
-	return { host, ctx, native, session, station: activeStation };
+	const station = wired.engine.station(ctx);
+	station.state.autopilot = true;
+	return { host, ctx, nativeTodo, station };
 }
 
 async function runAssistant(host, ctx, message) {
@@ -281,183 +224,29 @@ function asRoot(station) {
 	station.forkDepthPort = () => 0;
 }
 
-function relayOf(ctx) {
-	return stateFor(ctx).state.relay;
-}
-
 function textOf(result) {
 	return result.result.content.map((part) => part.text ?? "").join("");
 }
 
-describe("todo on the root branch", () => {
-	test("evaluates the ledger and reports the relay state", async () => {
-		const { host, ctx } = await start();
-		const [written] = await runAssistant(
-			host,
-			ctx,
-			assistant([
-				call("t1", "todo", {
-					op: "init",
-					list: [{ phase: "P", items: ["root work"] }],
-				}),
-			]),
-		);
+describe("native todo", () => {
+	for (const level of ["root", "child"]) {
+		test(`uses the unwrapped host tool at the ${level} without spending a turn`, async () => {
+			const { host, ctx, nativeTodo, station } = await start();
+			const ledger = level === "child" ? asChild(station, { budget: { todo: 1 } }) : null;
+			const list = [{ phase: "Plan", items: ["native item"] }];
+			const [written] = await runAssistant(
+				host,
+				ctx,
+				assistant([call("todo1", "todo", { op: "init", list })]),
+			);
 
-		expect(written.blocked).toBe(false);
-		expect(relayOf(ctx).firstEvaluation).toBe("nonempty");
-		expect(relayOf(ctx).lastLedger.open).toBe(1);
-		expect(relayOf(ctx).handoffPending).toBe(false);
-		expect(textOf(written)).toContain("RELAY STATE");
-	});
-
-	test("is allowed while an unreceived child result is outstanding, but an empty ledger is held", async () => {
-		const { host, ctx, station } = await start();
-		const registered = registerFork(station.forkLedgerPort(), {
-			forkId: "fork_open",
-			ownerId: "root",
-			levelKey: "root|0|0",
-			fsm: "unreceived child",
-			depth: 0,
+			expect(host.tools.get("todo")).toBe(nativeTodo);
+			expect(written.blocked).toBe(false);
+			expect(textOf(written)).toBe("host builtin");
+			expect(written.output.details).toEqual({ op: "init", phases: list });
+			if (ledger) expect(ledger.forks.fork_a.remaining.todo).toBe(1);
 		});
-		expect(registered.ok).toBe(true);
-		const [written] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-
-		expect(written.blocked).toBe(false);
-		expect(relayOf(ctx).firstEvaluation).toBeNull();
-		expect(relayOf(ctx).handoffPending).toBe(false);
-		expect(relayOf(ctx).lastLedger).toBeNull();
-		expect(textOf(written)).toContain("RELAY STATE");
-		expect(textOf(written)).toContain("unreceived result(s) from forked scopes");
-	});
-});
-
-describe("todo in a fork child", () => {
-	test("writes the ledger for free and leaves the relay untouched", async () => {
-		const { host, ctx, station } = await start();
-		const ledger = asChild(station);
-		const before = JSON.stringify(stateFor(ctx).state.relay);
-		const [written] = await runAssistant(
-			host,
-			ctx,
-			assistant([
-				call("t1", "todo", {
-					op: "init",
-					list: [{ phase: "P", items: ["child work"] }],
-				}),
-			]),
-		);
-
-		expect(written.blocked).toBe(false);
-		expect(written.result.isError).toBeFalsy();
-		expect(written.output.details.phases[0].tasks[0].content).toBe("child work");
-		expect(JSON.stringify(stateFor(ctx).state.relay)).toBe(before);
-		expect(textOf(written)).not.toContain("RELAY STATE");
-		expect(textOf(written)).toContain("did not advance");
-		expect(ledger.forks.fork_a.remaining).toEqual(ledger.forks.fork_a.budget);
-	});
-
-	test("an empty child ledger does not arm a handoff", async () => {
-		const { host, ctx, station } = await start();
-		asChild(station);
-		const [emptied] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "init", list: [] })]),
-		);
-
-		expect(emptied.blocked).toBe(false);
-		expect(relayOf(ctx).handoffPending).toBe(false);
-		expect(relayOf(ctx).generation).toBe(0);
-		expect(relayOf(ctx).firstEvaluation).toBeNull();
-		expect(relayOf(ctx).canStop).toBe(false);
-		expect(relayOf(ctx).lastLedger).toBeNull();
-		expect(textOf(emptied)).not.toContain("RELAY STATE");
-	});
-
-	test("stays available while the child itself owns an unreceived grandchild", async () => {
-		const { host, ctx, station } = await start();
-		const ledger = asChild(station);
-		const grandchild = registerFork(ledger, {
-			forkId: "grand",
-			ownerId: "fork_a",
-			levelKey: "fork_a|0|0",
-			fsm: "grandchild work",
-			depth: 1,
-		});
-		expect(grandchild.ok).toBe(true);
-		const [written] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "view" })]),
-		);
-
-		expect(written.blocked).toBe(false);
-		expect(written.result.isError).toBeFalsy();
-	});
-
-	test("a deep view leaves the inherited-ledger debt for the root", async () => {
-		const { host, ctx, station } = await start();
-		stateFor(ctx).state.relay = {
-			...stateFor(ctx).state.relay,
-			viewRequired: true,
-		};
-		const ledger = asChild(station);
-		const [deep] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "view" })]),
-		);
-		expect(deep.blocked).toBe(false);
-		expect(relayOf(ctx).viewRequired).toBe(true);
-
-		// The root may evaluate the ledger only after the child result is
-		// received; that is the ordinary join sequence, not a test shortcut.
-		expect(markReady(ledger, "fork_a", { ok: true }).ok).toBe(true);
-		expect(takeReady(ledger, { ownerId: "root" }).ok).toBe(true);
-		asRoot(station);
-		const [outer] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t2", "todo", { op: "init", list: [] })]),
-		);
-		expect(outer.result.isError).toBe(true);
-		expect(textOf(outer)).toContain("INHERITED_LEDGER_UNVIEWED");
-	});
-
-	test("is refused on the root while a handoff is pending", async () => {
-		const { host, ctx } = await start();
-		stateFor(ctx).state.relay = {
-			...stateFor(ctx).state.relay,
-			handoffPending: true,
-		};
-		const [root] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t1", "todo", { op: "view" })]),
-		);
-		expect(root.blocked).toBe(true);
-		expect(textOf(root)).toContain("RELAY_HANDOFF_PENDING");
-	});
-
-	test("is not refused in a child while the root handoff is pending", async () => {
-		const { host, ctx, station } = await start();
-		stateFor(ctx).state.relay = {
-			...stateFor(ctx).state.relay,
-			handoffPending: true,
-		};
-		asChild(station);
-		const [child] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("t2", "todo", { op: "view" })]),
-		);
-		expect(child.blocked).toBe(false);
-		expect(textOf(child)).not.toContain("RELAY_HANDOFF_PENDING");
-	});
+	}
 });
 
 const SKILL_READ = { path: "skill://tdd-crowdsource", i: "reading the contract skill" };
@@ -474,8 +263,6 @@ describe("skill read at every level", () => {
 		expect(read.blocked).toBe(true);
 		expect(textOf(read)).toContain("no ordinary tool budget");
 		expect(textOf(read)).toContain("scope_fork");
-		// The refusal is a turn decision, not a relay evaluation.
-		expect(relayOf(ctx).firstEvaluation).toBe(null);
 	});
 
 	test("is allowed on the root branch", async () => {
@@ -513,149 +300,23 @@ describe("skill read at every level", () => {
 		expect(ledger.forks.fork_a.remaining.read).toBe(0);
 	});
 
-	test("is refused on the root during a pending handoff", async () => {
-		const { host, ctx } = await start();
-		stateFor(ctx).state.relay = {
-			...stateFor(ctx).state.relay,
-			handoffPending: true,
-		};
-		const [refused] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("r1", "read", SKILL_READ)]),
-		);
-		expect(refused.blocked).toBe(true);
-		expect(textOf(refused)).toContain("RELAY_HANDOFF_PENDING");
-	});
-
-	test("is allowed in a child during a pending root handoff", async () => {
-		const { host, ctx, station } = await start();
-		stateFor(ctx).state.relay = {
-			...stateFor(ctx).state.relay,
-			handoffPending: true,
-		};
-		asChild(station);
-		const [read] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("r1", "read", SKILL_READ)]),
-		);
-		expect(read.blocked).toBe(false);
-		expect(textOf(read)).not.toContain("RELAY_HANDOFF_PENDING");
-	});
 });
 
-describe("todo description", () => {
-	test("says free at every level and never forbidden", async () => {
-		const { host } = await start();
-		const definition = host.tools.get("todo");
-		expect(definition.description).toMatch(/free at every level/i);
-		expect(definition.description).not.toContain("forbidden inside any active scope");
-	});
-});
-
-describe("manual duty (autopilot off)", () => {
-	test("a todo write leaves the relay untouched and hides RELAY STATE", async () => {
-		const { host, ctx } = await start();
-		stateFor(ctx).state.autopilot = false;
-		const before = JSON.stringify(stateFor(ctx).state.relay);
-		const [written] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("m1", "todo", { op: "init", list: [] })]),
-		);
-
-		expect(written.blocked).toBe(false);
-		expect(written.result.isError).toBeFalsy();
-		expect(JSON.stringify(stateFor(ctx).state.relay)).toBe(before);
-		expect(textOf(written)).not.toContain("RELAY STATE");
-		expect(textOf(written)).not.toContain("handoff report");
-	});
-
-	test("ask is allowed, and the native todo still runs", async () => {
-		const { host, ctx } = await start();
-		stateFor(ctx).state.autopilot = false;
-		const [asked] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("m2", "ask", { question: "Which file?" })]),
-		);
-		expect(asked.blocked).toBe(false);
-	});
-
-	test("a natural stop neither arms a handoff nor demands a report", async () => {
-		const { host, ctx, station } = await start();
-		stateFor(ctx).state.autopilot = false;
-		const stop = await emit(
-			host.handlers,
-			"session_stop",
-			{ last_assistant_message: { stopReason: "stop" } },
-			ctx,
-		);
-		expect(stop).toBeUndefined();
-		expect(stateFor(ctx).state.relay.handoffPending).toBe(false);
-		expect(station.state.relay.firstEvaluation).toBeNull();
-	});
-
-	test("a stale relay handoff cannot block tools in manual duty", async () => {
-		const { host, ctx } = await start();
-		stateFor(ctx).state.autopilot = false;
-		stateFor(ctx).state.relay = {
-			...stateFor(ctx).state.relay,
-			handoffPending: true,
-		};
-		const [written] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("m4", "todo", { op: "view" })]),
-		);
-		const [asked] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("m5", "ask", { question: "Paused?" })]),
-		);
-
-		expect(written.blocked).toBe(false);
-		expect(textOf(written)).not.toContain("RELAY_HANDOFF_PENDING");
-		expect(asked.blocked).toBe(false);
-	});
-
-	test("turning autopilot on restores relay evaluation and the relay prompt", async () => {
-		const { host, ctx, session, station } = await start();
-		stateFor(ctx).state.autopilot = false;
-
-		const toggled = station.onAutopilotCommand("");
-		expect(toggled).toEqual({ ok: true, mode: "on", text: "" });
-
-		const [emptied] = await runAssistant(
-			host,
-			ctx,
-			assistant([call("m3", "todo", { op: "init", list: [] })]),
-		);
-		expect(emptied.blocked).toBe(false);
-		expect(relayOf(ctx).handoffPending).toBe(true);
-		expect(textOf(emptied)).toContain("handoff report");
-
-		const source = session.agent.state.systemPrompt;
-		const sourceText = Array.isArray(source) ? source.join("\n") : source ?? "";
-		const prepared = await emit(
-			host.handlers,
-			"before_agent_start",
-			{ systemPrompt: source },
-			ctx,
-		);
-		// The managed block is the same bytes in both modes, so the gate leaves
-		// an inherited prompt untouched and the relay text was already there.
-		expect(prepared).toBeUndefined();
-		expect(sourceText).toContain("Any successful `todo` write");
-	});
+test("manual duty allows a natural stop", async () => {
+	const { host, ctx, station } = await start();
+	station.state.autopilot = false;
+	const stop = await emit(
+		host.handlers,
+		"session_stop",
+		{ last_assistant_message: { stopReason: "stop" } },
+		ctx,
+	);
+	expect(stop).toBeUndefined();
 });
 
 describe("ask under autopilot", () => {
 	test("is blocked for the root and for a child", async () => {
 		const { host, ctx, station } = await start();
-		stateFor(ctx).state.autopilot = true;
-
 		const [root] = await runAssistant(
 			host,
 			ctx,
@@ -676,7 +337,7 @@ describe("ask under autopilot", () => {
 
 	test("stays available to a child in manual duty", async () => {
 		const { host, ctx, station } = await start();
-		stateFor(ctx).state.autopilot = false;
+		station.state.autopilot = false;
 		asChild(station);
 
 		const [child] = await runAssistant(

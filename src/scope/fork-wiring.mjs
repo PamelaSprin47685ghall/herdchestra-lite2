@@ -224,7 +224,6 @@ function spawnPortFor(station, base, binder, options, wiring) {
 			display: { attach: binder.attachDisplay },
 			prepareChild: options.prepareChild ?? null,
 			report: (domain, error, detail) => wiring.report?.(domain, error, detail),
-			stopAfterReturn: options.stopAfterReturn ?? null,
 			// The host handle for a live child agent. Registration happens in
 			// the ticket, right after the session exists; the cascade deletes
 			// the entry as it stops the agent, so one child is stopped once.

@@ -18,11 +18,11 @@ function normalizeHost(host) {
 		conversationKey: source.conversationKeyOf,
 		branch: source.branchOf,
 		agent: source.agentOf,
-		activeTools: source.activeTools,
 		header: source.contextHeaderOf,
 		setMessages: source.setAgentMessages,
 		appendHistory: source.appendHistoryMessage,
 		abort: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
+		canRewindRoot: source.canRewindRoot,
 	});
 	const model = Object.freeze({
 		of: source.modelOf,
@@ -45,7 +45,6 @@ function normalizeHost(host) {
 			attachBaseForkPorts: source.attachBaseForkPorts,
 			identityForAgent: source.identityForAgent,
 			agentIdOf: source.agentIdOf,
-			selectStopStation: source.selectStopStation,
 			sameManager: source.sameManager,
 			ledgerFor: source.ledgerFor,
 			adoptLedger: source.adoptLedger,
@@ -110,12 +109,11 @@ export function createStationRegistry(options = {}) {
 	const defaultAgentId = () => null;
 	if (
 		!tickets ||
-		typeof tickets.activateTools !== "function" ||
 		typeof tickets.steer !== "function" ||
 		typeof tickets.prompt !== "function"
 	) {
 		const error = new Error(
-			"MISSING_TICKETS: createStationRegistry requires activateTools/steer/prompt",
+			"MISSING_TICKETS: createStationRegistry requires steer/prompt",
 		);
 		error.code = "MISSING_TICKETS";
 		throw error;
@@ -129,7 +127,6 @@ export function createStationRegistry(options = {}) {
 	const resolvedImplementations = wiring.implementations;
 	const stations = new WeakMap();
 	let orphanStation = null;
-	let pendingStation = null;
 	// One fork tree per process; the ledger is chosen by conversation, so a
 	// parent and its children share brackets even though they are different
 	// stations in different agents.
@@ -236,21 +233,6 @@ export function createStationRegistry(options = {}) {
 				station.noteError?.("activation", error);
 			}
 			return station;
-		},
-		stationForStop(ctx) {
-			const station = registry.stationFor(ctx);
-			const selected = host.fork?.selectStopStation?.({ station, pendingStation, ctx }) ?? {
-				station,
-				clearPending: false,
-			};
-			if (selected.clearPending) pendingStation = null;
-			return selected.station;
-		},
-		markPending(station) {
-			pendingStation = station;
-		},
-		clearPending(station) {
-			if (!station || pendingStation === station) pendingStation = null;
 		},
 	};
 

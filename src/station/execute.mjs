@@ -2,7 +2,6 @@
 
 import { errorResult, textResult } from "../tools/results.mjs";
 import { lastStructuralCallId } from "../transcript/index.mjs";
-import { handoffToolBlockedReason } from "../relay/index.mjs";
 import { handlePinCall, handleAmendCall } from "./controls.mjs";
 import { handleForkCall, handleJoinCall, handleReturnCall } from "./fork-controls.mjs";
 import { handleSendCall } from "./send-controls.mjs";
@@ -32,11 +31,6 @@ function executeAmend(station, toolCallId, params) {
 function executePin(station, toolCallId, params) {
 	const cached = processedOf(station).handledFor(toolCallId);
 	if (cached) return cached;
-	const ownerId =
-		typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
-	if (ownerId === null && station.state.autopilot && station.state.relay?.handoffPending) {
-		return errorResult("RELAY_HANDOFF_PENDING", handoffToolBlockedReason());
-	}
 	const result = handlePinCall(station, { id: toolCallId, arguments: params });
 	processedOf(station).setHandled(toolCallId, result);
 	return result;

@@ -4,17 +4,18 @@
  * The pure control flows live in `src/tools/tickets.mjs` and are host-free;
  * this node binds them to the host capabilities they need (diagnostics, the
  * fork registry waiters, model switching) and adds the tickets whose whole
- * body is a host call (steer, prompt, tool activation, scoped model switch).
+ * body is a host call (steer, prompt, rewind, scoped model switch).
  *
  * Everything here is the adapter side of the boundary: when the wiring moves
  * into the host package, this file moves with it unchanged.
  */
 
 import { sendSlashPrompt, sessionFor } from "./capture.mjs";
+import { managerOf, modelFrom, modelOf, sessionOf, thinkingFrom, thinkingOf } from "./adapter.mjs";
+import { hasScopeReturnStop } from "./branch-context.mjs";
+import { record } from "./diagnostics.mjs";
 
 const textResult = (text) => ({ content: [{ type: "text", text }] });
-import { modelFrom, modelOf, thinkingFrom, thinkingOf } from "./adapter.mjs";
-import { record } from "./diagnostics.mjs";
 
 
 /**
@@ -65,24 +66,77 @@ export async function sendUserMessageTicket(pi, text) {
 	}
 }
 
-/**
- * before_agent_start ticket: reactivate `todo` for a read-write subagent, then
- * report the injected system prompt (or undefined when unchanged).
- */
-export async function activateToolsTicket(pi, activeTools, prompt, promptChanged) {
-	if (typeof pi?.setActiveTools === "function") {
-		const next = Array.isArray(activeTools) ? [...activeTools] : [];
-		if (!next.includes("todo")) next.push("todo");
-		try {
-			await pi.setActiveTools(next);
-		} catch (error) {
-			// A host without tool activation keeps its own tool set, and
-			// `todoReady()` turns the relay off. Record why the grant failed so
-			// the reason is not guessed from the symptom.
-			record("tools", error, { requested: next.length });
-		}
+function supportsRootRewind(pi, session, manager) {
+	return Boolean(
+		session && manager && manager === session.sessionManager &&
+		!session.isDisposed && !session.isSessionTransitioning &&
+		typeof session.withQueueDrainPaused === "function" &&
+		typeof session.waitForIdle === "function" &&
+		typeof session.settleInFlightMessagePersistence === "function" &&
+		(typeof session.prompt === "function" || typeof pi?.sendUserMessage === "function") &&
+		typeof manager.getSessionId === "function" &&
+		typeof manager.getLeafId === "function" &&
+		typeof manager.getBranch === "function" &&
+		typeof manager.appendCompaction === "function" &&
+		typeof manager.appendMessage === "function" &&
+		typeof manager.buildSessionContext === "function" &&
+		Array.isArray(session.agent?.state?.messages) && hasScopeReturnStop(session.agent),
+	);
+}
+
+export function canRewindRoot(pi, ctx) {
+	return supportsRootRewind(pi, sessionOf(ctx), managerOf(ctx));
+}
+
+/** Run detached from agent_end, which must never await its own idle barrier. */
+export async function rewindRootTicket(pi, station, ctx, plan) {
+	let committed = false;
+	try {
+		const session = sessionOf(ctx);
+		const manager = managerOf(ctx);
+		if (!supportsRootRewind(pi, session, manager) || station.manager !== manager) return;
+		const sessionId = manager.getSessionId();
+		const epoch = session.transcriptEpoch;
+		const agent = session.agent;
+		let resume;
+		await session.withQueueDrainPaused(async () => {
+			await session.waitForIdle();
+			await session.settleInFlightMessagePersistence();
+			if (
+				session.isStreaming || session.isAborting || session.hasAdmittedSubmission || session.agent !== agent ||
+				session.transcriptEpoch !== epoch || sessionOf(ctx) !== session ||
+				managerOf(ctx) !== manager || manager.getSessionId() !== sessionId ||
+				station.manager !== manager || !supportsRootRewind(pi, session, manager)
+			) return;
+			// Commit checks that the plan still owns the station. Do not yield
+			// between that check, the transcript mutation, and the resume request.
+			committed = station.commitRootRewind(ctx, plan) === true;
+			if (!committed) return;
+			if (typeof session.prompt !== "function") {
+				resume = Promise.resolve(pi.sendUserMessage(plan.startPrompt, { attribution: "agent" }));
+				resume.catch((error) => record("tickets", error, { kind: "rewind-resume" }));
+				return;
+			}
+			// Release the queue hold as soon as the prompt claims the host, or
+			// when it fails before admission. Await the actual prompt outside.
+			let admitted;
+			const admission = new Promise((resolve) => { admitted = resolve; });
+			resume = Promise.resolve(session.prompt(plan.startPrompt, {
+				synthetic: true,
+				attribution: "agent",
+				userInitiated: false,
+				expandPromptTemplates: false,
+				runCommands: false,
+				throwOnDrop: true,
+				onPromptAdmitted: admitted,
+			}));
+			resume.then(admitted, admitted);
+			await admission;
+		});
+		await resume;
+	} finally {
+		if (!committed) station.abortRootRewind?.(plan);
 	}
-	return promptChanged ? { systemPrompt: prompt } : undefined;
 }
 
 const THINKING_SUFFIX =

@@ -1,45 +1,63 @@
-// The session-stop gate owns two rules. An aborted turn or an errored
-// assistant message is not a user request to stop the relay. An aborted turn
-// is, however, the user ending the branch: every descendant is cancelled
-// before the gate returns. These cases pin both rules at the station.
+// The session-stop gate owns the stop rules:
+// - An aborted turn or an errored assistant message never triggers a stop nudge.
+// - A Root turn that just triggered/is running a rewind never triggers a stop nudge.
+// - Unreceived children outrank everything else (`scope_join`).
+// - A running child is nudged to call `scope_return` within its shared allowance.
+// - Root under autopilot is nudged to call `scope_return` until `canStop === true`.
 
 import { describe, expect, test } from "bun:test";
 
 import { onSessionStop } from "../src/station/gates.mjs";
+import { rootReturnNudge } from "../src/station/texts.mjs";
 
-function station(recorded) {
+function station(overrides = {}) {
 	return {
-		state: { autopilot: true, relay: { canStop: false, handoffPending: false } },
-		relayOn: () => true,
-		recordNaturalStop: () => {
-			recorded.push("stopped");
+		state: {
+			autopilot: true,
+			relay: { canStop: false, pendingRewind: null, ...(overrides.relay ?? {}) },
+			...(overrides.state ?? {}),
 		},
-		cancelDescendants: () => {
-			recorded.push("cancelled");
-		},
+		rewoundThisTurn: overrides.rewoundThisTurn ?? false,
+		forkOwnerId: () => overrides.ownerId ?? null,
+		forkLedgerPort: () => overrides.ledger ?? null,
 	};
 }
 
 describe("session stop evidence", () => {
-	const cases = [
-		// Host stop evidence is never a user-abort proof. USER_ABORT is a typed
-		// first-class input at the abort entry; these frames only describe how
-		// the model loop ended.
-		["an aborted stop reason", { reason: "aborted" }, []],
-		["an error stop reason", { reason: "error" }, []],
-		["an aborted signal", { signal: { aborted: true }, reason: "stop" }, []],
-		["a tool interrupt", { signal: { aborted: true, reason: Symbol.for("pi-agent-core.tool-interrupt") }, reason: "stop" }, []],
-		["a normal stop", { reason: "stop", signal: { aborted: false } }, ["stopped"]],
-		["no evidence at all", null, ["stopped"]],
+	const silentCases = [
+		["an aborted stop reason", { reason: "aborted" }],
+		["an error stop reason", { reason: "error" }],
+		["an aborted signal", { signal: { aborted: true }, reason: "stop" }],
+		["a tool interrupt", { signal: { aborted: true, reason: Symbol.for("pi-agent-core.tool-interrupt") }, reason: "stop" }],
 	];
 
-	for (const [name, evidence, expected] of cases) {
+	for (const [name, evidence] of silentCases) {
 		test(name, () => {
-			const recorded = [];
-			const result = onSessionStop(station(recorded), {}, evidence);
-
-			expect(recorded).toEqual(expected);
-			expect(result).toBeUndefined();
+			expect(onSessionStop(station(), {}, evidence)).toBeUndefined();
 		});
 	}
+
+	test("a normal stop under autopilot before two oaths nudges scope_return", () => {
+		for (const evidence of [{ reason: "stop", signal: { aborted: false } }, null]) {
+			const result = onSessionStop(station(), {}, evidence);
+			expect(result).toEqual({
+				continue: true,
+				additionalContext: rootReturnNudge(),
+			});
+		}
+	});
+
+	test("a normal stop when canStop is true or autopilot is off is allowed", () => {
+		expect(onSessionStop(station({ relay: { canStop: true } }), {}, null)).toBeUndefined();
+		expect(onSessionStop(station({ state: { autopilot: false } }), {}, null)).toBeUndefined();
+	});
+
+	test("a root turn with rewoundThisTurn or pendingRewind is never double-nudged", () => {
+		const rewound = station({ rewoundThisTurn: true });
+		expect(onSessionStop(rewound, {}, null)).toBeUndefined();
+		expect(rewound.rewoundThisTurn).toBe(false);
+
+		const pending = station({ relay: { pendingRewind: { report: "r", big: false, generation: 1 } } });
+		expect(onSessionStop(pending, {}, null)).toBeUndefined();
+	});
 });

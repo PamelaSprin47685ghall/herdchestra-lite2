@@ -22,8 +22,8 @@ function ledgerWith(paths) {
 
 function receipt(ledger, selfPath) {
   const branch = selfPath === "/" ? null : Object.values(ledger.forks).find((r) => r.path === selfPath);
-  const state = { brackets: ledger, autopilot: false, relay: { generation: 0, fullFlow: false } };
-  return skillReceiptText(state, false, branch, 0, false, selfPath !== "/", { label: "" }, null);
+  const state = { brackets: ledger, autopilot: false, relay: { bigStreak: 0 } };
+  return skillReceiptText(state, branch, 0, selfPath !== "/");
 }
 
 /** Every <skill> element of the receipt, in order. */

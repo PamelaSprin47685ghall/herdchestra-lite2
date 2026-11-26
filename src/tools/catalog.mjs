@@ -15,8 +15,6 @@ import {
 	returnParameters,
 	SEND_DESCRIPTION,
 	sendParameters,
-	TODO_DESCRIPTION,
-	TODO_PARAMETERS,
 } from "./index.mjs";
 import {
 	forkTicket,
@@ -25,7 +23,6 @@ import {
 	sendTicket,
 	scopeContextTicket,
 } from "./tickets.mjs";
-import { todoTicket } from "./todo.mjs";
 
 const ESSENTIAL = "essential";
 
@@ -83,18 +80,6 @@ export function createTools({ stationFor, tickets }) {
 			loadMode: ESSENTIAL,
 			execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
 				scopeContextTicket(stationFor(ctx), toolCallId, params, tickets),
-		},
-		{
-			name: "todo",
-			label: "Todo",
-			description: TODO_DESCRIPTION,
-			parameters: TODO_PARAMETERS,
-			strict: true,
-			lenientArgValidation: true,
-			loadMode: ESSENTIAL,
-			approval: "read",
-			execute: (_toolCallId, params, _signal, _onUpdate, ctx) =>
-				todoTicket(stationFor(ctx), params, ctx),
 		},
 	]);
 }

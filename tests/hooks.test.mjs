@@ -32,7 +32,7 @@ function fakePi(throwFor = []) {
 }
 
 function fakeRegistry() {
-	return { stationFor: () => STATION, stationForStop: () => STATION };
+	return { stationFor: () => STATION };
 }
 
 function hooksRecords() {
@@ -87,7 +87,7 @@ describe("hook wiring", () => {
 			},
 		};
 		const pi = fakePi();
-		wireHooks(pi, { stationFor: () => station, stationForStop: () => station });
+		wireHooks(pi, { stationFor: () => station });
 		const handler = pi.handlers.get("session_stop");
 		const signal = { aborted: false };
 
@@ -106,14 +106,14 @@ describe("hook wiring", () => {
 		const seen = [];
 		const station = { ...STATION, onAgentEnd: (_ctx, evidence) => seen.push(evidence) };
 		const pi = fakePi();
-		wireHooks(pi, { stationFor: () => station, stationForStop: () => station });
+		wireHooks(pi, { stationFor: () => station });
 
-		pi.handlers.get("agent_end")({ messages: [{ role: "assistant", stopReason: "stop" }, { role: "assistant", stopReason: "aborted" }] }, {});
-		pi.handlers.get("agent_end")({ willContinue: true, awaitingAsyncWork: true, messages: [{ role: "assistant", stopReason: "aborted" }] }, {});
+		const messages = [{ role: "assistant", stopReason: "stop" }, { role: "assistant", stopReason: "aborted" }];
+		const pausedMessages = [{ role: "assistant", stopReason: "aborted" }];
+		pi.handlers.get("agent_end")({ messages }, {});
+		pi.handlers.get("agent_end")({ willContinue: true, awaitingAsyncWork: true, messages: pausedMessages }, {});
 
-		// The hook still forwards the frame; the clean break is that evidence is
-		// null, so no stopReason-derived cascade can start downstream.
-		expect(seen).toEqual([null, null]);
+		expect(seen).toEqual([{ messages, willContinue: undefined }, { messages: pausedMessages, willContinue: true }]);
 	});
 
 	test("is ok when both message events register", () => {

@@ -1,6 +1,5 @@
-// Handoff ratchet: the relay decisions live in a pure domain module, and the
-// handoff adapter keeps only the side effects. This bounds the inline decision
-// surface so the next slice starts from a lower count, never a higher one.
+// Handoff ratchet: the unified scope_return / rewind decisions live in a pure
+// domain module, and the handoff adapter keeps only the synchronous side effects.
 
 import { readFileSync } from "node:fs";
 
@@ -16,14 +15,12 @@ const controls = readFileSync(
 );
 
 const DECISIONS = [
-	"decideRelayEvaluation",
-	"decideRetirement",
-	"decideHandoffArm",
-	"decideHandoffAdvance",
-	"decideNaturalStop",
-	"decideInheritedLedgerViewed",
-	"decideHandoffReport",
-	"decideSelfHandoff",
+	"parseReturnOath",
+	"decideScopeReturn",
+	"formatGenerationReport",
+	"formatRebornPrompt",
+	"rebornStartPrompt",
+	"resetRootPromotion",
 ];
 
 describe("handoff ratchet", () => {
@@ -34,19 +31,12 @@ describe("handoff ratchet", () => {
 		expect(domain).not.toContain("Object.create(");
 	});
 
-	test("the decisions live in the domain and the controls import them", () => {
+	test("the decisions live in the domain and the adapter imports them", () => {
 		for (const name of DECISIONS) {
 			expect(domain).toContain(`export function ${name}`);
-			expect(controls).toContain(name);
 		}
-		expect(controls).not.toContain("applyLedgerEvaluation(");
-		expect(controls).not.toContain("applyRetirement(");
-		expect(controls).not.toContain("beginGenerationAfterHandoff(");
-		expect(controls).not.toContain("ledgerStats(");
-	});
-
-	test("no string relay comparison remains in the adapter", () => {
-		expect(controls).not.toMatch(/relay\s*===\s*["'](none|ledger|handoff)["']/);
-		expect(controls).not.toMatch(/relay\s*!==\s*["'](none|ledger|handoff)["']/);
+		expect(controls).toContain("formatRebornPrompt");
+		expect(controls).toContain("rebornStartPrompt");
+		expect(controls).toContain("resetRootPromotion");
 	});
 });

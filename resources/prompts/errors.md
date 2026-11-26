@@ -84,7 +84,7 @@ A new scope needs a non-empty `fsm`.
 
 ## missing-dafny
 
-A return needs `dafny` with text. Put there what your text and the calls cannot carry: the results the caller never sees. If the replay drops nothing, say that in one line.
+A return needs non-empty `dafny`. Carry forward the evidence and unresolved work that the next context or the caller would otherwise lose.
 
 ## child-spawner-unavailable
 
@@ -104,9 +104,21 @@ No forked scope has returned yet. Keep working, or wait for one with `scope_join
 {{detail}}
 The record stays ready; use a model with a larger window or shorten the record, then join again.
 
-## not-a-child
+## invalid-return-oath
 
-`scope_return` ends a forked scope. The scope that forked it receives the work with `scope_join`. A woken scope answers with `scope_send` instead.
+Omit `signed_sealed_hands_off_nothing_left_on_the_table` to rewind, or give it the exact value `a_ferocious_audacious_master_would_change_nothing` to take the oath.
+
+## mixed-return
+
+Call `scope_return` alone in its tool-call batch.
+
+## return-unreceived
+
+Root still owns unreceived work. Receive it with `scope_join` before taking the oath.
+
+## return-rewind-unavailable
+
+The rewind is unavailable. The current record is unchanged.
 
 ## unknown-fork
 
@@ -131,22 +143,6 @@ Scope `{{ownerId}}` has no fork record, so it has no budget. Return with `scope_
 ## accounting-failed-closed
 
 Scope accounting failed closed: {{error}}. No tool ran. Retry the call; if it fails again, report the accounting error.
-
-## inherited-ledger-unviewed
-
-The previous holder stopped with open work, so its ledger is yours to read first. Call `todo({ op: "view" })` once. It is free and does not submit a ledger; then write your own.
-
-## todo-native-unavailable
-
-This host does not expose `ctx.invokeTool`, so the native todo implementation cannot run. Do not implement todo state locally.
-
-## todo-native-failed
-
-The native todo call failed: {{detail}}. The ledger is unchanged; use the native error as evidence.
-
-## todo-native-invalid
-
-The native todo call returned no result object. The ledger is unchanged.
 
 ## no-unreceived-work
 

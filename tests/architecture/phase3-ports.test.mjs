@@ -1,15 +1,9 @@
-// Red contracts for Phase 3: delete the dead scope switch, make relay and the
-// session ports real objects, and refuse a registry with no ticket capability.
-//
-// These tests are intentionally written before the implementation. They fail
-// at import or assertion time until the named slices land; do not weaken them
-// to make the current tree green.
+// Port registration and station capability contracts.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import {
-	NAMED_SWITCHES,
 	PORT_NAMES,
 	PORTS,
 } from "../../src/core/ports/registry.mjs";
@@ -27,7 +21,6 @@ describe("B1 — the dead scope switch is deleted", () => {
 	test("the port table no longer has a scope entry", () => {
 		expect(PORTS.scope).toBeUndefined();
 		expect(PORT_NAMES).not.toContain("scope");
-		expect(NAMED_SWITCHES.has("scope")).toBe(false);
 	});
 
 	test("a stray HERD_SCOPE is ignored, not resolved", () => {
@@ -65,28 +58,26 @@ describe("B1 — the dead scope switch is deleted", () => {
 	});
 });
 
-describe("B2/B5 — buildPorts carries the relay and session port objects", () => {
-	test("relay resolves to a policy object, not a name", () => {
-		const none = buildPorts({ HERD_RELAY: "none" });
-		expect(none.ok).toBe(true);
-		expect(none.implementations.relay.name).toBe("none");
-		expect(none.implementations.relay.owesLedger()).toBe(false);
-		expect(none.implementations.relay.canHandoff()).toBe(false);
-
-		const handoff = buildPorts({ HERD_RELAY: "handoff" });
-		expect(handoff.implementations.relay.name).toBe("handoff");
-		expect(handoff.implementations.relay.owesLedger()).toBe(true);
-		expect(handoff.implementations.relay.canHandoff()).toBe(true);
+describe("the old relay is not a port", () => {
+	test("a stale relay switch is ignored at startup", () => {
+		const built = buildPorts({ HERD_RELAY: "sometimes" });
+		expect(built.ok).toBe(true);
+		expect(Object.hasOwn(built.names, "relay")).toBe(false);
+		expect(Object.hasOwn(built.implementations, "relay")).toBe(false);
 	});
 
-	test("an invalid relay name is refused", () => {
-		expect(buildPorts({ HERD_RELAY: "sometimes" })).toMatchObject({
+	test("an explicit relay request is refused as an unknown port", () => {
+		expect(resolvePorts({ relay: "handoff" }, {})).toEqual({
 			ok: false,
 			code: "PORT_UNAVAILABLE",
 			port: "relay",
+			wanted: "handoff",
+			available: [],
 		});
 	});
+});
 
+describe("B5 — buildPorts carries the session port objects", () => {
 	test("pin/amend/herd are state-bound implementations built once", () => {
 		const built = buildPorts({
 			HERD_PIN: "off",
@@ -149,10 +140,6 @@ describe("B3 — missing tickets refuse before a station exists", () => {
 		const calls = [];
 		return {
 			calls,
-			activateTools(...args) {
-				calls.push(["activateTools", ...args]);
-				return { systemPrompt: "ok" };
-			},
 			steer(...args) {
 				calls.push(["steer", ...args]);
 			},
@@ -184,7 +171,7 @@ describe("B3 — missing tickets refuse before a station exists", () => {
 	test("a partial capability set is refused", () => {
 		let error;
 		try {
-			createStationRegistry({ tickets: { activateTools() {} } });
+			createStationRegistry({ tickets: { steer() {} } });
 		} catch (caught) {
 			error = caught;
 		}

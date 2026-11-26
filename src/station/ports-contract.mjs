@@ -8,7 +8,6 @@
  */
 export const IMPLEMENTATION_KEYS = Object.freeze([
 	"clock",
-	"relay",
 	"pin",
 	"amend",
 	"herd",

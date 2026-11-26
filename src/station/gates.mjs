@@ -16,48 +16,24 @@ import { notifyWaiters } from "../scope/fork-registry.mjs";
 import { beatKey, toolCalls } from "../transcript/index.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
-import { successorStartNudge } from "../relay/index.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { controlsIn, hostBoundaryKey } from "./messages.mjs";
 import { firstTurnMessage, prependFirstTurn } from "./domain/context.mjs";
 import { decideToolCall } from "./domain/tool-call.mjs";
 import { dispatchOf, processedOf } from "./domain/tool-call-ledger.mjs";
-import { handoffDemandVisible, insideScopeNudge } from "./texts.mjs";
+import { insideScopeNudge, rootReturnNudge } from "./texts.mjs";
+import {
+	clearPendingRootRewind,
+	pendingRootRewindPlan,
+	syncRootUserPrompts,
+} from "./handoff-state.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
 const E = loadDoc("errors");
 
-/**
- * The branch's own fork id, or null at the root.
- *
- * Every relay decision asks this question: the relay belongs to the root, and
- * a fork child shares the root's relay object only so a reload can see it. A
- * child never evaluates, arms, or commits a handoff.
- */
+/** The branch's own fork id, or null at the root. */
 function ownerIdOf(station) {
 	return typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
-}
-
-/**
- * Record the model's own report while a handoff waits.
- *
- * Both message events carry the same text, so the rule lives here once: a
- * session outside every scope, with a handoff pending, whose assistant turn
- * made no tool call. A child's prose is fork output, never the root's report.
- */
-function capturePendingReport(station, message) {
-	const state = station.state;
-	if (!state.autopilot || !state.relay?.handoffPending) return;
-	if (ownerIdOf(station) !== null) return;
-	const ledger =
-		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
-	if (ledger && unreceivedChildren(ledger, "root").length > 0) return;
-	if (toolCalls(message).length > 0) return;
-	const text = message?.content
-		?.filter((block) => block?.type === "text")
-		.map((block) => block.text)
-		.join("\n") ?? "";
-	station.captureHandoffReport(text);
 }
 
 /**
@@ -83,7 +59,6 @@ function onAssistantMessage(station, message, ctx) {
 		dispatchOf(station).setPreparing(message);
 		dispatchOf(station).rememberGroups(message);
 		station.processAssistantMessage(message);
-		capturePendingReport(station, message);
 		station.maybeNudge(message, ctx);
 	} catch (error) {
 		noteFailure(station, error);
@@ -102,7 +77,6 @@ function onMessageEnd(station, event, ctx) {
 		if (controls.length > 0) {
 			station.processAssistantMessage(message);
 		}
-		capturePendingReport(station, message);
 		station.maybeNudge(message, ctx);
 	} catch (error) {
 		noteFailure(station, error);
@@ -144,7 +118,6 @@ function onToolCall(station, event, ctx) {
 		const decision = decideToolCall({
 			state: {
 				autopilot: state.autopilot,
-				relay: { handoffPending: state.relay?.handoffPending === true },
 				charges: state.charges,
 			},
 			processed: {
@@ -159,8 +132,6 @@ function onToolCall(station, event, ctx) {
 			policy: station.policy(ctx),
 			relay: {
 				ownerId,
-				handoffPending: state.relay?.handoffPending === true,
-				owesLedger: station.relayPort?.().owesLedger?.() === true,
 				timeLimitMs: null,
 			},
 		});
@@ -246,32 +217,33 @@ function managesRequest(station, ctx) {
 function receiptMatches(station, message) {
 	if (message?.herdSkill !== true) return false;
 	return message.autopilot === (station.state.autopilot === true) &&
-		message.branch === (ownerIdOf(station) !== null);
+		message.branch === (ownerIdOf(station) !== null) &&
+		message.canStop === (station.state.relay?.canStop === true);
 }
 
 function prepareRequest(station, ctx, previous, history) {
 	if (!managesRequest(station, ctx)) return null;
-	// Commit every transition before dispatching. `ensureTools` and
-	// `restoreScopedModel` detach tickets, and a ticket's synchronous prefix
-	// must observe a fully prepared request, not a half-updated one.
-	observeHostBoundary(station, station.contextMessages());
+	// Commit every transition before dispatching. `restoreScopedModel` detaches
+	// a ticket, and its synchronous prefix must observe a fully prepared
+	// request, not a half-updated one.
+	const contextMessages = station.contextMessages();
+	observeHostBoundary(station, contextMessages);
+	if (ownerIdOf(station) === null) {
+		const live = history
+			? [...(history.prefix ?? []), ...(history.pending ?? [])]
+			: contextMessages;
+		syncRootUserPrompts(station, live);
+	}
 	station.observeActualModel(ctx);
-	const demandVisible =
-		ownerIdOf(station) === null
-			? handoffDemandVisible(station.state.relay, history)
-			: false;
-	const restore = station.tickets.restoreScopedModel;
+	const restore = station.tickets?.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
 	const receipt = (message) =>
-		receiptMatches(station, message) ? message :
-			station.skillReceipt(ctx, demandVisible);
-	// `skillReceipt` writes the relay verdict, so it commits before dispatch.
+		receiptMatches(station, message) ? message : station.skillReceipt(ctx);
+	// `skillReceipt` builds the receipt synchronously before dispatch.
 	const next = req
 		? null
-		: receiptMatches(station, previous) ? previous :
-			station.skillReceipt(ctx, demandVisible);
-	// Tail position: the todo grant, then the restore ticket.
-	station.ensureTools(ctx);
+		: receiptMatches(station, previous) ? previous : station.skillReceipt(ctx);
+	// Tail position: the restore ticket.
 	if (req) return restore(station, ctx, req, previous, receipt);
 	return next;
 }
@@ -366,71 +338,91 @@ export function cancelTree(station, rootOwnerId = "root", reason = CANCELLED_BY_
 	return { abandonedIds, runningIds };
 }
 
+/**
+ * Post-loop gate for Root rewinds.
+ *
+ * When Root called `scope_return` and scheduled a rewind (`pendingRewind`),
+ * `stopAfterScopeReturn` ended the loop cleanly via `TERMINAL_RESULT`. Here at
+ * `agent_end`, the loop is idle, so the station commits nothing destructive
+ * itself and tail-dispatches the host `rewindRoot` ticket (which settles
+ * persistence, calls `station.commitRootRewind(ctx, plan)` synchronously, and
+ * prompts the reborn Root).
+ *
+ * USER_ABORT never enters here: Esc enters only through `onUserAbort`.
+ */
+function onAgentEnd(station, ctx, event = null) {
+	if (event?.willContinue === true) return undefined;
+	if (ownerIdOf(station) !== null) return undefined;
+	const plan = pendingRootRewindPlan(station);
+	if (!plan) return undefined;
+	// Prevent double-dispatch if two agent_end notifications arrive before the
+	// ticket commits and clears `pendingRewind`.
+	if (station.rewindDispatching === plan.pending) return undefined;
+	const rewindRoot = station.tickets?.rewindRoot;
+	if (typeof rewindRoot !== "function") {
+		// Fallback for minimal/test stations that do not inject the async host
+		// ticket: commit synchronously and deliver the start prompt at the tail.
+		const committed = station.commitRootRewind?.(ctx, plan);
+		if (committed) {
+			station.rewoundThisTurn = true;
+			station.deliverUserMessage?.(plan.startPrompt);
+		}
+		return undefined;
+	}
+	station.rewindDispatching = plan.pending;
+	station.rewoundThisTurn = true;
+	// Tail position: detach the async rewind ticket with catch-all diagnostics.
+	station.dispatchFireAndForget("handoff", () => rewindRoot(station, ctx, plan));
+	return undefined;
+}
+
 function onSessionStop(station, ctx, evidence = null) {
-	// Host stop evidence never proves USER_ABORT. omp 19.2 may suppress
-	// session_stop on Esc, settle it as a pause, or omit the aborted assistant
-	// message entirely; inferring the user's decision from those shapes both
-	// misses real aborts and cancels on tool interruptions. USER_ABORT enters
-	// only through the typed gate at the abort entry. An errored turn and a
-	// tool-interrupt steer leave the children alive and retryable, so they
-	// bypass every relay decision without cancelling anything.
+	// Host stop evidence never proves USER_ABORT. An errored turn and an
+	// aborted turn leave children alive and bypass stop nudges.
 	if (evidence?.signal?.aborted || evidence?.reason === "error" || evidence?.reason === "aborted") {
+		return undefined;
+	}
+	// A Root rewind just finished or is in flight on this turn: do not nudge
+	// against the turn that is being replaced.
+	if (station.rewoundThisTurn === true) {
+		station.rewoundThisTurn = false;
+		return undefined;
+	}
+	if (ownerIdOf(station) === null && station.state?.relay?.pendingRewind) {
 		return undefined;
 	}
 	const ledger =
 		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
 	const ownerId = ownerIdOf(station);
-	// A returned child that no join has taken is unreceived work in exactly
-	// the same sense as a running one. Counting only running children let a
-	// stop through while a finished result sat unread.
+	// Unreceived children (running or ready) outrank every other stop rule,
+	// for both Root (even with autopilot off) and child scopes.
 	const unreceived =
 		ledger && typeof unreceivedChildren === "function"
 			? unreceivedChildren(ledger, ownerId ?? "root").length
 			: 0;
-	// Join first, before autopilot and relay checks. The child may be parked
-	// in scope_return, so this nudge outranks every relay, handoff, and
-	// successor nudge; none of them can release that child. The rule binds the
-	// root too, including a root whose relay is off.
 	if (unreceived > 0) {
 		return continueFeedback(insideScopeNudge(unreceived));
 	}
-	// A child's natural stop is not a ledger submission. The assistant-message
-	// steer is one leg and the host can drop it; the stop itself asks again
-	// while the record is still running and the shared allowance lasts. A
-	// returned, failed, or blocked record has nothing to ask for, and the root
-	// owns no record at all.
+	// Child scope natural stop backstop: nudge to call `scope_return` while
+	// the bracket is still RUNNING and its shared allowance remains.
 	if (ownerId !== null && ledger) {
 		const self = forkOf(ledger, ownerId);
 		if (self && self.status === RUNNING && takeReturnNudge(self)) {
 			return continueFeedback(childReturnNudge());
 		}
-	}
-	if (!station.state.autopilot) return undefined;
-	if (!station.relayOn(ctx)) return undefined;
-	// A child's natural stop is not a ledger submission. The return steer in
-	// `nudge.mjs`, the stop backstop above, and the host's branch contract keep
-	// it working until `scope_return`; the root relay must not
-	// arm a handoff or capture the child's prose as the root's report.
-	if (ownerId !== null) return undefined;
-	const relay = station.state.relay;
-	if (relay?.canStop) return undefined;
-	if (relay?.handoffPending) {
-		if (station.handoffReport) {
-			const committed = station.commitSelfHandoff(ctx, station.handoffReport);
-			if (committed.ok) return continueFeedback(successorStartNudge(committed.relay));
-		}
-		// The demand already went out as a user prompt; repeating it as a
-		// steer would say the same thing twice in different words.
 		return undefined;
 	}
-	// A non-empty ledger used to be a reason to demand more work. It is not:
-	// a stop there is a retirement, and the successor continues what is left.
-	station.recordNaturalStop(ctx);
-	return undefined;
+	// Root natural stop: allowed when autopilot is off or after two consecutive
+	// big `scope_return` oaths (`canStop === true`). Otherwise nudge to call
+	// `scope_return`.
+	if (!station.state?.autopilot) return undefined;
+	if (station.state?.relay?.canStop === true) return undefined;
+	return continueFeedback(rootReturnNudge());
 }
 
 function onSessionSwitch(station, event, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return;
+	clearPendingRootRewind(station);
 	const reason = event?.reason ?? event?.handoffReason;
 	if (reason !== "handoff" && event?.handoff !== true) return;
 	truncateForHostBoundary(station.state);
@@ -440,11 +432,12 @@ function onSessionSwitch(station, event, ctx) {
 
 function onSessionCompact(station, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return;
+	clearPendingRootRewind(station);
 	truncateForHostBoundary(station.state);
 	station.hostBoundaryKey = cachedHostBoundaryKey(station, station.contextMessages()) ?? station.hostBoundaryKey;
 	station.resetUsageWatermark();
 	station.persist();
-	const restore = station.tickets.restoreScopedModel;
+	const restore = station.tickets?.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
 	if (req) return restore(station, ctx, req);
 }
@@ -460,15 +453,17 @@ function onBeforeAgentStart(station, event, ctx) {
 	const promptChanged = prompt !== event?.systemPrompt;
 	const result = promptChanged ? { systemPrompt: prompt } : undefined;
 	if (policy === READ_ONLY_SUBAGENT) return result;
+	station.rewoundThisTurn = false;
+	const contextMessages = station.contextMessages();
 	// The host selects the provider model before it calls the context hook.
-	observeHostBoundary(station, station.contextMessages());
+	observeHostBoundary(station, contextMessages);
+	if (ownerIdOf(station) === null) {
+		syncRootUserPrompts(station, contextMessages);
+	}
 	station.observeActualModel(ctx);
-	const restore = station.tickets.restoreScopedModel;
+	const restore = station.tickets?.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
-	// Relay and `todo` share one verdict: `ensureTools` owns that rule, so no
-	// second `getActiveTools` check may live here. Tail position: every state
-	// commit above lands before the grant (and the restore) dispatch.
-	station.ensureTools(ctx);
+	// Tail position: every state commit above lands before the restore dispatch.
 	if (req) return restore(station, ctx, req, result);
 	return result;
 }
@@ -489,6 +484,7 @@ export {
 	onAutopilotCommand,
 	prepareRequest,
 	onContext,
+	onAgentEnd,
 	onSessionStop,
 	onSessionSwitch,
 	onSessionCompact,

@@ -53,18 +53,3 @@ export function conversationKeyOf(manager) {
 	return manager;
 }
 
-/** Stop routing: a station whose session no longer owns the context is left. */
-export function selectStopStation({ station, pendingStation, ctx }) {
-	const pending = pendingStation ?? null;
-	if (!pending) return { station, clearPending: false };
-	// A pending handoff armed on the current station is already where the stop
-	// belongs; anywhere else it is either inherited or discarded.
-	if (station?.state?.relay?.handoffPending === true) {
-		return { station, clearPending: false };
-	}
-	if (pending === station) return { station, clearPending: false };
-	return sameManager(pending, ctx)
-		? { station: pending, clearPending: false }
-		: { station, clearPending: true };
-}
-

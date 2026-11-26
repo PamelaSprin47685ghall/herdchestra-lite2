@@ -1,10 +1,4 @@
-// Phase 4b red contracts: the tool-call decision is a pure function over
-// plain snapshots. No station, no mutation. The station commits the result.
-//
-// The module does not exist yet; these tests are the contract the 4b
-// implementation must satisfy. `charge` is an intent: the station executes
-// `chargeBranch` and turns a refusal into a block. The accounting refusal
-// itself stays covered by `tests/branch-charge.test.mjs`.
+// Tool-call decision contracts: pure function over plain snapshots.
 
 import { describe, expect, test } from "bun:test";
 
@@ -23,12 +17,12 @@ const NORMAL_CALL = {
 
 function decide(overrides = {}) {
 	const base = {
-		state: { autopilot: true, relay: { handoffPending: false }, charges: {} },
+		state: { autopilot: true, charges: {} },
 		processed: { handled: false, hasCall: false },
 		dispatch: { found: false, groupKey: undefined, beatTools: [] },
 		call: NORMAL_CALL,
 		policy: MAIN_AGENT,
-		relay: { ownerId: "fork_1", handoffPending: false, owesLedger: true },
+		relay: { ownerId: "fork_1" },
 	};
 	return decideToolCall({
 		...base,
@@ -101,12 +95,12 @@ describe("normal tools", () => {
 
 	test("the decision never mutates its inputs", () => {
 		const input = {
-			state: { autopilot: true, relay: { handoffPending: false }, charges: {} },
+			state: { autopilot: true, charges: {} },
 			processed: { handled: false, hasCall: false },
 			dispatch: { found: true, groupKey: "beat-1", beatTools: [] },
 			call: { toolName: "read", toolCallId: "call-1", input: { path: "a.mjs" } },
 			policy: MAIN_AGENT,
-			relay: { ownerId: "fork_1", handoffPending: false, owesLedger: true },
+			relay: { ownerId: "fork_1" },
 		};
 		const before = structuredClone(input);
 
@@ -133,7 +127,7 @@ describe("policy", () => {
 });
 
 describe("todo", () => {
-	test("todo is free and persists, but the gate does not grant it", () => {
+	test("native todo is free and persists without granting or blocking", () => {
 		const decision = decide({
 			policy: READ_WRITE_SUBAGENT,
 			call: {
@@ -153,7 +147,7 @@ describe("todo", () => {
 });
 
 describe("control tools", () => {
-	for (const name of ["scope_context", "scope_fork", "scope_join", "scope_return"]) {
+	for (const name of ["scope_context", "scope_fork", "scope_join", "scope_return", "scope_send"]) {
 		test(`${name} is a free control tool`, () => {
 			const decision = decide({
 				call: { toolName: name, toolCallId: `call-${name}`, input: {} },
@@ -287,42 +281,5 @@ describe("ask and wait", () => {
 			expect(decision.persist).toBe(false);
 			expect(decision.controls.directAmend).toBeNull();
 		}
-	});
-});
-
-describe("relay handoff", () => {
-	test("the root blocks every tool except the receive while a handoff is pending", () => {
-		const decision = decide({
-			state: { autopilot: true, relay: { handoffPending: true } },
-			relay: { ownerId: null, handoffPending: true },
-		});
-
-		expect(decision.verdict).toBe("block");
-		expect(decision.block.reason).toContain("RELAY_HANDOFF_PENDING");
-		expect(decision.controls.process).toBe(false);
-		expect(decision.charge).toBeNull();
-		expect(decision.persist).toBe(false);
-	});
-
-	test("the pending handoff still lets the root receive a child", () => {
-		const decision = decide({
-			state: { autopilot: true, relay: { handoffPending: true } },
-			relay: { ownerId: null, handoffPending: true },
-			call: { toolName: "scope_join", toolCallId: "call-join", input: {} },
-		});
-
-		expect(decision.verdict).toBe("allow");
-		expect(decision.block).toBeNull();
-	});
-
-	test("a child is not blocked by the root's pending handoff", () => {
-		const decision = decide({
-			state: { autopilot: true, relay: { handoffPending: true } },
-			relay: { ownerId: "fork_a", handoffPending: true },
-		});
-
-		expect(decision.verdict).toBe("allow");
-		expect(decision.block).toBeNull();
-		expect(decision.charge.request.ownerId).toBe("fork_a");
 	});
 });

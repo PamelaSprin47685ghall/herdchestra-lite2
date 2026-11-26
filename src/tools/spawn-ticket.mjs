@@ -22,6 +22,10 @@ import {
 	resetReturnNudges,
 	takeReturnNudge,
 } from "../scope/return-nudge.mjs";
+import {
+	formatRebornPrompt,
+} from "../station/domain/handoff.mjs";
+import { finishRewind } from "../station/handoff-state.mjs";
 
 /**
  * A fork the parent cancelled owns the reason the parent reads.
@@ -205,6 +209,11 @@ export async function spawnChildTicket(spec, ports) {
 		// old scheduler called prepareFlow() for every flow; without it the
 		// host's skill receipt can fail the prefix check before the child
 		// produces a turn. A refusal is recorded, not fatal.
+		let childStation = null;
+		let childCtx = null;
+		const hasOrigin =
+			Object.hasOwn(created, "originEntryId") && created.originEntryId !== undefined;
+		const originEntryId = hasOrigin ? created.originEntryId : undefined;
 		try {
 			const prepared = ports.prepareChild?.(session) ?? null;
 			if (prepared?.ok === false) {
@@ -212,11 +221,21 @@ export async function spawnChildTicket(spec, ports) {
 					forkId: spec.forkId,
 					phase: "child-context",
 				});
+			} else if (prepared?.station) {
+				childStation = prepared.station;
+				childCtx = prepared.ctx ?? null;
+				childStation.childRewindAvailable =
+					hasOrigin &&
+					typeof childStation.manager?.branch === "function" &&
+					typeof childStation.manager?.resetLeaf === "function";
 			}
 		} catch (error) {
 			report?.("fork", error, { forkId: spec.forkId, phase: "child-context" });
 		}
-		const before = messagesOf(session).length;
+		const originAmends = Array.isArray(childStation?.state?.amends)
+			? childStation.state.amends.slice()
+			: [];
+		let before = messagesOf(session).length;
 		// Every prompt from this point on is agent-authored: the receipt, added
 		// requirements, and the return nudge. The host marks a message
 		// `synthetic` when the agent wrote it; `role` stays "user" so the model
@@ -234,7 +253,9 @@ export async function spawnChildTicket(spec, ports) {
 			writeOutcome({ record: "", failed: true, reason });
 			return finish();
 		}
-		if (typeof session.agent?.abort === "function") detachTermination = ports.stopAfterReturn?.(session.agent) ?? null;
+		if (typeof session.agent?.abort === "function" && typeof ports.stopAfterReturn === "function") {
+			detachTermination = ports.stopAfterReturn(session.agent) ?? null;
+		}
 		// Messages arrive in the ledger's inbox while the child works. The child
 		// reads them at each turn boundary, so a message never interrupts a
 		// running tool call. Every envelope already names its sender, so the
@@ -246,15 +267,67 @@ export async function spawnChildTicket(spec, ports) {
 			await prompt(pending.map((entry) => entry.envelope).join("\n\n"));
 			return true;
 		};
+		// Rewind the child's own BranchManager back to `originEntryId` once the
+		// previous loop has exited cleanly via `stopLoop: true`, then prompt the
+		// reborn child with birth receipt + pins + formatted generation report
+		// (plus any inbox messages that arrived during the old generation).
+		const applyChildRewind = async (bracket) => {
+			const pending = childStation?.pendingChildRewind ?? null;
+			if (!pending) return false;
+			childStation.pendingChildRewind = null;
+			const manager = childStation.manager ?? null;
+			if (!hasOrigin || !manager) {
+				throw new Error("child rewind requested without a rewindable branch manager");
+			}
+			await session.settleInFlightMessagePersistence?.();
+			if (originEntryId === null) manager.resetLeaf();
+			else manager.branch(originEntryId);
+			const rebuilt =
+				typeof manager.buildSessionContext === "function"
+					? manager.buildSessionContext()?.messages
+					: null;
+			if (Array.isArray(rebuilt)) {
+				const setOnHost = childStation.host?.session?.setMessages;
+				const applied =
+					typeof setOnHost === "function"
+						? setOnHost(childCtx ?? session, rebuilt)
+						: false;
+				if (!applied && session?.agent?.state && Array.isArray(session.agent.state.messages)) {
+					session.agent.state.messages = rebuilt.slice();
+				} else if (!applied && Array.isArray(session?.messages)) {
+					session.messages.splice(0, session.messages.length, ...rebuilt);
+				}
+			}
+			finishRewind(childStation, { keepAmends: originAmends, rebaseAnchor: true });
+			resetReturnNudges(bracket);
+			before = messagesOf(session).length;
+			const pendingInbox = takePendingInbox(ledger, spec.forkId);
+			const inboxSection =
+				pendingInbox.length > 0
+					? pendingInbox.map((entry) => entry.envelope).join("\n\n")
+					: "";
+			const rebornBase = formatRebornPrompt({
+				birth: spec.receipt,
+				report: pending.report,
+				pins: childStation.state?.pins ?? [],
+				big: false,
+			});
+			const reborn =
+				inboxSection === "" ? rebornBase : `${rebornBase}\n\n---\n\n${inboxSection}`;
+			await prompt(reborn);
+			return true;
+		};
 		await prompt(spec.receipt);
-		await deliverInbox();
-		// A natural stop submits nothing. Only scope_return closes the bracket,
-		// so a RUNNING bracket after the prompt proves the child stopped short.
-		// The ticket says so and hands the loop back, once per stop. A record a
-		// cascade already closed ends the loop without a nudge.
+		// A natural stop submits nothing. Only scope_return with the oath closes
+		// the bracket; a small scope_return rewinds to originEntryId and keeps
+		// running in the same session, forkId, path, ownerId, inbox, and budget.
 		let bracket = forkOf(ledger, spec.forkId);
 		let unpublished = false;
 		while (bracket && bracket.status === "running") {
+			if (await applyChildRewind(bracket)) {
+				bracket = forkOf(ledger, spec.forkId);
+				continue;
+			}
 			if (await deliverInbox()) {
 				// A new requirement restarts the conversation, so it restarts the
 				// allowance this loop shares with the station.
@@ -278,6 +351,14 @@ export async function spawnChildTicket(spec, ports) {
 			}
 			await prompt(childReturnNudge());
 			bracket = forkOf(ledger, spec.forkId);
+		}
+		// A pending child rewind is still running; if inbox messages arrived
+		// concurrently while the old generation ran, rewind first so the reborn
+		// child reads them on its clean branch instead of losing them to rewind.
+		// After the child returns (no longer RUNNING), drain any inbox message
+		// that arrived before it finished, matching prior spawn behavior.
+		if (bracket && bracket.status !== "running") {
+			await deliverInbox();
 		}
 		const added = messagesOf(session).slice(before);
 		// The scope is finished, not gone. Hand the prompt handle to the wiring

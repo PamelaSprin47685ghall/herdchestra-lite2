@@ -18,7 +18,6 @@ test("every registered tool keeps its schema in the top-level request", () => {
 		"scope_join",
 		"scope_return",
 		"scope_send",
-		"todo",
 	]);
 	for (const [name, tool] of tools) {
 		expect(tool.loadMode, `${name} would be mounted under xd://`).toBe("essential");

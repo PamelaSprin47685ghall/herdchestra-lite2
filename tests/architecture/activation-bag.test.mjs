@@ -22,7 +22,7 @@ import { setIdentity } from "../../src/scope/fork-registry.mjs";
 import { SessionStation } from "../../src/station/station.mjs";
 
 const FORK_WIRING_KEY = Symbol.for("herdchestra-lite2.fork-wiring.v1");
-const PI = { getActiveTools: () => [] };
+const PI = {};
 
 function resetWiringSlot() {
 	delete globalThis[FORK_WIRING_KEY];
@@ -37,7 +37,7 @@ const REQUIRED = Object.freeze({
 		"conversationKey",
 		"branch",
 		"agent",
-		"activeTools",
+		"canRewindRoot",
 		"header",
 		"setMessages",
 		"appendHistory",
@@ -45,7 +45,7 @@ const REQUIRED = Object.freeze({
 	],
 	model: ["of", "thinkingOf", "parseSpec", "capabilities", "query"],
 	accounting: ["usage", "pricing"],
-	fork: ["wiring", "agentIdOf", "selectStopStation", "sameManager"],
+	fork: ["wiring", "agentIdOf", "sameManager"],
 	report: ["record"],
 });
 
@@ -101,7 +101,7 @@ test("the wiring slot is process-wide and first-wins", () => {
 });
 
 test("a second engine reuses the first engine's registry, ledger, and waiters", () => {
-	const tickets = { activateTools() {}, steer() {}, prompt() {} };
+	const tickets = { steer() {}, prompt() {}, rewindRoot() {} };
 	const root = createEngine({ host: createHostBag(PI), tickets, env: {} });
 	const child = createEngine({ host: createHostBag(PI), tickets, env: {} });
 

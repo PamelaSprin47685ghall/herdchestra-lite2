@@ -27,7 +27,7 @@ import { borrowInstalledAddon, borrowStaleAddon } from "./host-native.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const AGENT_SESSION = join(HOST, "packages/coding-agent/src/session/agent-session.ts");
-const REQUIRED_TOOLS = ["scope_fork", "scope_join", "scope_return", "scope_context", "todo"];
+const REQUIRED_TOOLS = ["scope_fork", "scope_join", "scope_return", "scope_send", "scope_context"];
 const STRICT = process.env.OMP_SMOKE_STRICT === "1";
 
 const results = [];

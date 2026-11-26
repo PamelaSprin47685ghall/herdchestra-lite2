@@ -621,10 +621,11 @@ export function deriveBranchConfig(options = {}) {
 /**
  * Build one flow's AgentSession.
  *
- * Returns `{ ok: true, session, config, limitations }` or
- * `{ ok: false, reason, detail }`. On refusal nothing is created and no host
- * side effect runs. On success the caller owns event forwarding and must not
- * dispose the session (see the file header and the
+ * Returns `{ ok: true, session, config, limitations, originEntryId }` or
+ * `{ ok: false, reason, detail }`. `originEntryId` is the inherited tip (`null`
+ * for an empty prefix), or `undefined` when the manager cannot isolate a tip.
+ * On success the caller owns event forwarding and must not dispose the
+ * session (see the file header and the
  * SHARED_MANAGER_DISPOSE_FORBIDDEN limitation).
  */
 export async function createBranchSession(options = {}) {
@@ -647,6 +648,7 @@ export async function createBranchSession(options = {}) {
 	let config = derived.config;
 	let limitations = derived.limitations;
 	let flowManager = null;
+	let originEntryId;
 	const parentManager = derived.config.sessionManager;
 	const shared = sharedManagerOf(parentManager);
 	if (canProxyBranchManager(shared)) {
@@ -662,9 +664,9 @@ export async function createBranchSession(options = {}) {
 		// The current assistant batch is still executing. Seeding the SDK at
 		// that leaf makes it treat the live parent's calls as a crashed turn.
 		// The child inherits the last complete prefix before that entire batch.
-		const tail = (sourceIndex < 0 ? parentBranch.at(-1) : parentBranch[sourceIndex - 1])?.id ?? null;
+		originEntryId = (sourceIndex < 0 ? parentBranch.at(-1) : parentBranch[sourceIndex - 1])?.id ?? null;
 		retainSessionLease(shared);
-		flowManager = createBranchManager(shared, { flowId: options.flowId, label, tail });
+		flowManager = createBranchManager(shared, { flowId: options.flowId, label, tail: originEntryId });
 		config = { ...derived.config, sessionManager: flowManager };
 	} else {
 		limitations = [...limitations, limitation(BRANCH_SESSION_LIMITS.SHARED_MANAGER_NOT_PROXIED)];
@@ -720,6 +722,7 @@ export async function createBranchSession(options = {}) {
 	return {
 		ok: true,
 		session: created.session,
+		originEntryId,
 		config,
 		limitations,
 		toolUI,

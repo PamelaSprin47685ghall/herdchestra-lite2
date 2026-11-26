@@ -1,11 +1,5 @@
-// Phase 1 contracts: the station's sync surface must not dispatch a ticket
-// from a query, and every detached ticket must consume its own rejection.
-//
-// These are behavioral contracts, not source scans. `policy()` is called by
-// several readers; one of them must not be the place that grants `todo`.
-// `syncTodo()` is the only place that grants it, and the grant is a
-// fire-and-forget ticket: a rejection or a synchronous throw must reach the
-// diagnostics ring instead of becoming an unhandled promise rejection.
+// Station purity contracts: every detached ticket consumes its own rejection,
+// policy() is side-effect free, and port tables are frozen once at composition.
 
 import { readdirSync, readFileSync } from "node:fs";
 
@@ -19,7 +13,6 @@ import {
 	reset as resetDiagnostics,
 	snapshot as diagnosticsSnapshot,
 } from "../host-omp/src/host/diagnostics.mjs";
-import { READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 import { activate } from "../host-omp/src/main.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 
@@ -40,8 +33,8 @@ function rwContext() {
 	};
 }
 
-function stationWith(tickets, host = { activeTools: () => ["read"] }) {
-	return createTestStation(SessionStation, 
+function stationWith(tickets, host = {}) {
+	return createTestStation(SessionStation,
 		{ getSessionId: () => "s1", getBranch: () => [] },
 		host,
 		tickets,
@@ -67,63 +60,9 @@ function compositionHost() {
 
 beforeEach(() => resetDiagnostics());
 
-test("policy() is a query and never calls syncTodo", () => {
-	const station = stationWith({ activateTools: () => Promise.resolve() });
-	station.syncTodo = () => {
-		throw new Error("policy dispatched the todo grant");
-	};
+test("policy() is a pure query without side effects", () => {
+	const station = stationWith({ steer: () => Promise.resolve(), prompt: () => Promise.resolve() });
 	expect(() => station.policy(rwContext())).not.toThrow();
-});
-
-test("policy() is a query and never dispatches the todo grant", () => {
-	let calls = 0;
-	const station = stationWith({
-		activateTools: () => {
-			calls += 1;
-			return Promise.resolve();
-		},
-	});
-
-	station.policy(rwContext());
-	expect(calls).toBe(0);
-
-	station.ensureTools(rwContext());
-	expect(calls).toBe(1);
-});
-
-test("ensureTools grants todo once per active tool set", () => {
-	let calls = 0;
-	const station = stationWith({
-		activateTools: () => {
-			calls += 1;
-			return Promise.resolve();
-		},
-	});
-
-	station.ensureTools(rwContext());
-	station.ensureTools(rwContext());
-	expect(calls).toBe(1);
-});
-
-test("a rejecting activateTools ticket is recorded, not left unhandled", async () => {
-	const station = stationWith({
-		activateTools: () => Promise.reject(new Error("activation moved")),
-	});
-
-	station.syncTodo(READ_WRITE_SUBAGENT);
-	await new Promise((resolve) => setTimeout(resolve, 0));
-	expect(diagnosticsSnapshot().some((entry) => entry.domain === "tickets")).toBe(true);
-});
-
-test("a synchronous throw from the ticket capability is recorded, not thrown", () => {
-	const station = stationWith({
-		activateTools: () => {
-			throw new Error("capability is not installed");
-		},
-	});
-
-	expect(() => station.syncTodo(READ_WRITE_SUBAGENT)).not.toThrow();
-	expect(diagnosticsSnapshot().some((entry) => entry.domain === "tickets")).toBe(true);
 });
 
 test("a rejecting steer and prompt ticket is recorded, not left unhandled", async () => {
@@ -180,7 +119,6 @@ test("a refused scoped model switch is recorded through the station", () => {
 
 test("the production entry injects the off port implementations", async () => {
 	const wired = await activate(compositionHost(), {
-		HERD_FOLDING: "off",
 		HERD_CLOCK: "off",
 	});
 	expect(wired.engine.registry.ports().clock).toBe("off");
@@ -207,10 +145,10 @@ test("a station without a complete port table refuses to start", () => {
 	try {
 		new SessionStation(
 			{ getSessionId: () => "s1", getBranch: () => [] },
-			{ activeTools: () => [] },
+			{},
 			{},
 			{
-				ports: () => ({ relay: "handoff" }),
+				ports: () => ({}),
 				implementations: () => built.implementations,
 			},
 			null,
@@ -222,13 +160,7 @@ test("a station without a complete port table refuses to start", () => {
 	expect(error?.missing).toContain("clock");
 });
 
-// Match every call spelling, whichever object holds the table: `registry.ports(`,
-// `registry?.ports?.(`, `station["registry"].ports()` and `wired.ports()` all
-// contain `.ports(` or `.ports?.(`. A detector anchored to the `registry`
-// identifier quietly accepts a table read through an alias or a bracket.
 const PORT_TABLE_READ = /\.\s*ports\s*(?:\?\.)?\s*\(/;
-// The ratchet's previous spelling. It accepts `registry.ports(` and
-// `registry?.ports(` but not `registry?.ports?.(`, so it was fake-green.
 const PRE_RATCHET_READ = /registry\?*\.ports\?*\(/;
 
 function portTableReads(source) {
@@ -250,10 +182,7 @@ test("the port-table detector catches every call spelling", () => {
 
 	const perEventRead = "const ports = registry?.ports?.();";
 	expect(portTableReads(perEventRead)).toHaveLength(1);
-	// The regression this test exists to catch: the pre-ratchet detector was
-	// blind to exactly the spelling a per-event read uses.
 	expect(perEventRead).not.toMatch(PRE_RATCHET_READ);
-	// The identifier-anchored detector was blind to the bracket spelling.
 	expect('station["registry"].ports()').not.toMatch(PRE_RATCHET_READ);
 });
 
@@ -274,19 +203,10 @@ function readsUnder(relative) {
 }
 
 test("the extension reads the port table only at composition time", () => {
-	// One read while the station is constructed and freezes its copy, and one
-	// while provider observation is wired. Every event-time reader uses
-	// `station.portTable`, so a third read in these trees is a regression.
-	// The engine resolves the table and hands each station its frozen copy;
-	// the anchors below pin the two places allowed to read it at composition.
-	// No count is asserted for the station tree: a stationary `.ports?.(`
-	// literal is not a behavior, and the anchors are what can regress.
 	expect(readsUnder("../host-omp/src/host/")).toEqual([
 		{ file: "provider-observer.mjs", match: ".ports(" },
 	]);
 
-	// Anchor each allowed read to its composition function, so it cannot be
-	// displaced by a same-count read elsewhere in the file.
 	const stationSource = readFileSync(
 		new URL("../src/station/station.mjs", import.meta.url),
 		"utf8",

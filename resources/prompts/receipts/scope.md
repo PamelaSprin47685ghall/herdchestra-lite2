@@ -8,7 +8,7 @@ Budget: {{budget}}.
 
 ## pin.saved
 
-OK. Update the `todo` ledger now with any change this note makes: the next step, a completed item, or a blocker. If this note carries the conclusion of the latest beat, amend that beat with `scope_context({ amend })`: the context keeps the note, not the search.
+Pin saved. If this note carries the conclusion of the latest beat, amend that beat with `scope_context({ amend })`: the context keeps the note, not the search.
 
 ## scope.unreceived
 
@@ -26,13 +26,9 @@ Scope budget: {{budget}}.
 
 Scope budget: unavailable; the ledger holds no record for this scope.
 
-## receipt.no-ledger
-
-Evaluate the ledger before forking.
-
 ## receipt.autopilot
 
-Autopilot on: the relay runs; `ask` is unavailable.
+Autopilot on: `ask` is unavailable.
 
 ## receipt.manual
 
@@ -42,21 +38,13 @@ Autopilot off: manual duty; `ask` is available.
 
 Ready to answer the user.
 
-## receipt.todo
+## receipt.return-required
 
-Evaluate the ledger with `todo` before stopping.
+Call `scope_return` before stopping: rewind to continue, or take the oath if nothing is left to change.
 
-## receipt.close-handoff
+## root.return-nudge
 
-Write the handoff report after receiving those results.
-
-## receipt.simple-outside
-
-No ledger. A stop still hands off, but it never finishes the chain; use `todo` to record remaining work.
-
-## receipt.view-required
-
-Run `todo({ op: "view" })` before writing the inherited ledger.
+Call `scope_return` alone with fresh `dafny`. Omit the oath to rewind and continue; take the oath only if nothing is left to change.
 
 ## fork.child-status
 
@@ -66,11 +54,11 @@ Budget: {{budget}}. Targets: {{targets}}.
 
 ## fork.child-return
 
-Report your findings. Only scope_return submits your full record.
+Use the `scope_return` oath to submit your record. Without the oath, the call rewinds without submitting it.
 
 ## fork.child-return-nudge
 
-Your record is still unpublished. Call `scope_return` to hand it to the scope that forked this one.
+Your record is still unpublished. Call `scope_return` with the oath to hand it to the scope that forked this one, or omit the oath to rewind and continue.
 
 ## language
 

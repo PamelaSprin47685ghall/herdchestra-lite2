@@ -158,9 +158,8 @@ export function conversationKeyOf(manager) {
 }
 
 /**
- * Whether a station belongs to the current context's session. A session switch
- * must never route the next stop to the old station; the session id survives a
- * branch manager proxy, so compare it when the manager object differs.
+ * Whether a station belongs to the current context's session. The session id
+ * survives a branch manager proxy, so compare it when the manager object differs.
  */
 export function sameManager(station, token) {
   const key = token ?? null;
@@ -173,21 +172,6 @@ export function sameManager(station, token) {
   } catch {
     return false;
   }
-}
-
-/**
- * Pick the station that owns a session stop. The pending handoff belongs to
- * one session; a different manager clears it. Return `clearPending` so the
- * registry keeps the only mutable field.
- */
-export function selectStopStation({ station, pendingStation, ctx, sameManager: same = sameManager }) {
-  if (station.state.relay?.handoffPending) return { station, clearPending: false };
-  if (!pendingStation) return { station, clearPending: false };
-  if (!same(pendingStation, ctx)) return { station, clearPending: true };
-  if (pendingStation.state.relay?.handoffPending) {
-    return { station: pendingStation, clearPending: false };
-  }
-  return { station, clearPending: false };
 }
 
 /**

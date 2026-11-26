@@ -1,21 +1,12 @@
-// The relay is a root protocol. A fork child shares the root's relay object so
-// a reload can see it, but it never evaluates it: a child's natural stop is the
-// host's return gate, not an empty-ledger submission. These cases pin that
-// boundary at the two entry points a child can hit — the stop gate and the
-// tool gate — plus the stop transition itself.
+// Child/Root isolation and Root natural-stop / autopilot / prompt contracts.
 
 import { describe, expect, test } from "bun:test";
 
 import { createRelay } from "../src/relay/index.mjs";
-import { onBeforeAgentStart, onSessionStop, onToolCall, prepareRequest } from "../src/station/gates.mjs";
-import {
-	advanceRelayForHandoff,
-	armHandoff,
-	captureHandoffReport,
-	commitSelfHandoff,
-	recordNaturalStop,
-} from "../src/station/handoff-state.mjs";
-import { skillReceiptText } from "../src/station/texts.mjs";
+import { onAgentEnd, onBeforeAgentStart, onSessionStop, prepareRequest } from "../src/station/gates.mjs";
+import { commitRootRewind } from "../src/station/handoff-state.mjs";
+import { rootReturnNudge, skillReceiptText } from "../src/station/texts.mjs";
+import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 import { injectSystemPrompt } from "../src/prompts/inject.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 
@@ -24,170 +15,107 @@ function relayState(overrides = {}) {
 }
 
 function stopStation(ownerId, overrides = {}) {
-	const recorded = [];
 	return {
-		recorded,
 		state: relayState(overrides.relay),
-		handoffReport: overrides.handoffReport ?? null,
 		forkOwnerId: () => ownerId,
-		relayOn: () => true,
-		recordNaturalStop: () => {
-			recorded.push("stop");
-		},
-		commitSelfHandoff: () => {
-			recorded.push("commit");
-			return { ok: true, relay: {} };
-		},
+		forkLedgerPort: () => overrides.ledger ?? null,
 	};
 }
 
 describe("a root's natural stop with unreceived work", () => {
-	test("continues with the join steer before any relay rule", () => {
+	test("continues with the join steer before any return nudge", () => {
 		const child = { forkId: "fork_a", status: "running", ownerId: "root" };
-		const station = stopStation(null);
-		station.forkLedgerPort = () => ({ order: ["fork_a"], forks: { fork_a: child } });
+		const station = stopStation(null, {
+			ledger: { order: ["fork_a"], forks: { fork_a: child } },
+		});
 
 		const out = onSessionStop(station, {});
 
 		expect(out?.continue).toBe(true);
 		expect(out.additionalContext).toContain("1 unreceived result(s) from forked scopes");
 		expect(out.additionalContext).toContain("scope_join");
-		expect(station.recorded).toEqual([]);
 	});
 
-	test("holds even when the relay is off and autopilot is manual", () => {
+	test("holds even when autopilot is off", () => {
 		const child = { forkId: "fork_a", status: "ready", ownerId: "root" };
-		const station = stopStation(null, { relay: {} });
+		const station = stopStation(null, {
+			ledger: { order: ["fork_a"], forks: { fork_a: child } },
+		});
 		station.state.autopilot = false;
-		station.relayOn = () => false;
-		station.forkLedgerPort = () => ({ order: ["fork_a"], forks: { fork_a: child } });
 
 		const out = onSessionStop(station, {});
 
 		expect(out?.continue).toBe(true);
 		expect(out.additionalContext).toContain("scope_join");
-		expect(station.recorded).toEqual([]);
 	});
 });
 
-describe("a child's natural stop", () => {
-	test("does not record a relay evaluation", () => {
-		const station = stopStation("fork_a");
-
+describe("root vs child natural stop", () => {
+	test("root under autopilot without canStop is nudged to call scope_return", () => {
+		const station = stopStation(null);
 		const out = onSessionStop(station, {});
-
-		expect(out).toBeUndefined();
-		expect(station.recorded).toEqual([]);
+		expect(out).toEqual({ continue: true, additionalContext: rootReturnNudge() });
 	});
 
-	test("does not commit a handoff it inherited as pending", () => {
+	test("root under autopilot with canStop is allowed to stop", () => {
+		const station = stopStation(null, { relay: { bigStreak: 2, canStop: true } });
+		expect(onSessionStop(station, {})).toBeUndefined();
+	});
+
+	test("root in manual duty is allowed to stop naturally", () => {
+		const station = stopStation(null);
+		station.state.autopilot = false;
+		expect(onSessionStop(station, {})).toBeUndefined();
+	});
+
+	test("a running child is nudged with childReturnNudge, never rootReturnNudge", () => {
+		const child = { forkId: "fork_a", status: "running", ownerId: "root", returnNudges: 0 };
 		const station = stopStation("fork_a", {
-			relay: { handoffPending: true },
-			handoffReport: "the child's own prose",
+			ledger: { order: ["fork_a"], forks: { fork_a: child } },
 		});
-
 		const out = onSessionStop(station, {});
-
-		expect(out).toBeUndefined();
-		expect(station.recorded).toEqual([]);
+		expect(out).toEqual({ continue: true, additionalContext: childReturnNudge() });
 	});
 
-	test("still steers when the child itself owns an unreceived grandchild", () => {
+	test("a child still receives join nudge first when it owns an unreceived grandchild", () => {
 		const grandchild = { forkId: "grand", status: "running", ownerId: "fork_a" };
-		const station = stopStation("fork_a");
-		station.forkLedgerPort = () => ({
-			order: ["grand"],
-			forks: { grand: grandchild },
+		const station = stopStation("fork_a", {
+			ledger: { order: ["grand"], forks: { grand: grandchild } },
 		});
-
 		const out = onSessionStop(station, {});
-
 		expect(out?.continue).toBe(true);
-		expect(out.additionalContext).toContain("1 unreceived result(s) from forked scopes");
-		expect(station.recorded).toEqual([]);
+		expect(out.additionalContext).toContain("scope_join");
 	});
 });
 
-describe("the natural-stop transition", () => {
-	test("leaves the shared relay untouched when the station is a child", () => {
-		const delivered = [];
+describe("child isolation from root rewind", () => {
+	test("commitRootRewind is a no-op on a child station", () => {
+		const relay = {
+			...createRelay(),
+			generation: 1,
+			pendingRewind: { report: "root pending", big: false, generation: 1 },
+		};
 		const station = {
-			state: relayState(),
+			state: { autopilot: true, relay, pins: [] },
 			forkOwnerId: () => "fork_a",
-			persist() {},
-			deliverUserMessage: (text) => {
-				delivered.push(text);
-				return true;
-			},
-			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
-			registry: { ports: () => ({ relay: "handoff" }), markPending() {} },
 		};
-		const before = JSON.stringify(station.state.relay);
-
-		const applied = recordNaturalStop(station, {});
-
-		expect(applied).toBeNull();
-		expect(JSON.stringify(station.state.relay)).toBe(before);
-		expect(delivered).toEqual([]);
+		expect(commitRootRewind(station, {})).toBe(false);
+		expect(station.state.relay.pendingRewind).not.toBeNull();
 	});
 
-	test("still arms the handoff for the root", () => {
-		const delivered = [];
+	test("onAgentEnd on a child never dispatches a root rewind", () => {
+		const dispatched = [];
 		const station = {
-			state: relayState(),
-			forkOwnerId: () => null,
-			persist() {},
-			deliverUserMessage: (text) => {
-				delivered.push(text);
-				return true;
+			state: {
+				autopilot: true,
+				relay: { ...createRelay(), pendingRewind: { report: "x", big: false, generation: 1 } },
 			},
-			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
-			registry: { ports: () => ({ relay: "handoff" }), markPending() {} },
-			markPending() {
-				this.registry.markPending(this);
-			},
-			clearPending() {},
+			forkOwnerId: () => "fork_a",
+			tickets: { rewindRoot: () => dispatched.push("rewind") },
+			dispatchFireAndForget: (_d, fn) => fn(),
 		};
-
-		const applied = recordNaturalStop(station, {});
-
-		expect(applied?.action).toBe("retire");
-		expect(station.state.relay.handoffPending).toBe(true);
-		expect(station.state.relay.firstEvaluation).toBe(null);
-		expect(station.state.relay.canStop).toBe(false);
-		expect(delivered).toHaveLength(1);
-	});
-});
-
-describe("the pending-handoff tool gate", () => {
-	function toolStation(ownerId) {
-		return {
-			state: { ...relayState({ handoffPending: true }), scopes: [] },
-			processed: { hasHandled: () => true, markCall() {} },
-			processControlsForTool() {},
-			forkOwnerId: () => ownerId,
-			policy: () => "main",
-			persist() {},
-		};
-	}
-
-	const todoEvent = {
-		toolName: "todo",
-		toolCallId: "call_todo",
-		input: { op: "view" },
-	};
-
-	test("refuses the root", () => {
-		const verdict = onToolCall(toolStation(null), todoEvent, {});
-
-		expect(verdict?.block).toBe(true);
-		expect(verdict.reason).toContain("RELAY_HANDOFF_PENDING");
-	});
-
-	test("does not refuse a child", () => {
-		const verdict = onToolCall(toolStation("fork_a"), todoEvent, {});
-
-		expect(verdict).toBeUndefined();
+		onAgentEnd(station, {}, { willContinue: false });
+		expect(dispatched).toEqual([]);
 	});
 });
 
@@ -196,7 +124,7 @@ function promptStation(ownerId, autopilot = true) {
 		state: { autopilot },
 		forkOwnerId: () => ownerId,
 		policy: () => READ_ONLY_SUBAGENT,
-		registry: { ports: () => ({}) },
+		portTable: {},
 	};
 }
 
@@ -226,13 +154,10 @@ describe("the prompt gate on an inherited prompt", () => {
 	for (const autopilot of [true, false]) {
 		test(`is a no-op for a child when autopilot is ${autopilot}`, () => {
 			const station = promptStation("fork_a", autopilot);
-			// The owner's live prompt, already injected: a child inherits it.
 			const inherited = injectSystemPrompt(["Host instructions"]);
 
 			const out = onBeforeAgentStart(station, { systemPrompt: inherited }, {});
 
-			// No result means no `setSystemPrompt`, so the provider cache key the
-			// host handed to the branch survives the child's first request.
 			expect(out).toBeUndefined();
 			expect(injectSystemPrompt(inherited)).toBe(inherited);
 		});
@@ -251,29 +176,25 @@ const childBranch = {
 function requestStation(ownerId) {
 	const state = {
 		autopilot: true,
-		relay: { ...createRelay(), fullFlow: true },
+		relay: createRelay(),
 		hostBoundaryKey: null,
 	};
 	const branch = ownerId ? childBranch : null;
-	const ledger = ownerId ? { forks: { [ownerId]: childBranch } } : null;
 	return {
 		state,
 		forkOwnerId: () => ownerId,
-		forkLedgerPort: () => ledger,
 		policy: () => READ_WRITE_SUBAGENT,
-		ensureTools() {},
 		contextMessages: () => [],
 		observeActualModel() {},
 		tickets: {},
 		persist() {},
 		resetUsageWatermark() {},
-		relayOn: () => true,
-		skillReceipt(ctx, demandVisible) {
+		skillReceipt() {
 			return {
 				herdSkill: true,
 				content: [{
 					type: "text",
-					text: skillReceiptText(this.state, true, branch, 0, demandVisible),
+					text: skillReceiptText(this.state, branch, 0, ownerId !== null),
 				}],
 			};
 		},
@@ -281,22 +202,18 @@ function requestStation(ownerId) {
 }
 
 describe("a child's skill receipt", () => {
-	test("describes child duty instead of the relay mode", () => {
+	test("describes child budget instead of root autopilot/return status", () => {
 		const text = skillReceiptText(
-			{ autopilot: true, relay: { ...createRelay(), fullFlow: true } },
-			true,
+			{ autopilot: true, relay: createRelay() },
 			childBranch,
 			0,
-			false,
+			true,
 		);
 
 		expect(text).toContain("Scope budget:");
-		expect(text).not.toContain("Forked scope duty");
-		expect(text).not.toContain("scope_return");
 		expect(text).not.toContain("Autopilot on");
 		expect(text).not.toContain("Autopilot off");
-		expect(text).not.toContain("Until the first `todo` write");
-		expect(text).not.toContain("Write the handoff report");
+		expect(text).not.toContain("Call `scope_return` before stopping");
 	});
 
 	test("prepareRequest keeps that child receipt", () => {
@@ -310,104 +227,18 @@ describe("a child's skill receipt", () => {
 
 		expect(message.herdSkill).toBe(true);
 		expect(text).toContain("Scope budget:");
-		expect(text).not.toContain("Forked scope duty");
 		expect(text).not.toContain("Autopilot on");
 	});
 
-	test("the root receipt still carries the mode line", () => {
+	test("the root receipt carries autopilot mode and scope_return obligation", () => {
 		const text = skillReceiptText(
-			{ autopilot: true, relay: { ...createRelay(), fullFlow: true } },
-			true,
+			{ autopilot: true, relay: createRelay() },
 			null,
 			0,
 			false,
 		);
 
 		expect(text).toContain("Autopilot on");
-		expect(text).toContain("Evaluate the ledger before forking.");
-		expect(text).not.toContain("Forked scope duty");
-	});
-});
-
-describe("a child's handoff transitions", () => {
-	test("captures nothing when called directly on a child", () => {
-		const station = {
-			state: { autopilot: true, relay: { ...createRelay(), handoffPending: true } },
-			forkOwnerId: () => "fork_a",
-			handoffReport: null,
-		};
-
-		expect(captureHandoffReport(station, "child prose")).toBe(false);
-		expect(station.handoffReport).toBeNull();
-	});
-
-	test("does not arm a handoff from a child", () => {
-		const station = {
-			state: { autopilot: true, relay: { ...createRelay() } },
-			forkOwnerId: () => "fork_a",
-			handoffReport: null,
-			persist() {},
-			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
-			registry: {
-				ports: () => ({ relay: "handoff" }),
-				markPending() {},
-			},
-		};
-
-		expect(armHandoff(station, {})).toBe(false);
-		expect(station.state.relay.handoffPending).toBeFalsy();
-	});
-
-	test("does not commit a handoff from a child", () => {
-		const relay = { ...createRelay(), handoffPending: true };
-		const station = {
-			state: { autopilot: true, relay, pins: [], usage: { lastTotalInput: 0 } },
-			forkOwnerId: () => "fork_a",
-			handoffReport: "child prose",
-			contextMessages: () => [],
-			manager: null,
-			persist() {},
-			resetUsageWatermark() {},
-			registry: {
-				ports: () => ({ relay: "handoff" }),
-				clearPending() {},
-			},
-		};
-		const before = JSON.stringify(relay);
-
-		expect(commitSelfHandoff(station, {}, "child prose")).toEqual({ ok: false });
-		expect(JSON.stringify(station.state.relay)).toBe(before);
-		expect(station.handoffReport).toBe("child prose");
-	});
-
-	test("cannot advance the relay directly", () => {
-		const relay = { ...createRelay(), handoffPending: true };
-		const station = {
-			state: { autopilot: true, relay },
-			forkOwnerId: () => "fork_a",
-			persist() {},
-			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
-			registry: { ports: () => ({ relay: "handoff" }) },
-		};
-		const before = JSON.stringify(relay);
-
-		expect(advanceRelayForHandoff(station)).toBe(false);
-		expect(JSON.stringify(station.state.relay)).toBe(before);
-		expect(station.state.relay.handoffPending).toBe(true);
-	});
-
-	test("the root still advances the relay", () => {
-		const relay = { ...createRelay(), handoffPending: true };
-		const station = {
-			state: { autopilot: true, relay },
-			forkOwnerId: () => null,
-			persist() {},
-			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
-			registry: { ports: () => ({ relay: "handoff" }) },
-		};
-
-		expect(advanceRelayForHandoff(station)).toBe(true);
-		expect(station.state.relay.handoffPending).toBe(false);
-		expect(station.state.relay.generation).toBe(relay.generation + 1);
+		expect(text).toContain("scope_return");
 	});
 });

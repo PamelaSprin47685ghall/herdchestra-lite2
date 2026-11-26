@@ -1,12 +1,11 @@
 // Activation ticket bundle: bind host API capabilities for station injection.
 
 import {
-	activateToolsTicket,
 	applyPendingModelSwitch,
+	rewindRootTicket,
 	restoreScopedModelTicket,
 	sendSteerTicket,
 	sendUserMessageTicket,
-	switchModelTicket,
 } from "../host/host-tickets.mjs";
 import { record } from "../host/diagnostics.mjs";
 
@@ -35,11 +34,8 @@ export function buildTickets(pi) {
 		prompt: (text) => detach(() => sendUserMessageTicket(pi, text)),
 		canPrompt: typeof pi?.sendUserMessage === "function",
 		restoreScopedModel: restoreScopedModelTicket,
-		activateTools: (activeTools, prompt, changed) =>
-			activateToolsTicket(pi, activeTools, prompt, changed),
+		rewindRoot: (station, ctx, plan) => rewindRootTicket(pi, station, ctx, plan),
 		applyPendingModelSwitch: (station, ctx, result) =>
 			applyPendingModelSwitch(pi, station, ctx, result),
-		// The host token is opaque to the core: dereference it here, in the host.
-		invokeTool: (ctx, params) => ctx?.invokeTool?.(params),
 	});
 }

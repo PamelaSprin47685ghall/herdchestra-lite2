@@ -3,38 +3,7 @@
 
 import { forkBudgetText } from "../scope/index.mjs";
 import { listActiveScopePaths } from "../scope/path.mjs";
-import { handoffDemand } from "../relay/index.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
-
-function hasDemand(message, demand, exact) {
-	if (message?.excludeFromContext === true) return false;
-	const { content } = message;
-	const matches = (text) => typeof text === "string" &&
-		(exact ? text === demand : text.includes(demand));
-	return typeof content === "string" ? matches(content) :
-		Array.isArray(content) && content.some((block) => block?.type === "text" && matches(block.text));
-}
-
-export function handoffDemandVisible(relay, history) {
-	if (!relay?.handoffPending || !history) return false;
-	const demand = handoffDemand();
-	for (const message of history.pending) {
-		if (message?.role === "user" && hasDemand(message, demand, true)) return true;
-	}
-	// A natural-stop prompt in committed history must be new input, not a
-	// prompt the model has answered. A todo result identifies its generation.
-	let newInput = true;
-	for (let index = history.prefix.length - 1; index >= 0; index -= 1) {
-		const message = history.prefix[index];
-		if (message?.role === "assistant") newInput = false;
-		if (message?.role === "user" && newInput && hasDemand(message, demand, true)) return true;
-		const reported = message?.details?.relay;
-		if (message?.role === "toolResult" && message.toolName === "todo" && message.isError !== true &&
-			reported?.generation === relay.generation && reported.handoffPending === true &&
-			reported.lastLedger?.at === relay.lastLedger?.at && hasDemand(message, demand, false)) return true;
-	}
-	return false;
-}
 
 const T = loadDoc("receipts/scope");
 
@@ -42,7 +11,7 @@ function branchBudget(record, clock = null) {
 	return forkBudgetText(record, Date.now(), clock) || "none";
 }
 
-/** The pin receipt: the note is saved, and the ledger may now be stale. */
+/** The pin receipt: the note is saved. */
 export const PIN_SAVED_TEXT = T["pin.saved"];
 
 function amendText(applied, record = null, clock = null) {
@@ -56,54 +25,46 @@ export function insideScopeNudge(openCount) {
 	return render(T["scope.stop-blocked"], { count: openCount });
 }
 
-export function skillReceiptText(state, relayOn = true, branch = null, openCount = 0, demandVisible = false, child = false, clock = null, chineseReminder = "on") {
+/** A steer when Root stops naturally under autopilot before finishing via scope_return. */
+export function rootReturnNudge() {
+	return T["root.return-nudge"];
+}
+
+export function skillReceiptText(
+	state,
+	branch = null,
+	openCount = 0,
+	child = false,
+	clock = null,
+	chineseReminder = "on",
+) {
 	const isChild = child || branch !== null;
 	const lines = [];
 	if (isChild) {
 		// A forked scope always has a budget to report. When the ledger holds no
 		// record for it, say the number is unknown instead of dropping the line:
 		// an absent line reads as "nothing to watch".
-		lines.push(branch
-			? render(T["receipt.branch"], { budget: branchBudget(branch, clock) })
-			: T["receipt.branch-missing"]);
+		lines.push(
+			branch
+				? render(T["receipt.branch"], { budget: branchBudget(branch, clock) })
+				: T["receipt.branch-missing"],
+		);
 	}
 	if (openCount > 0) {
 		lines.push(render(T["scope.unreceived"], { count: openCount }));
 	}
-	const relay = state.relay;
-	const fullFlow = relayOn && relay?.fullFlow === true;
-	if (!isChild && state.autopilot && fullFlow && relay.firstEvaluation === null) {
-		lines.push(T["receipt.no-ledger"]);
-	}
-	if (!isChild && state.autopilot && relayOn && relay?.viewRequired && !relay.handoffPending) {
-		lines.push(T["receipt.view-required"]);
-	}
+	const relay = state?.relay;
 	if (!isChild) {
-		if (state.autopilot) {
+		if (state?.autopilot) {
 			lines.push(T["receipt.autopilot"]);
+			if (openCount === 0) {
+				const readyToAnswer = relay?.canStop === true || (Number.isInteger(relay?.bigStreak) && relay.bigStreak >= 2);
+				lines.push(T[readyToAnswer ? "receipt.can-stop" : "receipt.return-required"]);
+			}
 		} else {
 			lines.push(T["receipt.manual"]);
 		}
 	}
-	if (state.autopilot && !isChild && relayOn) {
-		if (relay?.handoffPending) {
-			if (openCount > 0) lines.push(T["receipt.close-handoff"]);
-			else if (!demandVisible) lines.push(handoffDemand());
-		} else if (openCount === 0) {
-			lines.push(T[relay?.canStop ? "receipt.can-stop" : fullFlow ? "receipt.todo" : "receipt.simple-outside"]);
-		}
-	}
-	// The reminder rides with every receipt, root and branch alike: the host
-	// appends the receipt to the session tail, so the newest request keeps it
-	// in place even when the prompt prefix is folded away. It is its own
-	// skill element, outside the mode and relay conditionals above, because
-	// one skill element holds one subject: the scope status, then the
-	// standing language rule.
-	// The tree is stated as paths, so a receiver reads who exists without being
-	// told who is speaking, and `scope_send` takes exactly what it prints. It
-	// rides beside the status and the language rule because one skill element
-	// holds one subject; a finished scope leaves the list and stays addressable
-	// by its exact path.
 	const tree = scopeTreeText(state, branch);
 	const status = `<skill version="1.0" enforced>${lines.join(" ")}</skill>`;
 	const reminder = chineseReminder !== "off"

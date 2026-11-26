@@ -80,8 +80,7 @@ const UNITS = [
 ];
 
 const FINGERPRINTS = [
-  { root: CORE_INSTALL, file: "src/relay/texts.mjs", needle: "status.flow", min: 1 },
-  { root: CORE_INSTALL, file: "src/relay/texts.mjs", needle: 'case "reopened"', min: 1 },
+  { root: CORE_INSTALL, file: "src/station/domain/handoff.mjs", needle: "signed_sealed_hands_off_nothing_left_on_the_table", min: 1 },
   // The scope protocol is the three fork/join/return tools. The receipt chain
   // is gone, so no needle may depend on it. The tool catalog lives in the
   // core: the host package only loops over `engine.tools`.
@@ -367,5 +366,5 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
-console.log("fingerprints ok: status.flow, reopened, scope tools");
+console.log("fingerprints ok: return oath, scope tools");
 console.log("restart the session before relying on this build.");

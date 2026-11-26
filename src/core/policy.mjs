@@ -6,10 +6,7 @@
 // (task/read-only-policy.ts), and it is authoritative. `tools` records every
 // tool the session was granted, including extension-owned tools (`scope`,
 // `amend`, `pin`), so it must never be read as a capability list on
-// its own. A read-only subagent gets no scope or relay enforcement and keeps
-// no `todo`: the host strips `todo` from spawned subagents
-// (task/executor.ts). A read-write subagent keeps the relay protocol and must
-// have `todo` reactivated because that same strip removed it.
+// its own. A read-only subagent is exempt from scope enforcement.
 //
 // This module is pure: it reads the context's branch and agent metadata, never
 // the host runtime. The host layer re-exports it so both sides share one rule.
@@ -91,7 +88,7 @@ export function hasSessionInit(view) {
 
 /**
  * Classify the calling session. Unknown sessions stay on the main policy so a
- * missing or unreadable init entry can never disable the relay for the user.
+ * missing or unreadable init entry cannot disable scope enforcement.
  */
 export function agentPolicy(ctx) {
 	const init = sessionInitFor(ctx);
@@ -120,8 +117,6 @@ export function agentPolicy(ctx) {
 			: READ_WRITE_SUBAGENT;
 	}
 	// Only the runtime identity is known, so no tool grant has been recorded
-	// yet. Assume read-only: a relay started here would demand a `todo` the
-	// host has already stripped, while a read-write agent regains the relay
-	// as soon as its contract lands.
+	// yet. Assume read-only until its contract lands.
 	return READ_ONLY_SUBAGENT;
 }

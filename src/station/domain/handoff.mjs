@@ -1,142 +1,243 @@
-// Pure handoff/relay decisions for the Station.
+// Pure handoff and scope_return decisions for the Station.
 //
-// The Station and handoff-state own persistence, compaction, registry marks,
-// prompt delivery and diagnostics. This module owns only the decision over a
-// plain relay snapshot. It never imports the Station or a host module, never
-// mutates its inputs, and returns either a decision or a refusal.
+// Owns the oath contract (`RETURN_OATH_KEY` / `RETURN_OATH_VALUE`), the unified
+// Root + Child `scope_return` state transition table, and the reborn prompt /
+// generation-report formatting. Pure functions only: no Station import, no host
+// import, no mutation of inputs, no I/O.
 
-import {
-	applyLedgerEvaluation,
-	applyRetirement,
-	beginGenerationAfterHandoff,
-	ledgerStats,
-} from "../../relay/index.mjs";
+import { copyRelay } from "../../relay/state.mjs";
+import { filterAmends } from "../../transcript/amend.mjs";
+import { renderChildRecord } from "../../transcript/replay.mjs";
+import { loadDoc, render } from "../../prompts/index.mjs";
 
-const NO_LEDGER_STATS = Object.freeze({ empty: true, open: 0, total: 0 });
+export const RETURN_OATH_KEY = "signed_sealed_hands_off_nothing_left_on_the_table";
+export const RETURN_OATH_VALUE = "a_ferocious_audacious_master_would_change_nothing";
+
+function relayDoc() {
+	return loadDoc("receipts/relay");
+}
+
+function trimString(value) {
+	return typeof value === "string" ? value.trim() : "";
+}
 
 /**
- * Decide what one ledger write means for the relay.
+ * Validate the optional oath field strictly (never truthy coercion).
+ * - Omitted (`undefined`): small handoff (`big: false`).
+ * - Exact singleton string: big handoff (`big: true`).
+ * - Any other value (`false`, `null`, `""`, typo): refused with `INVALID_RETURN_OATH`.
+ */
+export function parseReturnOath(args) {
+	if (!args || typeof args !== "object" || !Object.hasOwn(args, RETURN_OATH_KEY) || args[RETURN_OATH_KEY] === undefined) {
+		return { ok: true, big: false };
+	}
+	if (args[RETURN_OATH_KEY] === RETURN_OATH_VALUE) {
+		return { ok: true, big: true };
+	}
+	return { ok: false, code: "INVALID_RETURN_OATH" };
+}
+
+/**
+ * Unified `scope_return` decision across Root and Child scopes.
  *
- * `none` owes nothing, so it keeps the shared answer shape without touching
- * the relay. An empty ledger is a claim that nothing remains; while this root
- * still owns an unreceived child, that claim is false: the write is accepted
- * and reported as held, but the relay does not advance.
+ * Pure: validates arguments, batch exclusivity, scope state, unreceived
+ * children, and Root rewind capability before any state mutates.
+ *
+ * Returns one of:
+ * - `{ ok: false, code, ... }`
+ * - `{ ok: true, kind: "forward", dafny, stopLoop: true }` (woken child)
+ * - `{ ok: true, kind: "rewind", scope: "child", dafny, stopLoop: true }`
+ * - `{ ok: true, kind: "deliver", scope: "child", dafny, receiverId, orphans, stopLoop: true }`
+ * - `{ ok: true, kind: "rewind", scope: "root", big, dafny, relay, pendingRewind, stopLoop: true }`
+ * - `{ ok: true, kind: "promote", scope: "root", dafny, relay, stopLoop: false }`
  */
-export function decideRelayEvaluation({
-	relay,
-	owesLedger,
-	phases,
-	op,
-	options = {},
+export function decideScopeReturn({
+	isRoot = false,
+	identityForkId = "",
+	record = null,
+	receiverId = "",
+	orphans = [],
 	unreceived = 0,
+	relay = null,
+	canRewindRoot = true,
+	mixedToolCalls = false,
+	args = {},
+	callId = "",
 } = {}) {
-	if (!owesLedger) {
+	const oath = parseReturnOath(args);
+	if (!oath.ok) return { ok: false, code: oath.code };
+
+	const dafny = trimString(args?.dafny);
+	if (dafny === "") return { ok: false, code: "MISSING_DAFNY" };
+
+	if (mixedToolCalls === true) {
+		return { ok: false, code: "MIXED_RETURN_TOOL_CALLS" };
+	}
+
+	// Child scope (depth >= 1)
+	if (!isRoot) {
+		if (typeof identityForkId !== "string" || identityForkId === "") {
+			return { ok: false, code: "NOT_A_CHILD" };
+		}
+		if (!record || typeof record !== "object") {
+			return { ok: false, code: "UNKNOWN_FORK" };
+		}
+		// A woken scope already paid its one return; any further scope_return
+		// forwards its dafny to `..` through `scope_send` without rewinding.
+		if (record.woken === true) {
+			return { ok: true, kind: "forward", scope: "child", dafny, stopLoop: true };
+		}
+		if (record.status !== "running") {
+			return {
+				ok: false,
+				code: "FORK_NOT_RUNNING",
+				status: record.status,
+			};
+		}
+		if (!oath.big) {
+			return {
+				ok: true,
+				kind: "rewind",
+				scope: "child",
+				big: false,
+				dafny,
+				stopLoop: true,
+			};
+		}
+		if (typeof receiverId !== "string" || receiverId === "") {
+			return { ok: false, code: "ORPHANS_WITHOUT_RECEIVER" };
+		}
 		return {
-			relay,
-			stats: NO_LEDGER_STATS,
-			action: null,
-			changed: false,
-			commit: false,
+			ok: true,
+			kind: "deliver",
+			scope: "child",
+			big: true,
+			dafny,
+			receiverId,
+			orphans: Array.isArray(orphans) ? orphans : [],
+			stopLoop: true,
 		};
 	}
-	const stats = ledgerStats(phases);
-	if (options.isError !== true && op !== "view" && stats.empty && unreceived > 0) {
+
+	// Root scope (depth === 0)
+	const current = copyRelay(relay);
+	const openCount = Number.isInteger(unreceived) && unreceived > 0 ? unreceived : 0;
+	if (oath.big && openCount > 0) {
+		return { ok: false, code: "UNRECEIVED_CHILDREN", unreceived: openCount };
+	}
+	if (oath.big && current.bigStreak >= 1) {
 		return {
-			relay,
-			stats,
-			action: "held",
-			changed: false,
-			unreceived,
-			commit: false,
+			ok: true,
+			kind: "promote",
+			scope: "root",
+			big: true,
+			dafny,
+			relay: {
+				...current,
+				bigStreak: 2,
+				canStop: true,
+				pendingRewind: null,
+			},
+			stopLoop: false,
 		};
 	}
-	return {
-		...applyLedgerEvaluation(relay, phases, { op, ...options }),
-		commit: true,
-	};
-}
-
-/** A non-empty ledger at a natural stop is a retirement, not a violation. */
-export function decideRetirement({ relay, owesLedger } = {}) {
-	if (!owesLedger) return null;
-	return applyRetirement(relay);
-}
-
-/** Only the handoff degree may arm a transfer, and only on a stoppable relay. */
-export function decideHandoffArm({ relay, isChild, canHandoff } = {}) {
-	if (isChild || !canHandoff) return { arm: false };
-	if (!relay || relay.canStop) return { arm: false };
-	return {
-		arm: true,
-		relay: { ...relay, handoffPending: true },
-	};
-}
-
-/** Advance one generation after a committed handoff. */
-export function decideHandoffAdvance({
-	relay,
-	isChild,
-	canHandoff,
-	expectedGeneration,
-	at,
-} = {}) {
-	if (isChild || !canHandoff) return { advance: false };
-	if (!relay || !relay.handoffPending || relay.canStop) {
-		return { advance: false };
+	if (canRewindRoot !== true) {
+		return { ok: false, code: "ROOT_REWIND_UNAVAILABLE" };
 	}
-	if (
-		Number.isInteger(expectedGeneration) &&
-		expectedGeneration !== relay.generation
-	) {
-		return { advance: false };
-	}
+	const nextGeneration = current.generation + 1;
+	const pendingRewind = {
+		report: "",
+		big: oath.big,
+		generation: nextGeneration,
+		...(typeof callId === "string" && callId !== "" ? { id: callId } : {}),
+	};
 	return {
-		advance: true,
-		relay: beginGenerationAfterHandoff(relay, {
-			at,
-			fromGeneration: relay.generation,
-		}),
+		ok: true,
+		kind: "rewind",
+		scope: "root",
+		big: oath.big,
+		dafny,
+		relay: {
+			...current,
+			generation: nextGeneration,
+			bigStreak: oath.big ? 1 : 0,
+			canStop: false,
+			pendingRewind,
+		},
+		pendingRewind,
+		stopLoop: true,
 	};
 }
 
 /**
- * A natural stop is a small handoff: transfer the holder and the record, never
- * count an empty evaluation. Children, manual stops, already-ending relays, and
- * relays that still owe a child take no action.
+ * Render the current generation's assistant text + tool calls (with args),
+ * excluding amended beats and appending the trimmed `dafny`.
+ *
+ * Shared by Child final return, Child rewind, and Root rewind so tool calls
+ * always travel into the next generation or calling scope automatically.
  */
-export function decideNaturalStop({
-	relay,
-	isChild,
-	autopilot,
-	owesLedger,
-	unreceived = 0,
+export function formatGenerationReport(messages, amends = [], start = 0, dafny = "") {
+	const visible = filterAmends(Array.isArray(messages) ? messages : [], amends);
+	const body = renderChildRecord(visible, { start });
+	const closing = trimString(dafny);
+	if (closing === "") return body;
+	return body === "" ? closing : `${body}\n\n${closing}`;
+}
+
+/**
+ * Render the reborn handoff prompt/summary shared by Root and Child rewinds.
+ *
+ * - For Child: `birth` is the original birth `spec.receipt`; the result is sent
+ *   as one single `user` message directly off `originEntryId`.
+ * - For Root: `birth` is omitted (user prompts and steers are restored as real
+ *   verbatim `user` messages right after the compaction boundary); the result
+ *   is stored as the compaction summary.
+ */
+export function formatRebornPrompt({
+	birth = "",
+	report = "",
+	pins = [],
+	big = false,
 } = {}) {
-	if (!owesLedger || !autopilot || isChild) return null;
-	// No natural-stop transfer may start before every child is received. The
-	// root still owes a take, and the child parked in scope_return cannot move
-	// until that take happens. The join nudge owns this turn instead.
-	if (unreceived > 0) return null;
-	if (!relay || relay.handoffPending || relay.canStop) return null;
-	return { kind: "retire" };
+	const R = relayDoc();
+	const sections = [];
+	const birthText = trimString(birth);
+	if (birthText !== "") sections.push(birthText);
+
+	const cleanPins = Array.isArray(pins)
+		? pins.filter((pin) => typeof pin === "string" && pin.trim() !== "")
+		: [];
+	if (cleanPins.length > 0) {
+		sections.push(render(R["reborn.pins"], { pins: cleanPins.join("\n\n---\n\n") }));
+	}
+
+	const reportText = trimString(report);
+	if (reportText !== "") {
+		sections.push(render(R["reborn.report"], { report: reportText }));
+	}
+
+	sections.push(big ? R["reborn.review"] : R["reborn.continue"]);
+	return sections.join("\n\n---\n\n");
 }
 
-/** Clear the inherited-ledger requirement once the successor has looked. */
-export function decideInheritedLedgerViewed({ relay } = {}) {
-	if (!relay?.viewRequired) return null;
-	return { relay: { ...relay, viewRequired: false } };
+/** The neutral resume cue delivered to a reborn Root after compaction commits. */
+export function rebornStartPrompt() {
+	return relayDoc()["reborn.start"];
 }
 
-/** A non-empty report is captured only while a handoff is pending. */
-export function decideHandoffReport({ relay, isChild, text } = {}) {
-	if (isChild || !relay?.handoffPending) return { capture: false };
-	const trimmed = typeof text === "string" ? text.trim() : "";
-	if (!trimmed) return { capture: false };
-	return { capture: true, text: trimmed };
-}
-
-/** A self-handoff is legal only on a pending, stoppable relay. */
-export function decideSelfHandoff({ relay, isChild } = {}) {
-	if (isChild) return false;
-	if (!relay || !relay.handoffPending || relay.canStop) return false;
-	return true;
+/**
+ * Pure check for resetting Root's promotion streak when new work starts
+ * (a new real user prompt/steer or a newly opened fork).
+ */
+export function resetRootPromotion(relay) {
+	const current = copyRelay(relay);
+	if (current.bigStreak === 0 && current.canStop === false) return { changed: false, relay: current };
+	return {
+		changed: true,
+		relay: {
+			...current,
+			bigStreak: 0,
+			canStop: false,
+		},
+	};
 }

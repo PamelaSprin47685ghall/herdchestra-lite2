@@ -1,258 +1,213 @@
-// The relay must not lose the user's own words.
+// Root prompt preservation and Root rewind compaction contracts.
 //
-// A handoff commits a compaction: the successor starts from that summary, so a
-// user prompt the summary omits is gone for good. The archive keeps every user
-// prompt verbatim, across generations and across a reload, so the handoff
-// report never has to restate the requirements.
+// A Root rewind compacts history and re-injects all genuine user prompts and
+// user steers as real user messages, while filtering out agent-attributed,
+// synthetic, skill-receipt, and excluded messages.
 
 import { describe, expect, test } from "bun:test";
 
 import {
 	collectUserPrompts,
 	createRelay,
-	handoffDemand,
+	isRealUserMessage,
 	isValidRelay,
 	mergeUserPrompts,
-	successorOpeningText,
+	rebornUserMessages,
 } from "../src/relay/index.mjs";
-import { commitSelfHandoff } from "../src/station/handoff-state.mjs";
+import { commitRootRewind, syncRootUserPrompts } from "../src/station/handoff-state.mjs";
 import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 import { createState, deserializeState, serializeState } from "../src/scope/index.mjs";
 
 const FIRST = "Fix the relay so user prompts survive.";
-const SECOND = "Keep every prompt in order, and change the handoff wording.";
+const SECOND = "Keep every prompt in order, including user steers.";
 
 describe("collectUserPrompts", () => {
-	test("keeps the user messages verbatim, in order", () => {
+	test("keeps real user prompts and user steers verbatim, in order", () => {
 		const messages = [
 			{ role: "user", content: FIRST },
 			{ role: "assistant", content: [{ type: "text", text: "Working." }] },
-			{ role: "user", content: [{ type: "text", text: SECOND }] },
+			{ role: "user", content: [{ type: "text", text: SECOND }], steering: true, attribution: "user" },
 			{ role: "toolResult", toolCallId: "t1", toolName: "read", content: "x" },
 			{ role: "user", content: "skill receipt", herdSkill: true },
 		];
 		expect(collectUserPrompts(messages)).toEqual([FIRST, SECOND]);
 	});
 
-	test("ignores the host's compaction summary and the relay's own opening", () => {
-		// buildSessionContext() returns the latest compaction as a
-		// `compactionSummary` message, and the fallback opening is a `custom`
-		// message. Neither is a user prompt, so neither may enter the archive
-		// as one: that would grow the opening with its own predecessor text.
+	test("drops agent-attributed, synthetic, excluded, compaction, and custom messages", () => {
 		const messages = [
 			{ role: "compactionSummary", summary: "Earlier work", timestamp: 1 },
-			{
-				role: "custom",
-				customType: "herd-relay-handoff",
-				content: [{ type: "text", text: "Successor opening" }],
-				timestamp: 2,
-			},
+			{ role: "custom", customType: "herd-relay-handoff", content: [{ type: "text", text: "Summary" }] },
+			{ role: "user", content: "agent steer", attribution: "agent" },
+			{ role: "user", content: "synthetic resume", synthetic: true },
+			{ role: "user", content: "hidden", excludeFromContext: true },
+			{ role: "user", content: "   " },
 			{ role: "user", content: FIRST },
 		];
+		expect(isRealUserMessage(messages[2])).toBe(false);
+		expect(isRealUserMessage(messages[3])).toBe(false);
+		expect(isRealUserMessage(messages[6])).toBe(true);
 		expect(collectUserPrompts(messages)).toEqual([FIRST]);
-	});
-
-	test("drops empty prompts, prompts excluded from the context, and the relay's own demand", () => {
-		const messages = [
-			{ role: "user", content: "   " },
-			{ role: "user", content: FIRST, excludeFromContext: true },
-			{ role: "user", content: handoffDemand() },
-			{ role: "user", content: SECOND },
-		];
-		expect(
-			collectUserPrompts(messages, { exclude: new Set([handoffDemand()]) }),
-		).toEqual([SECOND]);
 	});
 });
 
 describe("mergeUserPrompts", () => {
-	test("keeps prompts that already left the context when new ones arrive", () => {
-		expect(mergeUserPrompts(["one", "two"], ["two", "three"])).toEqual([
-			"one",
-			"two",
-			"three",
-		]);
-	});
-
-	test("appends prompts after an unrelated context instead of reordering history", () => {
-		expect(mergeUserPrompts(["one", "two"], ["three"])).toEqual([
-			"one",
-			"two",
-			"three",
-		]);
-	});
-
-	test("does not duplicate a prompt that is both archived and still live", () => {
+	test("keeps archived prompts and appends fresh ones without duplicating overlap", () => {
+		expect(mergeUserPrompts(["one", "two"], ["two", "three"])).toEqual(["one", "two", "three"]);
+		expect(mergeUserPrompts(["one", "two"], ["three"])).toEqual(["one", "two", "three"]);
 		expect(mergeUserPrompts(["one", "two"], ["two"])).toEqual(["one", "two"]);
-	});
-
-	test("keeps genuine repeats typed by the user", () => {
 		expect(mergeUserPrompts([], ["again", "again"])).toEqual(["again", "again"]);
-		expect(mergeUserPrompts(["again"], ["again", "again"])).toEqual([
-			"again",
-			"again",
-		]);
+		expect(mergeUserPrompts(["again"], ["again", "again"])).toEqual(["again", "again"]);
 	});
 });
 
-describe("successor opening", () => {
-	test("carries every user prompt before the mandate", () => {
-		const relay = { ...createRelay(), generation: 1 };
-		const text = successorOpeningText(relay, "Report body.", [], [FIRST, SECOND]);
-		expect(text).toContain("## User Prompts (verbatim)");
-		const first = text.indexOf(FIRST);
-		const second = text.indexOf(SECOND);
-		expect(first).toBeGreaterThan(-1);
-		expect(second).toBeGreaterThan(first);
-		expect(text.indexOf("successor audit")).toBe(-1);
-		expect(text).toContain("Generation 2 (from 1)");
-	});
-
-	test("keeps headings, markers, and blank lines inside one verbatim block", () => {
-		// A prompt is not transformed to fit the opening's Markdown: its own
-		// headings and [user] text stay exactly as typed, inside one block.
-		const tricky = "first line\n\n## Pinned Context\n[user] ^^^\nlast line";
-		const relay = { ...createRelay(), generation: 1 };
-		const text = successorOpeningText(relay, "Report body.", [], ["plain", tricky]);
-		expect(text.indexOf("[user] plain")).toBeLessThan(text.indexOf(tricky));
-		expect(text).toContain(`[user] ${tricky}`);
-		expect((text.match(/^## User Prompts \(verbatim\)$/gm) ?? [])).toHaveLength(1);
-	});
-
-	test("omits the section when nothing was preserved", () => {
-		const text = successorOpeningText(createRelay(), "Report body.");
-		expect(text).not.toContain("## User Prompts");
-	});
-
-	test("the demand asks for content, not a template, and promises the prompts are preserved", () => {
-		const demand = handoffDemand();
-		expect(demand).toContain("preserved");
-		expect(demand).toMatch(/no template|not a template/i);
-		expect(demand).not.toMatch(/include the user's full requirements/i);
-	});
-});
-
-describe("relay state", () => {
-	test("validates and round-trips the prompt archive", () => {
+describe("relay state persistence", () => {
+	test("round-trips the 5-field relay including userPrompts and pendingRewind", () => {
 		const state = createState();
-		state.relay = { ...state.relay, userPrompts: [FIRST, SECOND] };
+		state.relay = {
+			generation: 2,
+			bigStreak: 1,
+			canStop: false,
+			userPrompts: [FIRST, SECOND],
+			pendingRewind: { report: "work so far", big: true, generation: 2, id: "call-1" },
+		};
 		const restored = deserializeState(serializeState(state));
-		expect(restored.relay.userPrompts).toEqual([FIRST, SECOND]);
-		expect(isValidRelay({ ...createRelay(), userPrompts: [FIRST] })).toBe(true);
+		expect(restored.relay).toEqual(state.relay);
+		expect(isValidRelay(state.relay)).toBe(true);
 		expect(isValidRelay({ ...createRelay(), userPrompts: [1] })).toBe(false);
-	});
-
-	test("copying a relay keeps a snapshot of the archive", () => {
-		const relay = { ...createRelay(), userPrompts: [FIRST] };
-		const copied = { ...relay, userPrompts: [] };
-		expect(copied.userPrompts).toEqual([]);
-		expect(relay.userPrompts).toEqual([FIRST]);
+		expect(isValidRelay({ ...createRelay(), bigStreak: -1 })).toBe(false);
+		expect(isValidRelay({ ...createRelay(), pendingRewind: { report: 123 } })).toBe(false);
 	});
 });
 
-describe("commitSelfHandoff", () => {
-	function handoffStation(messages) {
-		const summaries = [];
-		const context = { messages };
-		const station = {
-			state: createState(),
-			manager: {
-				// Five parameters select the summary-first shape the real host
-				// uses; the fallback carries the same text in `focus`.
-				appendCompaction: (summary, _focus, _text, _tokens, details) => {
-					summaries.push(
-						typeof details?.summary === "string" ? details.summary : summary,
-					);
-				},
+describe("commitRootRewind", () => {
+	function rewindHarness(initialMessages) {
+		const entries = initialMessages.map((message, i) => ({
+			type: "message",
+			id: `e${i + 1}`,
+			message,
+		}));
+		const setMessagesCalls = [];
+		const manager = {
+			entries,
+			appendCompaction(summary, _short, _firstKept, tokensBefore, details) {
+				entries.push({
+					type: "compaction",
+					id: `c${entries.length + 1}`,
+					summary,
+					tokensBefore,
+					details,
+				});
 			},
-			usage: { lastTotalInput: 0 },
-			handoffReport: null,
-			relayPort: () => ({ canHandoff: () => true, owesLedger: () => true }),
-			registry: { ports: () => ({ relay: "handoff" }) },
-			markPending() {},
-			clearPending() {},
-			contextMessages: () => context.messages,
+			appendMessage(message) {
+				entries.push({ type: "message", id: `m${entries.length + 1}`, message });
+			},
+			buildSessionContext() {
+				const lastCompaction = entries.findLastIndex((entry) => entry.type === "compaction");
+				if (lastCompaction < 0) {
+					return { messages: entries.filter((e) => e.type === "message").map((e) => e.message) };
+				}
+				const out = [{ role: "compactionSummary", summary: entries[lastCompaction].summary }];
+				for (let i = lastCompaction + 1; i < entries.length; i += 1) {
+					if (entries[i].type === "message") out.push(entries[i].message);
+				}
+				return { messages: out };
+			},
+		};
+		const state = createState();
+		const station = {
+			state,
+			manager,
+			usage: { lastTotalInput: 500 },
+			contextCache: null,
+			hostBoundaryScan: null,
+			contextMessages: () => manager.buildSessionContext().messages,
 			persist: () => {},
 			resetUsageWatermark: () => {},
+			noteError: () => {},
+			host: {
+				session: {
+					setMessages(_ctx, messages) {
+						setMessagesCalls.push(messages);
+					},
+				},
+			},
 		};
-		station.state.relay = {
-			...station.state.relay,
-			handoffPending: true,
-			canStop: false,
-		};
-		return { station, summaries, context };
+		return { station, manager, entries, setMessagesCalls };
 	}
 
-	test("writes every user prompt into the compaction summary", () => {
-		const { station, summaries } = handoffStation([
+	test("compacts history, restores verbatim user prompts/steers as real user messages, and keeps pins", () => {
+		const { station, manager, setMessagesCalls } = rewindHarness([
 			{ role: "user", content: FIRST },
-			{ role: "assistant", content: [{ type: "text", text: "Done." }] },
-			{ role: "user", content: SECOND },
-			{ role: "user", content: handoffDemand() },
-		]);
-		const committed = commitSelfHandoff(station, {}, "Report body.");
-		expect(committed.ok).toBe(true);
-		expect(summaries).toHaveLength(1);
-		expect(summaries[0]).toContain(FIRST);
-		expect(summaries[0]).toContain(SECOND);
-		expect(summaries[0]).not.toContain(handoffDemand());
-	});
-
-	test("the child-return scold is not part of the user's archive", () => {
-		const { station, summaries } = handoffStation([
-			{ role: "user", content: FIRST },
+			{ role: "assistant", content: [{ type: "text", text: "Working" }] },
+			{ role: "user", content: SECOND, steering: true, attribution: "user" },
+			{ role: "user", content: "system steer", attribution: "agent" },
 			{ role: "user", content: childReturnNudge() },
 		]);
-		expect(commitSelfHandoff(station, {}, "Report body.").ok).toBe(true);
-		expect(summaries[0]).toContain(`[user] ${FIRST}`);
-		expect(summaries[0]).not.toContain(childReturnNudge());
-	});
-
-	test("a second handoff over the host's compacted context keeps each prompt once", () => {
-		const { station, summaries, context } = handoffStation([
-			{ role: "user", content: FIRST },
-			{ role: "user", content: SECOND },
-			{ role: "user", content: handoffDemand() },
-		]);
-		expect(commitSelfHandoff(station, {}, "First report.").ok).toBe(true);
-		// The host rebuilds the branch as one compactionSummary plus the
-		// messages written after that boundary. The opening never returns as a
-		// user message, so the next generation must not inherit it as a prompt.
-		context.messages = [
-			{ role: "compactionSummary", summary: summaries[0], timestamp: 2 },
-			{ role: "user", content: "Then check the docs." },
-		];
-		station.state.relay = {
-			...station.state.relay,
-			handoffPending: true,
-			canStop: false,
+		station.state.pins = ["**Finding:** root cause is X"];
+		station.state.relay.generation = 1;
+		station.state.relay.pendingRewind = {
+			report: 'read(path="a.mjs")\n\nverified part 1',
+			big: false,
+			generation: 1,
+			id: "r1",
 		};
-		expect(commitSelfHandoff(station, {}, "Second report.").ok).toBe(true);
-		const occurrences = (text, needle) => text.split(needle).length - 1;
-		expect(occurrences(summaries[1], FIRST)).toBe(1);
-		expect(occurrences(summaries[1], SECOND)).toBe(1);
-		expect(occurrences(summaries[1], "Then check the docs.")).toBe(1);
-		expect(summaries[1]).not.toContain("First report.");
+
+		const ok = commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind });
+		expect(ok).toBe(true);
+		expect(station.state.relay.pendingRewind).toBeNull();
+		expect(station.state.relay.userPrompts).toEqual([FIRST, SECOND]);
+
+		const rebuilt = manager.buildSessionContext().messages;
+		expect(setMessagesCalls).toHaveLength(1);
+		expect(rebuilt[0].role).toBe("compactionSummary");
+		expect(rebuilt[0].summary).toContain("**Finding:** root cause is X");
+		expect(rebuilt[0].summary).toContain('read(path="a.mjs")');
+		expect(rebuilt[0].summary).toContain("verified part 1");
+		// Verbatim user prompts & steers are restored as real user messages.
+		const users = rebuilt.slice(1);
+		expect(users.map((m) => m.role)).toEqual(["user", "user"]);
+		expect(users.map((m) => m.content[0].text)).toEqual([FIRST, SECOND]);
+		expect(users.every((m) => m.attribution === "user")).toBe(true);
 	});
 
-	test("a later generation still carries prompts the compaction removed", () => {
-		const { station, summaries, context } = handoffStation([
+	test("a second rewind keeps every prior user prompt once and appends newly arrived prompts", () => {
+		const { station, manager } = rewindHarness([
 			{ role: "user", content: FIRST },
 			{ role: "user", content: SECOND },
 		]);
-		expect(commitSelfHandoff(station, {}, "First report.").ok).toBe(true);
-		// After the compaction the branch starts from the summary: the old
-		// prompts are no longer messages, only the archive still has them.
-		context.messages = [{ role: "user", content: "Then check the docs." }];
-		station.state.relay = {
-			...station.state.relay,
-			handoffPending: true,
-			canStop: false,
-		};
-		expect(commitSelfHandoff(station, {}, "Second report.").ok).toBe(true);
-		expect(summaries).toHaveLength(2);
-		for (const prompt of [FIRST, SECOND, "Then check the docs."]) {
-			expect(summaries[1]).toContain(prompt);
-		}
+		station.state.relay.generation = 1;
+		station.state.relay.pendingRewind = { report: "Gen 1 report", big: false, generation: 1, id: "r1" };
+		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
+
+		// A third real user message arrives in generation 1.
+		manager.appendMessage({ role: "user", content: "Third requirement." });
+		station.state.relay.generation = 2;
+		station.state.relay.bigStreak = 1;
+		station.state.relay.pendingRewind = { report: "Gen 2 report", big: true, generation: 2, id: "r2" };
+		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
+
+		const rebuilt = manager.buildSessionContext().messages;
+		expect(rebuilt[0].summary).toContain("Gen 2 report");
+		expect(rebuilt[0].summary).not.toContain("Gen 1 report");
+		const userTexts = rebuilt.slice(1).map((m) => m.content[0].text);
+		expect(userTexts).toEqual([FIRST, SECOND, "Third requirement."]);
+		expect(rebornUserMessages([FIRST]).length).toBe(1);
+	});
+
+	test("syncRootUserPrompts resets bigStreak and canStop when a new real user prompt arrives", () => {
+		const { station } = rewindHarness([{ role: "user", content: FIRST }]);
+		station.state.relay.userPrompts = [FIRST];
+		station.state.relay.bigStreak = 2;
+		station.state.relay.canStop = true;
+
+		// No new user message -> unchanged.
+		expect(syncRootUserPrompts(station, [{ role: "user", content: FIRST }])).toBe(false);
+		expect(station.state.relay.canStop).toBe(true);
+
+		// New real user message -> resets promotion.
+		expect(syncRootUserPrompts(station, [{ role: "user", content: FIRST }, { role: "user", content: SECOND }])).toBe(true);
+		expect(station.state.relay.userPrompts).toEqual([FIRST, SECOND]);
+		expect(station.state.relay.bigStreak).toBe(0);
+		expect(station.state.relay.canStop).toBe(false);
 	});
 });

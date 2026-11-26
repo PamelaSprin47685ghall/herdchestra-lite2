@@ -7,7 +7,7 @@ import { agentIdOf, conversationKeyOf } from "./identity-adapters.mjs";
 // bindHostForkPorts with the result.
 
 import { createBranchSession, registerOwnerUI } from "./branch-session.mjs";
-import { prepareChildContext } from "./branch-context.mjs";
+import { prepareChildContext, stopAfterScopeReturn } from "./branch-context.mjs";
 import { childDisplayFor } from "./child-display.mjs";
 import { rememberSession, sessionFor } from "./capture.mjs";
 import { planStationBinding } from "./domain/binding.mjs";
@@ -31,6 +31,7 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 	const stationFor = options.stationFor;
 	const refresh = options.refresh;
 	const owner = sessionFor(ctx);
+	stopAfterScopeReturn(owner?.agent, owner);
 	const baseIdentity =
 		typeof station?.forkIdentityPort === "function" ? station.forkIdentityPort() : null;
 	const childIdentity =
@@ -91,10 +92,6 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 		ownerSession: owner,
 		prepareChild,
 		createSession,
-		// The spawn ticket lives in core. The termination hook must cross this
-		// binding, or bindHostForkPorts reads null and an accepted scope_return
-		// no longer ends the child at the tool-result boundary.
-		stopAfterReturn: options.stopAfterReturn ?? null,
 		// A cancelled subtree stops its live child agents through this host
 		// handle. The core never sees the session; the binding owns the shape.
 		abortChild: options.abortChild ?? null,

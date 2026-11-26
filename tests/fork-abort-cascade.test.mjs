@@ -121,9 +121,7 @@ describe("abort cascade", () => {
 	test("the session-stop gate never infers a user abort", () => {
 		const { ledger, registry } = tree();
 		const station = {
-			state: { autopilot: true, relay: { canStop: false, handoffPending: false } },
-			relayOn: () => true,
-			recordNaturalStop: () => {},
+			state: { autopilot: true, relay: { canStop: false, pendingRewind: null } },
 			cancelDescendants: () => cancelDescendants(station),
 			...rootStation(ledger, registry),
 		};
@@ -328,9 +326,7 @@ describe("abort cascade", () => {
 		const { ledger, registry } = tree();
 		const aborts = [];
 		const station = {
-			state: { autopilot: true, relay: { canStop: false, handoffPending: false } },
-			relayOn: () => true,
-			recordNaturalStop: () => {},
+			state: { autopilot: true, relay: { canStop: false, pendingRewind: null } },
 			cancelDescendants: () => cancelDescendants(station),
 			...rootStation(ledger, registry, aborts),
 		};

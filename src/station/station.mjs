@@ -81,17 +81,15 @@ import {
 	renderJoinResult,
 } from "./fork-controls.mjs";
 import {
-	advanceRelayForHandoff,
-	armHandoff,
-	captureHandoffReport,
-	commitSelfHandoff,
-	markInheritedLedgerViewed,
-	recordLedgerEvaluation,
-	recordNaturalStop,
+	clearPendingRootRewind,
+	commitRootRewind,
+	finishRewind,
+	syncRootUserPrompts,
 } from "./handoff-state.mjs";
 import {
 	cancelDescendants,
 	cancelTree,
+	onAgentEnd,
 	onAssistantMessage,
 	onBeforeAgentStart,
 	onContext,
@@ -190,11 +188,11 @@ export function shapeHost(host) {
 			conversationKey: pick(session.conversationKey, source.conversationKeyOf),
 			branch: pick(session.branch, source.branchOf),
 			agent: pick(session.agent, source.agentOf),
-			activeTools: pick(session.activeTools, source.activeTools),
 			header: pick(session.header, source.contextHeaderOf),
 			setMessages: pick(session.setMessages, source.setAgentMessages),
 			appendHistory: pick(session.appendHistory, source.appendHistoryMessage),
 			abort: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
+			canRewindRoot: pick(session.canRewindRoot, source.canRewindRoot),
 		},
 		model: {
 			of: pick(model.of, source.modelOf),
@@ -215,7 +213,6 @@ export function shapeHost(host) {
 			attachBaseForkPorts: pick(fork.attachBaseForkPorts, source.attachBaseForkPorts),
 			identityForAgent: pick(fork.identityForAgent, source.identityForAgent),
 			agentIdOf: pick(fork.agentIdOf, source.agentIdOf),
-			selectStopStation: pick(fork.selectStopStation, source.selectStopStation),
 			sameManager: pick(fork.sameManager, source.sameManager),
 			ledgerFor: pick(fork.ledgerFor, source.ledgerFor),
 			adoptLedger: pick(fork.adoptLedger, source.adoptLedger),
@@ -270,9 +267,10 @@ export class SessionStation {
 		// One projection per branch leaf: see `contextMessages`.
 		this.contextCache = null;
 		this.agentPolicy = null;
-		this.handoffReport = null;
-		this.relayState = true;
-		this.todoGrantKey = null;
+		this.pendingChildRewind = null;
+		this.childRewindAvailable = true;
+		this.rewoundThisTurn = false;
+		this.rewindDispatching = null;
 		this.pendingModelSwitch = null;
 		this.modelSwitchInFlight = null;
 		// The bracket ledger is session-wide: parent and child live in
@@ -360,7 +358,6 @@ export class SessionStation {
 			? portTable
 			: Object.freeze({ ...portTable });
 		this.ports = Object.freeze({
-			relay: implementations.relay,
 			clock: implementations.clock,
 			pin: implementations.pin.bindState(this.state),
 			amend: implementations.amend.bindState(this.state),
@@ -546,89 +543,6 @@ export class SessionStation {
 			this.agentPolicy = policy;
 		}
 		return policy;
-	}
-
-	/**
-	 * INVARIANT: a session that may run the relay always holds `todo`, and a
-	 * session that may not never receives it. `policy(ctx)` is the only
-	 * verdict; this method is the only place that acts on it.
-	 */
-	syncTodo(policy) {
-		if (policy !== READ_WRITE_SUBAGENT) return;
-		let active = [];
-		try {
-			active = this.host?.session?.activeTools?.() ?? [];
-		} catch {
-			active = [];
-		}
-		if (!Array.isArray(active) || active.includes("todo")) return;
-		// A host that filters `todo` out of every setActiveTools call returns
-		// the same tool set each time. Retry only when that set changes.
-		const key = active.join("\u0000");
-		if (key === this.todoGrantKey) return;
-		this.todoGrantKey = key;
-		this.dispatchFireAndForget("tickets", () =>
-			this.tickets.activateTools(active, undefined, false));
-	}
-
-	/**
-	 * Re-assert the invariant before every model request. The host can install
-	 * the session's tool set after the verdict lands, so one grant at verdict
-	 * time is not enough. Never duplicate the verdict here.
-	 */
-	ensureTools(ctx) {
-		this.syncTodo(this.policy(ctx));
-	}
-
-	/**
-	 * The only observable proof that the relay can run: the session really
-	 * holds `todo`. A grant request is not proof. omp strips `todo` from every
-	 * subagent spawn and filters it again out of every subagent
-	 * `setActiveTools` call (task/executor.ts passes `filterActiveTools`), so a
-	 * grant can succeed silently and still leave the tool absent.
-	 */
-	todoReady() {
-		try {
-			const active = this.host?.session?.activeTools?.();
-			return Array.isArray(active) && active.includes("todo");
-		} catch {
-			return false;
-		}
-	}
-
-	/**
-	 * INVARIANT: the relay runs only while `todo` is actually available.
-	 * `policy(ctx)` names the agent tier; `todoReady()` proves the tool. Both
-	 * must hold. A read-write subagent whose host filters the tool out stays
-	 * relay-off, because a nudge would demand a call the model cannot make.
-	 */
-	relayPort() {
-		return this.ports.relay;
-	}
-
-	relayOn(ctx) {
-		// No ledger owed means no relay nudge and no todo override for any
-		// agent tier. The policy object owns that decision, not a name string.
-		if (!this.relayPort().owesLedger()) {
-			this.relayState = false;
-			return false;
-		}
-		const policy = this.policy(ctx);
-		let on;
-		if (policy === MAIN_AGENT) on = true;
-		else if (policy !== READ_WRITE_SUBAGENT) on = false;
-		else on = this.todoReady();
-		this.relayState = on;
-		return on;
-	}
-
-	/**
-	 * The latest observable verdict, for synchronous result text. Gates call
-	 * `relayOn(ctx)` before any tool result is produced, so this holds a fact
-	 * from this turn, not an assumption about a grant.
-	 */
-	relayReady() {
-		return this.relayState;
 	}
 
 	// -- Internal helpers ----------------------------------------------------
@@ -966,12 +880,9 @@ export class SessionStation {
 
 	// -- Nudge -----------------------------------------------------------------
 
-	maybeNudge(message, ctx) {
+	maybeNudge(message, _ctx) {
 		if (!message || message.role !== "assistant") return;
 		if (message.stopReason === "aborted" || message.stopReason === "error") return;
-		// Keep the observable relay verdict current, but never let it veto the
-		// join nudge: an unreceived bracket is liveness, not relay policy.
-		this.relayOn(ctx);
 		if (this.nudged.has(message)) return;
 		const ledger =
 			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
@@ -981,6 +892,8 @@ export class SessionStation {
 			hasToolCalls: toolCalls(message).length > 0,
 			ledger,
 			ownerId,
+			autopilot: this.state?.autopilot === true,
+			relay: this.state?.relay ?? null,
 		});
 		if (decision.kind === "none") return;
 		// A steer the host refuses was never delivered, so it must not spend the
@@ -1043,50 +956,24 @@ export class SessionStation {
 
 	// -- Handoff state transitions (sync) ---------------------------------------
 
-	armHandoff(ctx) {
-		return armHandoff(this, ctx);
+	commitRootRewind(ctx, plan = null) {
+		const committed = commitRootRewind(this, ctx, plan);
+		if (this.rewindDispatching === plan?.pending || committed) {
+			this.rewindDispatching = null;
+		}
+		return committed;
 	}
 
-	captureHandoffReport(text) {
-		return captureHandoffReport(this, text);
+	abortRootRewind(plan = null) {
+		return clearPendingRootRewind(this, plan);
 	}
 
-	commitSelfHandoff(ctx, report) {
-		return commitSelfHandoff(this, ctx, report);
+	finishRewind(options = {}) {
+		return finishRewind(this, options);
 	}
 
-	advanceRelayForHandoff(options = {}) {
-		return advanceRelayForHandoff(this, options);
-	}
-
-	recordLedgerEvaluation(phases, op, options = {}) {
-		return recordLedgerEvaluation(this, phases, op, options);
-	}
-
-	/** A natural stop is a small handoff: it transfers the holder, not the count. */
-	recordNaturalStop(ctx) {
-		return recordNaturalStop(this, ctx);
-	}
-
-	/** The successor has looked at the inherited ledger; the requirement ends. */
-	markInheritedLedgerViewed() {
-		return markInheritedLedgerViewed(this);
-	}
-
-	/**
-	 * Relay bookkeeping: this station is the pending handoff target.
-	 *
-	 * The registry is the station's composition bridge, so its relay
-	 * bookkeeping is reached here instead of from the pure handoff module.
-	 * A station double may pass a registry without these methods.
-	 */
-	markPending() {
-		this.registry?.markPending?.(this);
-	}
-
-	/** Relay bookkeeping: no successor is pending any more. */
-	clearPending() {
-		this.registry?.clearPending?.(this);
+	syncRootUserPrompts(messages = null) {
+		return syncRootUserPrompts(this, messages);
 	}
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------
@@ -1111,7 +998,7 @@ export class SessionStation {
 	 * Build one Skill for the next request. The before-model adapter commits it
 	 * before extension context handlers run. Earlier receipts remain unchanged.
 	 */
-	skillReceipt(ctx, demandVisible) {
+	skillReceipt(_ctx) {
 		const ledger =
 			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
 		const ownerId =
@@ -1120,10 +1007,8 @@ export class SessionStation {
 		const open = ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0;
 		const text = skillReceiptText(
 			this.state,
-			this.relayOn(ctx),
 			branch,
 			open,
-			demandVisible,
 			ownerId !== null,
 			this.clockPort(),
 			this.portTable.chineseReminder,
@@ -1135,6 +1020,7 @@ export class SessionStation {
 			timestamp: Date.now(),
 			autopilot: this.state.autopilot === true,
 			branch: ownerId !== null,
+			canStop: this.state.relay?.canStop === true,
 			herdSkill: true,
 		};
 	}
@@ -1152,12 +1038,8 @@ export class SessionStation {
 		return onSessionStop(this, ctx, evidence);
 	}
 
-	onAgentEnd() {
-		// omp 19.2 may settle Esc as a pause, suppress session_stop, or omit the
-		// aborted assistant message entirely. None of those shapes is a user
-		// decision the scope domain may act on. USER_ABORT enters only through
-		// the typed gate at the host abort entry.
-		return undefined;
+	onAgentEnd(ctx, event = null) {
+		return onAgentEnd(this, ctx, event);
 	}
 
 	/**
@@ -1166,6 +1048,7 @@ export class SessionStation {
 	 * anchored at the conversation ledger root regardless of depth.
 	 */
 	onUserAbort(ctx, evidence = null) {
+		clearPendingRootRewind(this);
 		return cancelTree(this, "root", evidence?.reason ?? undefined);
 	}
 

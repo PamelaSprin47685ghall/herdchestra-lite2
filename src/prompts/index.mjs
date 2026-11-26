@@ -107,7 +107,6 @@ export const DOCUMENTS = [
 	"system",
 	"tools/fork-join",
 	"tools/notes",
-	"tools/todo",
 	"vibe-mode",
 ];
 

@@ -31,11 +31,16 @@ import {
   decideReturn,
   validateForkBatch,
 } from "./domain/fork-join.mjs";
+import {
+  decideScopeReturn,
+  formatGenerationReport,
+  resetRootPromotion,
+} from "./domain/handoff.mjs";
 import { processedOf } from "./domain/tool-call-ledger.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
 import { targetsText } from "../scope/targets.mjs";
-import { joinReceipt, renderChildRecord } from "../transcript/replay.mjs";
-import { filterAmends } from "../transcript/index.mjs";
+import { joinReceipt } from "../transcript/replay.mjs";
+import { toolCalls } from "../transcript/messages.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { handleSendCall } from "./send-controls.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
@@ -261,12 +266,13 @@ function epochOf(value) {
  * A child session is seeded with the parent's context, so the branch manager
  * returns the whole inherited transcript. Replaying it into the record would
  * hand the parent its own conversation back and defeat join admission. The
- * receipt the scope reads at its start is the exact boundary: the first user
- * message that opens with {@link scopeReceiptMarker}. When that message is
- * absent (a host that rewrites it), the bracket's start time is the fallback;
- * a message without a parseable timestamp cannot prove it belongs to the
- * scope, so the walk skips it. With neither marker nor timestamp the whole
- * context is returned: the old behaviour is never worse than a wrong cut.
+ * receipt the scope reads at its start is the exact boundary: the latest user
+ * message that opens with {@link scopeReceiptMarker}. Scanning backwards binds
+ * to the current generation's birth receipt even if an earlier message shared
+ * the prefix. When that message is absent (a host that rewrites it), the
+ * bracket's start time is the fallback; a message without a parseable
+ * timestamp cannot prove it belongs to the scope, so the walk skips it. With
+ * neither marker nor timestamp the whole context is returned.
  *
  * Receipts written by earlier builds still open with the legacy marker, so the
  * scan accepts both. Only the current marker is ever generated.
@@ -280,7 +286,7 @@ export function childRecordStart(messages, fork) {
     const names = [fork.path, fork.scopeId, forkId].filter(
       (name) => typeof name === "string" && name !== "",
     );
-    for (let index = 0; index < source.length; index += 1) {
+    for (let index = source.length - 1; index >= 0; index -= 1) {
       const text = textOfUser(source[index]).trimStart();
       for (const name of names) {
         if (
@@ -617,6 +623,13 @@ export function handleForkCall(station, call, options = {}) {
     }
   }
 
+  // Opening a new fork on Root starts new work, so any prior promotion
+  // (`canStop`) or first big-oath review streak is cleared synchronously.
+  if (started.length > 0 && parentOwnerId === "root" && station.state?.relay) {
+    const reset = resetRootPromotion(station.state.relay);
+    if (reset.changed) station.state.relay = reset.relay;
+  }
+
   const sections = [];
   if (started.length > 0) {
     sections.push(
@@ -828,59 +841,84 @@ export function renderJoinResult(station, record, options = {}) {
 }
 
 /**
- * Close your own bracket from the child side. Every child you still hold is
- * reparented to the parent, so no bracket is orphaned.
+ * Close or rewind the current scope through `scope_return`.
+ *
+ * Unified across Root (depth 0) and Child (depth >= 1):
+ * - Omitted oath -> small handoff rewind (`stopLoop: true`) back to birth.
+ * - Exact oath -> Child seals and delivers to parent (`stopLoop: true`);
+ *   Root #1 rewinds for independent review (`stopLoop: true`);
+ *   Root #2 consecutive promotes without rewind (`stopLoop: false`).
+ * - Woken child -> forwards `dafny` to `..` via `scope_send` (`stopLoop: true`).
  */
-export function handleReturnCall(station, call) {
+export function handleReturnCall(station, call, options = {}) {
   const args = parseArgs(call);
-  const ledger = ledgerOf(station);
-  if (!ledger) {
-    return errorResult("FORK_LEDGER_UNAVAILABLE", E["fork-ledger-unavailable"]);
-  }
   const identity = identityOf(station);
   const selfForkId =
     identity && typeof identity.forkId === "string" ? identity.forkId : "";
-  const record = selfForkId === "" ? null : forkOf(ledger, selfForkId);
-  // A woken scope already paid its one return. From then on this call means
-  // the only thing left to say: a message to the parent. It runs through the
-  // send path, so a message upward has exactly one implementation.
-  if (record && record.woken === true) {
-    const text = typeof args.dafny === "string" ? args.dafny.trim() : "";
-    if (text === "") {
-      return errorResult("MISSING_DAFNY", E["missing-dafny"]);
-    }
-    const forwarded = handleSendCall(station, {
-      id: call?.id,
-      name: "scope_send",
-      arguments: { target: "..", message: text },
-    });
-    if (forwarded?.isError === true) return forwarded;
-    setRecordFields(record, { woken: false });
-    const where = Array.isArray(forwarded?.details?.delivered)
-      ? forwarded.details.delivered.join(", ")
-      : "the parent scope";
-    return textResult(`Sent to ${where}.`, {
-      forkId: selfForkId,
-      scopeId: publicScopeId(record),
-      accepted: true,
-      forwardedToParent: true,
-    });
+  const isRoot = selfForkId === "";
+  const ledger = ledgerOf(station);
+  if (!isRoot && !ledger) {
+    return errorResult("FORK_LEDGER_UNAVAILABLE", E["fork-ledger-unavailable"]);
   }
-  // Adoption follows the current receiver, never the birth parent: a branch
-  // that was itself adopted must hand its unreceived children to the branch
-  // that now answers for it. The current receiver may already have returned
-  // too, so the whole chain is walked to the nearest live branch.
-  const orphans = record
+  const record = !isRoot && ledger ? forkOf(ledger, selfForkId) : null;
+  const orphans = !isRoot && record
     ? [...openChildren(ledger, selfForkId), ...readyChildren(ledger, selfForkId)]
     : [];
-  const receiverId = liveReceiverOf(ledger, record?.ownerId ?? "");
-  const decision = decideReturn({
+  const receiverId = !isRoot && record ? liveReceiverOf(ledger, record.ownerId ?? "") : "";
+  const unreceived = isRoot && ledger ? unreceivedChildren(ledger, "root").length : 0;
+
+  // Reject any mixed batch that pairs `scope_return` with other tool calls in
+  // the same assistant message, so sibling tools cannot race loop termination
+  // or a rewind boundary.
+  const carrying = options.currentMessage ?? null;
+  const callsInBeat = carrying ? toolCalls(carrying) : [];
+  const mixedToolCalls =
+    callsInBeat.length > 1 &&
+    callsInBeat.some((entry) => entry.id !== call?.id);
+
+  // Root rewinds require a real host session/manager capable of persisting the
+  // compaction boundary. If the host explicitly reports `canRewindRoot(ctx) === false`,
+  // refuse before mutating state so Root never lands in a stranded pendingRewind.
+  const canRewindFn = station.host?.session?.canRewindRoot;
+  const canRewindRoot =
+    typeof canRewindFn === "function"
+      ? canRewindFn(options.ctx) === true
+      : Boolean(station.manager && typeof station.manager.appendCompaction === "function");
+
+  const decision = decideScopeReturn({
+    isRoot,
     identityForkId: selfForkId,
     record,
     receiverId,
     orphans,
+    unreceived,
+    relay: station.state?.relay ?? null,
+    canRewindRoot,
+    mixedToolCalls,
+    args,
+    callId: typeof call?.id === "string" ? call.id : "",
   });
+
   if (!decision.ok) {
+    if (decision.code === "INVALID_RETURN_OATH") {
+      return errorResult("INVALID_RETURN_OATH", E["invalid-return-oath"]);
+    }
+    if (decision.code === "MISSING_DAFNY") {
+      return errorResult("MISSING_DAFNY", E["missing-dafny"]);
+    }
+    if (decision.code === "MIXED_RETURN_TOOL_CALLS") {
+      return errorResult("MIXED_RETURN_TOOL_CALLS", E["mixed-return"]);
+    }
+    if (decision.code === "UNRECEIVED_CHILDREN") {
+      return errorResult(
+        "UNRECEIVED_CHILDREN",
+        render(E["return-unreceived"], { count: decision.unreceived }),
+        { unreceived: decision.unreceived },
+      );
+    }
+    if (decision.code === "ROOT_REWIND_UNAVAILABLE") {
+      return errorResult("ROOT_REWIND_UNAVAILABLE", E["return-rewind-unavailable"]);
+    }
     if (decision.code === "NOT_A_CHILD") {
       return errorResult("NOT_A_CHILD", E["not-a-child"]);
     }
@@ -895,48 +933,147 @@ export function handleReturnCall(station, call) {
     }
     return errorResult("ORPHANS_WITHOUT_RECEIVER", E["orphans-without-receiver"]);
   }
-  // Judge the closing text before anything moves. A return that carries no
-  // dafny hands back a record whose results are already gone;
-  // refusing it here leaves the bracket untouched, so the child can retry.
-  const dafny = typeof args.dafny === "string" ? args.dafny.trim() : "";
-  if (dafny === "") {
-    return errorResult("MISSING_DAFNY", E["missing-dafny"]);
+
+  // Woken child: forward dafny to parent via scope_send.
+  if (decision.kind === "forward") {
+    const forwarded = handleSendCall(station, {
+      id: call?.id,
+      name: "scope_send",
+      arguments: { target: "..", message: decision.dafny },
+    });
+    if (forwarded?.isError === true) return forwarded;
+    setRecordFields(record, { woken: false });
+    const where = Array.isArray(forwarded?.details?.delivered)
+      ? forwarded.details.delivered.join(", ")
+      : "the parent scope";
+    return textResult(`Sent to ${where}.`, {
+      forkId: selfForkId,
+      scopeId: publicScopeId(record),
+      accepted: true,
+      stopLoop: true,
+      forwardedToParent: true,
+    });
   }
-  // Move this branch before it becomes ready: markReady queues the result
-  // under the record's current owner. Changing the owner afterwards would
-  // leave the queue and the record disagreeing, and the child would wait for
-  // a take from a branch that can never join.
-  const adopted = adoptFork(ledger, selfForkId, receiverId);
+
+  // Child small handoff: keep bracket RUNNING, capture formatted generation
+  // report, and let the spawn ticket rewind back to `originEntryId` after the
+  // agent loop stops cleanly via `stopLoop: true`.
+  if (decision.kind === "rewind" && decision.scope === "child") {
+    const canRewindChild =
+      station.childRewindAvailable !== false &&
+      typeof station.manager?.branch === "function" &&
+      typeof station.manager?.resetLeaf === "function";
+    if (!canRewindChild) {
+      return errorResult("ROOT_REWIND_UNAVAILABLE", E["return-rewind-unavailable"]);
+    }
+    const messages =
+      typeof station.contextMessages === "function" ? station.contextMessages() : [];
+    const report = formatGenerationReport(
+      messages,
+      station.state?.amends ?? [],
+      childRecordStart(messages, record),
+      decision.dafny,
+    );
+    const generation =
+      (Number.isInteger(record.handoffCount) && record.handoffCount >= 0 ? record.handoffCount : 0) + 1;
+    setRecordFields(record, { handoffCount: generation });
+    station.pendingChildRewind = {
+      report,
+      big: false,
+      generation,
+      id: typeof call?.id === "string" ? call.id : "",
+    };
+    return textResult(
+      render(F["return.rewind"], { generation }),
+      {
+        forkId: selfForkId,
+        scopeId: publicScopeId(record),
+        accepted: true,
+        rewind: true,
+        generation,
+        stopLoop: true,
+      },
+    );
+  }
+
+  // Root promotion (2nd consecutive big handoff): allow final answer in place.
+  if (decision.kind === "promote") {
+    station.state.relay = decision.relay;
+    return textResult(F["return.finish"], {
+      scope: "root",
+      accepted: true,
+      promoted: true,
+      bigStreak: decision.relay.bigStreak,
+      canStop: true,
+      stopLoop: false,
+    });
+  }
+
+  // Root rewind (small handoff or 1st big handoff): format this generation's
+  // record + dafny, persist `pendingRewind` on `state.relay`, and stop the
+  // loop cleanly so `onAgentEnd` dispatches the host rewind ticket.
+  if (decision.kind === "rewind" && decision.scope === "root") {
+    const messages =
+      typeof station.contextMessages === "function" ? station.contextMessages() : [];
+    const report = formatGenerationReport(
+      messages,
+      station.state?.amends ?? [],
+      0,
+      decision.dafny,
+    );
+    const pendingRewind = {
+      ...decision.pendingRewind,
+      report,
+    };
+    station.state.relay = {
+      ...decision.relay,
+      pendingRewind,
+    };
+    const template = decision.big ? F["return.review"] : F["return.rewind"];
+    return textResult(
+      render(template, { generation: pendingRewind.generation }),
+      {
+        scope: "root",
+        accepted: true,
+        rewind: true,
+        big: decision.big,
+        generation: pendingRewind.generation,
+        stopLoop: true,
+      },
+    );
+  }
+
+  // Child big handoff (oath present): seal the bracket and deliver to receiver.
+  // Keep `decideReturn` assertion for the pure fork-join gate contract.
+  const gate = decideReturn({
+    identityForkId: selfForkId,
+    record,
+    receiverId: decision.receiverId,
+    orphans: decision.orphans,
+  });
+  if (!gate.ok) {
+    return errorResult(gate.code, E["orphans-without-receiver"]);
+  }
+  const adopted = adoptFork(ledger, selfForkId, decision.receiverId);
   if (!adopted.ok) return errorResult(adopted.code, adopted.reason);
-  // Freeze this branch's own record before the bracket becomes ready. The
-  // parent may take it in the same tick, and a parent that reads an empty
-  // record cannot tell a silent child from a broken one. Amends are filtered
-  // first: a withdrawn beat must never return through a replay.
+
   let renderedRecord = null;
   if (typeof station.setChildOutcome === "function") {
     const messages =
       typeof station.contextMessages === "function" ? station.contextMessages() : [];
-    const visible = filterAmends(messages, station.state?.amends ?? []);
-    // The branch manager's context is the parent prefix plus this branch's
-    // own work. Only the branch's work belongs in the record: the parent
-    // already has the prefix, and replaying it back defeats join admission.
-    renderedRecord = renderChildRecord(visible, {
-      start: childRecordStart(visible, record),
-    });
-    // The dafny goes last: the child named it deliberately, so it must
-    // survive the replay that keeps only assistant text and tool names.
-    if (dafny !== "") {
-      renderedRecord = renderedRecord === "" ? dafny : `${renderedRecord}\n\n${dafny}`;
-    }
+    renderedRecord = formatGenerationReport(
+      messages,
+      station.state?.amends ?? [],
+      childRecordStart(messages, record),
+      decision.dafny,
+    );
     station.setChildOutcome(selfForkId, {
       record: renderedRecord,
       failed: false,
       reason: null,
     });
   }
-  // Mark the parent's own bracket first: its result must be queued ahead of
-  // the children it hands over, so a grandparent reads the introduction
-  // before their records. A failed mark changes no relationship.
+
   const readyDecision = decideReady({
     record,
     outcome:
@@ -955,11 +1092,8 @@ export function handleReturnCall(station, call) {
   }
   const ready = markReady(ledger, selfForkId, readyDecision.outcome);
   if (!ready.ok) return errorResult(ready.code, ready.reason);
-  if (orphans.length > 0) reparentOrphans(ledger, selfForkId, receiverId);
-  // The root branch owns the persisted tree. A child's own snapshot is not
-  // what a reload restores, so the return is written to the root before the
-  // parent is asked to take it. A failed write is not silent: the record is
-  // still ready in memory, and the receipt says the tree was not written.
+  if (decision.orphans.length > 0) reparentOrphans(ledger, selfForkId, decision.receiverId);
+
   let persisted = true;
   if (typeof station.persistLedger === "function") {
     persisted = station.persistLedger() !== false;
@@ -970,17 +1104,20 @@ export function handleReturnCall(station, call) {
       phase: "return",
     });
   }
-  // The receipt names the receiver in the prose the model reads. A root
-  // receiver is "Root"; an adopted branch shows its own identity,
-  // so a worker that moved between branches can name where it went.
-  const receiverText = receiverId === "root" ? "Root" : publicScopeId(forkOf(ledger, receiverId));
-
-  // The record is queued and the bracket is closed: nothing here waits for the
-  // parent's take. The child keeps its session and its own record, so a later
-  // `scope_send` can wake it without inventing a second return.
-  const lines = [render(F["return.receipt"], { forkId: publicScopeId(record), receiver: receiverText })];
-  if (orphans.length > 0) {
-    lines.push(`Reparented to ${receiverText}: ${orphans.map((id) => publicScopeId(forkOf(ledger, id))).join(", ")}.`);
+  const receiverText =
+    decision.receiverId === "root"
+      ? "Root"
+      : publicScopeId(forkOf(ledger, decision.receiverId));
+  const lines = [
+    render(F["return.receipt"], {
+      forkId: publicScopeId(record),
+      receiver: receiverText,
+    }),
+  ];
+  if (decision.orphans.length > 0) {
+    lines.push(
+      `Reparented to ${receiverText}: ${decision.orphans.map((id) => publicScopeId(forkOf(ledger, id))).join(", ")}.`,
+    );
   }
   if (!persisted) {
     lines.push(
@@ -991,10 +1128,11 @@ export function handleReturnCall(station, call) {
     forkId: selfForkId,
     scopeId: publicScopeId(record),
     returned: true,
-    reparented: orphans,
-    receiver: receiverId,
+    reparented: decision.orphans,
+    receiver: decision.receiverId,
     receiverText,
     accepted: true,
+    stopLoop: true,
   });
 }
 

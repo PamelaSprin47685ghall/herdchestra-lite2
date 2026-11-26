@@ -18,7 +18,9 @@ import {
 import { restoreLedgerChecked } from "../src/scope/forkjoin.mjs";
 import { createForkRegistry } from "../src/scope/fork-registry.mjs";
 import { handleReturnCall } from "../src/station/fork-controls.mjs";
-import { returnTicket } from "../src/tools/tickets.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+
+const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 
 function register(ledger, forkId, ownerId) {
 	const result = registerFork(ledger, {
@@ -90,7 +92,7 @@ describe("scope_return after the receiver returned", () => {
 		const out = handleReturnCall(returnStation(ledger, "fork_b"), {
 			id: "call-return-b",
 			name: "scope_return",
-			arguments: { dafny: "adoption probe: child b returns after the receiver moved" },
+			arguments: { dafny: "adoption probe: child b returns after the receiver moved", ...OATH },
 		});
 
 		expect(out.details.accepted).toBe(true);

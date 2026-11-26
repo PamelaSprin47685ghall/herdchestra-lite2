@@ -60,16 +60,11 @@ export function createEngine({ host = {}, tickets = {}, env = process.env, prici
 	});
 	const scopes = createScopes({ forkWiring });
 	const userAbort = (ctx, evidence = null) => {
-		// The typed gate is deliberately not stationForStop: a pending handoff or
-		// a child session must not decide which subtree dies. stationFor(ctx)
-		// resolves the conversation station that this host context belongs to,
-		// and the station itself anchors the cascade at the ledger root.
 		return registry.stationFor(ctx).onUserAbort?.(ctx, evidence);
 	};
 	return {
 		station: (ctx) => registry.stationFor(ctx),
 		hasStation: (ctx) => registry.hasStation(ctx),
-		stationForStop: (ctx) => registry.stationForStop(ctx),
 		userAbort,
 		tools: createTools({ stationFor: (ctx) => registry.stationFor(ctx), tickets }),
 		scopes,
@@ -102,11 +97,11 @@ export const HOST_CONTRACT = Object.freeze({
 		"conversationKey",
 		"branch",
 		"agent",
-		"activeTools",
 		"header",
 		"setMessages",
 		"appendHistory",
 		"abort",
+		"canRewindRoot",
 	]),
 	model: Object.freeze(["of", "thinkingOf", "parseSpec", "capabilities", "query"]),
 	accounting: Object.freeze(["usage", "pricing"]),
@@ -115,7 +110,6 @@ export const HOST_CONTRACT = Object.freeze({
 		"attachBaseForkPorts",
 		"identityForAgent",
 		"agentIdOf",
-		"selectStopStation",
 		"sameManager",
 		"ledgerFor",
 		"adoptLedger",
@@ -134,10 +128,9 @@ export const ENGINE_ONLY_HOST_KEYS = Object.freeze({
 export const TICKET_CONTRACT = Object.freeze([
 	"steer",
 	"prompt",
-	"activateTools",
+	"rewindRoot",
 	"restoreScopedModel",
 	"applyPendingModelSwitch",
-	"invokeTool",
 	"canSteer",
 	"canPrompt",
 ]);

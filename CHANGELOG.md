@@ -6,6 +6,68 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [4.2.0] — 2026-11-26
+
+### Changed — child activity uses the native assistant stream
+
+omp 19.2 settles a custom transcript message the moment it mounts. Updating
+that settled message afterward cannot keep a long stream visible: a terminal
+retires its rows into scrollback, and a native surface drops the fine-grained
+watchers that were driving the redraw. A child's live thinking and prose now
+enter the host's ordinary assistant channel, preceded by a settled one-line
+scope label.
+
+- The child stream starts, updates, and ends as an assistant message. It stays
+  live until the child ends, so completed paragraphs retire while the current
+  tail continues to redraw.
+- Only one child owns that live channel at a time. When it finishes, the next
+  child that is still producing text takes the channel immediately and starts
+  from the text already accumulated.
+- A cumulative provider snapshot and an incremental delta are reconciled by
+  content position. An update that carries both does not append the delta a
+  second time, and a final message replaces the accumulated draft.
+
+### Fixed — a finished todo no longer pins the transcript
+
+omp 19.2 deliberately leaves a completed `todo` tool card unsettled so a later
+`todo` call in the same turn can replace it. In a root turn that then forks
+and joins many scopes, that one card held the scrollback frontier at the top
+of the screen. A completed root or child `todo` is now a settled checklist
+card and retires with the transcript. The root's persisted `todo` result still
+updates the host's todo HUD; a child's result does not overwrite it.
+
+### Fixed — Esc cancels the live scope tree
+
+The stop decision is no longer inferred from the terminal shape of an aborted
+assistant message. omp 19.2 can omit `session_stop`, settle Esc as a pause, or
+leave the last assistant message with a different stop reason while a join is
+still parked.
+
+- `AgentSession.abort` is the native entry. An explicit user or parent-kill
+  interrupt fires a typed user abort synchronously before the host waits for
+  the session to unwind. An internal abort and a steer that redirects queued
+  messages do not cascade.
+- The web stop command uses the same typed entry, and each activation reaches
+  only the engine that owns its session.
+- The cascade starts from the conversation root. It stops running children,
+  children woken after returning, and children woken after their result was
+  joined. A child still being created receives the abort when creation returns
+  and never starts its prompt. A child abort also stops its retry, setup, and
+  background task machinery without reentering the user-abort gate.
+
+### Fixed — a persisted assistant snapshot matches its live request
+
+The host may persist an enriched snapshot of an assistant message before the
+tool result reaches agent state. That snapshot now matches the live assistant
+frame, so a tool result whose call is already committed is deferred instead of
+refusing the request as history corruption.
+
+### Fixed — finished tools use the host's settled card
+
+A finished tool is emitted as the host's start and completion together. While
+it is running it stays in the bottom tray, so neither a live child tool nor a
+root tool pins the transcript behind an open card.
+
 ## [4.1.2] — 2026-11-25
 
 ### Fixed — a forked scope's first request reuses the owner's prompt cache

@@ -8,9 +8,7 @@
 // reactive watchers in native mode) mid-stream. Live child thinking and prose
 // therefore stream on the host's native `role: "assistant"` channel (headed by
 // a settled one-line scope label), so thinking stays live with progressive
-// stable-head retirement until `message_end`. Finished `todo` snapshots render
-// as settled checklist cards so omp's displaceable-todo tracker never pins the
-// transcript scrollback frontier across long fork/join turns.
+// stable-head retirement until `message_end`.
 import { record } from "./diagnostics.mjs";
 import { getHostTui } from "./tui-runtime.mjs";
 import {
@@ -22,7 +20,6 @@ import {
 	finalizeAssistantStream,
 	buildChildAssistantMessage,
 	buildChildAssistantDelta,
-	buildTodoSnapshot,
 	partsText,
 	partsSignature,
 } from "./activity.mjs";
@@ -132,39 +129,15 @@ function renderStaticPart(tui, part) {
 	return tui.jsx("md", { text: part.text });
 }
 
-function renderTodoCard(tui, label, todo) {
-	const spans = [];
-	if (label) spans.push({ t: `${label} · `, s: "muted" });
-	spans.push({ t: "Todo", s: "accent strong" });
-	if (todo.total > 0) spans.push({ t: ` ${todo.closed}/${todo.total}`, s: "dim" });
-	const header = tui.jsx("text", { spans, wrap: true });
-	if (Array.isArray(todo.phases) && todo.phases.length > 0) {
-		return tui.jsx("col", {
-			children: [
-				header,
-				tui.jsx("checklist", { mode: "full", phases: todo.phases }),
-			],
-		});
-	}
-	const fallback = typeof todo.text === "string" && todo.text ? todo.text : "No todos";
-	return tui.jsx("col", {
-		children: [header, tui.jsx("text", { text: fallback, wrap: true })],
-	});
-}
-
 /**
  * Render static, settled `herd.fork-activity` custom messages:
  * - scope header labels (1-line tag introducing a child's native assistant stream),
- * - settled todo checklists (preventing omp 19.2's displaceable-todo card from pinning scrollback),
  * - fallback static parts snapshots (for replayed or non-streamed entries).
  */
 export function renderChildActivity(message, _options, _theme, tui = getHostTui()) {
 	if (typeof tui?.jsx !== "function" || message?.details?.tool) return undefined;
 	const details = message.details ?? {};
 	const label = typeof details.label === "string" ? details.label : "";
-	if (details.todo) {
-		return renderTodoCard(tui, label, details.todo);
-	}
 	const parts = normalizeParts(details.parts);
 	if (parts.length === 0) {
 		return label
@@ -414,11 +387,6 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 		emitCustom(label, label, { label, body: "", parts: null, tool: null });
 	}
 
-	function emitTodoCard(label, todo) {
-		const content = label ? `${label}\n${todo.text}` : todo.text;
-		emitCustom(label, content, { label, body: todo.text, parts: null, tool: null, todo });
-	}
-
 	function emitChildAssistantStart(stream, parts) {
 		emitLabelHeader(stream.label);
 		stream.started = true;
@@ -547,11 +515,6 @@ function displayArbiter(state, tray, suppressApprovalPreview) {
 		}
 		if (type === "tool_execution_end") {
 			const active = tray.end(source, event);
-			const todo = buildTodoSnapshot(event);
-			if (todo) {
-				block(() => emitTodoCard(root ? null : label, todo));
-				return;
-			}
 			const completed = {
 				...event,
 				toolCallId: root ? event.toolCallId : `herd:${label ?? "child"}:${event.toolCallId ?? event.toolName}`,

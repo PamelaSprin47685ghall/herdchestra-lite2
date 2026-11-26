@@ -6,7 +6,10 @@
 import { describe, expect, test } from "bun:test";
 import { activate } from "../host-omp/src/main.mjs";
 import { CHILD_ACTIVITY_TYPE } from "../host-omp/src/host/child-display.mjs";
-import { skillReceiptText } from "../src/station/texts.mjs";
+import {
+	projectCapabilities,
+	renderConsoleReceipt,
+} from "../src/station/domain/capabilities.mjs";
 import { installVibeTools } from "../host-omp/src/host/index.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
 import { buildTickets } from "../host-omp/src/activation/tickets.mjs";
@@ -338,7 +341,7 @@ describe("root rewind host lifecycle", () => {
 });
 
 describe("vibe mode", () => {
-	test("keeps registered scope tools when entering vibe mode", async () => {
+	test("keeps the session's registered tools when entering vibe mode", async () => {
 		class Session {
 			constructor(registered) {
 				this.registered = registered;
@@ -352,9 +355,11 @@ describe("vibe mode", () => {
 		}
 		installVibeTools(Session);
 		installVibeTools(Session);
-		const session = new Session(["read", "scope", "amend", "pin"]);
-		await session.activateVibeTools(["read", "scope"]);
-		expect(session.active).toEqual(["read", "scope", "amend", "pin", "task"]);
+		// `amend`/`pin` are retired: whatever a session registered is kept, and
+		// a retired name is not resurrected by entering vibe mode.
+		const session = new Session(["read", "js", "amend", "pin"]);
+		await session.activateVibeTools(["read", "js"]);
+		expect(session.active).toEqual(["read", "js", "task"]);
 		const other = new Session(["read"]);
 		await other.activateVibeTools(["read"]);
 		expect(other.active).toEqual(["read", "task"]);

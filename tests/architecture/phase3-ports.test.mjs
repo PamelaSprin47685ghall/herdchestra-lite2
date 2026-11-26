@@ -78,29 +78,13 @@ describe("the old relay is not a port", () => {
 });
 
 describe("B5 — buildPorts carries the session port objects", () => {
-	test("pin/amend/herd are state-bound implementations built once", () => {
-		const built = buildPorts({
-			HERD_PIN: "off",
-			HERD_AMEND: "on",
-			HERD_HERD: "off",
-		});
+	test("herd is the one state-bound implementation, built once", () => {
+		const built = buildPorts({ HERD_HERD: "off" });
 		expect(built.ok).toBe(true);
-		for (const name of ["pin", "amend", "herd"]) {
-			expect(typeof built.implementations[name]?.bindState).toBe("function");
-		}
-
-		const pin = built.implementations.pin.bindState({ pins: [] });
-		expect(pin.add("note")).toEqual({
-			ok: false,
-			code: "PIN_UNAVAILABLE",
-			port: "pin",
-		});
-
-		const amend = built.implementations.amend.bindState({ amends: [] });
-		expect(amend.record("beat-1")).toEqual({
-			ok: true,
-			retired: ["beat-1"],
-		});
+		// `clock` is stateless, so it is the object itself; `herd` reads and
+		// writes the station's state, so it is a binder.
+		expect(typeof built.implementations.clock).toBe("object");
+		expect(typeof built.implementations.herd?.bindState).toBe("function");
 
 		const herd = built.implementations.herd.bindState({ autopilot: false });
 		expect(herd.toggle("hi")).toEqual({
@@ -110,28 +94,25 @@ describe("B5 — buildPorts carries the session port objects", () => {
 		});
 	});
 
-	test("the on forms write through the store they are bound to", () => {
-		const built = buildPorts({
-			HERD_PIN: "on",
-			HERD_AMEND: "on",
-			HERD_HERD: "on",
-		});
-		const store = { pins: [], amends: [], autopilot: false };
-
-		const pin = built.implementations.pin.bindState(store);
-		expect(pin.add("note")).toEqual({ ok: true, count: 1 });
-		expect(store.pins).toEqual(["note"]);
-
-		const amend = built.implementations.amend.bindState(store);
-		expect(amend.record("beat-1")).toEqual({
-			ok: true,
-			retired: ["beat-1"],
-		});
-		expect(store.amends).toEqual(["beat-1"]);
+	test("the on form writes through the store it is bound to", () => {
+		const built = buildPorts({ HERD_HERD: "on" });
+		const store = { autopilot: false };
 
 		const herd = built.implementations.herd.bindState(store);
 		expect(herd.toggle("hi")).toEqual({ ok: true, mode: "on", text: "hi" });
 		expect(store.autopilot).toBe(true);
+	});
+
+	test("a retired pin or amend switch is refused, not silently ignored", () => {
+		// Leaving the switches in the table would let an operator believe a
+		// pin/amend feature still exists. The port is gone, so an explicit
+		// request for it must fail loudly at the composition root.
+		for (const port of ["pin", "amend"]) {
+			const resolved = resolvePorts({ [port]: "on" }, {});
+			expect(resolved.ok).toBe(false);
+			expect(resolved.code).toBe("PORT_UNAVAILABLE");
+			expect(resolved.port).toBe(port);
+		}
 	});
 });
 
@@ -202,7 +183,7 @@ describe("B3 — missing tickets refuse before a station exists", () => {
 		}
 		expect(error).toBeInstanceOf(Error);
 		expect(error.code).toBe("MISSING_PORTS");
-		expect(error.missing).toContain("pin");
+		expect(error.missing).toContain("clock");
 	});
 
 	test("the silent no-op default is gone", () => {

@@ -349,7 +349,7 @@ test("concurrent child streams hand off the live assistant lease seamlessly when
 	});
 });
 
-test("finished root and child todo tools emit settled custom checklist cards instead of unsettled displaceable todo tool events", () => {
+test("todo tool events no longer become checklist cards, while the root toolResult still reaches listeners for the host TodoHud", () => {
 	const root = new Session();
 	const child = new Session();
 	const seen = [];
@@ -385,15 +385,11 @@ test("finished root and child todo tools emit settled custom checklist cards ins
 		isError: false,
 	});
 
-	// Never emit raw todo tool_execution_start/end that would trigger omp's
-	// unsettled displaceable-todo tracker or pollute root's TodoHud from a child.
-	expect(seen.some((event) => event.type.startsWith("tool_execution_") && event.toolName === "todo")).toBe(false);
+	// `todo` is not a bound capability any more, so the display never turns a
+	// todo event into a checklist card. Raw tool events still pass through to
+	// the host, which is the host's own business.
 	const todoCards = seen.filter((event) => event.message?.customType === CHILD_ACTIVITY_TYPE && event.message.details?.todo);
-	expect(todoCards).toHaveLength(2);
-	expect(todoCards[0].message.details.label).toBeNull();
-	expect(todoCards[0].message.details.todo.closed).toBe(1);
-	expect(todoCards[0].message.details.todo.total).toBe(2);
-	expect(todoCards[1].message.details.label).toBe("Worker");
+	expect(todoCards).toHaveLength(0);
 	// Root's toolResult message_end still reaches listeners for dock TodoHud sync.
 	expect(seen.some((event) => event.type === "message_end" && event.message?.role === "toolResult" && event.message.toolName === "todo")).toBe(true);
 });
@@ -422,7 +418,7 @@ test("the native working row follows the latest requester and omits Root", () =>
 	bindScopeView(null);
 });
 
-test("renderChildActivity builds a one-line scope header and a settled checklist card", () => {
+test("renderChildActivity builds a one-line scope header", () => {
 	const tui = {
 		jsx(kind, props = {}) {
 			return { kind, props: () => props, children: () => props.children ?? [] };
@@ -431,20 +427,6 @@ test("renderChildActivity builds a one-line scope header and a settled checklist
 	const header = renderChildActivity({ details: { label: "Oh My Pie" } }, {}, {}, tui);
 	expect(header.kind).toBe("text");
 	expect(header.props().spans).toEqual([{ t: "Oh My Pie", s: "accent" }]);
-
-	const todoNode = renderChildActivity({
-		details: {
-			label: null,
-			todo: {
-				closed: 1,
-				total: 2,
-				phases: [{ id: "p0", title: "Phase 1", items: [{ id: "p0.0", text: "Task", status: "active" }], collapsed: false }],
-			},
-		},
-	}, {}, {}, tui);
-	expect(todoNode.kind).toBe("col");
-	expect(todoNode.children()[1].kind).toBe("checklist");
-	expect(todoNode.children()[1].props().mode).toBe("full");
 });
 
 test("a late child cannot write into the replacement root conversation", () => {

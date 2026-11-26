@@ -3,19 +3,22 @@
  *
  * Each ticket carries one complete async flow and returns a Promise. Stations
  * (SessionStation) stay synchronous; they call these through the injected
- * `tickets` capability bundle at wiring time. Tickets call station sync
- * methods for every state transition and never hold shared state of their own.
+ * `tickets` capability bundle or through the js runtime's core-tool table.
+ * Tickets call station sync methods for every state transition and never hold
+ * shared state of their own.
  *
  * This node is host-free: every host capability arrives as the trailing
- * `host` bag. The host adapter (`src/host/host-tickets.mjs`) binds the bag and
- * is the entry the wiring imports.
+ * `host` bag.
  */
 
-import { errorResult, textResult } from "./results.mjs";
-import { PIN_INTERNAL_ERROR } from "../features/pin/index.mjs";
+import { errorResult } from "./results.mjs";
 import { levelKeyOf, ownerIdOf, admitJoin } from "../station/fork-controls.mjs";
 import { loadDoc } from "../prompts/index.mjs";
 import { notifyWaiters, waitForReady } from "../scope/fork-registry.mjs";
+import {
+	REQUEST_INTERRUPT_REASON,
+	registerRuntime,
+} from "../scope/request-queue.mjs";
 
 const errors = loadDoc("errors");
 
@@ -24,24 +27,20 @@ const errors = loadDoc("errors");
 // the host's symbol without importing its package.
 export const TOOL_INTERRUPT_ABORT_REASON = Symbol.for("pi-agent-core.tool-interrupt");
 
-function isUserInputInterrupt(signal) {
-	return signal?.aborted === true && signal.reason === TOOL_INTERRUPT_ABORT_REASON;
-}
+// `scope_request` interrupts a peer for an answer, which is a different
+// decision from the user taking the turn back. The interrupt symbol lives with
+// the queue that owns it: `REQUEST_INTERRUPT_REASON` in scope/request-queue.mjs.
 
 /**
  * Open one child scope. The station finishes every state transition before
  * this ticket is called, so the parent's receipt is already correct when the
  * host persists it. Child assembly belongs to the host wiring.
  */
-export async function forkTicket(station, toolCallId, params, ctx, host = {}) {
+export async function forkTicket(station, toolCallId, params, ctx, host = {}, frameId = null) {
 	let result;
 	try {
-		result = station.executeFork(toolCallId, params, ctx);
+		result = station.executeFork(toolCallId, params, ctx, frameId);
 	} catch (error) {
-		// The host bag is the fifth argument, and this is what it is for: a
-		// fork that dies inside the station leaves a diagnostic, exactly as a
-		// join does. A caller that slips a signal into this position loses the
-		// record instead of the promise.
 		host?.report?.record?.("fork", error, {
 			phase: "fork",
 			toolCallId,
@@ -59,10 +58,10 @@ export async function forkTicket(station, toolCallId, params, ctx, host = {}) {
  * synchronous beat; when none is ready this ticket parks until one is. The
  * station never waits, so its own state stays atomic.
  */
-export async function joinTicket(station, toolCallId, params, ctx, signal = null, host = {}) {
+export async function joinTicket(station, toolCallId, params, ctx, signal = null, host = {}, frameId = null) {
 	try {
 		const wait = station.forkWaitPort?.() ?? null;
-		const first = station.executeJoin(toolCallId, params, ctx);
+		const first = station.executeJoin(toolCallId, params, ctx, frameId);
 		if (first?.details?.code !== "NO_READY_CHILD") {
 			// A take closes one bracket. The child parked in scope_return is
 			// waiting for exactly that fact, so wake it before answering.
@@ -81,6 +80,22 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 			);
 		}
 		const waited = await (async () => {
+			// While parked, a peer sees an idle scope that cannot answer yet: a
+			// request must yield this join first. Registering the parking state
+			// is what makes that yield reachable; leaving the entry `running`
+			// would let an interrupt abort a wait with no beat to stop.
+			const selfPath = station.selfScopePath?.() ?? "/";
+			const yieldController = new AbortController();
+			const relay = () => yieldController.abort(signal?.reason);
+			if (signal) {
+				if (signal.aborted) relay();
+				else signal.addEventListener("abort", relay, { once: true });
+			}
+			registerRuntime(wait.registry, selfPath, {
+				state: "running",
+				parked: "join",
+				yieldJoin: () => yieldController.abort(REQUEST_INTERRUPT_REASON),
+			});
 			// The parent's own clock stops while it waits for a child. Hiring
 			// people does not spend the manager's personal time budget.
 			station.noteRootWait?.(1);
@@ -89,7 +104,7 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 				return await waitForReady(wait.registry, wait.ledger, {
 					ownerId: ownerIdOf(station),
 					levelKey: levelKeyOf(station),
-					signal,
+					signal: yieldController.signal,
 					// Capacity belongs to this model and this record. The record
 					// stays ready when it cannot fit, and the ticket answers
 					// instead of parking for an event that cannot change it.
@@ -98,6 +113,10 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 			} finally {
 				station.noteRootWait?.(-1);
 				station.resumeBranchClock?.();
+				signal?.removeEventListener?.("abort", relay);
+				// The join is over either way, so the parking hooks must stop
+				// answering: a request that lands now belongs to the next turn.
+				registerRuntime(wait.registry, selfPath, { parked: null, yieldJoin: null });
 			}
 		})();
 		if (!waited.ok) {
@@ -110,7 +129,7 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 		}
 		// waitForReady already took the child. Rendering it here keeps the
 		// single take: calling executeJoin again would find an empty queue.
-		const taken = station.finalizeJoin(toolCallId, waited.fork, ctx);
+		const taken = station.finalizeJoin(toolCallId, waited.fork, ctx, frameId);
 		if (taken?.details?.joined) notifyWaiters?.(wait.registry);
 		return taken;
 	} catch (error) {
@@ -126,9 +145,25 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
  * be talked to instead of being stuck inside an open tool call, and the
  * parent's next join takes the record whenever it is ready for it.
  */
-export async function returnTicket(station, toolCallId, params, ctx, _signal = null, _host = {}) {
+/**
+ * Close a child that will not return. The station does the whole job in one
+ * synchronous beat: the bracket closes as failed, its agent stops, its queued
+ * requests settle, and a parked join wakes to take the failure.
+ */
+export async function abandonTicket(station, toolCallId, params, ctx, _host = {}) {
 	try {
-		const result = station.executeReturn(toolCallId, params, ctx);
+		if (typeof station.executeAbandon !== "function") {
+			return errorResult("ABANDON_UNAVAILABLE", "This station cannot abandon a scope.");
+		}
+		return station.executeAbandon(toolCallId, params, ctx);
+	} catch (error) {
+		return errorResult("ABANDON_INTERNAL_ERROR", String(error?.message ?? error));
+	}
+}
+
+export async function returnTicket(station, toolCallId, params, ctx, _signal = null, _host = {}, frameId = null) {
+	try {
+		const result = station.executeReturn(toolCallId, params, ctx, frameId);
 		// Every ledger write wakes its waiters: a parent parked in a join is
 		// waiting for exactly this record.
 		const wait = station.forkWaitPort?.() ?? null;
@@ -139,39 +174,64 @@ export async function returnTicket(station, toolCallId, params, ctx, _signal = n
 	}
 }
 
-/** One message addressed by path; every state change is synchronous. */
-export async function sendTicket(station, toolCallId, params, host = {}) {
+/**
+ * Request one peer scope's answer and wait for its `scope_reply`.
+ *
+ * The waiting half is here; the synchronous half — resolving the target,
+ * checking the wait graph for a cycle, enqueueing the request, choosing whether
+ * to interrupt or to let the next request pick it up — belongs to the station's
+ * `handleScopeRequest`. The station returns the pending Promise, so this ticket
+ * only owns the clock pause and the error line.
+ *
+ * Station contract:
+ *   station.handleScopeRequest({ toolCallId, params, ctx, signal })
+ *     -> Promise<{ content, isError?, details? }>
+ *   `details.result` must be `{ ok, from, reply }` on success.
+ *
+ * A caller that is interrupted mid-wait withdraws an undelivered request; one
+ * the target already printed is never withdrawn, because the reply has a
+ * reader by then and is simply ignored.
+ */
+export async function requestTicket(station, toolCallId, params, ctx, signal = null, host = {}) {
 	try {
-		return station.executeSend(toolCallId, params);
+		if (typeof station.handleScopeRequest !== "function") {
+			return errorResult("REQUEST_UNAVAILABLE", "This station cannot request another scope.");
+		}
+		station.noteRootWait?.(1);
+		station.pauseBranchClock?.();
+		try {
+			return await station.handleScopeRequest({ toolCallId, params, ctx, signal });
+		} finally {
+			station.noteRootWait?.(-1);
+			station.resumeBranchClock?.();
+		}
 	} catch (error) {
-		host?.report?.record?.("fork", error, { phase: "send", toolCallId });
-		return errorResult("SEND_INTERNAL_ERROR", String(error?.message ?? error));
+		host?.report?.record?.("fork", error, {
+			phase: "request",
+			toolCallId,
+			stack: error?.stack,
+		});
+		return errorResult("REQUEST_INTERNAL_ERROR", String(error?.message ?? error));
 	}
 }
 
 /**
- * One call that may carry a note, an amend, or both. The amend half runs
- * first so its refund is already in the ledger when the note is saved. The
- * two halves use derived cache keys: the host retries the outer call id, and
- * the direct-amend path may already have answered that id before this ticket.
+ * Answer the request this scope is holding. Only bound while the projection is
+ * `AWAITING_REPLY`, so the key does not exist on `api` in any other mode.
+ *
+ * Station contract:
+ *   station.handleScopeReply({ toolCallId, params, ctx })
+ *     -> { content, isError?, details? }
+ *   `details.result` is `{ ok: true }` on success.
  */
-export async function scopeContextTicket(station, toolCallId, params, host = {}) {
-	let args = params;
-	if (typeof args === "string") {
-		try {
-			args = JSON.parse(args);
-		} catch {
-			args = null;
-		}
-	}
-	if (args?.pin === undefined && args?.amend === undefined) {
-		return errorResult("scope_context-empty", errors["scope-context-empty"]);
-	}
+export async function replyTicket(station, toolCallId, params, ctx, _signal = null, host = {}) {
 	try {
-		return station.executeContext(toolCallId, args);
+		if (typeof station.handleScopeReply !== "function") {
+			return errorResult("REPLY_UNAVAILABLE", "This station holds no pending request.");
+		}
+		return station.handleScopeReply({ toolCallId, params, ctx });
 	} catch (error) {
-		host?.report?.record?.("tickets", error, { kind: "scope_context", toolCallId });
-		return errorResult(PIN_INTERNAL_ERROR, errors["pin-internal-error"]);
+		host?.report?.record?.("fork", error, { phase: "reply", toolCallId });
+		return errorResult("REPLY_INTERNAL_ERROR", String(error?.message ?? error));
 	}
 }
-

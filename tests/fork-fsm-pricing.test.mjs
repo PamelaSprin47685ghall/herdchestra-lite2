@@ -115,8 +115,8 @@ describe("a fork is priced by the receipt it sends", () => {
 });
 
 // A generation and a revived checkpoint no longer exist: a fork only creates,
-// and a message to an existing scope is `scope_send`. Their pricing paths went
-// with them, so no case here can re-pin them.
+// and a message to an existing scope is `scope_request`, which is a free control
+// call with no pricing path. No case here can re-pin them.
 
 describe("the ledger snapshot format", () => {
   test("a version-1 snapshot is refused and rebuilt without throwing", () => {

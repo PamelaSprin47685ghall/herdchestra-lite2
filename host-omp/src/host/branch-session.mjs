@@ -31,6 +31,7 @@
 import {
 	canProxyBranchManager,
 	createBranchManager,
+	findBranchManager,
 	sharedManagerOf,
 	retainBranchManager,
 } from "./branch-manager.mjs";
@@ -628,6 +629,85 @@ export function deriveBranchConfig(options = {}) {
  * session (see the file header and the
  * SHARED_MANAGER_DISPOSE_FORBIDDEN limitation).
  */
+/**
+ * Rebuild one session over a stopped child's branch.
+ *
+ * The branch outlives the session: it lives in the shared manager under the
+ * child's agent id, and the record keeps its leaf as `branchTail`. A resume
+ * opens the same flow at that leaf, lets the caller bind the child's station
+ * (the identity is installed by the caller before this call), and hands back a
+ * one-shot prompt. Teardown is the caller's: dispose the session, close the
+ * flow, drop the identity — the record itself is never touched.
+ *
+ * Returns null for anything it cannot rebuild: a failed record, a record with
+ * no agent id, a manager that cannot proxy, or a factory refusal.
+ */
+export async function resumeBranchSession(options = {}) {
+	const { record, owner, prepare = null } = options;
+	if (!record || typeof record !== "object" || !owner) return null;
+	if (record.outcome === "failed" || record.status === "failed") return null;
+	const agentId =
+		typeof record.agentId === "string" && record.agentId !== "" ? record.agentId : null;
+	if (!agentId) return null;
+	const derived = deriveBranchConfig({
+		...options,
+		session: owner,
+		flowId: agentId,
+		agentDisplayName: record.scopeId,
+	});
+	if (!derived.ok) return null;
+	const shared = sharedManagerOf(derived.config.sessionManager);
+	if (!canProxyBranchManager(shared)) return null;
+	const flowManager =
+		findBranchManager(shared, agentId) ??
+		createBranchManager(shared, {
+			flowId: agentId,
+			label: record.scopeId,
+			tail: typeof record.branchTail === "string" ? record.branchTail : null,
+		});
+	const factory = options.createAgentSession ?? (await loadCreateAgentSession());
+	if (typeof factory !== "function") return null;
+	let created = null;
+	try {
+		created = await factory({ ...derived.config, sessionManager: flowManager });
+	} catch {
+		return null;
+	}
+	const session = created?.session ?? null;
+	if (!session) return null;
+	try {
+		await prepare?.(session);
+	} catch {
+		// A station gap costs the reply, not the resume; the caller reports it.
+	}
+	const prompt = (text) =>
+		typeof session.prompt === "function"
+			? session.prompt(text, { synthetic: true, attribution: "agent", userInitiated: false })
+			: session.agent.prompt(text, {
+					synthetic: true,
+					attribution: "agent",
+					userInitiated: false,
+				});
+	return {
+		ok: true,
+		session,
+		prompt,
+		agentId,
+		close: async () => {
+			try {
+				await session.dispose?.();
+			} catch {
+				// The reply already landed, or it never will.
+			}
+			try {
+				await flowManager.close?.();
+			} catch {
+				// Releasing the flow is best-effort.
+			}
+		},
+	};
+}
+
 export async function createBranchSession(options = {}) {
 	const baseAgentRegistry =
 		options.agentRegistry === undefined && options.baseAgentRegistry === undefined

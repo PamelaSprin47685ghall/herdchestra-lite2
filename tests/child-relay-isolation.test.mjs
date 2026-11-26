@@ -5,7 +5,12 @@ import { describe, expect, test } from "bun:test";
 import { createRelay } from "../src/relay/index.mjs";
 import { onAgentEnd, onBeforeAgentStart, onSessionStop, prepareRequest } from "../src/station/gates.mjs";
 import { commitRootRewind } from "../src/station/handoff-state.mjs";
-import { rootReturnNudge, skillReceiptText } from "../src/station/texts.mjs";
+import { rootReturnNudge } from "../src/station/texts.mjs";
+import {
+	projectCapabilities,
+	renderConsoleReceipt,
+} from "../src/station/domain/capabilities.mjs";
+import { unreceivedChildren } from "../src/scope/index.mjs";
 import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 import { injectSystemPrompt } from "../src/prompts/inject.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
@@ -15,11 +20,30 @@ function relayState(overrides = {}) {
 }
 
 function stopStation(ownerId, overrides = {}) {
-	return {
+	const station = {
 		state: relayState(overrides.relay),
 		forkOwnerId: () => ownerId,
 		forkLedgerPort: () => overrides.ledger ?? null,
 	};
+	// The stop gate reads two facts from the projection — the mode and the
+	// pending count — so the stub answers both from the live state it is given.
+	// A stub that answered neither would make every test below look like a
+	// root with nothing outstanding.
+	station.projectionFor = () => {
+		const ledger = station.forkLedgerPort();
+		return {
+			mode:
+				ownerId !== null
+					? "CHILD"
+					: station.state.autopilot === true
+						? "ROOT_AUTOPILOT"
+						: "ROOT_MANUAL",
+			state: {
+				unreceived: ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0,
+			},
+		};
+	};
+	return station;
 }
 
 describe("a root's natural stop with unreceived work", () => {
@@ -164,6 +188,12 @@ describe("the prompt gate on an inherited prompt", () => {
 	}
 });
 
+/** The single object literal the REPL probe prints, evaluated as JavaScript. */
+function probeOf(text) {
+	const line = text.split("\n").find((candidate) => candidate.trimStart().startsWith("{ api:"));
+	return new Function(`return (${line})`)();
+}
+
 const childBranch = {
 	fsm: "child work",
 	remaining: { read: 1 },
@@ -190,30 +220,31 @@ function requestStation(ownerId) {
 		persist() {},
 		resetUsageWatermark() {},
 		skillReceipt() {
+			// The probe is the receipt: same projection source as the runtime.
+			const projection = projectCapabilities({
+				isChild: ownerId !== null,
+				autopilot: state.autopilot,
+				canStop: false,
+				unreceived: 0,
+				selfPath: ownerId ? "/fork_a" : "/",
+				remaining: branch ? { read: "1/2" } : null,
+				activePaths: ["/"],
+			});
 			return {
 				herdSkill: true,
-				content: [{
-					type: "text",
-					text: skillReceiptText(this.state, branch, 0, ownerId !== null),
-				}],
+				content: [{ type: "text", text: renderConsoleReceipt(projection) }],
 			};
 		},
 	};
 }
 
 describe("a child's skill receipt", () => {
-	test("describes child budget instead of root autopilot/return status", () => {
-		const text = skillReceiptText(
-			{ autopilot: true, relay: createRelay() },
-			childBranch,
-			0,
-			true,
-		);
-
-		expect(text).toContain("Scope budget:");
-		expect(text).not.toContain("Autopilot on");
-		expect(text).not.toContain("Autopilot off");
-		expect(text).not.toContain("Call `scope_return` before stopping");
+	test("carries the child's own turns instead of root autopilot/return status", () => {
+		const text = requestStation("fork_a").skillReceipt().content[0].text;
+		const view = probeOf(text);
+		expect(view.remaining).toEqual({ read: "1/2" });
+		expect(view).not.toHaveProperty("autopilot");
+		expect(view).not.toHaveProperty("canStop");
 	});
 
 	test("prepareRequest keeps that child receipt", () => {
@@ -226,19 +257,15 @@ describe("a child's skill receipt", () => {
 		const text = message.content.map((part) => part.text ?? "").join("\n");
 
 		expect(message.herdSkill).toBe(true);
-		expect(text).toContain("Scope budget:");
-		expect(text).not.toContain("Autopilot on");
+		expect(text).toContain("remaining:");
+		expect(text).not.toContain("autopilot:");
 	});
 
 	test("the root receipt carries autopilot mode and scope_return obligation", () => {
-		const text = skillReceiptText(
-			{ autopilot: true, relay: createRelay() },
-			null,
-			0,
-			false,
-		);
+		const text = requestStation(null).skillReceipt().content[0].text;
+		const view = probeOf(text);
 
-		expect(text).toContain("Autopilot on");
-		expect(text).toContain("scope_return");
+		expect(view.autopilot).toBe(true);
+		expect(view.api).toContain("scope_return");
 	});
 });

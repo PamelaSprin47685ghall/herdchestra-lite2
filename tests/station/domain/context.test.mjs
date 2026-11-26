@@ -3,7 +3,6 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { beatKey } from "../../../src/transcript/messages.mjs";
 import {
 	projectContext,
 	shouldRebase,
@@ -26,25 +25,6 @@ describe("projectContext", () => {
 
 		expect(JSON.stringify({ snapshot, original })).toBe(before);
 		expect(result.messages).not.toBe(original);
-	});
-
-	test("drops every message of an amended beat", () => {
-		const call = {
-			role: "assistant",
-			content: [{ type: "toolCall", id: "a1", name: "read", arguments: {} }],
-			timestamp: 1,
-		};
-		const resultMessage = {
-			role: "toolResult",
-			toolCallId: "a1",
-			content: [{ type: "text", text: "read result" }],
-		};
-		const keep = { role: "user", content: "keep", timestamp: 2 };
-		const result = projectContext(
-			{ amends: [beatKey(call)] },
-			{ original: [call, resultMessage, keep] },
-		);
-		expect(result.messages).toEqual([keep]);
 	});
 
 	test("rebases only when the host tree tail still matches the outbound tail", () => {
@@ -122,128 +102,14 @@ describe("projectContext", () => {
 		expect(result.usage).toBeNull();
 	});
 
-	const turn = [
-		{ role: "user", content: [{ type: "text", text: "what did we settle" }] },
-		{
-			role: "assistant",
-			content: [
-				{ type: "thinking", thinking: "let me recall", signature: "sig" },
-				{ type: "text", text: "we settled this" },
-			],
-		},
-	];
-
-	test("prepends the shared opening exchange before the outbound list", () => {
-		const user = { role: "user", content: "hello", timestamp: 2 };
-		const result = projectContext(
-			{ amends: [] },
-			{ original: [user], modelKey: "m1", firstTurn: turn },
-		);
-
-		expect(result.messages.map((message) => message.role)).toEqual([
-			"user",
-			"assistant",
-			"user",
-		]);
-		expect(result.messages[0]).toMatchObject({
-			role: "user",
-			content: turn[0].content,
-			timestamp: 1,
-			attribution: "user",
-		});
-		// The host walks an assistant message as real history. Every field it
-		// reads must exist, or a DeepSeek-compatible child aborts before its
-		// first answer.
-		expect(result.messages[1]).toMatchObject({
-			role: "assistant",
-			content: turn[1].content,
-			api: "openai-completions",
-			provider: "herdchestra",
-			model: "shared-opening",
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
-			stopReason: "stop",
-			timestamp: 1,
-			attribution: "assistant",
-		});
-		expect(result.messages[2]).toBe(user);
-		expect(result.usage.messages).toBe(result.messages);
-		expect(result.usage.frontier).toBe(1);
-	});
-
-	test("a tool-calling opening reports toolUse and drops streaming residue", () => {
-		const calling = [
-			{ role: "user", content: [{ type: "text", text: "go" }] },
-			{
-				role: "assistant",
-				content: [
-					{ type: "text", text: "checking" },
-					{
-						type: "toolCall",
-						id: "call-1",
-						name: "bash",
-						arguments: { command: "pwd" },
-						partialArgs: '{"command": "pwd"}',
-						streamIndex: 0,
-					},
-				],
-			},
-			{
-				role: "toolResult",
-				toolCallId: "call-1",
-				toolName: "bash",
-				content: [{ type: "text", text: "no budget" }],
-				isError: true,
-			},
-		];
-
-		const result = projectContext(
-			{ amends: [] },
-			{ original: [], modelKey: "m1", firstTurn: calling },
-		);
-
-		// A captured stream still carries the arguments being parsed. Replayed
-		// history must not: the host would treat the call as unfinished, and
-		// the toolResult that follows would lose its call.
-		expect(result.messages[1].stopReason).toBe("toolUse");
-		expect(result.messages[1].content[1]).toEqual({
-			type: "toolCall",
-			id: "call-1",
-			name: "bash",
-			arguments: { command: "pwd" },
-		});
-		expect(JSON.stringify(result.messages)).not.toContain("partialArgs");
-		expect(JSON.stringify(result.messages)).not.toContain("streamIndex");
-	});
-
-	test("an empty first turn leaves the list unchanged", () => {
-		const user = { role: "user", content: "hello", timestamp: 2 };
-		const result = projectContext({}, { original: [user], firstTurn: [] });
-		expect(result.messages).toEqual([user]);
-	});
-
-	test("the first turn does not count as a branch position", () => {
-		const result = projectContext(
-			{},
-			{ original: [], modelKey: "m1", firstTurn: turn },
-		);
-		expect(result.messages).toHaveLength(2);
-		expect(result.usage.frontier).toBe(0);
-	});
-
-	test("keeps a leading developer message ahead of the shared turn", () => {
+	test("keeps a leading developer message ahead of the user turn", () => {
 		const developer = { role: "developer", content: "rules", timestamp: 1 };
 		const user = { role: "user", content: "hello", timestamp: 2 };
-		const result = projectContext(
-			{},
-			{ original: [developer, user], firstTurn: turn },
-		);
+		const result = projectContext({}, { original: [developer, user] });
 		expect(result.messages.map((message) => message.role)).toEqual([
 			"developer",
 			"user",
-			"assistant",
-			"user",
 		]);
-		expect(result.messages[1].content[0].text).toBe("what did we settle");
 	});
 
 	test("keeps every part and role verbatim", () => {
@@ -252,7 +118,7 @@ describe("projectContext", () => {
 			{ role: "assistant", content: [{ type: "text", text: "a" }, { type: "toolCall", id: "t", name: "x", arguments: {} }] },
 			{ role: "toolResult", toolCallId: "t", content: [{ type: "text", text: "r" }] },
 		];
-		const result = projectContext({}, { original: [], firstTurn: withImage });
+		const result = projectContext({}, { original: withImage });
 		expect(result.messages.map((message) => message.role)).toEqual([
 			"user",
 			"assistant",

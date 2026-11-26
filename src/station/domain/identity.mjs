@@ -13,19 +13,6 @@
 import { selectForkLedger } from "./fork-ledger.mjs";
 
 /**
- * A beat-key list as data: strings only, and always a fresh array.
- *
- * A forked scope projects the parent's transcript, so it must drop the beats
- * the parent had already retired; otherwise the child's outbound list includes
- * a beat the parent's does not, and its request prefix stops matching.
- */
-export function inheritedAmends(source) {
-	return Array.isArray(source)
-		? source.filter((key) => typeof key === "string")
-		: [];
-}
-
-/**
  * Build the identity a child station reads back from the registry.
  *
  * `spec` is the fork registration data; `deps` are host capabilities captured
@@ -48,10 +35,6 @@ export function buildChildIdentity(spec = {}, deps = {}) {
 		// normalizes it in one place.
 		targets: spec.targets ?? null,
 		childDepth: Number.isInteger(spec.childDepth) ? spec.childDepth : null,
-		// The beats the parent had already retired when this child was forked.
-		// A child projects the same transcript, so it must drop the same beats;
-		// the array is copied into the child's own state when the station binds.
-		amends: inheritedAmends(deps.amends),
 		agentId: typeof deps.agentId === "string" ? deps.agentId : null,
 		display: deps.display ?? null,
 		displayHolder: deps.displayHolder ?? null,

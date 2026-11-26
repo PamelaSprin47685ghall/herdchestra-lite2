@@ -1,0 +1,303 @@
+// The js tool's wire schema and the static `.d.ts` compiler.
+//
+// `js` is the only tool the model ever sees. Everything else -- host tools,
+// MCP tools, and the scope control plane -- is reachable as async methods on
+// the `api` object inside the vm. Their documentation is compiled once from
+// the tools' own JSON schemas into a deterministic TypeScript declaration
+// block embedded in the managed system prompt. One source, zero drift:
+// schemas are never described twice, and a host adding a tool updates the
+// declarations for free.
+//
+// Pure functions only: no Station import, no host import, no mutation, no I/O.
+
+/** The wire schema of the one registered tool. */
+export const jsParameters = Object.freeze({
+	type: "object",
+	additionalProperties: false,
+	required: ["code"],
+	properties: {
+		code: {
+			type: "string",
+			minLength: 1,
+			description:
+				"Async JS expression or function body evaluated with `api`, `state`, and `inputs` in scope. A bare expression is returned implicitly; a multi-statement body needs its own `return`. Always `await` api methods.",
+		},
+		inputs: {
+			type: "object",
+			additionalProperties: true,
+			description:
+				"Optional raw payloads (file content, patch strings, large literals). Reference them as `inputs.<key>` inside `code` instead of escaping big text into a JS string.",
+		},
+	},
+});
+
+/** A comment closing sequence would end the JSDoc block early. */
+function escapeComment(text) {
+	return String(text).replace(/\*\//g, "*\\/");
+}
+
+function docLines(description) {
+	if (typeof description !== "string" || description.trim() === "") return [];
+	return escapeComment(description.trim())
+		.split("\n")
+		.map((line) => ` * ${line}`.trimEnd());
+}
+
+function indentBlock(lines, indent) {
+	return lines.map((line) => (line === "" ? line : indent + line));
+}
+
+/**
+ * Compile one JSON schema fragment into TypeScript. Covers the subset the
+ * host schemas actually use; anything outside it degrades to `unknown`
+ * rather than guessing wrong.
+ */
+export function jsonSchemaToTs(schema) {
+	if (schema === true || schema === undefined || schema === null) return "unknown";
+	if (schema === false) return "never";
+	if (typeof schema !== "object") return "unknown";
+	if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
+		return schema.anyOf.map((part) => jsonSchemaToTs(part)).join(" | ");
+	}
+	if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
+		return schema.oneOf.map((part) => jsonSchemaToTs(part)).join(" | ");
+	}
+	if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+		return schema.enum
+			.map((value) => (typeof value === "string" ? JSON.stringify(value) : String(value)))
+			.join(" | ");
+	}
+	const types = Array.isArray(schema.type) ? schema.type : schema.type !== undefined ? [schema.type] : [];
+	if (types.length > 1) {
+		return types.map((type) => jsonSchemaToTs({ ...schema, type })).join(" | ");
+	}
+	const type = types[0];
+	switch (type) {
+		case "string":
+			return "string";
+		case "integer":
+		case "number":
+			return "number";
+		case "boolean":
+			return "boolean";
+		case "null":
+			return "null";
+		case "array":
+			return `Array<${jsonSchemaToTs(schema.items)}>`;
+		case "object": {
+			const properties = schema.properties;
+			if (properties && typeof properties === "object" && Object.keys(properties).length > 0) {
+				return inlineObjectType(schema);
+			}
+			const additional = schema.additionalProperties;
+			if (additional && typeof additional === "object" && additional.type !== undefined) {
+				return `Record<string, ${jsonSchemaToTs(additional)}>`;
+			}
+			return "Record<string, unknown>";
+		}
+		default:
+			return "unknown";
+	}
+}
+
+/** Property keys are always quoted: tool schemas use dashes and dots freely. */
+function propertyKey(key) {
+	return JSON.stringify(key);
+}
+
+/**
+ * Nested object schemas print as one compact single-line type literal.
+ * Multi-line inline indentation inside an interface is fragile for zero
+ * benefit; only the top-level interface body gets real line structure.
+ */
+function inlineObjectType(schema) {
+	const properties = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+	const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+	const parts = Object.keys(properties)
+		.sort()
+		.map((key) => {
+			const sub = properties[key] && typeof properties[key] === "object" ? properties[key] : {};
+			const optional = required.has(key) ? "" : "?";
+			return `${propertyKey(key)}${optional}: ${jsonSchemaToTs(sub)}`;
+		});
+	if (schema.additionalProperties === true) parts.push("[key: string]: unknown");
+	return `{ ${parts.join("; ")}${parts.length > 0 ? ";" : ""} }`;
+}
+
+function renderObjectType(schema, indent) {
+	const lines = ["{"];
+	const properties = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+	const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+	for (const key of Object.keys(properties).sort()) {
+		const sub = properties[key] && typeof properties[key] === "object" ? properties[key] : {};
+		const doc = docLines(sub.description);
+		if (doc.length > 0) lines.push(...indentBlock(["/**", ...doc, " */"], indent));
+		const optional = required.has(key) ? "" : "?";
+		lines.push(`${indent}${propertyKey(key)}${optional}: ${jsonSchemaToTs(sub)};`);
+	}
+	const additional = schema.additionalProperties;
+	if (additional === true) {
+		lines.push(`${indent}[key: string]: unknown;`);
+	}
+	lines.push(`${indent.slice(0, -1)}}`);
+	return lines.join("\n");
+}
+
+/** `scope_fork` -> `ScopeForkArgs`; non-alphanumerics are word separators. */
+function argsTypeName(toolName) {
+	const words = String(toolName)
+		.split(/[^A-Za-z0-9]+/)
+		.filter((word) => word !== "");
+	const pascal = words
+		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+		.join("");
+	return `${pascal === "" ? "Tool" : pascal}Args`;
+}
+
+// The scope control plane's result shapes are fixed by the protocol itself,
+// so they are declared inline once instead of being derived from anywhere.
+const CONTROL_PLANE_BLOCK = `/**
+ * The scope control plane. These six primitives always exist in the type
+ * space; whether one is callable this turn is decided by the live binding
+ * printed in the REPL probe, never by this declaration.
+ */
+interface ScopeForkItem {
+	scopeId: string;
+	fsm: string;
+	profession: string;
+	n: number;
+	budget: Record<string, number>;
+	targets: string[];
+	model?: string | null;
+}
+
+interface ScopeForkArgs {
+	forks: ScopeForkItem[];
+}
+
+interface ScopeForkResult {
+	ok: boolean;
+	started: Array<{ path: string; depth: number; fsm: string }>;
+	failed: Array<{ index: number; error?: string }>;
+	unreceived: string[];
+}
+
+interface ScopeJoinResult {
+	ok: boolean;
+	scope: string;
+	failed: boolean;
+	reason: string | null;
+	/** History only; do not re-execute it. */
+	record: string;
+	note: string;
+	unreceived: string[];
+	persisted: boolean;
+}
+
+interface ScopeRequestArgs {
+	/** Exact scope path, e.g. "/api" or ".." — no wildcards. */
+	target: string;
+	message: string;
+	/** true interrupts the target at once; false lands at its next request. */
+	interrupt?: boolean;
+}
+
+interface ScopeRequestResult {
+	ok: boolean;
+	from: string;
+	reply: string;
+}
+
+interface ScopeAbandonArgs {
+	/** Exact path of one child this scope forked, never a wildcard. */
+	target: string;
+}
+
+interface ScopeAbandonResult {
+	ok: boolean;
+	/** Every path this call closed, the target first. */
+	abandoned: string[];
+}
+
+interface ScopeReturnArgs {
+	dafny: string;
+	signed_sealed_hands_off_nothing_left_on_the_table?: "a_ferocious_audacious_master_would_change_nothing";
+}
+
+interface ScopeState {
+	mode: "CHILD" | "ROOT_MANUAL" | "ROOT_AUTOPILOT" | "FINAL_ANSWER" | "CONTEXT_LIMIT" | "AWAITING_REPLY";
+	scope: string;
+	autopilot?: boolean;
+	canStop?: boolean;
+	/** Child only: per-tool balance as "remaining/budget", plus time and panhandles. */
+	remaining?: Record<string, string | number>;
+	unreceived: number;
+	scopes: string[];
+	request?: { from: string; message: string };
+}`;
+
+/**
+ * Compile every tool spec into the deterministic TypeScript declaration block
+ * for the managed system prompt.
+ *
+ * @param {Array<{ name: string, description?: string, parameters?: object }>} toolSpecs
+ *   Host tools (built-in + MCP) with their JSON schemas. The scope control
+ *   plane is not an input: its declarations are protocol-fixed inline text.
+ * @returns {string} Stable bytes: tools sorted by name, so a reordering of
+ *   the host's tool list never invalidates the prompt prefix cache.
+ */
+export function renderCapabilitiesDts(toolSpecs = []) {
+	const specs = (Array.isArray(toolSpecs) ? toolSpecs : [])
+		.filter((spec) => spec && typeof spec.name === "string" && spec.name !== "")
+		.filter((spec) => spec.name !== "js" && spec.name !== "todo")
+		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+	const sections = [
+		"// Auto-generated from the host tools' JSON schemas. Do not edit by hand.",
+		CONTROL_PLANE_BLOCK,
+	];
+
+	const methods = [];
+	for (const spec of specs) {
+		const parameters =
+			spec.parameters && typeof spec.parameters === "object" ? spec.parameters : { type: "object" };
+		const typeName = argsTypeName(spec.name);
+		const doc = docLines(spec.description);
+		const argsLines = [];
+		if (doc.length > 0) argsLines.push("/**", ...doc, " */");
+		argsLines.push(`interface ${typeName} ${renderObjectType(parameters, "\t")}`);
+		sections.push(argsLines.join("\n"));
+		const methodDoc = doc.length > 0 ? `\n\t/**\n${indentBlock(doc, "\t * ").join("\n")}\n\t */` : "";
+		methods.push(`${methodDoc}\n\t${JSON.stringify(spec.name)}(args: ${typeName}): Promise<unknown>;`);
+	}
+
+	const controlMethods = [
+		`\t"scope_fork"(args: ScopeForkArgs): Promise<ScopeForkResult>;`,
+		`\t"scope_join"(): Promise<ScopeJoinResult>;`,
+		`\t"scope_request"(args: ScopeRequestArgs): Promise<ScopeRequestResult>;`,
+		`\t"scope_return"(args: ScopeReturnArgs): Promise<never>;`,
+		`\t"scope_reply"(reply: string): Promise<{ ok: boolean }>;`,
+	];
+
+	sections.push(`/**
+ * Host-managed live capability binding. It behaves like a DevTools host
+ * object or an ES module live binding: the host state machine rebinds it
+ * between turns, and the set of present keys can shrink or grow without any
+ * action of yours. Methods absent from the current REPL probe do not exist
+ * at runtime — calling them throws. Trust the probe, not memory of earlier
+ * turns: the probe is reprinted every single turn.
+ *
+ * Type-wise every method is declared here, but at runtime only the keys
+ * printed in the probe exist on the object.
+ */
+declare interface Api {${[...controlMethods, ...methods].join("\n")}
+}
+
+/**
+ * Read-only snapshot of the session state machine, passed fresh into every
+ * evaluation. Use it instead of hardcoding sibling paths or budgets.
+ */
+declare const state: ScopeState;`);
+
+	return sections.join("\n\n");
+}

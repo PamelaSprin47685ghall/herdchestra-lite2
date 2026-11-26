@@ -14,9 +14,18 @@ import { createUsageLedger } from "../src/scope/usage-ledger.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { injectSystemPrompt } from "../src/prompts/inject.mjs";
 import { loadDoc } from "../src/prompts/index.mjs";
-import { skillReceiptText } from "../src/station/texts.mjs";
+import {
+	projectCapabilities,
+	renderConsoleReceipt,
+} from "../src/station/domain/capabilities.mjs";
 
-const nudgeText = loadDoc("receipts/scope")["context.nudge"];
+const nudgeSteer = loadDoc("receipts/scope")["mode.context-limit"];
+
+/** The single object literal the REPL probe prints, evaluated as JavaScript. */
+function probeOf(text) {
+	const line = text.split("\n").find((candidate) => candidate.trimStart().startsWith("{ api:"));
+	return new Function(`return (${line})`)();
+}
 
 /** A ledger whose window is fixed by the test, not by a host. */
 function ledgerWith(window) {
@@ -96,7 +105,7 @@ describe("arming on a live ledger", () => {
 		expect(ledger.contextNudge).toBe(false);
 	});
 
-	test("crossing the midpoint arms the next request, descending disarms it", () => {
+	test("crossing the midpoint arms the next request", () => {
 		const ledger = ledgerWith(10000);
 		response(ledger, 1000);
 		expect(ledger.contextNudge).toBe(false);
@@ -105,9 +114,9 @@ describe("arming on a live ledger", () => {
 		expect(ledger.contextNudge).toBe(false);
 		response(ledger, 5401);
 		expect(ledger.contextNudge).toBe(true);
-		// A fold reclaims room below the midpoint and the scope is left alone.
-		ledger.rebase({ savedTokens: 2000 });
-		expect(ledger.contextNudge).toBe(false);
+		// The only remaining disarm is a new birth (a rewind or a reborn
+		// scope); the fold that used to reclaim room mid-scope is gone, and
+		// `resetWatermark` is pinned by the next case.
 	});
 
 	test("a rewind re-baselines at the new birth", () => {
@@ -157,45 +166,58 @@ describe("arming on a live ledger", () => {
 });
 
 describe("trailing injection", () => {
-	test("the nudge is a skill block, and only when the scope is armed", () => {
-		const quiet = skillReceiptText({}, null, 0, false, null, "on", false);
-		expect(quiet).not.toContain(nudgeText);
-		expect(quiet).toContain("<additional-system-instructions>");
+	const quietFacts = {
+		isChild: false,
+		autopilot: false,
+		canStop: false,
+		unreceived: 0,
+		activePaths: ["/"],
+	};
 
-		const armed = skillReceiptText({}, null, 0, false, null, "on", true);
-		expect(armed).toContain(`<skill version="1.0" enforced>${nudgeText}</skill>`);
-		// It urges the return, and it is a skill, not a receipt line.
-		expect(armed).toContain("scope_return");
+	test("past the midpoint the tools collapse to one, and nothing moves into the prompt", () => {
+		const quiet = renderConsoleReceipt(projectCapabilities(quietFacts));
+		expect(quiet).toContain("scope_request");
+		// The signal is a hard mode, not a paragraph: the whole api disappears.
+		const armed = projectCapabilities({ ...quietFacts, contextOverHalf: true });
+		expect(armed.mode).toBe("CONTEXT_LIMIT");
+		expect(probeOf(renderConsoleReceipt(armed)).api).toEqual(["scope_return"]);
 	});
 
-	test("the nudge follows the existing children instead of replacing them", () => {
-		const state = { autopilot: false };
-		const armed = skillReceiptText(state, null, 0, false, null, "on", true);
-		// The status skill still opens the block, the Chinese reminder still
-		// closes it, and the nudge sits between them.
-		expect(armed.startsWith('<additional-system-instructions><skill version="1.0" enforced>')).toBe(true);
-		expect(armed.endsWith("</skill></additional-system-instructions>")).toBe(true);
-		expect(armed).toContain("Autopilot off");
-		expect(armed.indexOf(nudgeText)).toBeGreaterThan(armed.indexOf("Autopilot off"));
-		expect(armed.indexOf(nudgeText)).toBeLessThan(armed.indexOf("强制简体中文"));
-		expect(armed.split("<skill version=").length - 1).toBe(3);
+	test("the collapsed probe keeps the state the model still needs", () => {
+		const view = probeOf(
+			renderConsoleReceipt(
+				projectCapabilities({
+					...quietFacts,
+					contextOverHalf: true,
+					unreceived: 2,
+					activePaths: ["/", "/api"],
+				}),
+			),
+		);
+		expect(view.api).toEqual(["scope_return"]);
+		expect(view.mode).toBe("CONTEXT_LIMIT");
+		// The address book and the pending count survive the collapse.
+		expect(view.unreceived).toBe(2);
+		expect(view.scopes).toEqual(["/", "/api"]);
 	});
 
-	test("disarming removes the block and restores the quiet bytes", () => {
-		const state = { autopilot: false };
-		const armed = skillReceiptText(state, null, 0, false, null, "on", true);
-		const disarmed = skillReceiptText(state, null, 0, false, null, "on", false);
-		expect(disarmed).not.toContain(nudgeText);
-		expect(disarmed).toBe(skillReceiptText(state));
+	test("disarming restores the quiet bytes", () => {
+		const armed = renderConsoleReceipt(
+			projectCapabilities({ ...quietFacts, contextOverHalf: true }),
+		);
+		const quiet = renderConsoleReceipt(projectCapabilities({ ...quietFacts }));
+		expect(quiet).not.toContain("CONTEXT_LIMIT");
+		expect(quiet).toContain("scope_request");
+		expect(quiet).toBe(renderConsoleReceipt(projectCapabilities({ ...quietFacts })));
+		expect(armed).not.toBe(quiet);
 	});
 
-	test("the cached prefix never carries the nudge", () => {
-		// The nudge rides the per-turn trailing block. Putting it in the system
-		// prompt would make the provider re-prefill the whole conversation every
-		// time a scope arms or disarms, so this assertion is the guard.
+	test("the cached prefix never carries a per-turn steer", () => {
+		// The armed signal is a hard mode printed by the trailing probe, so the
+		// steer must stay out of the prefix; putting it there would force a full
+		// re-prefill every time a scope armed or disarmed.
 		const prompt = injectSystemPrompt("Host prompt.");
-		expect(prompt).not.toContain(nudgeText);
-		expect(prompt).not.toContain("Context pressure");
-		expect(prompt).not.toContain('name="context-nudge"');
+		expect(prompt).not.toContain(nudgeSteer);
+		expect(prompt).not.toContain("Context Pressure");
 	});
 });

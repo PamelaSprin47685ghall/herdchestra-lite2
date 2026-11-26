@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 
 import { createBracketLedger } from "../src/scope/forkjoin.mjs";
 import { decideRegister, validateFork } from "../src/station/domain/fork-join.mjs";
-import { forkParameters } from "../src/tools/descriptions.mjs";
+import { loadDoc } from "../src/prompts/index.mjs";
 
 const item = {
   scopeId: "worker",
@@ -24,11 +24,14 @@ describe("fork validation", () => {
     expect(blank.code).toBe("INVALID_FSM");
   });
 
-  test("the schema requires fsm and no longer carries blocked", () => {
-    const schema = forkParameters.properties.forks.items;
-    expect(schema.required).toContain("fsm");
-    expect(schema.required).not.toContain("blocked");
-    expect(schema.properties.blocked).toBeUndefined();
+  test("the model-facing fork copy needs an fsm and never mentions blocked", () => {
+    // There is no JSON schema for a fork item any more: `scope_fork` is an api
+    // method whose declaration is static. What teaches the rule is the copy, so
+    // the copy is where the rule must survive.
+    const doc = loadDoc("tools/fork-join");
+    expect(doc["fork.fsm"]).toMatch(/fsm/i);
+    expect(doc["fork.fsm"]).toMatch(/required|refuse/i);
+    expect(Object.values(doc).join("\n")).not.toContain("blocked");
   });
 });
 
@@ -144,9 +147,13 @@ describe("handleForkCall", () => {
     expect(spawned.map((spec) => spec.scopeId)).toEqual(["worker", "worker-2"]);
     expect(spawned.map((spec) => spec.path)).toEqual(["/worker", "/worker-2"]);
     expect(spawned[1].receipt).toContain("You are now in the scope /worker-2");
-    expect(out.content[0].text).toContain("/worker-2");
-
-    // The ledger records the address, so `scope_send` can find it later.
+    expect(out.content[0].text).toContain("worker-2");
+    // The machine channel carries the address, so a later `scope_request` can
+    // name it.
+    expect(out.details.result.started.map((entry) => entry.path)).toEqual([
+      "/worker",
+      "/worker-2",
+    ]);
     const record = ledger.forks[spawned[1].forkId];
     expect(record.path).toBe("/worker-2");
     expect(record.parentForkId).toBeNull();

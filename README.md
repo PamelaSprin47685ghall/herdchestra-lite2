@@ -6,33 +6,35 @@ Herdchestra is an integration workbench built on DeerFlow: the kernel and visual
 
 Herdchestra Lite 2 gives an agent session parallel work that returns to the scope that asked for it. A parent calls `scope_fork` with one item per child; each child works in its own scope with its own budget, time and model, then takes the `scope_return` oath to submit its record. The parent calls `scope_join` to receive one finished child as a tool receipt. The parent keeps its own model, context and message line; it never becomes the child and the child never becomes the parent.
 
-Every `scopeId` names one new scope among its siblings, and nothing else: a fork never reuses an existing scope. A name a sibling already holds — running, finished, or reserved earlier in the same call — is renamed by appending the lowest free numeric suffix (`worker` → `worker-2` → `worker-3`), and both the caller's receipt and the child's start receipt show the final path. The same name under two different parents names two unrelated scopes. To talk to a scope after it exists, call `scope_send` with its path.
+Every `scopeId` names one new scope among its siblings, and nothing else: a fork never reuses an existing scope. A name a sibling already holds — running, finished, or reserved earlier in the same call — is renamed by appending the lowest free numeric suffix (`worker` → `worker-2` → `worker-3`), and both the caller's receipt and the child's start receipt show the final path. The same name under two different parents names two unrelated scopes. To ask a scope that already exists a question, call `scope_request` with its exact path.
 
-A scope is addressed by where it sits: the root is `/`, and a child's path is its parent's path plus its own name (`/api`, `/api/auth`). `.` is your own path, `..` the parent, a bare name a child of yours, and `/a/b` an absolute path. A wildcard addresses a set: `*` for the direct children of a path, `**` for every scope under it. A wildcard reaches active scopes only, so it never wakes a finished one; an exact path may name a finished scope, and naming it wakes it. Each turn's receipt lists every active path in lexicographic order, so a receiver can address any scope without being told who is speaking.
+A scope is addressed by where it sits: the root is `/`, and a child's path is its parent's path plus its own name (`/api`, `/api/auth`). `scope_request` takes one exact path resolved against your own — `..` for the parent, a bare name for a child of yours, `/a/b` for an absolute path — and refuses a self-target. There are no wildcards: ask several scopes in parallel from one script, over `state.scopes`. A finished scope may still be named, and asking it wakes it for one reply turn. The probe prints `state.scopes`, every path that can still answer, in lexicographic order, so a receiver can address any scope without being told who is speaking.
 
 ## Fork, join and return
 
 `scope_fork({ forks: [...] })` starts one new scope per item and cannot extend an existing one. Each item carries `scopeId`, `fsm`, `profession`, `n`, `budget`, `targets`, and an optional `model`; every one of them is required, and a blank `fsm` or `profession` rejects the item. The wall clock is not a model field: the system derives it as the session's mean LLM-request duration times the sum of that item's turns (one minute per turn until a request has been measured, and never less than one second). The clock covers tool execution too: a bash or test run spends wall time without spending turns, so an I/O-heavy scope can reach its deadline first — an over-deadline call still returns its result and is recorded in the panhandle count, so the clock is a receipt, not a fence; size the turns for the time the work needs. One invalid item rejects the whole call before any child starts; an array may hold several items, and one assistant message may hold several `scope_fork` calls. A scope is sized by the work in hand, not by a table: budget about `sqrt(2n)` turns, where `n` is that scope's share of the work counted in ideal turns. Two, because a worker's real work runs back and forth — about two turns for every ideal one. Fork as much as the work allows — a wide batch costs one call — and say so inside every item: a child that finds independent work forks again in turn. Nothing else is capped: no turn total, no items per call, no tree depth. A scope that is too small wastes one fork; a scope that is too large puts the whole job on one context, and no receipt can repay that.
 
-`scope_join({})` receives one eligible child result. In a message with other calls, place it last: its result is a whole working record and reads best after the other results. A batch containing `scope_return` must contain no other tool calls. The record holds what the child's assistant said, in order, with one line per tool call written as `name(key="value", ...)`: assistant text lines and `read(path="a.mjs:1-20")`, `edit(path="b.mjs")`, `bash(command="ls -la")` lines, joined by newlines. A string argument is quoted, any other value is compact JSON, and no argument is truncated or filtered. Tool results, thinking blocks, and user broadcasts are absent. `scope_join` has no time limit: while it waits, the parent's wall clock stops and the wait is added back to its deadline. `scope_return` answers in the same beat: the record is sealed and queued for the parent's next join, and nothing is left parked, so a finished scope's session stays alive and idle. A manager's time budget does not include the people it hired; turns and time stay independent.
+`scope_join({})` receives one eligible child result. In a message with other calls, place it last: its result is a whole working record and reads best after the other results. `scope_return` runs alone in its script. The record holds what the child's assistant said, in order, with one line per tool call written as `name(key="value", ...)`: assistant text lines and `js(code="…")`, `read(path="a.mjs:1-20")`, `edit(path="b.mjs")`, `bash(command="ls -la")` lines, joined by newlines. A string argument is quoted, any other value is compact JSON, and no argument is truncated or filtered. Tool results, thinking blocks, and user broadcasts are absent. `scope_join` has no time limit: while it waits, the parent's wall clock stops and the wait is added back to its deadline. A child that will not return is closed with `scope_abandon({ target })` instead of being waited on. `scope_return` answers in the same beat: the record is sealed and queued for the parent's next join, and nothing is left parked, so a finished scope's session stays alive and idle. A manager's time budget does not include the people it hired; turns and time stay independent.
 
-Call `scope_return` alone in its tool-call batch, always with non-empty `dafny`. Omitting the oath rewinds the context and continues the same scope; a child keeps its birth instructions, pins, and latest report. The new report replaces the old one, so carry forward evidence and unresolved work that still matter. To publish a child's record, pass `signed_sealed_hands_off_nothing_left_on_the_table: "a_ferocious_audacious_master_would_change_nothing"`. The child seal appends the trimmed `dafny` to the record. Any unreceived children transfer to the receiving scope and keep their identities and turns. An unsealed child that stops is nudged to return.
+Call `scope_return` alone in its script, always with non-empty `dafny`. Omitting the oath rewinds the context and continues the same scope; a child keeps its birth instructions and latest report. The new report replaces the old one, so carry forward evidence and unresolved work that still matter. To publish a child's record, pass `signed_sealed_hands_off_nothing_left_on_the_table: "a_ferocious_audacious_master_would_change_nothing"`. The child seal appends the trimmed `dafny` to the record. Any unreceived children transfer to the receiving scope and keep their identities and turns. An unsealed child that stops is nudged to return.
 
-A scope's budget and wall clock come from the `scope_fork` item that created it. The parent's budget never funds a child and never shrinks when a child starts. The root has no budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `scope_return`, `scope_send`, `scope_context`, `todo`, `ask`, `wait`), and every `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…), stay available at the root. Turns are a ledger, not a fence. When a scope's turns for a tool are spent, the call still runs and the receipt records that the call was panhandled; the scope's panhandle count travels with its record, so the caller reads it at `scope_join`. Panhandling buys the call and nothing else: it is the receipt saying in public that the scope sized itself wrong, and a scope that panhandles its way to a checkpoint has told its caller it could not plan. The root is the one exception, because it is outside every scope and holds no budget to overrun. `scope_return` is child-only: it submits a scope's own record, so the root has no use for it. `scope_context({ amend })` may not retract a beat at or before the scope's most recent structural call.
+A scope's budget and wall clock come from the `scope_fork` item that created it. The parent's budget never funds a child and never shrinks when a child starts. The root has no budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `scope_return`, `scope_request`, `scope_abandon`, `wait`, and `ask` while autopilot is off) stay available at the root; a `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) spends no turn wherever it is bound, and the root binds neither, because the skills are already inlined in its system prompt. Turns are a ledger, not a fence. When a scope's turns for a tool are spent, the call still runs and the receipt records that the call was panhandled; the scope's panhandle count travels with its record, so the caller reads it at `scope_join`. Panhandling buys the call and nothing else: it is the receipt saying in public that the scope sized itself wrong, and a scope that panhandles its way to a checkpoint has told its caller it could not plan. The root is the one exception, because it is outside every scope and holds no budget to overrun. `scope_return` is child-only: it submits a scope's own record, so the root has no use for it.
 
 The root (`Root`) keeps its native transcript and input stream. Descendants at every depth appear in the main transcript as labelled message and tool components; full records arrive through `scope_join`. Root and descendants compete equally for one streaming slot: the first stream holds it through completion, and an overlapping stream appears as a single block after it ends. The native working row displays `[Busy: X, Idle: Y]` and the path to the latest requesting scope, omitting `Root`. Each fork item supplies a short `scopeId` such as `oh-my-pie`, displayed as `Oh My Pie`. Only explicit tool prompts and approvals can use the root UI. An accepted child oath ends the child loop at the tool-result boundary, without an extra model request or an interruption message.
 
 Depth is not a policy. A child reads the same rule its parent read — fork when the work splits, budget the turns the rule above derives from `n` — so a larger job becomes a deeper tree rather than a fatter scope, and the tree stops where the work stops. What each extra layer costs is context: the record compresses to prose once more, and every ancestor's plan rides in the child's prefix. A child's birth receipt states its place as `depth X` and attaches no default and no recommendation. A single-child relay layer buys nothing; ask first whether the leaves are cut too fine. Never serialize ten independent closures into repeated root waves to keep the tree shallow: that spends the root's attention on records instead of giving them one subtree.
 
-The four tools exist in every supported configuration. There is no `scope` tool, no `begin`/`end` argument, no alias and no fallback: a configuration that cannot support fork/join/send refuses the call instead of registering the retired tool.
+The control tools exist in every supported configuration. There is no `scope` tool, no `begin`/`end` argument, no alias and no fallback: a configuration that cannot support fork/join/request refuses the call instead of registering the retired tool.
 
-## Messaging a scope
+## Asking a scope
 
-`scope_send({ target, message, budget? })` is the only way to talk to a scope after its creation, and it spends no turn. `target` is one path or an array of paths, resolved against your own path: `.`, `..`, a child's name, `/a/b`, `/`, or a wildcard. The message arrives wrapped as `[Message from <your path>]` followed by your text, so the receiver answers by addressing that path and is never told who spoke.
+`scope_request({ target, message, interrupt })` is the only way to talk to a scope after its creation, and it spends no turn. `target` is one exact path resolved against your own — `..`, a child's name, or `/a/b`; there are no wildcards and a scope cannot ask itself. The call resolves to `{ ok, from, reply }`, so the requester waits on the answer inside the same script and continues on the next line with it.
 
-A message to a running scope waits in its inbox and is read at its next turn boundary, never in the middle of a running tool. A message to `/` reaches the holder at once. A message to a finished scope also lands in its inbox and wakes it in place: it re-enters the active list, reads the message, answers by `scope_send`, and goes idle again when it stops. Its earlier record is untouched, so waking it creates no second result for the parent to join. `budget` optionally adds turns to each target, in the same shape a fork takes; it is ignored for `/`.
+The question arrives as the target's next turn in `AWAITING_REPLY`: its `api` holds only `scope_reply`, and `state.request` carries `{ from, message }`. It answers with one string, which resolves the caller's request and lifts the mode. A second question waits in the same queue and is answered in the next reply turn, so concurrent callers are served in arrival order and each costs the target one turn.
 
-A woken scope owes no second return. If it calls `scope_return` anyway, that text is delivered to `..` through the same path as `scope_send`, and its turn ends.
+`interrupt: true` cuts the target off in the middle of its work and makes it answer now; the default `false` lets the question land at its next request. The interrupt travels on its own reason, never the user's abort, so the web stop button still cancels the whole tree while a request never does. A question that would close a cycle of scopes waiting on each other is refused at the call instead of deadlocking the tree.
+
+A finished scope is still addressable: a question wakes it for one `scope_reply` turn and it stops again. Its sealed record is untouched, so waking it creates no second result for the parent to join.
 
 ## Running from source
 
@@ -76,9 +78,7 @@ Guidance ships as Markdown under `resources/skills/<name>/SKILL.md` in the core.
 
 The inlined skills are authoritative: apply `constitution` before work, `prompt-craft` before changing model-facing text, `skill-authoring` before creating or splitting a skill, and `polish` before polishing an existing text. Apply `decision-framing` when the goal or limits are unclear, and `tdd-crowdsource` before writing code or tests.
 
-Red contracts may be written by the lead or delegated. As contracts become ready, pin the current dispatch plan instead of running Red, then start the corresponding Green slices without waiting for the rest. A child may pin unrun checks for its parent; only checks that ran count as verification. Keep design artifacts as skills under `.agent/skills/<name>/SKILL.md`.
-
-Native `todo` is optional working notes. Its state does not control return or completion.
+Red contracts may be written by the lead or delegated. As contracts become ready, write the current dispatch plan into the design record instead of running Red, then start the corresponding Green slices without waiting for the rest. A child may report unrun checks to its parent; only checks that ran count as verification. Keep design artifacts as skills under `.agent/skills/<name>/SKILL.md`.
 
 Model-facing text lives in `resources/prompts/` as Markdown documents with `## section` blocks. Code loads them through `src/prompts/index.mjs`; no prompt, tool description, parameter description, receipt, or model-facing error is duplicated in source.
 
@@ -99,11 +99,9 @@ A bare `/herd-autopilot` flips the mode and sends nothing to the model: the next
 
 `ask` needs one condition: autopilot off.
 
-## Pinned context
+## Rewind
 
-`scope_context` carries both working-level bookkeeping moves. `scope_context({ pin })` records durable notes: assumptions, deductions, inductions, findings, and conclusions. Each call appends one record to the session state and costs no turn. Pins survive receipt shortening because they belong to the session, not to a scope. `scope_context({ amend })` replaces the record of the beat that just delivered, and both halves may arrive in one call; amend runs first so its refund is already in the ledger when the note lands.
-
-A rewind retains relevant working context as pins and the latest return report. Read important pinned documents in full rather than relying on grep excerpts.
+A rewind keeps the latest return report, plus the birth instructions in a child. The report is where durable findings live now, so write it as the record a later turn needs; read the documents it names in full rather than relying on grep excerpts.
 
 ## Context pressure
 
@@ -111,13 +109,14 @@ A scope is asked to return when it outgrows half of its own headroom. The
 midpoint is `(window - baseline) / 2 + baseline`, where the baseline is the
 input the provider reported for the scope's first request and the window is the
 model's input limit. When the occupancy the last response ended at is strictly
-above that midpoint, the next request carries one more `skill` in the per-turn
-trailing injection that weighs the record against another turn and urges
-`scope_return` with a fresh `dafny`. Below the midpoint the skill is gone again,
-so a scope settles rather than hears the same sentence every turn.
+above that midpoint, the scope's projection collapses to `CONTEXT_LIMIT`: only
+`scope_return` is bound, and the probe carries one `> // Context Pressure:` line
+that weighs the record against another turn. Below the midpoint the ordinary
+capability set returns, so a scope settles rather than reads the same sentence
+every turn.
 
-The nudge never touches the system prompt: the trailing block is rebuilt for
-every request and is not part of the cached prefix, so arming and disarming it
+The mode and the probe never touch the system prompt: both are rebuilt for
+every request and are not part of the cached prefix, so arming and disarming
 costs the provider nothing. `injectSystemPrompt` is byte-identical to what it
 produced before this feature.
 
@@ -128,7 +127,7 @@ birth; a fold keeps the baseline and simply reclaims room.
 
 ## Root return and review
 
-At root, a small return (no oath) uses compaction to rewind and continue. Root keeps verbatim user prompts and steers as actual messages, plus pins and the new `dafny` report. Do not repeat those user messages in the report. The old report is replaced, not appended: carry forward any evidence a later turn still needs.
+At root, a small return (no oath) uses compaction to rewind and continue. Root keeps verbatim user prompts and steers as actual messages, plus the new `dafny` report. Do not repeat those user messages in the report. The old report is replaced, not appended: carry forward any evidence a later turn still needs.
 
 Root must receive all outstanding children with `scope_join` before taking the oath. The first oath rewinds for a fresh review against the user's requirements. A second consecutive oath permits the final reply. If review identifies work worth doing, continue working; a small rewind resets the streak. A natural stop is not a rewind or an oath.
 
@@ -207,7 +206,7 @@ Set a fork item's `model` to a host `/switch` selector to use a different model 
 ```js
 scope_fork({ forks: [{
   scopeId: "review-results",
-  fsm: "states: locate the replay module, read it, pin each finding; transition: a finding with no file:line and severity sends the read back; parallel: none",
+  fsm: "states: locate the replay module, read it, record each finding; transition: a finding with no file:line and severity sends the read back; parallel: none",
   profession: "You are a careful reviewer like Barbara Liskov. ",
   budget: { read: 3 },
   targets: ["src/transcript/replay.mjs"],

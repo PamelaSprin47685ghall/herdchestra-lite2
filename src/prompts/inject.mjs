@@ -4,10 +4,12 @@
 // host layer re-exports it so the Station can inject the managed block without
 // depending on the host adapter.
 
-import { loadDoc } from "./index.mjs";
+import { loadDoc, placeholderNames } from "./index.mjs";
 import { inlinedSkillsSection } from "./skills.mjs";
+import { renderCapabilitiesDts } from "../tools/js-protocol.mjs";
 
 const system = loadDoc("system");
+const forkJoin = loadDoc("tools/fork-join");
 
 const systemPromptStart = "<!-- herdchestra-lite2:system-prompt v1 -->";
 const systemPromptEnd = "<!-- /herdchestra-lite2:system-prompt -->";
@@ -21,6 +23,21 @@ export const persistentOperatingSkill = system["persistent-rules"];
 // The section states both duties instead of swapping them; the current mode
 // reaches the model through the receipt, never through this block.
 const scopeRules = system["scope-rules"];
+
+/**
+ * The control plane's own contract. `js` is the only registered tool, so the
+ * five `scope_*` methods have no JSON schema to carry a description; this text
+ * is the carrier, compiled next to the declarations it constrains. A section
+ * that declares a placeholder is a receipt rendered elsewhere, not prose, and
+ * a raw template must never enter the prompt: those are skipped.
+ */
+function controlPlaneSkill() {
+	const sections = Object.keys(forkJoin)
+		.filter((key) => placeholderNames(forkJoin[key]).length === 0)
+		.map((key) => `### ${key}\n\n${forkJoin[key]}`);
+	if (sections.length === 0) return "";
+	return `<skill version="1.0" enforced>\n${sections.join("\n\n")}\n</skill>`;
+}
 
 // The Simplified-Chinese reminder is one line inside the persistent rules.
 // Turning `chineseReminder` off removes that line and nothing else, so the
@@ -36,19 +53,45 @@ function persistentRulesBlock(options) {
 		.join("\n");
 }
 
+// The tool declarations are compiled from the confiscated tools' own JSON
+// schemas. One cache per tool-name set: a host that adds or drops a tool
+// changes the names, which is the only event that can change the compiled
+// text, and the prefix stays byte-identical for every request in between.
+let cachedToolKey = "";
+let cachedToolDts = "";
+
+function capabilitiesSection(options = {}) {
+	const specs = Array.isArray(options.toolSpecs) ? options.toolSpecs : [];
+	if (specs.length === 0) return "";
+	const key = specs
+		.map((spec) => String(spec?.name ?? ""))
+		.sort()
+		.join("|");
+	if (key !== cachedToolKey) {
+		cachedToolDts = renderCapabilitiesDts(specs);
+		cachedToolKey = key;
+	}
+	return cachedToolDts;
+}
+
 /**
- * Build the managed block: persistent rules, the inlined skill bodies, then
- * the one scope-and-relay section. Nothing in the block depends on the
- * request, so an owner and a forked scope share the same bytes. The block is
- * replaced between its markers on every injection, so a second call returns
- * the same string instead of appending.
+ * Build the managed block: persistent rules, the inlined skill bodies, the one
+ * scope-and-relay section, then the tool declarations. Nothing in the block
+ * depends on the request, so an owner and a forked scope share the same bytes.
+ * The block is replaced between its markers on every injection, so a second
+ * call returns the same string instead of appending.
  */
 function managedBlock(options = {}) {
+	const capabilities = capabilitiesSection(options);
 	return `${systemPromptStart}\n${[
 		persistentRulesBlock(options),
 		inlinedSkillsSection,
 		scopeRules,
-	].join("\n\n")}\n${systemPromptEnd}`;
+		controlPlaneSkill(),
+		capabilities,
+	]
+		.filter((part) => part !== "")
+		.join("\n\n")}\n${systemPromptEnd}`;
 }
 
 function replaceManaged(text, options = {}) {

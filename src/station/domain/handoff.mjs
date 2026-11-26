@@ -6,7 +6,6 @@
 // import, no mutation of inputs, no I/O.
 
 import { copyRelay } from "../../relay/state.mjs";
-import { filterAmends } from "../../transcript/amend.mjs";
 import { renderChildRecord } from "../../transcript/replay.mjs";
 import { loadDoc, render } from "../../prompts/index.mjs";
 
@@ -45,7 +44,6 @@ export function parseReturnOath(args) {
  *
  * Returns one of:
  * - `{ ok: false, code, ... }`
- * - `{ ok: true, kind: "forward", dafny, stopLoop: true }` (woken child)
  * - `{ ok: true, kind: "rewind", scope: "child", dafny, stopLoop: true }`
  * - `{ ok: true, kind: "deliver", scope: "child", dafny, receiverId, orphans, stopLoop: true }`
  * - `{ ok: true, kind: "rewind", scope: "root", big, dafny, relay, pendingRewind, stopLoop: true }`
@@ -81,11 +79,6 @@ export function decideScopeReturn({
 		}
 		if (!record || typeof record !== "object") {
 			return { ok: false, code: "UNKNOWN_FORK" };
-		}
-		// A woken scope already paid its one return; any further scope_return
-		// forwards its dafny to `..` through `scope_send` without rewinding.
-		if (record.woken === true) {
-			return { ok: true, kind: "forward", scope: "child", dafny, stopLoop: true };
 		}
 		if (record.status !== "running") {
 			return {
@@ -176,9 +169,8 @@ export function decideScopeReturn({
  * Shared by Child final return, Child rewind, and Root rewind so tool calls
  * always travel into the next generation or calling scope automatically.
  */
-export function formatGenerationReport(messages, amends = [], start = 0, dafny = "") {
-	const visible = filterAmends(Array.isArray(messages) ? messages : [], amends);
-	const body = renderChildRecord(visible, { start });
+export function formatGenerationReport(messages, start = 0, dafny = "") {
+	const body = renderChildRecord(Array.isArray(messages) ? messages : [], { start });
 	const closing = trimString(dafny);
 	if (closing === "") return body;
 	return body === "" ? closing : `${body}\n\n${closing}`;
@@ -196,20 +188,12 @@ export function formatGenerationReport(messages, amends = [], start = 0, dafny =
 export function formatRebornPrompt({
 	birth = "",
 	report = "",
-	pins = [],
 	big = false,
 } = {}) {
 	const R = relayDoc();
 	const sections = [];
 	const birthText = trimString(birth);
 	if (birthText !== "") sections.push(birthText);
-
-	const cleanPins = Array.isArray(pins)
-		? pins.filter((pin) => typeof pin === "string" && pin.trim() !== "")
-		: [];
-	if (cleanPins.length > 0) {
-		sections.push(render(R["reborn.pins"], { pins: cleanPins.join("\n\n---\n\n") }));
-	}
 
 	const reportText = trimString(report);
 	if (reportText !== "") {

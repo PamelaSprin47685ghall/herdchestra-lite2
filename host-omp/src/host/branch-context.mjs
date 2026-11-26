@@ -59,7 +59,9 @@ export function stopAfterScopeReturn(agent, session = null) {
 	};
 	const hook = function (ctx, signal) {
 		const after = original?.call(this, ctx, signal);
-		if (ctx.toolCall.name !== "scope_return") return after;
+		// The tool's own name no longer decides this. Every call arrives as `js`
+		// and reports its terminal intent through `details.stopLoop`; the js
+		// ticket guarantees that result is terminal and exclusive in its beat.
 		const finish = (override) => {
 			const details = override?.details ?? ctx.result?.details;
 			// The per-tool signal also covers steers. An accepted return still

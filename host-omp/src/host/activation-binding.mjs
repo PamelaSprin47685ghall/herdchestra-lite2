@@ -6,7 +6,7 @@ import { agentIdOf, conversationKeyOf } from "./identity-adapters.mjs";
 // resolves them into a plain binding, so activation only calls
 // bindHostForkPorts with the result.
 
-import { createBranchSession, registerOwnerUI } from "./branch-session.mjs";
+import { createBranchSession, registerOwnerUI, resumeBranchSession } from "./branch-session.mjs";
 import { prepareChildContext, stopAfterScopeReturn } from "./branch-context.mjs";
 import { childDisplayFor } from "./child-display.mjs";
 import { rememberSession, sessionFor } from "./capture.mjs";
@@ -92,6 +92,25 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 		ownerSession: owner,
 		prepareChild,
 		createSession,
+		// A stopped scope answers a scope_request through a one-shot session over
+		// the branch its record still names. The core installs the child identity
+		// before this call and drops it after the reply, so the record and its
+		// liveness are unchanged. A record with no branch returns null.
+		resumeIdle:
+			owner && typeof resumeBranchSession === "function"
+				? (forkId) => {
+						const ledger =
+							typeof station?.forkLedgerPort === "function"
+								? station.forkLedgerPort()
+								: null;
+						const record = ledger?.forks?.[forkId] ?? null;
+						return resumeBranchSession({
+							record,
+							owner: sessionFor(ctx) ?? owner,
+							prepare: prepareChild,
+						});
+					}
+				: undefined,
 		// A cancelled subtree stops its live child agents through this host
 		// handle. The core never sees the session; the binding owns the shape.
 		abortChild: options.abortChild ?? null,

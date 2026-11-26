@@ -27,6 +27,7 @@ import {
   waitForReady,
 } from "../src/scope/fork-registry.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
+import { enqueueRequest } from "../src/scope/request-queue.mjs";
 
 const AGENT_REGISTRY = { kind: "agentRegistry" };
 
@@ -270,6 +271,14 @@ describe("scope_fork through a real branch session", () => {
     handleForkCall(station, forkCall("fork-call-2"));
     const fork = forkOf(attached.ledger, "fork-call-2");
     expect(fork.status).toBe(RUNNING);
+    // A request queued before the refusal must not outlive the child: the
+    // caller would otherwise park on a promise nothing can resolve.
+    const pending = enqueueRequest(wiring.registry, {
+      from: "/",
+      target: fork.path,
+      message: "are you there?",
+    });
+    expect(pending.ok).toBe(true);
 
     const taken = await waitForReady(wiring.registry, attached.ledger, {
       ownerId: "root",
@@ -282,6 +291,7 @@ describe("scope_fork through a real branch session", () => {
     expect(outcome.reason.startsWith("NO_FORK_FRAME: ")).toBe(true);
     expect(outcome.record).toBe("");
     expect(taken.fork.status).not.toBe(RUNNING);
+    await expect(pending.promise).rejects.toThrow();
   });
 
   test("a rejected first prompt fails the bracket and wakes the join", async () => {

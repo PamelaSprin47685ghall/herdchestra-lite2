@@ -37,7 +37,7 @@ function callLine(name, args) {
  * options.start / options.end select the message range, [start, end).
  *
  * Every assistant text block becomes one line, verbatim. Every tool call
- * becomes one `name(...)` line, scope_context included: a pin reaches the
+ * becomes one `name(...)` line: a child's own text reaches the parent, and the
  * parent as its arguments, like any other call. Thinking blocks, tool
  * results, user broadcasts, and bookkeeping entries never reach the parent.
  * Lines are joined with `\n`.

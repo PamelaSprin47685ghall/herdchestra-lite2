@@ -3,21 +3,33 @@ import { createTestStation } from "./helpers/station-ports.mjs";
 
 import { injectSystemPrompt, persistentOperatingSkill } from "../src/prompts/inject.mjs";
 import { inlinedSkills } from "../src/prompts/skills.mjs";
+import { loadDoc } from "../src/prompts/index.mjs";
 import { wireTools } from "../src/tools/catalog.mjs";
 
 import { installContextPreparation } from "../host-omp/src/host/context-preparation.mjs";
 
-import { skillReceiptText } from "../src/station/texts.mjs";
+import {
+	projectCapabilities,
+	renderConsoleReceipt,
+} from "../src/station/domain/capabilities.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 import { createBracketLedger, markReady, registerFork, takeReady } from "../src/scope/index.mjs";
 
 const chineseInstruction = /^.*强制以简体中文思考.*$/gm;
 const chineseRequirement = "强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。";
+// The per-turn probe closes with the same requirement in its own wording.
+const probeRequirement = "强制以简体中文思考，以简体中文词开头，简体中文回答。";
 // The receipt carries the historical self-description so a user-role reminder
 // cannot be mistaken for a fresh user message.
 const chineseParenthetical = "（宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）";
 const chineseReminderSkill = ` <skill version="1.0" enforced>${chineseParenthetical}${chineseRequirement}</skill>`;
+
+/** The single object literal the REPL probe prints, evaluated as JavaScript. */
+function probeOf(text) {
+	const line = text.split("\n").find((candidate) => candidate.trimStart().startsWith("{ api:"));
+	return new Function(`return (${line})`)();
+}
 
 for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 	test(`the ${typeof hostPrompt === "string" ? "string" : "array"} system prompt stays idempotent when reinjected`, () => {
@@ -46,7 +58,7 @@ test("one scope-and-relay section serves root and child, manual and autopilot", 
 	const baseText = Array.isArray(base) ? base.join("\n") : base;
 	expect(baseText).toContain("Forked scope duty");
 	expect(baseText).toContain("Only the user toggles autopilot");
-	expect(baseText).toContain("Native `todo` is optional working notes");
+	expect(baseText).toContain("exactly one tool: `js`");
 	expect(baseText).toContain("At root, join every outstanding child before taking the oath");
 
 	// The managed block never varies with the request: a forked scope inherits
@@ -59,6 +71,17 @@ test("one scope-and-relay section serves root and child, manual and autopilot", 
 	}
 });
 
+test("the control plane's contract travels inside the managed block", () => {
+	const prompt = injectSystemPrompt("Host instructions");
+	const text = Array.isArray(prompt) ? prompt.join("\n") : prompt;
+	// The five `scope_*` methods have no schema to describe them; the compiled
+	// prose is the only place the model can read their fields.
+	expect(text).toContain("### fork.budget");
+	expect(text).toContain("panhandled");
+	expect(text).toContain("### return.dafny");
+	expect(text).not.toContain("{{");
+});
+
 test("reinjecting a prompt converted from text to an array retains only the host repo rules", () => {
 	const hostPrompt = "# Repo-aware Rules\nHost review rules";
 	const prompt = injectSystemPrompt([injectSystemPrompt(hostPrompt)]);
@@ -69,53 +92,74 @@ test("reinjecting a prompt converted from text to an array retains only the host
 });
 
 test("a root with two consecutive oaths is ready to answer", () => {
-	const state = { autopilot: true, relay: { bigStreak: 2 } };
-	const text = skillReceiptText(state);
-	expect(text).toMatch(/ready to answer/i);
-	expect(text).not.toContain("Call `scope_return` before stopping");
+	const projection = projectCapabilities({
+		isChild: false,
+		autopilot: true,
+		canStop: true,
+		unreceived: 0,
+		activePaths: ["/"],
+	});
+	const view = probeOf(renderConsoleReceipt(projection));
+	// Every tool is withdrawn: the only move left is the final answer itself.
+	expect(projection.mode).toBe("FINAL_ANSWER");
+	expect(view.api).toEqual([]);
 });
 
 test("routine scope status keeps local turns and pending work without repeating the assignment", () => {
 	const fsm = "Write a report on the cave swallows of Costa Rica";
-	const state = { autopilot: true, startedAt: 0 };
-	const branch = {
-		fsm,
-		remaining: { read: 2, edit: 1 },
-		budget: { read: 8, edit: 3 },
-		clockPausedAt: 4000,
-		deadlineAt: 24000,
-		timeBudgetMs: 24000,
-	};
-	const pending = skillReceiptText(state, branch, 3, true);
-	const root = skillReceiptText(state);
-	for (const text of [pending, root]) {
-		// The reminder closes the receipt as its own skill element inside the
-		// same additional-system-instructions wrapper.
-		expect(text.startsWith('<additional-system-instructions><skill version="1.0" enforced>')).toBe(true);
-		expect(text.endsWith(`${chineseReminderSkill}</additional-system-instructions>`)).toBe(true);
-		expect(text).not.toMatch(/\bUTC\b|since this session began/);
-	}
-	// The system prompt still states it exactly once.
-	expect(persistentOperatingSkill.split(chineseRequirement)).toHaveLength(2);
-	expect(pending).not.toContain(fsm);
-	expect(pending).toMatch(/read remaining\s+2(?:\.00)?\/8(?:\.00)?\b/);
-	expect(pending).toMatch(/edit remaining\s+1(?:\.00)?\/3(?:\.00)?\b/);
-	expect(pending).toMatch(/\btime remaining\s+0:20\s*\/\s*0:24\b/);
-	expect(pending).toMatch(/\b3\s+unreceived result(?:\(s\)|s)? from forked scopes\b|\bunreceived results from forked scopes:\s*3\b/i);
-	expect(pending).toContain("scope_join");
-	expect(root).not.toContain("scope_join");
+	const projection = projectCapabilities({
+		isChild: true,
+		autopilot: true,
+		unreceived: 3,
+		selfPath: "/api",
+		remaining: { read: "2/8", edit: "1/3", time: "0:20/0:24" },
+		activePaths: ["/", "/api", "/ui"],
+		hostToolNames: ["read", "edit", "write"],
+	});
+	const text = renderConsoleReceipt(projection);
+	const view = probeOf(text);
+	// The child reads its own turns and the fanout address book; it never sees
+	// the root's autopilot switch or its return obligation.
+	expect(view.remaining).toEqual({ read: "2/8", edit: "1/3", time: "0:20/0:24" });
+	expect(view.unreceived).toBe(3);
+	expect(view.scopes).toEqual(["/", "/api", "/ui"]);
+	expect(view).not.toHaveProperty("autopilot");
+	expect(view).not.toHaveProperty("canStop");
+	// The assignment is not repeated: the model already has it.
+	expect(text).not.toContain(fsm);
+	expect(text).toContain(probeRequirement);
 });
 
 test("a forked scope with no ledger record still learns that its turns are unavailable", () => {
-	const state = { autopilot: true, startedAt: 0 };
 	// The bearer runs inside a scope, yet the ledger holds no fork record for
-	// it. Saying nothing would read as "turns are fine"; say it is unknown.
-	const missing = skillReceiptText(state, null, 0, true);
-	expect(missing).toContain("Scope budget:");
-	expect(missing).toMatch(/no record|unavailable/i);
-	expect(missing).not.toMatch(/remaining\s+\d/);
-	// A root receipt has no turns to report, and must not gain the line.
-	expect(skillReceiptText(state)).not.toContain("Scope budget:");
+	// it. Saying nothing would read as "turns are fine"; the projection states
+	// that the allowance is unknown instead.
+	const orphan = probeOf(
+		renderConsoleReceipt(
+			projectCapabilities({
+				isChild: true,
+				autopilot: true,
+				remaining: null,
+				selfPath: "/orphan",
+				activePaths: ["/"],
+				hostToolNames: [],
+			}),
+		),
+	);
+	expect(orphan.remaining).toEqual({});
+	// A root probe has no turns to report at all.
+	const root = probeOf(
+		renderConsoleReceipt(
+			projectCapabilities({
+				isChild: false,
+				autopilot: true,
+				canStop: false,
+				unreceived: 0,
+				activePaths: ["/"],
+			}),
+		),
+	);
+	expect(root).not.toHaveProperty("remaining");
 });
 
 test("the fork receipt describes new work once and lists all unreceived scopes by name", () => {
@@ -134,35 +178,33 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 	const current = launch("latest", "Check the harbor lights");
 	expect(current.isError).toBeUndefined();
 	const text = current.content[0].text;
-	expect(text).toContain("latest: Check the harbor lights");
+	// The batch is described once, with the assignment attached to the scope
+	// that owns it, and the earlier batch is not restated.
+	expect(text).toMatch(/latest \(depth \d+\): Check the harbor lights/);
 	expect(text.match(/Check the harbor lights/g)).toHaveLength(1);
 	expect(text).not.toContain("Measure the tide");
-	expect(text).toContain("Unreceived work: earlier, latest.");
+	expect(text).toContain("Still unreceived: earlier, latest.");
+	// The machine channel carries the same facts without the prose.
+	expect(current.details.result.started.map((entry) => entry.path)).toEqual(["/latest"]);
 });
 
-test("the registered scope_return explains the return-only batch and fresh report", () => {
-	const tools = new Map();
-	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
-	const returning = tools.get("scope_return");
-	expect(returning.parameters.required).toEqual(["dafny"]);
-	const { dafny } = returning.parameters.properties;
-	expect(dafny.type).toBe("string");
-	expect(dafny.description).toMatch(/replaces the old one on a rewind/);
-	expect(dafny.description).toMatch(/carry forward evidence/);
-	expect(dafny.description).toMatch(/appended to the published record/);
-	expect(returning.description).toContain("Call alone in its tool-call batch");
-	expect(returning.description).toContain("A woken scope forwards");
+test("the scope_return documentation explains the return-only script and fresh report", () => {
+	// The control-plane prose moved out of the registered tool schema (only
+	// `js` is registered) into the document the system prompt compiles. The
+	// model still reads these guardrails, so they are asserted where they live.
+	const doc = Object.values(loadDoc("tools/fork-join")).join("\n");
+	expect(doc).toContain("Call `scope_return` alone in its script");
+	expect(doc).toMatch(/replaces the old one on a rewind/);
+	expect(doc).toMatch(/carry forward evidence/);
+	expect(doc).toMatch(/appended to the published record/);
 });
 
-test("the registered scope_fork renames a repeated sibling name instead of amending", () => {
-	const tools = new Map();
-	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
-	const item = tools.get("scope_fork").parameters.properties.forks.items;
-	expect(item.properties.scopeId.description).toMatch(/lowest free numeric suffix/i);
-	expect(item.properties.scopeId.description).toMatch(/unique among its siblings only/i);
-	expect(item.properties.fsm.description).toMatch(/state machine/i);
-	expect(item.required).toContain("fsm");
-	expect(item.required).not.toContain("blocked");
+test("the scope_fork documentation renames a repeated sibling name instead of amending", () => {
+	const doc = Object.values(loadDoc("tools/fork-join")).join("\n");
+	expect(doc).toMatch(/lowest free numeric suffix/i);
+	expect(doc).toMatch(/unique among its siblings only/i);
+	expect(doc).toMatch(/state machine/i);
+	expect(doc).not.toMatch(/blocked/i);
 });
 
 test("the root receipt reports unreceived work until the root joins it", () => {
@@ -176,10 +218,10 @@ test("the root receipt reports unreceived work until the root joins it", () => {
 	expect(markReady(ledger, "worker-1").ok).toBe(true);
 
 	const receipt = () => station.skillReceipt({ agent: { kind: "main" } }).content[0].text;
-	expect(receipt()).toMatch(/\b1 unreceived result(?:\(s\)|s)? from forked scopes\b|\bunreceived results from forked scopes:\s*1\b/i);
-	expect(receipt()).toContain("scope_join");
+	expect(probeOf(receipt()).unreceived).toBe(1);
 	expect(takeReady(ledger, { ownerId: "root" }).ok).toBe(true);
-	expect(receipt()).not.toContain("scope_join");
+	// The work is received: the count drops, though the scope stays addressable.
+	expect(probeOf(receipt()).unreceived).toBe(0);
 });
 
 function relayRequest({ registry = null, keepHook = false } = {}) {
@@ -234,21 +276,24 @@ test("a toggle regenerates the mode receipt instead of reusing the previous one"
 	try {
 		const autoMessages = await fixture.request();
 		const auto = autoMessages.filter((message) => message.herdSkill).at(-1);
-		expect(receiptTextOf(auto)).toContain("Autopilot on");
+		expect(probeOf(receiptTextOf(auto)).autopilot).toBe(true);
+		expect(probeOf(receiptTextOf(auto)).mode).toBe("ROOT_AUTOPILOT");
+		// Autopilot withdraws `ask`: the probe, not a sentence, says so.
+		expect(probeOf(receiptTextOf(auto)).api).not.toContain("ask");
 
 		fixture.station.state.autopilot = false;
 		const manualMessages = await fixture.request();
 		const manual = manualMessages.filter((message) => message.herdSkill).at(-1);
 		expect(manual).not.toBe(auto);
-		expect(receiptTextOf(manual)).toContain("Autopilot off");
-		expect(receiptTextOf(manual)).not.toContain("Autopilot on");
+		expect(probeOf(receiptTextOf(manual)).autopilot).toBe(false);
+		expect(probeOf(receiptTextOf(manual)).mode).toBe("ROOT_MANUAL");
+		expect(probeOf(receiptTextOf(manual)).api).toContain("ask");
 
 		fixture.station.state.autopilot = true;
 		const backMessages = await fixture.request();
 		const back = backMessages.filter((message) => message.herdSkill).at(-1);
 		expect(back).not.toBe(manual);
-		expect(receiptTextOf(back)).toContain("Autopilot on");
-		expect(receiptTextOf(back)).not.toContain("Autopilot off");
+		expect(probeOf(receiptTextOf(back)).autopilot).toBe(true);
 
 		// Same mode: the receipt is reused rather than rebuilt.
 		const sameMessages = await fixture.request();
@@ -277,16 +322,13 @@ test("the language reminder ends every request receipt and follows its port", as
 		for (let round = 0; round < 2; round++) {
 			const on = await latestReceipt(enabled);
 			const off = await latestReceipt(disabled);
-			// Appended to the session, never patched into an older message: the
-			// reminder is the last skill element of the newest receipt, inside
-			// the additional-system-instructions wrapper.
-			expect(on.startsWith('<additional-system-instructions><skill version="1.0" enforced>')).toBe(true);
-			expect(on.endsWith(`${chineseReminderSkill}</additional-system-instructions>`)).toBe(true);
-			expect(on.split(chineseRequirement)).toHaveLength(2);
-			// Off removes that whole skill element and leaves the rest
-			// byte-identical.
-			expect(off).not.toContain(chineseRequirement);
-			expect(off).toBe(on.replace(chineseReminderSkill, ""));
+			// The reminder is the last line of the newest receipt; with the port
+			// off, the rest of the probe is byte-identical.
+			const reminderLine = "\n> // System Requirement:";
+			expect(on).toContain(reminderLine);
+			expect(on.endsWith(probeRequirement)).toBe(true);
+			expect(off).not.toContain("强制以简体中文");
+			expect(off).toBe(on.slice(0, on.lastIndexOf(reminderLine)));
 			// A new receipt is appended per turn, never written over the old one:
 			// the prefix stays byte-identical, which is what keeps the cache warm.
 			expect(journalReceipts(enabled)).toBe(round + 1);

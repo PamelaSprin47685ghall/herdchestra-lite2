@@ -145,41 +145,42 @@ describe("child record rendering", () => {
     expect(rendered).not.toContain("[result");
   });
 
-  test("renders pin with its arguments and drops its OK result", () => {
+  test("renders scope_request with its arguments and drops its OK result", () => {
     const messages = [
       assistant([
         text("Fix confirmed."),
-        call("p1", "pin", { finding: "The bug lives in parse().", conclusion: "Ship it." }),
+        call("r1", "scope_request", { target: "/api", message: "Where does the bug live?" }),
       ]),
-      result("p1", "pin", "OK"),
+      result("r1", "scope_request", "OK"),
     ];
     const rendered = renderChildRecord(messages);
     expect(rendered).toBe(
-      'Fix confirmed.\npin(finding="The bug lives in parse().", conclusion="Ship it.")',
+      'Fix confirmed.\nscope_request(target="/api", message="Where does the bug live?")',
     );
-    expect(rendered).not.toContain("[result pin]");
+    expect(rendered).not.toContain("[result scope_request]");
   });
 
-  test("renders scope_context with its arguments", () => {
+  test("renders scope_fork and scope_return with their arguments", () => {
     const messages = [
-      assistant([call("s1", "scope_context", { pin: { finding: "The bug lives in parse()." } })]),
-      result("s1", "scope_context", "OK"),
-      assistant([call("s2", "scope_context", { amend: { reflection: "drop the search" } })]),
-      result("s2", "scope_context", "Amended."),
+      assistant([call("f1", "scope_fork", { forks: [{ fsm: "audit" }] })]),
+      result("f1", "scope_fork", "OK"),
+      assistant([call("s2", "scope_return", { dafny: "done", signed_sealed_hands_off_nothing_left_on_the_table: "x" })]),
+      result("s2", "scope_return", "Sealed."),
     ];
     const rendered = renderChildRecord(messages);
     expect(rendered).toBe(
       [
-        'scope_context(pin={"finding":"The bug lives in parse()."})',
-        'scope_context(amend={"reflection":"drop the search"})',
+        'scope_fork(forks=[{"fsm":"audit"}])',
+        'scope_return(dafny="done", signed_sealed_hands_off_nothing_left_on_the_table="x")',
       ].join("\n"),
     );
-    expect(rendered).not.toContain("[result scope_context]");
+    expect(rendered).not.toContain("[result scope_fork]");
+    expect(rendered).not.toContain("[result scope_return]");
   });
 
   test("renders a boolean argument as JSON", () => {
-    const messages = [assistant([call("s1", "scope_context", { whatever: true })])];
-    expect(renderChildRecord(messages)).toBe("scope_context(whatever=true)");
+    const messages = [assistant([call("s1", "scope_request", { interrupt: true })])];
+    expect(renderChildRecord(messages)).toBe("scope_request(interrupt=true)");
   });
 
   test("skips user broadcasts and custom entries", () => {

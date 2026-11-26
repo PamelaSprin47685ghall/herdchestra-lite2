@@ -1,6 +1,6 @@
 ## reborn.continue
 
-Continue the work from the report and relevant pins. Carry forward the evidence when you next return.
+Continue the work from the report and the documents it names. Carry forward the evidence when you next return.
 
 ## reborn.review
 
@@ -11,14 +11,6 @@ Independently review the result against the user's requirements. If nothing rema
 ## Latest Return Report
 
 {{report}}
-
-## reborn.pins
-
-## Pinned Context
-
-{{pins}}
-
-Read relevant pinned documents in full before changing the work.
 
 ## reborn.start
 

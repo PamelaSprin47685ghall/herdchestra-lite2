@@ -3,10 +3,10 @@
 
 import {
   CONTROL_TOOLS,
-  isPlainObject,
   isNonEmptyString,
   put,
 } from "./state.mjs";
+import { isPlainObject } from "./plain.mjs";
 
 // Charge amounts are real numbers with at most two decimal places. One turn is
 // split into 100 hundredths so an assistant message spends exactly one turn
@@ -20,7 +20,6 @@ const CHARGE_SCALE = 100;
 export function isFreeTool(name) {
   return (
     CONTROL_TOOLS.has(name) ||
-    name === "todo" ||
     name === "ask" ||
     name === "wait"
   );

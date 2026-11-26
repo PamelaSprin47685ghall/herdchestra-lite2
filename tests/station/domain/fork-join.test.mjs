@@ -2,6 +2,7 @@
 // These cases pin the consumer-visible edges the handlers rely on.
 
 import { describe, expect, test } from "bun:test";
+import vm from "node:vm";
 
 import {
 	decideAbandon,
@@ -102,6 +103,28 @@ describe("fork validation and register", () => {
 		expect(
 			validateFork({ ...item, targets: [" src/parser.mjs ", "src/cache.mjs"] }).targets,
 		).toEqual(["src/parser.mjs", "src/cache.mjs"]);
+	});
+
+	test("a fork issued from the js sandbox validates", () => {
+		// The `js` tool compiles model code in its own vm context, so a budget
+		// built there carries that realm's Object.prototype. A plain-data check
+		// tied to this realm's prototype refused every real fork.
+		const sandbox = vm.createContext(Object.create(null));
+		const foreign = vm.runInContext(
+			`({
+				scopeId: "probe",
+				fsm: "x",
+				profession: "You are a probe engineer like Barbara Liskov.",
+				budget: { read: 1 },
+				targets: ["src/parser.mjs"],
+			})`,
+			sandbox,
+		);
+		const out = validateFork(foreign);
+		expect(out.ok).toBe(true);
+		expect(out.budget).toEqual({ read: 1 });
+		// A Map is still not plain data.
+		expect(validateFork({ ...item, budget: new Map() }).code).toBe("INVALID_BUDGET");
 	});
 
 	test("decideRegister renames a taken sibling name instead of amending", () => {

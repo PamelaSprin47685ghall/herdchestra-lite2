@@ -39,4 +39,19 @@ describe("handoff ratchet", () => {
 		expect(controls).toContain("rebornStartPrompt");
 		expect(controls).toContain("resetRootPromotion");
 	});
+
+	test("the return decision has no woken-forward branch", () => {
+		// A woken scope is answered through `scope_request`/`scope_reply`; the
+		// old "forward dafny to the parent" path would now mean a second reply
+		// for the same turn, so it must stay deleted.
+		expect(domain).not.toMatch(/kind:\s*"forward"/);
+		expect(domain).not.toMatch(/\bwoken\b/);
+	});
+
+	test("the machine channel for ending the loop is details.stopLoop", () => {
+		// The js tool is the only tool the model can call, so the host cannot
+		// key the stop on a tool name; the returned decision object is the
+		// contract.
+		expect(domain).toMatch(/stopLoop:\s*true/);
+	});
 });

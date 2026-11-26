@@ -153,7 +153,7 @@ describe("abort cascade", () => {
 		expect([...aborts].sort()).toEqual(["child", "grandchild"]);
 	});
 
-	test("onUserAbort aborts an idle woken child as well as running children", async () => {
+	test("onUserAbort aborts an idle child as well as running children", async () => {
 		const spawns = [];
 		const wiring = createForkWiring(
 			{},
@@ -185,7 +185,6 @@ describe("abort cascade", () => {
 			abort: () => aborts.push("child"),
 		});
 		forkOf(ledger, "child").status = "ready";
-		forkOf(ledger, "child").woken = true;
 
 		root.onUserAbort({});
 
@@ -193,7 +192,7 @@ describe("abort cascade", () => {
 		expect(forkOf(ledger, "child").status).toBe("failed");
 	});
 
-	test("onUserAbort aborts a joined child that was woken by scope_send without altering its joined status", () => {
+	test("onUserAbort aborts a joined child without altering its joined status", () => {
 		const spawns = [];
 		const wiring = createForkWiring(
 			{},
@@ -222,13 +221,11 @@ describe("abort cascade", () => {
 			abort: () => aborts.push("child"),
 		});
 		forkOf(ledger, "child").status = "joined";
-		forkOf(ledger, "child").woken = true;
 
 		root.onUserAbort({});
 
 		expect(aborts).toEqual(["child"]);
 		expect(forkOf(ledger, "child").status).toBe("joined");
-		expect(forkOf(ledger, "child").woken).toBe(false);
 		// Second Esc is a no-op.
 		root.onUserAbort({});
 		expect(aborts).toEqual(["child"]);

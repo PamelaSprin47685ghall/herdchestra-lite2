@@ -19,10 +19,6 @@ import { createHash } from "node:crypto";
 const FALLBACK_TOKENS_PER_CHAR = 0.3;
 const MIN_TOKENS_PER_CHAR = 0.15;
 const MAX_TOKENS_PER_CHAR = 0.8;
-// Weight of one fresh sample in the per-turn shape averages. Fast enough to
-// follow a model switch, slow enough that a single short turn cannot erase
-// the estimate.
-const SMOOTH_ALPHA = 0.3;
 const SMOOTH_SAMPLES = 8;
 
 function digestText(text) {
@@ -273,23 +269,6 @@ function extendsMessages(previous, next) {
 	return previous.every((hash, index) => hash === next[index]);
 }
 
-function smooth(previous, sample, alpha = SMOOTH_ALPHA) {
-	if (!Number.isFinite(sample) || sample <= 0) return previous;
-	return Number.isFinite(previous)
-		? previous * (1 - alpha) + sample * alpha
-		: sample;
-}
-
-/** Keep only the token counts a pricing policy can read back. */
-function tokenFields(snap) {
-	return {
-		input: snap.input,
-		cacheRead: snap.cacheRead,
-		cacheWrite: snap.cacheWrite,
-		output: snap.output,
-	};
-}
-
 /**
  * Build one ledger.
  *
@@ -358,17 +337,8 @@ export function createUsageLedger(options) {
 		// from the branch tail so a session reload (-r) keeps the watermark.
 		lastTotalInput: null,
 		lastOutputTokens: 0,
-		lastUsageCost: null,
 		lastCtxModel: null,
 		lastUsageModelKey: null,
-		// The raw payload that produced `lastUsageCost`. `pricingHint` hands
-		// it back to `policyFromUsage`, which needs the token counts as much
-		// as the charge: a cost alone cannot derive a unit price.
-		lastUsageSnapshot: null,
-		// Smoothed per-turn shape. Without these the non-context part of a
-		// turn is zero, and degradation rent only counts the cache re-read.
-		avgOutputTokens: null,
-		avgTurnGrowthTokens: null,
 		received: new WeakSet(),
 		sentContext: null,
 		contextRevision: 0,
@@ -467,17 +437,6 @@ export function createUsageLedger(options) {
 			ledger.lastTotalInput = tIn;
 			ledger.lastUsageModelKey = modelKeyOf(latest.entry?.message);
 			ledger.lastOutputTokens = latest.snap.output;
-			ledger.lastUsageCost = latest.usage.cost ?? null;
-			ledger.lastUsageSnapshot = tokenFields(latest.snap);
-			// Warm the output average oldest-first so a reloaded session
-			// enters its first fold decision with the same shape a live one
-			// learned, instead of treating output as free.
-			for (const sample of samples.slice().reverse()) {
-				ledger.avgOutputTokens = smooth(
-					ledger.avgOutputTokens,
-					sample.snap.output,
-				);
-			}
 			// Receipt projection owns baselines now; a restored branch reads its
 			// usage snapshot and derives them from the live request.
 		} catch (error) {
@@ -506,9 +465,8 @@ export function createUsageLedger(options) {
 				ledger.lastSample = null;
 				// Preserve a real reported output charge if a provider omitted
 				// input usage. It supplies no input-density measurement either.
-				if (snap.output > 0 || snap.cost > 0) {
+				if (snap.output > 0) {
 					ledger.lastOutputTokens += Math.max(0, snap.output);
-					ledger.lastUsageCost = message.usage.cost ?? null;
 				}
 				return;
 			}
@@ -519,16 +477,11 @@ export function createUsageLedger(options) {
 			ledger.lastUsageModelKey = key;
 			ledger.lastTotalInput = tIn;
 			ledger.lastOutputTokens = snap.output;
-			ledger.lastUsageCost = message.usage.cost ?? null;
-			ledger.lastUsageSnapshot = tokenFields(snap);
 			// The first measured request is this scope's birth context. A scope
 			// that lost its ledger and reloaded re-baselines here on its first
 			// response, which is the only honest reading of a session the host
 			// rebuilt without the scope's own history.
 			if (ledger.baselineTokens === null) ledger.baselineTokens = tIn;
-			// Output arrives on every measured turn, cached or not, so this
-			// average needs no alignment proof.
-			ledger.avgOutputTokens = smooth(ledger.avgOutputTokens, snap.output);
 			refreshContextNudge();
 			if (key) {
 				const messages = contextMessages();
@@ -541,7 +494,6 @@ export function createUsageLedger(options) {
 							(modelKeyOf(item) ?? key) === key),
 				);
 				const sent = ledger.sentContext;
-				const frontier = index < 0 ? messages.length : index;
 				// These are local request estimates. They do not prove which
 				// tokens the provider retained or read from its own cache.
 				const aligned = sent?.key === key &&
@@ -575,14 +527,6 @@ export function createUsageLedger(options) {
 					const slope =
 						(tIn - prior.totalInput) / (measured - prior.chars);
 					if (Number.isFinite(slope) && slope > 0) {
-						// The same aligned delta measures how many tokens one
-						// turn appends to the context. That growth is written
-						// to the cache once, so it is part of every extra
-						// turn a bloated context forces.
-						ledger.avgTurnGrowthTokens = smooth(
-							ledger.avgTurnGrowthTokens,
-							tIn - prior.totalInput,
-						);
 						const sample = Math.min(
 							MAX_TOKENS_PER_CHAR,
 							Math.max(MIN_TOKENS_PER_CHAR, slope),
@@ -621,8 +565,6 @@ export function createUsageLedger(options) {
 					ledger.fixedHeaderKeys.set(key, sent.headerKey);
 				}
 				touchModelCache(state, key, {
-					cachedUntilPos:
-						aligned ? Math.min(frontier, sent.frontier) : frontier,
 					lastUsedAt: Date.now(),
 					tokensPerChar: density,
 					// Estimate the fixed portion only from an aligned request.
@@ -732,16 +674,6 @@ export function createUsageLedger(options) {
 		return Boolean(message?.usage) || ledger.received.has(message);
 	}
 
-	function pricingHint() {
-		if (!ledger.lastUsageCost) return undefined;
-		return {
-			usage: {
-				...(ledger.lastUsageSnapshot ?? {}),
-				cost: ledger.lastUsageCost,
-			},
-		};
-	}
-
 	function resetWatermark() {
 		ledger.lastTotalInput = null;
 		ledger.lastOutputTokens = 0;
@@ -756,31 +688,6 @@ export function createUsageLedger(options) {
 		ledger.lastSample = null;
 	}
 
-	/** After a fold, shift younger baselines down by the reclaimed tokens. */
-	function rebase(folded) {
-		if (!folded) return;
-		ledger.contextRevision += 1;
-		ledger.sentContext = null;
-		ledger.lastSample = null;
-		if (
-			typeof folded.savedTokens !== "number" ||
-			folded.savedTokens <= 0
-		) {
-			return;
-		}
-		// A batch can contain records measured by several tokenizers. Rebase
-		// this ledger in its own model's units when the removed text is known.
-		const saved = Number.isFinite(folded.savedChars)
-			? charsToTokens(Math.max(0, folded.savedChars), tokensPerCharFor(ledger.lastUsageModelKey))
-			: folded.savedTokens;
-		if (Number.isFinite(ledger.lastTotalInput)) {
-			ledger.lastTotalInput = Math.max(0, ledger.lastTotalInput - saved);
-		}
-		// The fold reclaimed room, so the scope may now sit below its midpoint
-		// again. Base is untouched: a fold changes the context, not the birth.
-		refreshContextNudge();
-	}
-
 	return Object.assign(ledger, {
 		noteSentContext,
 		restoreFromBranch,
@@ -790,9 +697,7 @@ export function createUsageLedger(options) {
 		currentContextTokens,
 		projectContextTokens,
 		usageArrivedFor,
-		pricingHint,
 		resetWatermark,
-		rebase,
 		refreshContextNudge,
 	});
 }

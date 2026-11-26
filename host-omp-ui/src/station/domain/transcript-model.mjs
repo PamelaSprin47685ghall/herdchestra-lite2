@@ -101,6 +101,13 @@ function messageFromEntry(entry) {
       toolCallId: message.toolCallId,
       toolName: message.toolName,
       isError: Boolean(message.isError),
+      // The single `js` tool reports the inner calls it dispatched in
+      // `details.innerCalls`. The artifact pane and the js card both rebuild
+      // file writes from there, so the field must survive projection intact —
+      // dropping it makes every write inside a script invisible.
+      ...(message.details && typeof message.details === "object"
+        ? { details: message.details }
+        : {}),
       blocks: cleanBlocks(blocksOf(message.content)),
       text: stripAnsi(textOf(message.content)),
     };
@@ -411,6 +418,7 @@ export function reconstructRange(entries, from, to, index) {
       block.result = result.blocks;
       block.resultText = result.text;
       block.isError = result.isError;
+      if (result.details !== undefined) block.details = result.details;
     }
   }
   return messages;

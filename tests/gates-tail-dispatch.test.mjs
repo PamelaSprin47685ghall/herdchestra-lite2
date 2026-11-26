@@ -121,7 +121,7 @@ test("a read-only session never reaches the restore ticket", () => {
 	expect(events).toEqual([]);
 });
 
-test("a read-only session still carries the shared first turn", () => {
+test("a read-only session passes its history through untouched", () => {
 	const messages = [{ role: "user", content: "hello", timestamp: 2 }];
 	const station = {
 		policy: () => READ_ONLY_SUBAGENT,
@@ -130,20 +130,9 @@ test("a read-only session still carries the shared first turn", () => {
 		},
 	};
 
-	const result = onContext(
-		station,
-		messages,
-		CTX,
-		[{ role: "user", content: [{ type: "text", text: "shared snapshot" }] }],
-	);
+	const result = onContext(station, messages, CTX);
 
-	expect(result.messages[0]).toEqual({
-		role: "user",
-		content: [{ type: "text", text: "shared snapshot" }],
-		timestamp: 1,
-		attribution: "user",
-		synthetic: true,
-	});
-	expect(result.messages[1]).toBe(messages[0]);
-	expect(onContext(station, messages, CTX).messages).toBe(messages);
+	// A read-only subagent owns no scope state, so the projection must never
+	// run for it; its history reaches the host exactly as it arrived.
+	expect(result.messages).toBe(messages);
 });

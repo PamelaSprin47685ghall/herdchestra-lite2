@@ -56,7 +56,6 @@ describe("hook wiring", () => {
 		});
 		// The remaining events still bind, so the rest of the surfaces work.
 		for (const event of [
-			"tool_call",
 			"context",
 			"before_agent_start",
 			"session_stop",
@@ -127,28 +126,6 @@ describe("hook wiring", () => {
 		expect(hooksRecords()).toHaveLength(0);
 	});
 
-	test("forwards the shared first turn to the context gatekeeper", () => {
-		const seen = [];
-		const station = {
-			...STATION,
-			onContext(messages, _ctx, firstTurn) {
-				seen.push({ messages, firstTurn });
-				return { messages };
-			},
-		};
-		const firstTurn = [
-			{ role: "user", content: [{ type: "text", text: "question" }] },
-			{ role: "assistant", content: [{ type: "text", text: "answer" }] },
-		];
-		const pi = fakePi();
-		wireHooks(pi, { stationFor: () => station }, firstTurn);
-		const messages = [{ role: "user", content: "hello", timestamp: 2 }];
-
-		const result = pi.handlers.get("context")({ messages }, {});
-
-		expect(seen).toEqual([{ messages, firstTurn }]);
-		expect(result).toEqual({ messages });
-	});
 });
 
 describe("host diagnosis announcement", () => {

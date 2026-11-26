@@ -166,7 +166,6 @@ function historyRevision(station) {
 			epoch,
 			generation: state.relay?.generation ?? 0,
 			hostBoundary: station.hostBoundaryKey ?? null,
-			amends: Array.isArray(state.amends) ? state.amends : [],
 		});
 	} catch {
 		return null;

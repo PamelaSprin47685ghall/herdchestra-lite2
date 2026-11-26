@@ -3,31 +3,19 @@
 
 import { createRelay } from "../relay/state.mjs";
 import { createBracketLedger } from "./forkjoin.mjs";
+import { isPlainObject } from "./plain.mjs";
 
 const VERSION = 2;
 
 const CONTROL_TOOLS = new Set([
+  "scope_request",
   "scope_fork",
   "scope_join",
+  "scope_reply",
   "scope_return",
-  "scope_send",
-  "scope_context",
-  // The retired names are never registered now, but an older transcript
-  // still carries amend and pin calls that the scan path must process.
-  "amend",
-  "pin",
+  "scope_abandon",
+  "wait",
 ]);
-
-// Local cache-freshness estimate, not a provider guarantee. The blueprint
-// fixes it at four minutes; longer values count savings on a cache that the
-// provider may already have dropped.
-export const CACHE_TTL_MS = 4 * 60 * 1000;
-
-function isPlainObject(value) {
-  if (typeof value !== "object" || value === null) return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-}
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -63,14 +51,11 @@ export function createState() {
     startedAt: Date.now(),
     seq: 0,
     epoch: 0,
-    charges: {},
-    amends: [],
     // The bracket tree itself: fork ids, owners, budgets, ready order and the
     // frozen record of every child that returned. It is persisted with the
     // state because a reload must be able to close or explain every bracket.
     brackets: createBracketLedger(),
     autopilot: false,
-    pins: [],
     relay: createRelay(),
     // Persisted base model identity. The base model lives outside all
     // scopes; the host integration fills these from preparseModelSpec.
@@ -81,13 +66,10 @@ export function createState() {
     // resume the pending switch.
     modelRecovery: null,
     // Provider prompt caches keyed by canonical model key (provider/id).
-    // Entries: { cachedUntilPos, lastUsedAt, tokensPerChar,
-    // fixedOverheadTokens } where
-    // cachedUntilPos is the exclusive message index the provider still
-    // holds, tokensPerChar is the measured density of *dialogue* characters,
-    // and fixedOverheadTokens is the part of every input payload that does not
+    // Entries: { lastUsedAt, tokensPerChar, fixedOverheadTokens } where
+    // tokensPerChar is the measured density of *dialogue* characters and
+    // fixedOverheadTokens is the part of every input payload that does not
     // come from the dialogue at all (system prompt plus tool schemas).
-    // Persisted with the snapshot.
     modelCaches: {},
   };
 }
@@ -95,11 +77,9 @@ export function createState() {
 /** Make a flow-local view while keeping session fields shared with its owner. */
 export function createFlowState(base) {
   const flow = createState();
-  // `charges` is deliberately NOT shared: a child station observes its own host
-  // boundary, and `truncateForHostBoundary` drops every entry. Sharing the map
-  // would let a child erase the parent's refund memory. The map is bounded, so
-  // the per-child copy stays small.
-  const shared = new Set(["autopilot", "relay", "pins", "brackets"]);
+  // `brackets` is the session's single ledger; `autopilot` and `relay` are
+  // session switches every scope reads live.
+  const shared = new Set(["autopilot", "relay", "brackets"]);
   // A child starts its own receive chain: the parent's receipts belong to the
   // parent's level and must not be folded twice from a child's projection.
   const local = new Set(["receipts"]);
@@ -132,30 +112,17 @@ export function modelCacheFor(state, key) {
   return isPlainObject(entry) ? entry : null;
 }
 
-/** True when the entry's last use is inside the five-minute TTL. */
-export function cacheIsFresh(entry, now = Date.now(), ttl = CACHE_TTL_MS) {
-  if (!isPlainObject(entry)) return false;
-  const at = Number.isFinite(entry.lastUsedAt) ? entry.lastUsedAt : null;
-  if (at === null || !Number.isFinite(now)) return false;
-  return now - at <= ttl;
-}
-
 /**
- * Create or update a cache entry. cachedUntilPos is the exclusive message
- * index up to which the provider cache is valid; lastUsedAt refreshes the
- * TTL clock; tokensPerChar is this model's measured dialogue density;
- * fixedOverheadTokens is the constant prefix (system prompt and tool
- * schemas) that no dialogue character accounts for.
+ * Create or update a cache entry. lastUsedAt is when this model was last used;
+ * tokensPerChar is this model's measured dialogue density; fixedOverheadTokens
+ * is the constant prefix (system prompt and tool schemas) that no dialogue
+ * character accounts for.
  */
 export function touchModelCache(state, key, fields = {}, options = {}) {
   if (!state || typeof state !== "object" || !validKey(key)) return null;
   if (!isPlainObject(state.modelCaches)) state.modelCaches = {};
   const existing = isPlainObject(state.modelCaches[key]) ? state.modelCaches[key] : {};
   const entry = {
-    cachedUntilPos:
-      Number.isInteger(fields.cachedUntilPos) && fields.cachedUntilPos >= 0
-        ? fields.cachedUntilPos
-        : (Number.isInteger(existing.cachedUntilPos) ? existing.cachedUntilPos : 0),
     lastUsedAt:
       Number.isFinite(fields.lastUsedAt) && fields.lastUsedAt >= 0
         ? fields.lastUsedAt
@@ -177,29 +144,6 @@ export function touchModelCache(state, key, fields = {}, options = {}) {
   return entry;
 }
 
-/**
- * Cap every cache's cachedUntilPos at a message index. Used after a
- * physical fold (cap = first removed begin's assistantIndex) or a host
- * boundary (cap = 0): content at or after the cap no longer matches the
- * provider cache. lastUsedAt and tokensPerChar are preserved.
- */
-export function capCachePositions(state, maxPos) {
-  if (!state || !isPlainObject(state.modelCaches)) return 0;
-  const cap = Number.isInteger(maxPos) && maxPos >= 0 ? maxPos : 0;
-  let changed = 0;
-  for (const key of Reflect.ownKeys(state.modelCaches)) {
-    if (typeof key !== "string") continue;
-    const entry = state.modelCaches[key];
-    if (!isPlainObject(entry)) continue;
-    const pos = Number.isInteger(entry.cachedUntilPos) ? entry.cachedUntilPos : 0;
-    if (pos > cap) {
-      entry.cachedUntilPos = cap;
-      changed += 1;
-    }
-  }
-  return changed;
-}
-
 /** The tightest wall-clock deadline across the branch's own fork, or null. */
 export function branchDeadline(record) {
   return record && Number.isFinite(record.deadlineAt) ? record.deadlineAt : null;
@@ -208,7 +152,6 @@ export function branchDeadline(record) {
 export {
   VERSION,
   CONTROL_TOOLS,
-  isPlainObject,
   isNonEmptyString,
   failure,
   put,

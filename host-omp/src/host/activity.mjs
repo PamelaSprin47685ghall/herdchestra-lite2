@@ -18,13 +18,6 @@ const ZERO_USAGE = Object.freeze({
 	}),
 });
 
-const TODO_STATUS = Object.freeze({
-	pending: "pending",
-	in_progress: "active",
-	completed: "done",
-	abandoned: "dropped",
-});
-
 export function stripToolCalls(event) {
 	const message = event?.message;
 	if (!message || message.role !== "assistant" || !Array.isArray(message.content)) return event;
@@ -294,74 +287,4 @@ export function buildChildAssistantDelta(previousParts, nextParts, partial) {
 		delta,
 		partial,
 	};
-}
-
-function todoItemClosed(status) {
-	return status === "completed" || status === "abandoned";
-}
-
-function todoGlyph(status) {
-	if (status === "completed") return "☑";
-	if (status === "abandoned") return "☒";
-	if (status === "in_progress") return "◐";
-	return "☐";
-}
-
-/**
- * Extract a settled todo snapshot from a finished `todo` tool event.
- *
- * In omp 19.2+, native `todo` tool cards carrying `details.phases` stay
- * unsettled until the next user turn or `agent_end` so another `todo` call can
- * displace them. In a long root turn that forks/joins many scopes, that single
- * unsettled card pins the terminal scrollback frontier at the top of the screen.
- * Rendering finished todo updates as settled custom cards preserves full
- * checklist visibility while letting the transcript scroll normally.
- */
-export function buildTodoSnapshot(event) {
-	if (event?.toolName !== "todo" || event.isError === true) return null;
-	const rawPhases = event?.result?.details?.phases;
-	if (!Array.isArray(rawPhases)) return null;
-	const phases = [];
-	let total = 0;
-	let closed = 0;
-	const lines = [];
-	for (let p = 0; p < rawPhases.length; p += 1) {
-		const phase = rawPhases[p];
-		const rawTasks = Array.isArray(phase?.tasks) ? phase.tasks : [];
-		if (rawTasks.length === 0) continue;
-		const title = typeof phase.name === "string" && phase.name.trim() ? phase.name.trim() : `Phase ${p + 1}`;
-		const items = [];
-		let phaseClosed = 0;
-		for (let t = 0; t < rawTasks.length; t += 1) {
-			const task = rawTasks[t];
-			const text = typeof task?.content === "string" ? task.content.trim() : "";
-			if (!text) continue;
-			const rawStatus = typeof task?.status === "string" ? task.status : "pending";
-			const mapped = TODO_STATUS[rawStatus] ?? "pending";
-			if (todoItemClosed(rawStatus)) {
-				closed += 1;
-				phaseClosed += 1;
-			}
-			total += 1;
-			items.push({ id: `p${p}.${t}`, text, status: mapped });
-		}
-		if (items.length === 0) continue;
-		phases.push({
-			id: `p${p}`,
-			title,
-			items,
-			collapsed: phaseClosed === items.length,
-		});
-		lines.push(`${title} (${phaseClosed}/${items.length})`);
-		for (let t = 0; t < rawTasks.length; t += 1) {
-			const task = rawTasks[t];
-			const text = typeof task?.content === "string" ? task.content.trim() : "";
-			if (!text) continue;
-			lines.push(`  ${todoGlyph(task.status)} ${text}`);
-		}
-	}
-	const fallback = textBlocks(event.result?.content, "text", "text").trim();
-	const header = total > 0 ? `Todo ${closed}/${total}` : "Todo";
-	const text = lines.length > 0 ? `${header}\n${lines.join("\n")}` : (fallback || header);
-	return { phases, total, closed, text };
 }

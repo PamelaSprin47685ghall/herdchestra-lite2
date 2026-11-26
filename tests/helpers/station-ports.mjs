@@ -48,11 +48,8 @@ export const testHostBag = {
 };
 
 const ENV_NAME = {
-	pin: "HERD_PIN",
-	amend: "HERD_AMEND",
 	herd: "HERD_HERD",
 	clock: "HERD_CLOCK",
-	folding: "HERD_FOLDING",
 };
 
 function implementationsComplete(implementations) {
@@ -89,9 +86,6 @@ export function bindStationPorts(state, env = {}) {
 	const implementations = builtFor(null, env).implementations;
 	return Object.freeze({
 		clock: implementations.clock,
-		folding: implementations.folding,
-		pin: implementations.pin.bindState(state),
-		amend: implementations.amend.bindState(state),
 		herd: implementations.herd.bindState(state),
 	});
 }

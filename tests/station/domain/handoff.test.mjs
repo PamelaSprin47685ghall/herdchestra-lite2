@@ -93,25 +93,6 @@ describe("decideScopeReturn", () => {
 		});
 	});
 
-	test("woken child forwards dafny regardless of oath", () => {
-		const woken = { ...childRecord, status: "ready", woken: true };
-		for (const extra of [{}, OATH]) {
-			const decision = decideScopeReturn({
-				isRoot: false,
-				identityForkId: "f1",
-				record: woken,
-				args: { dafny: "follow-up answer", ...extra },
-			});
-			expect(decision).toEqual({
-				ok: true,
-				kind: "forward",
-				scope: "child",
-				dafny: "follow-up answer",
-				stopLoop: true,
-			});
-		}
-	});
-
 	test("root small handoff rewinds, increments generation, and resets bigStreak", () => {
 		const before = Object.freeze({ ...createRelay(), generation: 2, bigStreak: 1, canStop: false });
 		const decision = decideScopeReturn({
@@ -236,7 +217,7 @@ describe("formatting helpers", () => {
 			},
 			{ role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "file body" }] },
 		];
-		const out = formatGenerationReport(messages, [], 0, "deduction: parser is clean");
+		const out = formatGenerationReport(messages, 0, "deduction: parser is clean");
 		expect(out).toBe('checked parser\nread(path="a.mjs")\n\ndeduction: parser is clean');
 	});
 
@@ -248,8 +229,7 @@ describe("formatting helpers", () => {
 			big: false,
 		});
 		expect(cont.startsWith("You are now in the scope /api,")).toBe(true);
-		expect(cont).toContain("Pinned Context");
-		expect(cont).toContain("**Finding:** cache key stable");
+		expect(cont).not.toContain("Pinned Context");
 		expect(cont).toContain("Latest Return Report");
 		expect(cont).toContain('read(path="a.mjs")');
 

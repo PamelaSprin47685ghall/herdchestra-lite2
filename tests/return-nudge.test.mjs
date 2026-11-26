@@ -12,6 +12,7 @@ import {
 	forkOf,
 	markReady,
 	registerFork,
+	unreceivedChildren,
 } from "../src/scope/index.mjs";
 import {
 	childReturnNudge,
@@ -70,6 +71,14 @@ function stopStation(ownerId, ledger) {
 		state: { autopilot: false, relay: { canStop: false, pendingRewind: null } },
 		forkOwnerId: () => ownerId,
 		forkLedgerPort: () => ledger,
+		// The stop gate reads two facts from the projection: the mode, and how
+		// many children this scope still owes a receive. A stub that answered
+		// only the mode would make every child look childless and let the
+		// return nudge outrank a pending join.
+		projectionFor: () => ({
+			mode: ownerId === null ? "ROOT_AUTOPILOT" : "CHILD",
+			state: { unreceived: unreceivedChildren(ledger, ownerId ?? "root").length },
+		}),
 	};
 }
 
@@ -115,14 +124,14 @@ describe("nudgeDecision", () => {
 
 		// Manual duty: root may stop naturally.
 		expect(
-			nudgeDecision({ hasToolCalls: false, ledger: createBracketLedger(), autopilot: false }),
+			nudgeDecision({ hasToolCalls: false, ledger: createBracketLedger(), mode: "ROOT_MANUAL" }),
 		).toEqual({ kind: "none" });
 
 		// Autopilot without canStop: root must call scope_return.
 		const auto = nudgeDecision({
 			hasToolCalls: false,
 			ledger: createBracketLedger(),
-			autopilot: true,
+			mode: "ROOT_AUTOPILOT",
 			relay: { canStop: false, pendingRewind: null },
 		});
 		expect(auto.kind).toBe("steer");
@@ -133,7 +142,7 @@ describe("nudgeDecision", () => {
 			nudgeDecision({
 				hasToolCalls: false,
 				ledger: createBracketLedger(),
-				autopilot: true,
+				mode: "ROOT_AUTOPILOT",
 				relay: { canStop: true, pendingRewind: null },
 			}),
 		).toEqual({ kind: "none" });

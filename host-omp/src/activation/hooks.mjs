@@ -5,7 +5,6 @@ import { sessionFor } from "../host/capture.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { installContextPreparation } from "../host/context-preparation.mjs";
 import { wireProviderObservation } from "../host/provider-observer.mjs";
-import { installToolDispatch } from "../host/tool-dispatch.mjs";
 
 
 const USER_ABORT_CAPTURE = Symbol.for("herdchestra-lite2.user-abort-capture.v1");
@@ -73,7 +72,7 @@ function dispatchSession(ctx) {
  * decision stops arriving, yet the extension still loads and the status line
  * looks healthy. That silence is the bug this return value closes.
  */
-export function wireHooks(pi, engine, sharedFirstTurn = null) {
+export function wireHooks(pi, engine) {
 	// A wiring may hand a full engine or a station-shaped double.
 	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
 	// Native Esc is consumed by the host before any terminal event is emitted.
@@ -94,12 +93,6 @@ export function wireHooks(pi, engine, sharedFirstTurn = null) {
 	const bindDispatch = (ctx) => {
 		const station = stationOf(ctx);
 		const session = dispatchSession(ctx);
-		installToolDispatch(
-			session,
-			(message, id, name) => station.prepareToolDispatch(message, id, name),
-			(id, name, toolCtx, receipt) =>
-				station.admitToolDispatch(id, name, toolCtx, receipt),
-		);
 		if (session) {
 			stopAfterScopeReturn(session.agent, session);
 			installContextPreparation(session, { station, ctx });
@@ -162,13 +155,9 @@ export function wireHooks(pi, engine, sharedFirstTurn = null) {
 			{ missing: ["assistant_message", "message_end"] },
 		);
 	}
-	pi.on("tool_call", (event, ctx) =>
-		stationOf(ctx).onToolCall(event, ctx),
-	);
 	pi.on(
 		"context",
-		(event, ctx) =>
-			bindDispatch(ctx).onContext(event?.messages, ctx, sharedFirstTurn),
+		(event, ctx) => bindDispatch(ctx).onContext(event?.messages, ctx),
 	);
 	pi.on("before_agent_start", (event, ctx) => {
 		releaseScopeReturnDrain(dispatchSession(ctx));

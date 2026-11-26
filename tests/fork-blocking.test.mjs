@@ -145,7 +145,7 @@ describe("scope_return as a ticket", () => {
     // record waits in the parent's queue for whatever join comes later.
     const result = await returnTicket(station, "call-r1", { dafny: "the child returns its record", ...OATH }, {});
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain("has been handed to Root");
+    expect(result.content[0].text).toContain("delivered to Root");
     expect(result.details.accepted).toBe(true);
     expect(result.details.awaitingReceipt).toBeUndefined();
     expect(ledger.forks.c1.status).toBe("ready");

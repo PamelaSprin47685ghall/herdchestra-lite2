@@ -12,13 +12,7 @@ test("every registered tool keeps its schema in the top-level request", () => {
 	const tools = new Map();
 	wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
 
-	expect([...tools.keys()].sort()).toEqual([
-		"scope_context",
-		"scope_fork",
-		"scope_join",
-		"scope_return",
-		"scope_send",
-	]);
+	expect([...tools.keys()].sort()).toEqual(["js"]);
 	for (const [name, tool] of tools) {
 		expect(tool.loadMode, `${name} would be mounted under xd://`).toBe("essential");
 	}

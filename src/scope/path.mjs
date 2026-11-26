@@ -4,10 +4,11 @@
 // path plus `/<scopeId>`, so the tree the ledger already records in
 // `parentForkId` is its own address space: sibling uniqueness plus the parent
 // chain, never a global name table. This module is pure. It reads a ledger
-// snapshot and returns an address, or a set of addresses, with no station, no
-// clock, and no I/O.
-
-const WILDCARD = /[*?[]/;
+// snapshot and returns an address, with no station, no clock, and no I/O.
+//
+// There is no wildcard engine. `scope_request` takes one exact path; a script that
+// wants several scopes maps over `state.scopes` itself, which is ordinary
+// JavaScript and needs no address language here.
 
 /** `"/api"` + `"auth"` -> `"/api/auth"`; the root is spelled `/`. */
 export function childScopePath(parentPath, scopeId) {
@@ -25,18 +26,23 @@ function splitSegments(value) {
   return value.split("/").filter((segment) => segment !== "");
 }
 
+/** A target shaped like a pattern is refused by callers, never resolved here. */
+export function looksLikePattern(rawTarget) {
+  return typeof rawTarget === "string" && /[*?[]/.test(rawTarget);
+}
+
 /**
  * Resolve one target against the caller's path.
  *
  * `.` is the caller, `..` is its parent (clamped at the root), a bare name is
- * a child, and a leading `/` starts at the root. A target that carries `*`,
- * `?` or `[` is a glob and is reported as one; normalization still applies,
- * so `../*` becomes `/<parent>/*`.
+ * a child, and a leading `/` starts at the root. `isGlob` only reports that
+ * the target carries `*`, `?` or `[`: the address is still normalized, so a
+ * caller can name the pattern it refused in its error message.
  */
 export function normalizeScopePath(cwdPath = "/", rawTarget = "") {
   const target = typeof rawTarget === "string" ? rawTarget.trim() : "";
   if (target === "") return { ok: false, code: "INVALID_SCOPE_TARGET" };
-  const isGlob = WILDCARD.test(target);
+  const isGlob = looksLikePattern(target);
   const segments = target.startsWith("/") ? [] : splitSegments(cwdPath);
   for (const segment of target.split("/")) {
     if (segment === "" || segment === ".") continue;
@@ -78,8 +84,8 @@ function siblingOwnerOf(record) {
 
 /**
  * The lowest free sibling name. A finished scope keeps its name while it can
- * still be woken, so the taken set covers every record of that parent, not
- * only the running ones.
+ * still be asked a question or joined, so the taken set covers every record of
+ * that parent, not only the running ones.
  */
 export function allocateSiblingScopeId(
   ledger,
@@ -118,12 +124,41 @@ export function scopePathOf(record) {
   return typeof name === "string" && name !== "" ? `/${name}` : null;
 }
 
-/** Active means it can take a message now: running, or woken from finished. */
-export function isScopeActive(record) {
-  return Boolean(record && (record.status === "running" || record.woken === true));
+/**
+ * One record by address, in any status. A finished scope is still addressable:
+ * `scope_request` wakes it for one reply turn, and `scope_join` takes its ready
+ * record. Case-insensitive, matching the sibling namespace's own rule.
+ */
+export function findScopeByPath(ledger, path) {
+  if (!ledger || typeof ledger !== "object") return null;
+  const wanted = typeof path === "string" ? path.trim().toLowerCase() : "";
+  if (wanted === "" || wanted === "/") return null;
+  for (const record of recordsOf(ledger)) {
+    const address = scopePathOf(record);
+    if (address !== null && address.toLowerCase() === wanted) return record;
+  }
+  return null;
 }
 
-/** Every unfinished path, the root first, then lexicographic order. */
+/** Every fork id with a record at or under `path`, for subtree operations. */
+export function forkIdsUnderPath(ledger, path) {
+  const base = typeof path === "string" && path !== "" ? path : "/";
+  const prefix = base === "/" ? "/" : `${base}/`;
+  const ids = [];
+  for (const record of recordsOf(ledger)) {
+    const address = scopePathOf(record);
+    if (address === null) continue;
+    if (address === base || address.startsWith(prefix)) ids.push(record.forkId);
+  }
+  return ids;
+}
+
+/** Active means it is running work right now. */
+export function isScopeActive(record) {
+  return Boolean(record && record.status === "running");
+}
+
+/** Every running path, the root first, then lexicographic order. */
 export function listActiveScopePaths(ledger) {
   const paths = new Set(["/"]);
   for (const record of recordsOf(ledger)) {
@@ -134,96 +169,21 @@ export function listActiveScopePaths(ledger) {
   return [...paths].sort();
 }
 
-function matchSegments(pattern, index, segments, cursor) {
-  if (index === pattern.length) return cursor === segments.length;
-  const head = pattern[index].toLowerCase();
-  if (head === "**") {
-    for (let next = cursor; next <= segments.length; next += 1) {
-      if (matchSegments(pattern, index + 1, segments, next)) return true;
-    }
-    return false;
-  }
-  if (head === "*") {
-    if (cursor >= segments.length) return false;
-    // A trailing star means the rest of the tree, so `**` and `*` differ only
-    // where the star sits in the middle of a pattern.
-    if (index === pattern.length - 1) return true;
-    return matchSegments(pattern, index + 1, segments, cursor + 1);
-  }
-  if (cursor >= segments.length) return false;
-  if (segments[cursor].toLowerCase() !== head) return false;
-  return matchSegments(pattern, index + 1, segments, cursor + 1);
-}
-
-function matchesGlob(pattern, path) {
-  return matchSegments(splitSegments(pattern), 0, splitSegments(path), 0);
-}
-
-function noMatch() {
-  return { ok: false, code: "NO_MATCHING_SCOPES", targets: [], paths: [] };
-}
-
-const matchesNothing = null;
-
 /**
- * Turn one target, or a list of them, into concrete addresses.
- *
- * An exact path names any scope, active or finished; naming a finished scope
- * is how a wake is asked for. A glob names active scopes only, because a
- * broadcast must never resurrect a scope nobody asked about, and it never
- * names the sender itself.
+ * Every address a `scope_request` can still reach: running, returned, and
+ * joined scopes keep a live agent that answers one reply turn. A failed or
+ * abandoned record cannot answer, so it is not offered as a target.
  */
-export function resolveScopeTargets(ledger, callerPath = "/", targetInput = "") {
-  const inputs = Array.isArray(targetInput) ? targetInput : [targetInput];
-  if (inputs.length === 0) return noMatch();
-  const caller = normalizeScopePath("/", callerPath);
-  const callerId = caller.ok ? caller.path : "/";
-  const targets = [];
-  const seen = new Set();
-  const push = (target) => {
-    if (seen.has(target.path)) return;
-    seen.add(target.path);
-    targets.push(target);
-  };
-  for (const entry of inputs) {
-    const norm = normalizeScopePath(callerId, entry);
-    if (!norm.ok) return { ok: false, code: norm.code, targets: [], paths: [] };
-    if (!norm.isGlob) {
-      if (norm.path === "/") {
-        push({ kind: "root", path: "/" });
-        continue;
-      }
-      const found = recordsOf(ledger).find((record) => {
-        const path = scopePathOf(record);
-        return path !== null && path.toLowerCase() === norm.path.toLowerCase();
-      });
-      if (!found) {
-        return {
-          ok: false,
-          code: "UNKNOWN_SCOPE_TARGET",
-          target: norm.path,
-          targets: [],
-          paths: [],
-        };
-      }
-      push({ kind: "scope", forkId: found.forkId, path: scopePathOf(found) });
-      continue;
-    }
-    // A bare `**` is the whole tree, not the caller's subtree.
-    const raw = typeof entry === "string" ? entry.trim() : "";
-    const pattern = raw === "**" ? "/**" : norm.path;
-    for (const record of recordsOf(ledger)) {
-      if (!isScopeActive(record)) continue;
-      const path = scopePathOf(record);
-      if (path === null || path === "/") continue;
-      if (path.toLowerCase() === callerId.toLowerCase()) continue;
-      if (!matchesGlob(pattern, path)) continue;
-      push({ kind: "scope", forkId: record.forkId, path });
-    }
+export function listAddressableScopePaths(ledger) {
+  const paths = new Set(["/"]);
+  for (const record of recordsOf(ledger)) {
+    if (record.status === "failed") continue;
+    // A record whose outcome failed never produced a session that answers: a
+    // spawn the host refused, or a child that died before returning. Offering
+    // the address would park every `scope_request` sent there forever.
+    if (record.outcome === "failed") continue;
+    const path = scopePathOf(record);
+    if (path !== null) paths.add(path);
   }
-  if (targets.length === 0) return noMatch();
-  targets.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
-  return { ok: true, targets, paths: targets.map((target) => target.path) };
+  return [...paths].sort();
 }
-
-export { matchesNothing };

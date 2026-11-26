@@ -16,7 +16,16 @@ import {
 } from "../scope/fork-registry.mjs";
 import { renderChildRecord } from "../transcript/replay.mjs";
 import { publicScopeId, scopeTitle } from "../scope/scope-id.mjs";
-import { clearWakeFlag, forkOf, takePendingInbox } from "../scope/forkjoin.mjs";
+import { forkOf } from "../scope/forkjoin.mjs";
+import {
+	REQUEST_INTERRUPT_REASON,
+	clearRuntime,
+	currentRequest,
+	hasPendingRequests,
+	pendingRequestCount,
+	rejectPendingRequests,
+	registerRuntime,
+} from "../scope/request-queue.mjs";
 import {
 	childReturnNudge,
 	resetReturnNudges,
@@ -26,6 +35,14 @@ import {
 	formatRebornPrompt,
 } from "../station/domain/handoff.mjs";
 import { finishRewind } from "../station/handoff-state.mjs";
+import { setRecordFields } from "../scope/record-mutation.mjs";
+
+// A child that keeps ending a beat without answering the queued request would
+// otherwise be re-prompted forever: the loop's only exit was "no request
+// pending", and a stuck head never clears. Two wake prompts are the whole
+// allowance; after that the caller is settled as unanswered and the loop falls
+// through to the stop/nudge path, which closes the bracket.
+const MAX_WAKE_ATTEMPTS = 2;
 
 /**
  * A fork the parent cancelled owns the reason the parent reads.
@@ -75,15 +92,14 @@ export function writeFrozenOutcome(registry, forkId, outcome) {
 /**
  * Wake one finished scope in place.
  *
- * The scope already paid its single return, so waking it adds no record and
- * asks for no nudge: the inbox is drained, the model answers, and a natural
- * stop leaves the bracket exactly as it was. A second message that lands while
- * the model is working is not a second concurrent prompt; it sets `pending`,
- * and this loop drains it before the scope goes idle again.
+ * A scope that finished its return is idle, not gone. A pending `scope_request`
+ * wakes it: the projection turns into `AWAITING_REPLY`, the model answers
+ * through `scope_reply`, and a natural stop returns the scope to idle without
+ * touching the record the parent will join.
  */
 export async function wakeIdleScope(entry, ledger, forkId) {
-	const record = forkOf(ledger, forkId);
-	if (!record || record.woken !== true) return { ok: true, woken: false };
+	if (!forkOf(ledger, forkId)) return { ok: true, woken: false };
+	if (typeof entry?.drain !== "function") return { ok: true, woken: false };
 	if (entry.busy === true) {
 		entry.pending = true;
 		return { ok: true, woken: true, deferred: true };
@@ -93,13 +109,9 @@ export async function wakeIdleScope(entry, ledger, forkId) {
 		do {
 			entry.pending = false;
 			if (!(await entry.drain())) break;
-			const next = forkOf(ledger, forkId);
-			if (!next || next.woken !== true) return { ok: true, woken: false };
 		} while (entry.pending === true);
-		clearWakeFlag(ledger, forkId, true);
 		return { ok: true, woken: false };
 	} catch (error) {
-		clearWakeFlag(ledger, forkId);
 		return { ok: false, reason: String(error?.message ?? error) };
 	} finally {
 		entry.busy = false;
@@ -120,6 +132,10 @@ export async function spawnChildTicket(spec, ports) {
 	let session = null;
 	let failed = false;
 	let reason = null;
+	// Declared in the function body, not the try block: `finish()` is declared
+	// outside the try and closes over this scope, so a `let` inside the block
+	// would be invisible to it and every early `return finish()` would throw.
+	let unpublished = false;
 	let created = null;
 	let detachDisplay = null;
 	let detachTermination = null;
@@ -232,21 +248,36 @@ export async function spawnChildTicket(spec, ports) {
 		} catch (error) {
 			report?.("fork", error, { forkId: spec.forkId, phase: "child-context" });
 		}
-		const originAmends = Array.isArray(childStation?.state?.amends)
-			? childStation.state.amends.slice()
-			: [];
 		let before = messagesOf(session).length;
 		// Every prompt from this point on is agent-authored: the receipt, added
 		// requirements, and the return nudge. The host marks a message
 		// `synthetic` when the agent wrote it; `role` stays "user" so the model
 		// still reads it as instructions from its parent.
 		const syntheticOptions = { synthetic: true, attribution: "agent", userInitiated: false };
-		const prompt =
+		const send =
 			typeof session.prompt === "function"
 				? (text, options) => session.prompt(text, { ...syntheticOptions, ...options })
 				: typeof session.agent?.prompt === "function"
 					? (text, options) => session.agent.prompt(text, { ...syntheticOptions, ...options })
 					: null;
+		// A stopped scope resumes from its branch, so the leaf of the last
+		// completed turn must survive in the record. Every turn goes through
+		// `prompt`, so recording here covers the receipt, a rewind, a request
+		// reply, and a return nudge without a second call site.
+		const noteTail = () => {
+			const tail =
+				session?.manager?.getLeafId?.() ?? session?.getLeafId?.() ?? null;
+			if (typeof tail !== "string" || tail === "") return;
+			setRecordFields(forkOf(ledger, spec.forkId), { branchTail: tail });
+		};
+		const prompt =
+			typeof send === "function"
+				? async (text, options) => {
+						const result = await send(text, options);
+						noteTail();
+						return result;
+					}
+				: null;
 		if (typeof prompt !== "function") {
 			failed = true;
 			reason = "the forked scope's session exposes no prompt()";
@@ -256,21 +287,58 @@ export async function spawnChildTicket(spec, ports) {
 		if (typeof session.agent?.abort === "function" && typeof ports.stopAfterReturn === "function") {
 			detachTermination = ports.stopAfterReturn(session.agent) ?? null;
 		}
-		// Messages arrive in the ledger's inbox while the child works. The child
-		// reads them at each turn boundary, so a message never interrupts a
-		// running tool call. Every envelope already names its sender, so the
-		// model answers by addressing that path and is never told who spoke.
-		const deliverInbox = async () => {
-			// The ledger owns the cursor and marks it before the prompt can yield.
-			const pending = takePendingInbox(ledger, spec.forkId);
-			if (pending.length === 0) return false;
-			await prompt(pending.map((entry) => entry.envelope).join("\n\n"));
+		// The request table: this child answers a peer's synchronous
+		// `scope_request` in one turn. While it is running an interrupt can cut
+		// the current beat short; the loop below turns that abort into the reply
+		// turn instead of a failure.
+		const childRuntimePath = runtimePathOf();
+		if (childRuntimePath !== null) {
+			registerRuntime(registry, childRuntimePath, {
+				state: "running",
+				interrupt: () => session.agent?.abort?.(REQUEST_INTERRUPT_REASON),
+			});
+		}
+		// A pending `scope_request` is the only asynchronous input a running
+		// child reads. The projection turns it into `AWAITING_REPLY`, so the
+		// prompt only has to wake the loop; the model then answers through
+		// `scope_reply` and the request is resolved by the station.
+		const REQUEST_WAKE =
+			"A peer scope is waiting on your answer. Only `scope_reply` is bound this turn; answer in one string.";
+		const hasPendingRequest = () =>
+			childRuntimePath !== null && hasPendingRequests(registry, childRuntimePath);
+		let wakeHead = null;
+		let wakeAttempts = 0;
+		const deliverRequest = async () => {
+			if (!hasPendingRequest()) {
+				wakeHead = null;
+				wakeAttempts = 0;
+				return false;
+			}
+			const head = currentRequest(registry, childRuntimePath);
+			const headId = head?.id ?? null;
+			if (headId !== wakeHead) {
+				wakeHead = headId;
+				wakeAttempts = 0;
+			}
+			if (wakeAttempts >= MAX_WAKE_ATTEMPTS) {
+				// Asked twice and still unanswered: settle the caller so no promise
+				// parks, then let the loop reach its stop/nudge path.
+				rejectPendingRequests(
+					registry,
+					childRuntimePath,
+					"the scope did not answer",
+				);
+				wakeHead = null;
+				wakeAttempts = 0;
+				return false;
+			}
+			wakeAttempts += 1;
+			await prompt(REQUEST_WAKE);
 			return true;
 		};
 		// Rewind the child's own BranchManager back to `originEntryId` once the
 		// previous loop has exited cleanly via `stopLoop: true`, then prompt the
-		// reborn child with birth receipt + pins + formatted generation report
-		// (plus any inbox messages that arrived during the old generation).
+		// reborn child with its birth receipt and formatted generation report.
 		const applyChildRewind = async (bracket) => {
 			const pending = childStation?.pendingChildRewind ?? null;
 			if (!pending) return false;
@@ -298,22 +366,14 @@ export async function spawnChildTicket(spec, ports) {
 					session.messages.splice(0, session.messages.length, ...rebuilt);
 				}
 			}
-			finishRewind(childStation, { keepAmends: originAmends, rebaseAnchor: true });
+			finishRewind(childStation, { rebaseAnchor: true });
 			resetReturnNudges(bracket);
 			before = messagesOf(session).length;
-			const pendingInbox = takePendingInbox(ledger, spec.forkId);
-			const inboxSection =
-				pendingInbox.length > 0
-					? pendingInbox.map((entry) => entry.envelope).join("\n\n")
-					: "";
-			const rebornBase = formatRebornPrompt({
+			const reborn = formatRebornPrompt({
 				birth: spec.receipt,
 				report: pending.report,
-				pins: childStation.state?.pins ?? [],
 				big: false,
 			});
-			const reborn =
-				inboxSection === "" ? rebornBase : `${rebornBase}\n\n---\n\n${inboxSection}`;
 			await prompt(reborn);
 			return true;
 		};
@@ -322,21 +382,36 @@ export async function spawnChildTicket(spec, ports) {
 		// the bracket; a small scope_return rewinds to originEntryId and keeps
 		// running in the same session, forkId, path, ownerId, inbox, and budget.
 		let bracket = forkOf(ledger, spec.forkId);
-		let unpublished = false;
 		while (bracket && bracket.status === "running") {
 			if (await applyChildRewind(bracket)) {
 				bracket = forkOf(ledger, spec.forkId);
 				continue;
 			}
-			if (await deliverInbox()) {
-				// A new requirement restarts the conversation, so it restarts the
-				// allowance this loop shares with the station.
-				resetReturnNudges(bracket);
+			if (await deliverRequest()) {
+				// A wake prompt alone proves nothing was answered: refresh the nudge
+				// allowance only when the queue actually emptied, or a request the
+				// child ignores would keep the allowance alive and the bracket would
+				// never close.
+				if (
+					childRuntimePath !== null &&
+					pendingRequestCount(registry, childRuntimePath) === 0
+				) {
+					resetReturnNudges(bracket);
+				}
 				bracket = forkOf(ledger, spec.forkId);
 				continue;
 			}
 			const stop = stopReasonOf(session);
 			if (stop !== null && stop !== "stop" && stop !== "end") {
+				// A request interrupt stops the current beat, not the scope. While
+				// a request is still pending the abort is that interrupt, so clear
+				// the stale stop reason and drive the reply turn instead of
+				// failing the child.
+				if (stop === "aborted" && hasPendingRequest()) {
+					const agentState = session?.agent?.state;
+					if (agentState) agentState.stopReason = "stop";
+					continue;
+				}
 				failed = true;
 				reason = `the worker in the forked scope stopped with reason "${stop}"`;
 				break;
@@ -358,7 +433,7 @@ export async function spawnChildTicket(spec, ports) {
 		// After the child returns (no longer RUNNING), drain any inbox message
 		// that arrived before it finished, matching prior spawn behavior.
 		if (bracket && bracket.status !== "running") {
-			await deliverInbox();
+			await deliverRequest();
 		}
 		const added = messagesOf(session).slice(before);
 		// The scope is finished, not gone. Hand the prompt handle to the wiring
@@ -369,7 +444,7 @@ export async function spawnChildTicket(spec, ports) {
 		if (!failed && !unpublished) {
 			ports.registerIdle?.(spec.forkId, {
 				prompt,
-				drain: deliverInbox,
+				drain: deliverRequest,
 				abort: () => ports.abortChild?.(session),
 			});
 		}
@@ -405,11 +480,35 @@ export async function spawnChildTicket(spec, ports) {
 		}
 	}
 
+	/**
+	 * The child's address in the request table. A function declaration, not a
+	 * `const`: `finish()` is called from inside the try block, before any later
+	 * statement has been evaluated, so only a hoisted declaration is in scope.
+	 */
+	function runtimePathOf() {
+		const path = forkOf(ledger, spec.forkId)?.path;
+		return typeof path === "string" && path !== "" ? path : null;
+	}
+
 	function finish() {
 		// Remove only this child's widget row; root events never pass through it.
 		detach();
 		// Wake the waiting parent in every case: a failed child is still a
 		// returned child, and a join that never wakes is a deadlock.
+		// After the child returns (no longer RUNNING) or fails, no further turn
+		// can answer for it. A scope that keeps an idle handle stays addressable
+		// and keeps its entry; anything else stops answering for good.
+		if (failed || unpublished) {
+			const runtimePath = runtimePathOf();
+			if (runtimePath !== null) {
+				clearRuntime(registry, runtimePath);
+				// A child that failed or never published can never answer. A
+				// queued scope_request must not park its caller forever, so the
+				// queue settles here; a scope that returns successfully keeps its
+				// idle wake and its queue.
+				rejectPendingRequests(registry, runtimePath, reason ?? undefined);
+			}
+		}
 		pulse(registry, ledger, spec.forkId, outcomeOf(registry, spec.forkId));
 		ports.persistLedger?.();
 		return { ok: true, failed, reason };

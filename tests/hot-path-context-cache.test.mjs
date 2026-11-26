@@ -66,8 +66,8 @@ describe("contextMessages branch projection cache", () => {
 		expect(station.contextMessages()).toBe(moved);
 	});
 
-	test("an amend that returns to a previous leaf id still rebuilds", () => {
-		// Amends and branch switches produce fresh entry ids, so a leaf id that
+	test("a rebuild that returns to a previously seen leaf id still rebuilds", () => {
+		// Branch mutations produce fresh entry ids, so a leaf id that
 		// reappears means the branch genuinely returned to that shape.
 		const manager = managerWith({ a: [{ role: "user", content: "one" }] });
 		manager.setLeaf("a");

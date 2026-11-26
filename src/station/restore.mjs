@@ -15,7 +15,7 @@ const SESSION_STATE_TYPE = "scope.state";
 /** A state entry without its embedded ledger half, which folds separately. */
 function stripEmbeddedLedger(data) {
 	if (!data || typeof data !== "object" || !["checkpoint", "delta"].includes(data.kind)) return data;
-	const { ledger, amends, ...rest } = data;
+	const { ledger, ...rest } = data;
 	return rest;
 }
 
@@ -39,24 +39,15 @@ function collectChain(manager) {
 	// history that no newer entry repeats.
 	let chainSealed = false;
 	let ledgerSealed = false;
-	let amendsSealed = false;
 	for (let index = branch.length - 1; index >= 0; index -= 1) {
 		const entry = branch[index];
 		if (entry?.type !== "custom" || entry.customType !== SESSION_STATE_TYPE) {
 			continue;
 		}
 		const data = entry.data;
-		if (data?.kind === "amends") {
-			if (!amendsSealed) {
-				ledger.push(data);
-				if (Array.isArray(data.amends)) amendsSealed = true;
-			}
-			continue;
-		}
-		if (!amendsSealed && data?.amends && !Array.isArray(data.amends) && typeof data.amends === "object") {
-			ledger.push({ version: data.version, kind: "amends", ...data.amends });
-			if (Array.isArray(data.amends.amends)) amendsSealed = true;
-		}
+		// A retired generation journaled retired beats. The domain is gone, and
+		// an old session must still load, so its entries are skipped whole.
+		if (data?.kind === "amends") continue;
 		if (isLedgerEntry(data)) {
 			if (!ledgerSealed) {
 				const { amends: _amends, ...rest } = data;
@@ -88,10 +79,6 @@ function collectChain(manager) {
 				}
 				ledgerSealed = true;
 			}
-			if (!amendsSealed) {
-				ledger.push({ version: 3, kind: "amends", amends: Array.isArray(legacy?.amends) ? legacy.amends : [] });
-				amendsSealed = true;
-			}
 		}
 		// A write may carry its ledger increment inside the state entry.
 		const embedded = embeddedLedger(data);
@@ -118,7 +105,7 @@ function collectChain(manager) {
 		// and the core chain has reached its checkpoint. Earlier entries cannot
 		// contribute to any of the three domains. The host may still materialize
 		// the branch, but there is no reason to inspect its older entries again.
-		if (chainSealed && ledgerSealed && amendsSealed) break;
+		if (chainSealed && ledgerSealed) break;
 	}
 	chain.reverse();
 	ledger.reverse();

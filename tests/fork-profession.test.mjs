@@ -5,7 +5,7 @@ import { validateFork, validateForkBatch } from "../src/station/domain/fork-join
 import { createBracketLedger } from "../src/scope/forkjoin.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
-import { forkParameters } from "../src/tools/descriptions.mjs";
+import { loadDoc } from "../src/prompts/index.mjs";
 
 const base = {
   scopeId: "alpha",
@@ -16,11 +16,14 @@ const base = {
 };
 
 describe("scope_fork profession", () => {
-  test("the item schema requires a You are statement", () => {
-    const item = forkParameters.properties.forks.items;
-    assert.ok(item.required.includes("profession"));
-    assert.equal(item.properties.profession.pattern, "^You are \\S");
-    assert.equal(item.properties.profession.minLength, 9);
+  test("the model-facing fork copy states the identity rule", () => {
+    // The JSON schema that used to carry the pattern is gone: `scope_fork` is
+    // an api method now, so the rule the model must satisfy lives in the copy it
+    // reads. If that sentence disappears the model has no way to know, and the
+    // first refusal it meets is INVALID_PROFESSION.
+    const copy = loadDoc("tools/fork-join")["fork.profession"];
+    assert.ok(copy);
+    assert.match(copy, /You are /);
   });
 
   test("validateFork trims and returns the profession", () => {

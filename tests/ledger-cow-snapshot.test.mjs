@@ -12,7 +12,6 @@ import { describe, expect, test } from "bun:test";
 
 import {
   applyCharge,
-  applyRefund,
   createBracketLedger,
   forkOf,
   markReady,
@@ -63,16 +62,6 @@ describe("the ledger snapshot is shared, not recopied", () => {
     expect(before.forks.a.remaining).toEqual({ read: 3 });
     expect(after.forks.a.remaining).toEqual({ read: 2 });
     expect(after).toEqual(serializeLedger(ledger));
-  });
-
-  test("a refuted charge leaves the snapshot untouched", () => {
-    const ledger = createBracketLedger();
-    running(ledger, "a");
-    applyCharge(ledger, "a", { tool: "read", toolCallId: "call-1", amount: 1 });
-    const charged = serializeLedgerShared(ledger);
-    const again = applyCharge(ledger, "a", { tool: "read", toolCallId: "call-1", amount: 1 });
-    expect(again.alreadyCharged).toBe(true);
-    expect(serializeLedgerShared(ledger)).toBe(charged);
   });
 
   test("a paused clock reaches the next snapshot and no earlier one", () => {
@@ -159,8 +148,6 @@ describe("the ledger snapshot is shared, not recopied", () => {
     running(ledger, "b");
     same();
     applyCharge(ledger, "a", { tool: "read", toolCallId: "call-1" });
-    same();
-    applyRefund(ledger, "a", "call-1");
     same();
     pauseClock(forkOf(ledger, "a"), 3_000);
     same();

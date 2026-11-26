@@ -2,6 +2,10 @@
  * Host capture for omp: the live AgentSession seam, the builtin slash
  * executor, and a strict slash dispatcher.
  *
+ * The slash route is not a model-facing tool; it is how a forked scope applies
+ * its own `model` selection (`switchModelTicket` -> `sendSlashPrompt`). It
+ * stays even though the model never issues a slash command itself.
+ *
  * One narrow patch remains: the `extensionRunner` getter binds the live
  * AgentSession to its SessionManager, because the extension context exposes the
  * manager but not the session. Everything else uses public host API.
@@ -23,9 +27,10 @@ const USER_INTERRUPT_REASONS = new Set([
 	"Interrupted by user",
 	"Stopped by parent agent",
 ]);
-// The retired `amend` and `pin` stay here so an older transcript is still
-// recognized as carrying scope tools.
-const SCOPE_TOOLS = ["scope_fork", "scope_join", "scope_return", "scope_context", "amend", "pin", "todo"];
+// Vibe mode re-activates a tool set from a base list. The core registers
+// exactly one tool, so that is the whole set this patch must keep alive; the
+// retired scope_* names must never come back through this door.
+const SCOPE_TOOLS = ["js"];
 
 function patchMethod(prototype, name, marker, createWrapper) {
 	if (!prototype || Object.hasOwn(prototype, marker)) return false;
@@ -316,10 +321,9 @@ export function installBuiltinSlashExecutor(executor) {
 /**
  * Execute one system slash command and wait for its completion promise.
  *
- * This route remains for model selection (`/switch`, `/model`). The relay
- * handoff no longer passes through the slash dispatcher: it calls
- * `session.compact(focus, { mode: "handoff" })`, the same call the builtin
- * `/handoff` makes, so no prompt or message is ever sent.
+ * This route carries a scoped model switch: the fork ticket names the model,
+ * and the switch itself is performed by the host's own `/switch` command
+ * against the child session. No prompt or message text is ever sent.
  */
 export async function sendSlashPrompt(target, text, options = {}) {
 	const session = sessionFor(target) ?? target;

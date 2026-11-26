@@ -140,7 +140,7 @@ describe("restore replays the whole ledger journal", () => {
 		});
 		const restored = restoreState(manager);
 		expect(Object.keys(restored.brackets.forks)).toEqual(["new"]);
-		expect(restored.amends).toEqual(["new-beat"]);
+		expect(restored.amends).toBeUndefined();
 	});
 
 	test("a later unenveloped legacy snapshot supersedes earlier increments", () => {
@@ -157,7 +157,7 @@ describe("restore replays the whole ledger journal", () => {
 		manager.appendCustomEntry("scope.state", serializeState(later));
 		const restored = restoreState(manager);
 		expect(Object.keys(restored.brackets.forks)).toEqual(["new"]);
-		expect(restored.amends).toEqual(["new-beat"]);
+		expect(restored.amends).toBeUndefined();
 	});
 
 	test("a string-encoded legacy snapshot also supersedes older increments", () => {
@@ -172,7 +172,7 @@ describe("restore replays the whole ledger journal", () => {
 		manager.appendCustomEntry("scope.state", JSON.stringify(serializeState(later)));
 		const restored = restoreState(manager);
 		expect(Object.keys(restored.brackets.forks)).toEqual(["new"]);
-		expect(restored.amends).toEqual(["new-beat"]);
+		expect(restored.amends).toBeUndefined();
 	});
 
 	test("a v1 snapshot without optional domains cuts off older increments", () => {
@@ -185,7 +185,7 @@ describe("restore replays the whole ledger journal", () => {
 		const restored = restoreState(manager);
 		expect(restored.seq).toBe(23);
 		expect(Object.keys(restored.brackets.forks)).toEqual([]);
-		expect(restored.amends).toEqual([]);
+		expect(restored.amends).toBeUndefined();
 	});
 
 	test("a v3 suffix after a legacy checkpoint applies to that checkpoint", () => {
@@ -210,7 +210,7 @@ describe("restore replays the whole ledger journal", () => {
 		const restored = restoreState(manager);
 		expect(Object.keys(restored.brackets.forks)).toEqual(["new"]);
 		expect(restored.brackets.forks.new.task).toBe("updated");
-		expect(restored.amends).toEqual(["base-beat", "later-beat"]);
+		expect(restored.amends).toBeUndefined();
 	});
 
 	test("an increment older than the newest checkpoint still restores", () => {

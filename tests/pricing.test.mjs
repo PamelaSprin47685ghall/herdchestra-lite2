@@ -6,8 +6,8 @@ import {
 	charsToTokens,
 	createEmptyCatalog,
 	loadPricingCatalog,
-	resolveModelPolicy,
 } from "../host-omp/src/host/index.mjs";
+import { preparseModelSpec } from "../host-omp/src/host/pricing.mjs";
 
 const savedEnv = {
 	OMP_CODING_AGENT_DIR: process.env.OMP_CODING_AGENT_DIR,
@@ -42,85 +42,6 @@ describe("charsToTokens", () => {
 	});
 });
 
-describe("resolveModelPolicy", () => {
-	test("fallback when no config and no usage cost", () => {
-		const policy = resolveModelPolicy(createEmptyCatalog(), {}, {});
-		expect(policy).toEqual({
-			pHit: 1e-6,
-			pMiss: 10e-6,
-			pOut: 50e-6,
-			contextWindow: null,
-			knownPricing: false,
-			label: "fallback",
-		});
-	});
-
-	test("Anthropic pricing: cacheWrite > input > cacheRead", () => {
-		const policy = resolveModelPolicy(createEmptyCatalog(), {
-			model: {
-				id: "claude-sonnet-4-5",
-				provider: "anthropic",
-				contextWindow: 200000,
-				cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-			},
-		}, {});
-		expect(policy.pHit).toBeCloseTo(0.3e-6);
-		expect(policy.pMiss).toBeCloseTo(3.75e-6);
-		expect(policy.pOut).toBeCloseTo(15e-6);
-		expect(policy.contextWindow).toBe(200000);
-		expect(policy.knownPricing).toBe(true);
-	});
-
-	test("no-cache model: pHit equals pMiss at the input price", () => {
-		const policy = resolveModelPolicy(createEmptyCatalog(), {
-			model: { id: "gpt-no-cache", cost: { input: 1, output: 2 } },
-		}, {});
-		expect(policy.pHit).toBeCloseTo(1e-6);
-		expect(policy.pMiss).toBeCloseTo(1e-6);
-		expect(policy.knownPricing).toBe(true);
-	});
-
-	test("free local model: prices are zero but pricing is known", () => {
-		const policy = resolveModelPolicy(createEmptyCatalog(), {
-			model: { id: "free-local", cost: { input: 0, cacheRead: 0, cacheWrite: 0 } },
-		}, {});
-		expect(policy.pHit).toBe(0);
-		expect(policy.pMiss).toBe(0);
-		expect(policy.knownPricing).toBe(true);
-	});
-
-	test("derives unit prices from usage cost when no model config", () => {
-		const policy = resolveModelPolicy(createEmptyCatalog(), {}, {
-			usage: {
-				input: 100,
-				cacheRead: 200,
-				cacheWrite: 50,
-				output: 10,
-				cost: { cacheRead: 0.02, cacheWrite: 0.01, input: 0.01, output: 0.02 },
-			},
-		});
-		expect(policy.knownPricing).toBe(true);
-		expect(policy.pHit).toBeCloseTo(0.02 / 200);
-		expect(policy.pMiss).toBeCloseTo(0.01 / 50);
-		expect(policy.pOut).toBeCloseTo(0.02 / 10);
-		expect(policy.contextWindow).toBeNull();
-		expect(policy.label).toBe("usage-derived");
-	});
-
-	test("uses modelRegistry.find when it returns synchronously", () => {
-		const policy = resolveModelPolicy(createEmptyCatalog(), {
-			modelRegistry: {
-				find(provider, modelId) {
-					if (provider !== "acme" || modelId !== "m1") return undefined;
-					return { id: "m1", cost: { input: 2, cacheRead: 0.5 } };
-				},
-			},
-		}, { provider: "acme", modelId: "m1" });
-		expect(policy.pHit).toBeCloseTo(0.5e-6);
-		expect(policy.pMiss).toBeCloseTo(2e-6);
-	});
-});
-
 describe("loadPricingCatalog", () => {
 	test("reads an array-style models.json and the default model", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pricing-"));
@@ -147,9 +68,9 @@ describe("loadPricingCatalog", () => {
 			const catalog = await loadPricingCatalog();
 			expect(catalog.defaultModelKey).toBe("anthropic/claude-x");
 			expect(catalog.byFullId.has("anthropic/claude-x")).toBe(true);
-			const policy = resolveModelPolicy(catalog, {}, {});
-			expect(policy.pHit).toBeCloseTo(0.3e-6);
-			expect(policy.contextWindow).toBe(100000);
+			const parsed = preparseModelSpec(catalog, {}, "anthropic/claude-x");
+			expect(parsed.pricing.pHit).toBeCloseTo(0.3e-6);
+			expect(parsed.contextWindow).toBe(100000);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -175,9 +96,9 @@ describe("loadPricingCatalog", () => {
 		try {
 			const catalog = await loadPricingCatalog();
 			expect(catalog.byFullId.has("openai/gpt-y")).toBe(true);
-			const policy = resolveModelPolicy(catalog, {}, {});
-			expect(policy.pHit).toBeCloseTo(2e-6);
-			expect(policy.pMiss).toBeCloseTo(2e-6);
+			const parsed = preparseModelSpec(catalog, {}, "gpt-y");
+			expect(parsed.pricing.pHit).toBeCloseTo(2e-6);
+			expect(parsed.pricing.pMiss).toBeCloseTo(2e-6);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

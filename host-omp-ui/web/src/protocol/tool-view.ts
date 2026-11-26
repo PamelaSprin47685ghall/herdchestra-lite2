@@ -343,6 +343,11 @@ export type EvalView = ToolViewBase & {
   language: string;
   code: string;
   output: string;
+  /**
+   * The inner tool calls a `js` script dispatched, already described. One
+   * level only: a js call cannot nest another js call.
+   */
+  children?: ToolView[];
 };
 export type SearchView = ToolViewBase & {
   kind: "search";
@@ -411,7 +416,63 @@ function titleOf(name: string, args: Record<string, unknown>, fallback: string):
   return description || path || command || fallback || name;
 }
 
-export function describeTool(tool: ToolExecution): ToolView {
+// The js result's first line is a fixed echo of the invocation; the code itself
+// already travelled in the call's arguments, so the card shows the output only.
+const REPL_ECHO_PREFIX = "> await AsyncFunction(";
+
+function stripReplEcho(text: string): string {
+  if (!text.startsWith(REPL_ECHO_PREFIX)) return text;
+  const at = text.indexOf("\n");
+  return at === -1 ? "" : text.slice(at + 1);
+}
+
+/**
+ * The inner tool calls a `js` script dispatched, read from
+ * `result.details.innerCalls`. Each entry is described by this same function so
+ * a `write` inside js renders as a write card, not a JSON blob. One level only:
+ * a js call cannot nest another.
+ */
+function innerCallViews(
+  result: unknown,
+  detailsField: unknown,
+  depth: number,
+): ToolView[] | undefined {
+  if (depth > 0) return undefined;
+  // Live frames carry the details on the result; a rebuilt history carries them
+  // on the block, which `mergeToolBlock` copies onto the execution.
+  const details =
+    asRecord(asRecord(result)?.details) ?? asRecord(detailsField);
+  const calls = Array.isArray(details?.innerCalls) ? details.innerCalls : [];
+  const views: ToolView[] = [];
+  for (const raw of calls) {
+    const call = asRecord(raw);
+    const name = typeof call?.name === "string" ? call.name : "";
+    if (!name) continue;
+    views.push(
+      describeTool(
+        {
+          id: `${name}:${views.length}`,
+          name,
+          status: call?.isError === true ? ("failed" as const) : ("completed" as const),
+          args: call?.args,
+          result: {
+            content: [
+              {
+                type: "text",
+                text: typeof call?.resultText === "string" ? call.resultText : "",
+              },
+            ],
+          },
+          isError: call?.isError === true,
+        },
+        depth + 1,
+      ),
+    );
+  }
+  return views.length > 0 ? views : undefined;
+}
+
+export function describeTool(tool: ToolExecution, depth = 0): ToolView {
   const name = tool.name || "tool";
   const args = argsOf(tool);
   const output = truncate(resultText(tool.result ?? tool.partialResult));
@@ -479,6 +540,20 @@ export function describeTool(tool: ToolExecution): ToolView {
     };
   }
 
+  // The single `js` tool: the script is the code, the REPL text is the output,
+  // and the real work is in `details.innerCalls` — one card per inner call.
+  if (name === "js") {
+    return {
+      ...base,
+      kind: "eval",
+      title: titleOf(name, args, "js"),
+      language: "javascript",
+      code: String(args.code ?? ""),
+      output: stripReplEcho(output.text),
+      children: innerCallViews(tool.result, tool.details, depth),
+    };
+  }
+
   if (name === "eval") {
     return {
       ...base,
@@ -508,6 +583,69 @@ export function describeTool(tool: ToolExecution): ToolView {
       title: titleOf(name, args, name),
       query: String(args.query ?? ""),
       links: safeLinks(output.text, typeof args.url === "string" ? args.url : undefined),
+    };
+  }
+
+  // Mirrors the Node mapper: the scope control plane is the orchestration
+  // surface once every native tool hides behind `js`, so its calls get a card
+  // instead of a JSON blob.
+  if (name === "scope_request") {
+    const target = String(args.target ?? "");
+    const message = String(args.message ?? "");
+    const interrupt = args.interrupt === true ? " · interrupt" : "";
+    return {
+      ...base,
+      kind: "ask",
+      title: `scope_request → ${target || "?"}`,
+      summary: [`→ ${target}${interrupt}: ${message}`, output.text && `← ${output.text}`]
+        .filter(Boolean)
+        .join("\n"),
+    };
+  }
+
+  if (name === "scope_reply") {
+    const reply = String(args.text ?? args.reply ?? args.message ?? output.text);
+    return {
+      ...base,
+      kind: "ask",
+      title: "scope_reply",
+      summary: `← ${reply}`,
+    };
+  }
+
+  if (name === "scope_fork") {
+    const forks = Array.isArray(args.forks) ? args.forks : [];
+    const requested = forks.map((fork) => {
+      const spec: Record<string, unknown> = asRecord(fork) ?? {};
+      const id = String(spec.scopeId ?? spec.name ?? "?");
+      const fsm = String(spec.fsm ?? "").slice(0, 80);
+      return fsm ? `${id} — ${fsm}` : id;
+    });
+    return {
+      ...base,
+      kind: "task",
+      title: titleOf(name, args, `scope_fork (${forks.length})`),
+      agent: "scope_fork",
+      prompt: requested.join("\n"),
+      result: output.text,
+    };
+  }
+
+  if (name === "scope_join" || name === "scope_return") {
+    const scope = String(args.scope ?? "");
+    const plan =
+      name === "scope_return"
+        ? args.signed_sealed_hands_off_nothing_left_on_the_table
+          ? "seal"
+          : "rewind"
+        : "";
+    return {
+      ...base,
+      kind: "task",
+      title: scope ? `${name} ${scope}` : name,
+      agent: name,
+      prompt: plan,
+      result: output.text,
     };
   }
 
@@ -577,6 +715,7 @@ export function mergeToolBlock(
           args: block.args,
           argsText: block.argsText,
           result: block.result,
+          details: block.details,
           isError: block.isError,
           toolCallId: block.id,
           toolName: block.name,
@@ -588,6 +727,7 @@ export function mergeToolBlock(
             status: block.status ?? "running",
             args: block.args,
             result: block.result,
+            details: block.details,
             toolCallId: block.toolCallId,
             toolName: block.name,
           }
@@ -600,6 +740,9 @@ export function mergeToolBlock(
     name: execution.name || fromBlock.name,
     args: execution.args ?? fromBlock.args,
     result: execution.result ?? fromBlock.result,
+    // A live execution may arrive without details while the rebuilt block has
+    // them (or the reverse); either side may supply them.
+    details: execution.details ?? fromBlock.details,
     isError: Boolean(execution.isError ?? fromBlock.isError),
     status: execution.isError
       ? "failed"

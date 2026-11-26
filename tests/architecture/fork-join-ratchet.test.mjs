@@ -54,3 +54,28 @@ describe("fork/join ratchet", () => {
 		expect(controls).not.toContain("Object.create(station)");
 	});
 });
+
+// A `scope_request` is a live Promise, not a record: it exists only while the
+// requester is parked. Persisting it would serialize a resolver that no reload can
+// honour, so the persistence layer must never name the request table.
+describe("the request queue stays in memory", () => {
+	const persistence = readFileSync(
+		new URL("../../src/scope/persistence.mjs", import.meta.url),
+		"utf8",
+	);
+
+	test("no serialized state carries a request queue", () => {
+		expect(persistence).not.toMatch(/registry\.requests/);
+		expect(persistence).not.toMatch(/\bpendingRequests?\b/);
+		expect(persistence).not.toMatch(/\bwaitFor\b/);
+	});
+
+	test("the queue lives beside the fork registry, not on the state", () => {
+		const state = readFileSync(
+			new URL("../../src/scope/state.mjs", import.meta.url),
+			"utf8",
+		);
+		expect(state).not.toMatch(/\brequests\s*:/);
+		expect(state).not.toMatch(/\bwaitFor\s*:/);
+	});
+});

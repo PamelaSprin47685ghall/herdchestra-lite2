@@ -81,12 +81,40 @@ const UNITS = [
 
 const FINGERPRINTS = [
   { root: CORE_INSTALL, file: "src/station/domain/handoff.mjs", needle: "signed_sealed_hands_off_nothing_left_on_the_table", min: 1 },
-  // The scope protocol is the three fork/join/return tools. The receipt chain
-  // is gone, so no needle may depend on it. The tool catalog lives in the
-  // core: the host package only loops over `engine.tools`.
-  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_fork"', min: 1 },
-  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_join"', min: 1 },
-  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'name: "scope_return"', min: 1 },
+  // The scope protocol is reachable only through the single `js` tool: every
+  // capability, fork/join/return included, is a method on the `api` object the
+  // js ticket builds. So the catalog registers one tool, and these needles pin
+  // that surface plus the two modules it rests on.
+  //
+  // Two entries for the catalog, because two facts matter and either can rot
+  // alone: the name is literally `js` (the model sees that string), and the
+  // registered tool is built from that constant rather than a hard-coded one.
+  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'JS_TOOL_NAME = "js"', min: 1 },
+  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: "name: JS_TOOL_NAME", min: 1 },
+  { root: CORE_INSTALL, file: "src/tools/js-ticket.mjs", needle: "AsyncFunction", min: 1 },
+  { root: CORE_INSTALL, file: "src/station/domain/capabilities.mjs", needle: "projectCapabilities", min: 1 },
+  // These two prompts are inlined into the system prompt, so a retired tool name
+  // there teaches the model a call that no longer exists while the code is fine.
+  // Pin the live vocabulary and forbid the retired names (`max: 0`).
+  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_request", min: 1 },
+  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_ask", min: 0, max: 0 },
+  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_send", min: 0, max: 0 },
+  { root: CORE_INSTALL, file: "resources/prompts/errors.md", needle: "request-deadlock-cycle", min: 1 },
+];
+
+/**
+ * Facts about the working tree itself, which no install target carries.
+
+ * The `js` result echo is written once, by the core, and stripped twice: the
+ * transcript renderer and the web client each keep their own copy of the prefix,
+ * in a package the vendor copy does not include. Drift is silent — the renderer
+ * shows the echo line as output — so pin all three literals here, and check them
+ * in every install shape.
+ */
+const TREE_FINGERPRINTS = [
+  { file: "src/tools/js-ticket.mjs", needle: "> await AsyncFunction(", min: 1 },
+  { file: "host-omp-ui/src/station/domain/tool-artistry.mjs", needle: "> await AsyncFunction(", min: 1 },
+  { file: "host-omp-ui/web/src/protocol/tool-view.ts", needle: "> await AsyncFunction(", min: 1 },
 ];
 const checkOnly = process.argv.includes("--check");
 const vendorRequested =
@@ -216,15 +244,18 @@ function pruneAll(extra) {
   }
 }
 
-function fingerprintProblems() {
-  return FINGERPRINTS.map(({ root, file, needle, min }) => {
-    const path = join(TARGET, root, file);
+function problemsFor(base, entries) {
+  return entries.map(({ root = "", file, needle, min, max = Number.POSITIVE_INFINITY }) => {
+    const path = join(base, root, file);
     const hits = existsSync(path) ? readFileSync(path, "utf8").split(needle).length - 1 : 0;
-    return hits >= min
-      ? null
-      : `${join(root, file)} carries "${needle}" ${hits} time(s); needs ${min}`;
+    if (hits >= min && hits <= max) return null;
+    const wanted = max === Number.POSITIVE_INFINITY ? `at least ${min}` : `${min}-${max}`;
+    return `${join(root, file)} carries "${needle}" ${hits} time(s); needs ${wanted}`;
   }).filter(Boolean);
 }
+
+const fingerprintProblems = () => problemsFor(TARGET, FINGERPRINTS);
+const treeFingerprintProblems = () => problemsFor(ROOT, TREE_FINGERPRINTS);
 
 /**
  * The install comes in two shapes, and the sync owns only one of them.
@@ -278,8 +309,10 @@ if (target.kind === "link") {
     process.exit(1);
   }
   console.log("the working tree is the plugin; nothing to copy");
-  if (checkOnly) console.log("in sync (link install); nothing to check");
-  process.exit(0);
+  const treeProblems = treeFingerprintProblems();
+  for (const line of treeProblems) console.error(`  stale  ${line}`);
+  if (checkOnly && treeProblems.length === 0) console.log("in sync (link install); tree fingerprints ok");
+  process.exit(treeProblems.length === 0 ? 0 : 1);
 }
 
 if (target.kind === "foreign-link") {
@@ -326,7 +359,7 @@ for (const { unit, rel } of extra) console.log(`  extra  ${join(unit.dest, rel)}
 for (const rel of legacy) console.log(`  legacy ${rel}/`);
 
 if (checkOnly) {
-  const problems = fingerprintProblems();
+  const problems = [...fingerprintProblems(), ...treeFingerprintProblems()];
   for (const line of problems) console.log(`  stale  ${line}`);
   if (drift.length === 0 && extra.length === 0 && legacy.length === 0 && problems.length === 0) {
     console.log("in sync; fingerprints ok");
@@ -359,7 +392,7 @@ if (remaining.length > 0) {
 }
 if (drift.length === 0) console.log("already in sync: 0 file(s) copied");
 
-const problems = fingerprintProblems();
+const problems = [...fingerprintProblems(), ...treeFingerprintProblems()];
 if (problems.length > 0) {
   console.error("sync-plugin: installed build is missing current code");
   for (const line of problems) console.error(`  stale  ${line}`);

@@ -46,6 +46,54 @@ const toolResultEntry = {
 	},
 };
 
+test("a toolResult keeps the js inner-call details the artifact pane rebuilds from", async () => {
+	const { reconstructTranscriptFromEntries } = await load();
+	const details = {
+		innerCalls: [
+			{ name: "write", args: { path: "src/a.mjs", content: "one" }, resultText: "ok", isError: false },
+		],
+	};
+	const messages = reconstructTranscriptFromEntries([
+		{
+			type: "message",
+			id: "a1",
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc1", name: "js", arguments: { code: "…" } }],
+				timestamp: 1,
+			},
+		},
+		{
+			type: "message",
+			id: "t1",
+			message: {
+				role: "toolResult",
+				toolCallId: "tc1",
+				toolName: "js",
+				content: [{ type: "text", text: "> await AsyncFunction(" }],
+				details,
+				timestamp: 2,
+			},
+		},
+	]);
+	// The result message carries it for the artifact scan of a page that starts
+	// after the call...
+	const result = messages.find((message) => message.role === "toolResult");
+	expect(result.details).toEqual(details);
+	// ...and the call block carries it whenever the pair is rebuilt together.
+	const block = messages
+		.find((message) => message.role === "assistant")
+		.blocks.find((entry) => entry.type === "toolCall");
+	expect(block.details).toEqual(details);
+});
+
+test("a toolResult without details does not grow a details field", async () => {
+	const { reconstructTranscriptFromEntries } = await load();
+	const messages = reconstructTranscriptFromEntries([toolResultEntry]);
+	expect(messages[0].role).toBe("toolResult");
+	expect("details" in messages[0]).toBe(false);
+});
+
 test("reconstructs every camelCase role and pairs tool results by toolCallId", async () => {
 	const { reconstructTranscriptFromEntries } = await load();
 	const messages = reconstructTranscriptFromEntries([
@@ -270,4 +318,57 @@ test("a delta appended past the last block still respects the 1MB text budget", 
 	const block = next.liveSession.messages[0].blocks[0];
 	expect(block.text.endsWith("… [truncated]")).toBe(true);
 	expect(block.text.length).toBeLessThan(atCap.length + 32);
+});
+
+// The single `js` tool reports what it dispatched in `details.innerCalls`, and
+// both the js card and the artifact drawer rebuild file writes from there.
+// Dropping `details` here leaves every card intact and empties the drawer —
+// the failure is invisible in the transcript itself.
+test("a toolResult keeps details and the paired toolCall block receives them", async () => {
+	const { reconstructTranscriptFromEntries, reconstructRange } = await load();
+	const details = {
+		innerCalls: [
+			{ id: "tc1#0", name: "write", args: { path: "src/c.mjs", content: "export const c = 3;" }, resultText: "ok" },
+		],
+	};
+	const entries = [
+		{
+			type: "message",
+			id: "a1",
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc1", name: "js", arguments: { code: "await api.write(...)" } }],
+				timestamp: 1,
+			},
+		},
+		{
+			type: "message",
+			id: "t1",
+			message: {
+				role: "toolResult",
+				toolCallId: "tc1",
+				toolName: "js",
+				content: [{ type: "text", text: "ok" }],
+				details,
+				timestamp: 2,
+			},
+		},
+	];
+
+	const messages = reconstructTranscriptFromEntries(entries);
+	const result = messages.find((message) => message.role === "toolResult");
+	expect(result.toolName).toBe("js");
+	expect(result.details).toEqual(details);
+
+	const call = messages
+		.flatMap((message) => message.blocks ?? [])
+		.find((block) => block.type === "toolCall");
+	expect(call.name).toBe("js");
+	expect(call.details).toEqual(details);
+	expect(call.details.innerCalls[0].args.path).toBe("src/c.mjs");
+
+	// A page whose result lives on it must carry the same details as the rebuild.
+	const paged = reconstructRange(entries, 0, 2);
+	const pagedCall = paged.flatMap((message) => message.blocks ?? []).find((block) => block.type === "toolCall");
+	expect(pagedCall.details).toEqual(details);
 });

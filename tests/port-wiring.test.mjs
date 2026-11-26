@@ -13,8 +13,6 @@ import { createState, deserializeState, serializeState } from "../src/scope/inde
 
 const PORT_ENV = {
 	clock: "HERD_CLOCK",
-	pin: "HERD_PIN",
-	amend: "HERD_AMEND",
 	herd: "HERD_HERD",
 };
 
@@ -38,21 +36,8 @@ function stationWith(ports, state = {}) {
 	return station;
 }
 
-test("pin off refuses every note and leaves the store untouched", () => {
-	const station = stationWith({ pin: "off" }, { pins: [] });
-	const result = station.pinPort().add("note");
-	expect(result).toEqual({ ok: false, code: "PIN_UNAVAILABLE", port: "pin" });
-	expect(station.state.pins).toEqual([]);
-});
-
-test("pin on writes through the station's persisted list", () => {
-	const station = stationWith({ pin: "on" }, { pins: [] });
-	expect(station.pinPort().add("note")).toEqual({ ok: true, count: 1 });
-	expect(station.state.pins).toEqual(["note"]);
-});
-
 test("the station binds one session port object, not one per call", () => {
-	const built = buildPorts({ HERD_PIN: "on" });
+	const built = buildPorts({ HERD_HERD: "on" });
 	const station = createTestStation(SessionStation, 
 		{ getSessionId: () => "s1" },
 		{},
@@ -60,24 +45,10 @@ test("the station binds one session port object, not one per call", () => {
 		{ ports: () => built.names, implementations: () => built.implementations },
 		null,
 	);
-	const first = station.pinPort();
-	expect(first).toBe(station.pinPort());
-	expect(first.add("note")).toEqual({ ok: true, count: 1 });
-	expect(station.state.pins).toContain("note");
-});
-
-test("amend off refuses before applyAmend can mutate the ledger", () => {
-	const station = stationWith({ amend: "off" }, { amends: [] });
-	const result = station.amendPort().record("beat-1");
-	expect(result).toEqual({ ok: false, code: "AMEND_UNAVAILABLE", port: "amend" });
-	expect(station.state.amends).toEqual([]);
-});
-
-test("amend on records into the station's persisted list exactly once", () => {
-	const station = stationWith({ amend: "on" }, { amends: [] });
-	expect(station.amendPort().record("beat-1")).toEqual({ ok: true, retired: ["beat-1"] });
-	expect(station.amendPort().record("beat-1")).toEqual({ ok: true, retired: ["beat-1"] });
-	expect(station.state.amends).toEqual(["beat-1"]);
+	const first = station.herdPort();
+	expect(first).toBe(station.herdPort());
+	expect(first.toggle("hi")).toEqual({ ok: true, mode: "on", text: "hi" });
+	expect(station.state.autopilot).toBe(true);
 });
 
 test("herd off refuses a toggle and never flips the persisted mode", () => {
@@ -115,11 +86,9 @@ test("one complete bundle binds one object per station", () => {
 		null,
 		null,
 	);
-	Object.assign(station.state, { pins: [], amends: [], autopilot: false });
-	expect(station.pinPort()).toBe(station.pinPort());
-	expect(station.amendPort()).toBe(station.amendPort());
+	Object.assign(station.state, { autopilot: false });
 	expect(station.herdPort()).toBe(station.herdPort());
-	expect(station.pinPort().add("note").ok).toBe(true);
+	expect(station.herdPort().toggle("hi").ok).toBe(true);
 });
 
 test("status off binds no host event and builds no runtime", () => {

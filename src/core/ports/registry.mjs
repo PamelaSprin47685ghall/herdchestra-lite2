@@ -14,8 +14,6 @@ export const PORTS = Object.freeze({
 	chineseReminder: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	vibeCompat: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	herd: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
-	pin: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
-	amend: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	modelSwitch: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	status: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	observer: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),

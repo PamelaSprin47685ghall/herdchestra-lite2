@@ -4,11 +4,8 @@ export {
   createState,
   createFlowState,
   branchDeadline,
-  CACHE_TTL_MS,
   modelCacheFor,
-  cacheIsFresh,
   touchModelCache,
-  capCachePositions,
 } from "./state.mjs";
 export {
   roundAmount,
@@ -24,16 +21,14 @@ export {
   registerFork,
   forkOf,
   markReady,
-  enqueueScopeMessage,
-  enqueueRootMessage,
-  takePendingInbox,
-  finishWokenScope,
+  releaseRecordText,
   takeReady,
   reparentOrphans,
   liveReceiverOf,
   adoptFork,
   rehomeReadyResults,
   abandon,
+  abandonDescendants,
   openChildren,
   unreceivedChildren,
   readyChildren,
@@ -49,17 +44,18 @@ export {
   touchRecord,
   validLedger,
   applyCharge,
-  applyRefund,
-  forkBudgetText,
 } from "./forkjoin.mjs";
 export {
   childScopePath,
   normalizeScopePath,
+  looksLikePattern,
   scopePathOf,
+  findScopeByPath,
+  forkIdsUnderPath,
   isScopeActive,
   allocateSiblingScopeId,
   listActiveScopePaths,
-  resolveScopeTargets,
+  listAddressableScopePaths,
 } from "./path.mjs";
 export {
   pauseClock,
@@ -72,8 +68,6 @@ export {
 } from "./clock.mjs";
 export {
   chargeBranch,
-  refundBranch,
-  applyAmend,
   truncateForHostBoundary,
 } from "./accounting.mjs";
 export {
@@ -85,7 +79,6 @@ export {
   applyDelta,
   planStateEntry,
   planLedgerEntry,
-  planAmendsEntry,
   splitState,
   isLedgerEntry,
   foldStateChain,

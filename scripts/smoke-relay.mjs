@@ -4,8 +4,11 @@
  * real station and activation wiring in one fresh process.
  *
  * Proves:
- * - The extension registers the five scope tools and does NOT override `todo`.
- * - `scope_fork` / `scope_join` enforce their missing-spawner / idle-root contracts.
+ * - The extension registers exactly one tool, `js`; no native `todo` and no
+ *   retired scope tool is registered alongside it.
+ * - Through `js`, the scope protocol keeps its contracts: `scope_fork` without
+ *   a spawner is refused, `scope_join` on an idle root is refused, and the
+ *   `scope_return` oath is validated strictly.
  * - `scope_return` enforces the strict oath contract, supports small rewind and
  *   two-consecutive-oath promotion at Root, resets the streak on a small handoff
  *   or new fork, blocks Root big oath while children are unreceived, and preserves
@@ -142,11 +145,11 @@ station.state.autopilot = true;
 
 let callSeq = 0;
 
-async function call(name, args, targetCtx = ctx) {
+async function callJs(code, inputs, targetCtx = ctx) {
 	const id = `smoke-${++callSeq}`;
-	const tool = host.tools.get(name);
-	if (!tool) throw new Error(`${name} is not registered`);
-	const output = await tool.execute(id, args, undefined, undefined, targetCtx);
+	const tool = host.tools.get("js");
+	if (!tool) throw new Error("js is not registered");
+	const output = await tool.execute(id, { code, inputs }, undefined, undefined, targetCtx);
 	return {
 		text: (output.content ?? []).map((part) => part.text ?? "").join(""),
 		code: output.details?.code,
@@ -169,48 +172,52 @@ function expect(condition, message) {
 	if (!condition) throw new Error(message);
 }
 
-await check("registers the five scope tools and leaves native todo untouched", async () => {
-	for (const name of ["scope_fork", "scope_join", "scope_return", "scope_send", "scope_context"]) {
-		expect(host.tools.has(name), `${name} is not registered`);
+await check("registers exactly one tool, js, and nothing retired", async () => {
+	expect(host.tools.has("js"), "js is not registered");
+	for (const name of ["scope_fork", "scope_join", "scope_return", "scope_request", "scope_reply", "scope_send", "scope_ask", "scope_context", "pin", "amend", "todo", "scope"]) {
+		expect(!host.tools.has(name), `${name} should not be registered as a tool`);
 	}
-	expect(!host.tools.has("todo"), "todo override should be removed");
-	expect(!host.tools.has("scope"), "retired scope tool is still registered");
 });
 
 await check("scope_fork refuses without a child spawner", async () => {
-	const out = await call("scope_fork", {
-		forks: [
-			{
-				scopeId: "probe",
-				fsm: "probe",
-				profession: "You are a probe engineer.",
-				n: 1,
-				budget: { read: 1 },
-				targets: ["src/probe.mjs"],
+	const out = await callJs(
+		"await api.scope_fork(inputs.spec)",
+		{
+			spec: {
+				forks: [
+					{
+						scopeId: "probe",
+						fsm: "probe",
+						profession: "You are a probe engineer.",
+						n: 1,
+						budget: { read: 1 },
+						targets: ["src/probe.mjs"],
+					},
+				],
 			},
-		],
-	}, bareCtx);
+		},
+		bareCtx,
+	);
 	expect(out.isError, "scope_fork should report the missing spawner");
-	expect(out.code === "CHILD_SPAWNER_UNAVAILABLE", `got ${out.code ?? out.text.split("\n")[0]}`);
+	expect(out.text.includes("CHILD_SPAWNER_UNAVAILABLE"), `got ${out.text.split("\n")[1] ?? out.text}`);
 });
 
 await check("scope_join refuses an idle root", async () => {
-	const out = await call("scope_join", {}, bareCtx);
+	const out = await callJs("await api.scope_join()", undefined, bareCtx);
 	expect(out.isError, "scope_join should refuse an idle branch");
-	expect(out.code === "NO_UNRECEIVED_WORK", `got ${out.code}`);
+	expect(out.text.includes("NO_UNRECEIVED_WORK"), `got ${out.text.split("\n")[1] ?? out.text}`);
 });
 
 await check("scope_return refuses non-matching oath values strictly", async () => {
-	const out = await call("scope_return", {
-		dafny: "trying boolean false",
-		[RETURN_OATH_KEY]: false,
+	const out = await callJs("await api.scope_return(inputs.args)", {
+		args: { dafny: "trying boolean false", [RETURN_OATH_KEY]: false },
 	});
 	expect(out.isError, "boolean oath must be rejected");
-	expect(out.code === "INVALID_RETURN_OATH", `got ${out.code}`);
+	expect(out.text.includes("INVALID_RETURN_OATH"), `got ${out.text.split("\n")[1] ?? out.text}`);
 });
 
 await check("root small handoff rewinds via agent_end ticket preserving verbatim user prompt", async () => {
-	const out = await call("scope_return", { dafny: "gen 0 progress" });
+	const out = await callJs('await api.scope_return({ dafny: "gen 0 progress" })');
 	expect(!out.isError, `small handoff failed: ${out.text}`);
 	expect(out.details?.rewind === true && out.details?.stopLoop === true, "expected rewind + stopLoop");
 	expect(station.state.relay.generation === 1, `expected gen 1, got ${station.state.relay.generation}`);
@@ -227,7 +234,7 @@ await check("root small handoff rewinds via agent_end ticket preserving verbatim
 });
 
 await check("root first oath rewinds for review; second consecutive oath promotes without rewind", async () => {
-	const first = await call("scope_return", { dafny: "ready for review", ...OATH });
+	const first = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "ready for review", ...OATH } });
 	expect(!first.isError, `first oath failed: ${first.text}`);
 	expect(first.details?.rewind === true && first.details?.big === true && first.details?.stopLoop === true, "expected review rewind");
 	expect(station.state.relay.bigStreak === 1, `expected bigStreak 1, got ${station.state.relay.bigStreak}`);
@@ -243,7 +250,7 @@ await check("root first oath rewinds for review; second consecutive oath promote
 	const stopBeforeSecond = (host.handlers.get("session_stop") ?? []).map((h) => h({}, ctx)).find(Boolean);
 	expect(stopBeforeSecond?.continue === true, "session_stop should nudge before 2nd oath (after rewoundThisTurn cleared)");
 
-	const second = await call("scope_return", { dafny: "verified nothing left", ...OATH });
+	const second = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "verified nothing left", ...OATH } });
 	expect(!second.isError, `second oath failed: ${second.text}`);
 	expect(second.details?.promoted === true && second.details?.stopLoop === false, "expected promotion without stopLoop");
 	expect(station.state.relay.bigStreak === 2 && station.state.relay.canStop === true, "expected canStop true");

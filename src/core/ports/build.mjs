@@ -6,9 +6,7 @@
 // reporting and domain checks. Do not invent a second table here.
 
 import { resolvePorts } from "./resolve.mjs";
-import { createAmendOff, createAmendOn } from "../../features/amend/index.mjs";
 import { createHerdOff, createHerdOn } from "../../features/herd/index.mjs";
-import { createPinOff, createPinOn } from "../../features/pin/index.mjs";
 import { createClockOff, createClockOn } from "../../scope/clock.mjs";
 
 function detailOf(refusal) {
@@ -30,20 +28,6 @@ export function buildPorts(env = process.env) {
 	const names = { ...resolved.ports };
 	const implementations = {
 		clock: names.clock === "off" ? createClockOff() : createClockOn(),
-		pin: {
-			name: names.pin,
-			bindState(store) {
-				return names.pin === "off" ? createPinOff() : createPinOn({ notes: store.pins });
-			},
-		},
-		amend: {
-			name: names.amend,
-			bindState(store) {
-				return names.amend === "off"
-					? createAmendOff()
-					: createAmendOn({ retired: store.amends });
-			},
-		},
 		herd: {
 			name: names.herd,
 			bindState(store) {
@@ -51,7 +35,7 @@ export function buildPorts(env = process.env) {
 			},
 		},
 	};
-	for (const port of ["pin", "amend", "herd"]) {
+	for (const port of ["herd"]) {
 		Object.freeze(implementations[port]);
 	}
 	return {

@@ -14,6 +14,7 @@ import {
 } from "../host/adapter.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
 import { registerUserAbortListener, sessionFor, setAgentMessages } from "../host/capture.mjs";
+import { createToolGateway, installToolConfiscation } from "../host/tool-confiscation.mjs";
 import { charsToTokens, createEmptyCatalog, preparseModelSpec } from "../host/pricing.mjs";
 import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
 import {
@@ -146,7 +147,8 @@ function globalForkWiring(wiring = null) {
  * session from the object. `fork.identityForAgent` is deliberately absent: the
  * core owns that lookup, and a host copy would be a second registry.
  */
-export function createHostBag(pi) {
+export function createHostBag(pi, getEngine = () => null) {
+	const tools = createToolGateway(getEngine);
 	const branchOf = (ctx) => {
 		try {
 			const branch = managerOf(ctx)?.getBranch?.();
@@ -165,6 +167,15 @@ export function createHostBag(pi) {
 			header: contextHeaderOf,
 			setMessages: setAgentMessages,
 			appendHistory: appendHistoryMessage,
+			// The host's extension wrapper resolves an approval mode from
+			// `context.settings`; an extension context carries none, so the mode
+			// falls back to always-ask. A child has no interactive UI, so its
+			// bash/write would throw instead of running. The session's own
+			// settings are the only owner of that decision.
+			settingsOf: (ctx) => {
+				const session = sessionFor(ctx);
+				return session?.extensionRunner?.sessionSettings ?? session?.settings ?? null;
+			},
 			abort: (ctx, error) => sessionFor(ctx)?.agent?.abort?.(error),
 		}),
 		model: Object.freeze({
@@ -189,16 +200,19 @@ export function createHostBag(pi) {
 			sameManager,
 		}),
 		report: Object.freeze({ record }),
+		// The host's tool surface. `listSpecs` feeds the static `.d.ts` block and
+		// `execute` is the js ticket's inner funnel; both reach the tools that
+		// confiscation hid from the model but kept alive. Exactly these two keys
+		// form the contract, so the bag carries no extra surface here.
+		tools: Object.freeze({
+			listSpecs: (ctx) => tools.listSpecs(ctx),
+			execute: (name, callId, args, signal, onUpdate, ctx) =>
+				tools.execute(name, callId, args, signal, onUpdate, ctx),
+		}),
 	});
 }
 
-export function wireExtension(
-	pi,
-	pricingCatalog,
-	diagnosis = null,
-	env = process.env,
-	sharedFirstTurn = null,
-) {
+export function wireExtension(pi, pricingCatalog, diagnosis = null, env = process.env) {
 	// The engine owns port resolution, fork wiring, the tool catalog, and the
 	// scope read model. This function only supplies host facts and binds the
 	// host's own surfaces.
@@ -224,7 +238,7 @@ export function wireExtension(
 		}
 		forkWiring.bind(station, binding ?? { display: null });
 	};
-	const hostBag = createHostBag(pi);
+	const hostBag = createHostBag(pi, () => engine);
 	engine = createEngine({
 		host: {
 			...hostBag,
@@ -240,7 +254,11 @@ export function wireExtension(
 	});
 	bindScopeView(engine.scopes);
 	registerProcessUserAbortEngine(engine);
-	const hooks = wireHooks(pi, engine, sharedFirstTurn);
+	// Hide the host's own tools before the first request is assembled: from
+	// this point `js` is the only tool the model can see, and everything else
+	// is reachable only through the `api` object the ticket builds.
+	installToolConfiscation(pi, () => engine);
+	const hooks = wireHooks(pi, engine);
 	for (const tool of engine.tools) pi.registerTool(tool);
 	wireCommands(pi, engine);
 	wireHostDiagnosis(pi, diagnosis, hooks);

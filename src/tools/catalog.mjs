@@ -1,87 +1,131 @@
-// The tool catalog: every tool this extension registers, fully bound.
+// The tool catalog: the one tool this extension registers, fully bound.
 //
-// A host registers these in one loop. It never learns which ticket backs which
-// tool, and it never builds an `execute` of its own. The flags below are the
-// host-facing registration hints; `execute` closes over the station lookup.
+// The model sees exactly one tool: `js`. Everything else — host tools, MCP
+// tools, the scope control plane — is an async method on the `api` object the
+// js ticket builds from the station's capability projection. The control plane
+// lives here as a plain function table; it is never registered with the host,
+// so no native tool name can leak back into the model's tool list.
 
+import { jsParameters } from "./js-protocol.mjs";
+import { jsTicket } from "./js-ticket.mjs";
 import {
-	SCOPE_CONTEXT_DESCRIPTION,
-	scopeContextParameters,
-	FORK_DESCRIPTION,
-	forkParameters,
-	JOIN_DESCRIPTION,
-	joinParameters,
-	RETURN_DESCRIPTION,
-	returnParameters,
-	SEND_DESCRIPTION,
-	sendParameters,
-} from "./index.mjs";
-import {
+	abandonTicket,
 	forkTicket,
 	joinTicket,
+	replyTicket,
+	requestTicket,
 	returnTicket,
-	sendTicket,
-	scopeContextTicket,
 } from "./tickets.mjs";
+import { errorResult } from "./results.mjs";
 
 const ESSENTIAL = "essential";
 
+/** The one registered tool's name. */
+export const JS_TOOL_NAME = "js";
+
+const JS_DESCRIPTION =
+	"Run one async JavaScript program against the live `api` object. `code` is an expression or a statement body with `api`, `state`, and `inputs` in scope; await every api call. `inputs` carries raw payloads (file bodies, patch strings) so large text never has to be escaped into a JS string. The set of methods actually bound this turn is printed in the trailing REPL probe; a method absent there does not exist at runtime.";
+
+/**
+ * The scope control plane as plain async functions.
+ *
+ * Signature: `(station, toolCallId, args, ctx, signal, frameId) ->
+ * Promise<ToolResult>`. These are internal handlers, not host-registered
+ * tools: the js runtime calls them through `host.dispatchInnerTool` and they
+ * answer with the same result shape every tool returns.
+ */
+export function createCoreTools({ tickets = {} } = {}) {
+	return Object.freeze({
+		scope_fork: (station, toolCallId, args, ctx, _signal, frameId) =>
+			forkTicket(station, toolCallId, args, ctx, tickets, frameId),
+		scope_join: (station, toolCallId, args, ctx, signal, frameId) =>
+			joinTicket(station, toolCallId, args, ctx, signal, tickets, frameId),
+		scope_return: (station, toolCallId, args, ctx, signal, frameId) =>
+			returnTicket(station, toolCallId, args, ctx, signal, tickets, frameId),
+		scope_request: (station, toolCallId, args, ctx, signal) =>
+			requestTicket(station, toolCallId, args, ctx, signal, tickets),
+		scope_reply: (station, toolCallId, args, ctx, signal) =>
+			replyTicket(station, toolCallId, args, ctx, signal, tickets),
+		scope_abandon: (station, toolCallId, args, ctx) =>
+			abandonTicket(station, toolCallId, args, ctx, tickets),
+	});
+}
+
+/**
+ * Build the one registered tool.
+ *
+ * Its `execute` builds the host funnel the ticket expects: control-plane names
+ * go to the core table, every other name to the host's confiscated-tool
+ * snapshot (`host.tools.execute`), with the live `ctx` passed through
+ * untouched so the host's approval and dialog fences keep working.
+ */
 export function createTools({ stationFor, tickets }) {
-	return Object.freeze([
-		{
-			name: "scope_fork",
-			label: "Fork Scope",
-			description: FORK_DESCRIPTION,
-			parameters: forkParameters,
-			loadMode: ESSENTIAL,
-			// A fork finishes in one synchronous beat and then hands its result
-			// to the host's pending model switch. There is no wait to cancel, so
-			// it takes no signal: its ticket declares four arguments and a host
-			// bag, and that is exactly what it gets.
-			execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-				forkTicket(stationFor(ctx), toolCallId, params, ctx, tickets),
+	const core = createCoreTools({ tickets });
+	const jsTool = {
+		name: JS_TOOL_NAME,
+		label: "JS",
+		description: JS_DESCRIPTION,
+		parameters: jsParameters,
+		loadMode: ESSENTIAL,
+		// `scope_join` and `scope_request` park; a queued user message must be
+		// able to take the turn back exactly as the native join allowed.
+		interruptible: true,
+		handlesToolInterrupt: true,
+		execute: (toolCallId, params, signal, _onUpdate, ctx) => {
+			const station = stationFor(ctx);
+			const host = {
+				dispatchInnerTool: (name, innerId, args, innerCtx, innerSignal, frameId) => {
+					const handle = core[name];
+					if (typeof handle === "function") {
+						return handle(
+							station,
+							innerId,
+							args,
+							innerCtx ?? ctx,
+							innerSignal ?? signal ?? null,
+							frameId ?? toolCallId,
+						);
+					}
+					const execute = station?.host?.tools?.execute;
+					if (typeof execute === "function") {
+						// The host's extension wrapper resolves the approval mode from
+						// `context.settings`. An extension context carries none, so a
+						// context passed as-is resolves to always-ask: the root would
+						// prompt, and a child — which has no interactive UI — would
+						// throw instead of running the tool. Attach the session's own
+						// settings so `tools.approvalMode` decides, exactly as it does
+						// for the host's native tool loop.
+						const baseCtx = innerCtx ?? ctx;
+						const settings =
+							typeof station?.host?.session?.settingsOf === "function"
+								? station.host.session.settingsOf(baseCtx)
+								: null;
+						const callCtx =
+							settings && baseCtx
+								? Object.assign(Object.create(baseCtx), { settings })
+								: baseCtx;
+						return execute(
+							name,
+							innerId,
+							args,
+							innerSignal ?? signal ?? null,
+							undefined,
+							callCtx,
+						);
+					}
+					return Promise.resolve(
+						errorResult(
+							"TOOL_UNAVAILABLE",
+							`No tool named "${name}" is bound this turn.`,
+						),
+					);
+				},
+				report: station?.host?.report,
+			};
+			return jsTicket(station, toolCallId, params, ctx, signal, host);
 		},
-		{
-			name: "scope_join",
-			label: "Join Child",
-			description: JOIN_DESCRIPTION,
-			parameters: joinParameters,
-			loadMode: ESSENTIAL,
-			interruptible: true,
-			handlesToolInterrupt: true,
-			execute: (toolCallId, params, signal, _onUpdate, ctx) =>
-				joinTicket(stationFor(ctx), toolCallId, params, ctx, signal, tickets),
-		},
-		{
-			name: "scope_return",
-			label: "Return Scope",
-			description: RETURN_DESCRIPTION,
-			parameters: returnParameters,
-			loadMode: ESSENTIAL,
-			execute: (toolCallId, params, signal, _onUpdate, ctx) =>
-				returnTicket(stationFor(ctx), toolCallId, params, ctx, signal, tickets),
-		},
-		{
-			name: "scope_send",
-			label: "Send To Scope",
-			description: SEND_DESCRIPTION,
-			parameters: sendParameters,
-			loadMode: ESSENTIAL,
-			// One synchronous beat: resolve, deliver, wake. There is nothing to
-			// wait for and nothing to cancel.
-			execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-				sendTicket(stationFor(ctx), toolCallId, params, tickets),
-		},
-		{
-			name: "scope_context",
-			label: "Scope Context",
-			description: SCOPE_CONTEXT_DESCRIPTION,
-			parameters: scopeContextParameters,
-			loadMode: ESSENTIAL,
-			execute: (toolCallId, params, _signal, _onUpdate, ctx) =>
-				scopeContextTicket(stationFor(ctx), toolCallId, params, tickets),
-		},
-	]);
+	};
+	return Object.freeze([jsTool]);
 }
 
 /**

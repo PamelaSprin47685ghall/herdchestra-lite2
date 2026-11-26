@@ -1,30 +1,20 @@
 // Tools domain index. This node only lists its children's public keys.
 
 export { textResult, errorResult, continueFeedback } from "./results.mjs";
+export { jsParameters, jsonSchemaToTs, renderCapabilitiesDts } from "./js-protocol.mjs";
+export { jsTicket, compileAsync, formatReplValue, REPL_ECHO } from "./js-ticket.mjs";
 export {
-	SCOPE_CONTEXT_DESCRIPTION,
-	AMEND_PARAMETER_DESCRIPTION,
-	PIN_PARAMETER_DESCRIPTION,
-	REFLECTION_DESCRIPTION,
-	PIN_ASSUMPTION_DESCRIPTION,
-	PIN_DEDUCTION_DESCRIPTION,
-	PIN_INDUCTION_DESCRIPTION,
-	PIN_FINDING_DESCRIPTION,
-	PIN_CONCLUSION_DESCRIPTION,
-	forkParameters,
-	joinParameters,
-	returnParameters,
-	sendParameters,
-	FORK_DESCRIPTION,
-	JOIN_DESCRIPTION,
-	RETURN_DESCRIPTION,
-	RETURN_DAFNY_DESCRIPTION,
-	RETURN_OATH_DESCRIPTION,
-	RETURN_OATH_KEY,
-	RETURN_OATH_VALUE,
-	SEND_DESCRIPTION,
-	SEND_TARGET_DESCRIPTION,
-	SEND_MESSAGE_DESCRIPTION,
-	SEND_BUDGET_DESCRIPTION,
-	scopeContextParameters,
-} from "./descriptions.mjs";
+	createTools,
+	createCoreTools,
+	wireTools,
+	JS_TOOL_NAME,
+} from "./catalog.mjs";
+export {
+	forkTicket,
+	joinTicket,
+	replyTicket,
+	requestTicket,
+	returnTicket,
+	TOOL_INTERRUPT_ABORT_REASON,
+} from "./tickets.mjs";
+export { spawnChildTicket, wakeIdleScope, writeFrozenOutcome } from "./spawn-ticket.mjs";

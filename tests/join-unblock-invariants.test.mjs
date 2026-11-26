@@ -50,9 +50,6 @@ const LEDGER_KEYS = [
 	"queues",
 	"levels",
 	"totals",
-	// The root's mailbox: a branch addresses `/`, and the message has to survive
-	// a snapshot or the root loses what it was told across a restart.
-	"rootInbox",
 ];
 
 function settleRace(promise, ms = 5) {

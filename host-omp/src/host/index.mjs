@@ -34,7 +34,6 @@ export {
 	charsToTokens,
 	createEmptyCatalog,
 	loadPricingCatalog,
-	resolveModelPolicy,
 } from "./pricing.mjs";
 export {
 	sendSteerTicket,

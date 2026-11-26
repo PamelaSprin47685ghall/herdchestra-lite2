@@ -101,12 +101,10 @@ export function render(template, vars = {}) {
  */
 export const DOCUMENTS = [
 	"errors",
-	"labels",
 	"receipts/relay",
 	"receipts/scope",
 	"system",
 	"tools/fork-join",
-	"tools/notes",
 	"vibe-mode",
 ];
 

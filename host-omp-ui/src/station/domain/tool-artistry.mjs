@@ -110,6 +110,40 @@ function readRange(args) {
   return limit > 0 ? `${offset}-${offset + limit - 1}` : `${offset}-`;
 }
 
+// The js result's first line is a fixed echo of the invocation; the code itself
+// already travelled in the call's arguments, so the card shows the output only.
+const REPL_ECHO_PREFIX = "> await AsyncFunction(";
+
+function stripReplEcho(text) {
+  if (!text.startsWith(REPL_ECHO_PREFIX)) return text;
+  const at = text.indexOf("\n");
+  return at === -1 ? "" : text.slice(at + 1);
+}
+
+/**
+ * One view per `await api.*` the script dispatched, in call order. Mapping each
+ * entry back through `describeToolCall` is what keeps a `write` inside js
+ * rendering as a write card — and what lets the artifact collector see it.
+ * Depth-limited to one level: a js call cannot contain another js call.
+ */
+function innerCallViews(toolResult) {
+  const details = toolResult?.details;
+  const innerCalls = Array.isArray(details?.innerCalls) ? details.innerCalls : [];
+  return innerCalls
+    .filter((call) => call && typeof call.name === "string" && call.name !== "")
+    .map((call) =>
+      describeToolCall(
+        { name: call.name, args: call.args ?? {} },
+        {
+          content: [
+            { type: "text", text: typeof call.resultText === "string" ? call.resultText : "" },
+          ],
+          isError: call.isError === true,
+        },
+      ),
+    );
+}
+
 export function describeToolCall(toolCall, toolResult) {
   const name = toolCall?.name ?? "unknown";
   const args = toolCall?.args ?? {};
@@ -158,6 +192,20 @@ export function describeToolCall(toolCall, toolResult) {
     };
   }
 
+  // The single `js` tool: the script is the code, the REPL text is the output,
+  // and the real work is in `details.innerCalls` — one card per inner call.
+  if (name === "js") {
+    return {
+      kind: "eval",
+      title: args.title ?? "js",
+      language: "javascript",
+      code: typeof args.code === "string" ? args.code : "",
+      output: stripReplEcho(output),
+      children: innerCallViews(toolResult),
+      isError,
+    };
+  }
+
   if (name === "eval") {
     return {
       kind: "eval",
@@ -187,6 +235,70 @@ export function describeToolCall(toolCall, toolResult) {
       query: args.query ?? "",
       url: args.url ?? "",
       links,
+      isError,
+    };
+  }
+
+  // The scope control plane is the orchestration surface once every native tool
+  // hides behind `js`. Without these branches each call falls through to the
+  // generic card, and the transcript fills with JSON blobs exactly where the
+  // model is coordinating work.
+  if (name === "scope_request") {
+    const target = String(args.target ?? "");
+    const message = String(args.message ?? "");
+    const interrupt = args.interrupt === true ? " · interrupt" : "";
+    return {
+      kind: "ask",
+      title: `scope_request → ${target || "?"}`,
+      summary: [`→ ${target}${interrupt}: ${message}`, output && `← ${output}`]
+        .filter(Boolean)
+        .join("\n"),
+      isError,
+    };
+  }
+
+  if (name === "scope_reply") {
+    const reply = String(args.text ?? args.reply ?? args.message ?? output);
+    return {
+      kind: "ask",
+      title: "scope_reply",
+      summary: `← ${reply}`,
+      isError,
+    };
+  }
+
+  if (name === "scope_fork") {
+    const forks = Array.isArray(args.forks) ? args.forks : [];
+    const requested = forks.map((fork) => {
+      const spec = fork ?? {};
+      const id = String(spec.scopeId ?? spec.name ?? "?");
+      const fsm = String(spec.fsm ?? "").slice(0, 80);
+      return fsm ? `${id} — ${fsm}` : id;
+    });
+    return {
+      kind: "task",
+      title: args.description ?? `scope_fork (${forks.length})`,
+      agent: "scope_fork",
+      prompt: requested.join("\n"),
+      result: output,
+      isError,
+    };
+  }
+
+  if (name === "scope_join" || name === "scope_return") {
+    const scope = String(args.scope ?? "");
+    const plan =
+      name === "scope_return"
+        ? args.signed_sealed_hands_off_nothing_left_on_the_table
+          ? "seal"
+          : "rewind"
+        : "";
+    return {
+      kind: "task",
+      title: scope ? `${name} ${scope}` : name,
+      agent: name,
+      prompt: plan,
+      result: output,
       isError,
     };
   }
@@ -243,21 +355,30 @@ export function describeToolCall(toolCall, toolResult) {
 export function createArtifactCollector() {
   const artifacts = [];
   const seen = new Set();
+  // First call that names a path wins — including a call nested inside `js`:
+  // a file written by a script must list exactly as a direct write would.
+  const collect = (view) => {
+    if (
+      view?.path &&
+      !seen.has(view.path) &&
+      ["read", "write", "edit"].includes(view.kind)
+    ) {
+      seen.add(view.path);
+      artifacts.push({
+        path: view.path,
+        kind: view.kind,
+        language: view.language ?? "text",
+        content: view.artifact?.content ?? view.preview ?? "",
+        diff: view.diff ?? null,
+      });
+    }
+    for (const child of view?.children ?? []) collect(child);
+  };
   return {
     add(items) {
       for (const item of items ?? []) {
         if (!item?.toolCall) continue;
-        const view = describeToolCall(item.toolCall, item.toolResult);
-        if (!view.path || seen.has(view.path)) continue;
-        if (!["read", "write", "edit"].includes(view.kind)) continue;
-        seen.add(view.path);
-        artifacts.push({
-          path: view.path,
-          kind: view.kind,
-          language: view.language ?? "text",
-          content: view.artifact?.content ?? view.preview ?? "",
-          diff: view.diff ?? null,
-        });
+        collect(describeToolCall(item.toolCall, item.toolResult));
       }
     },
     list() {

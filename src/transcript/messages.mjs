@@ -9,7 +9,6 @@
  */
 
 const TOOL_CALL_TYPE = "toolCall";
-export const PIN_TOOL_NAME = "pin";
 
 function reject(code, reason) {
 	return { ok: false, code, reason };

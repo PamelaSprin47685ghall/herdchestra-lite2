@@ -79,19 +79,19 @@ describe("bill-split directions", () => {
 	});
 
 	test("pin × folding: folding owns the keep-list; pin only publishes its set", () => {
-		const pin = publisher({ pins: ["p1", "p2"] });
+		const pin = publisher({ notes: ["p1", "p2"] });
 		const folding = decider({ kept: [] }, (mine, fact) => {
-			mine.kept = fact.pins.slice();
+			mine.kept = fact.notes.slice();
 			return mine.kept;
 		});
 		const before = snapshot(pin.state);
 
 		expect(folding.judge(pin.publish())).toEqual(["p1", "p2"]);
-		pin.state.pins.push("p3");
+		pin.state.notes.push("p3");
 		expect(folding.judge(pin.publish())).toEqual(["p1", "p2", "p3"]);
 
 		// Folding kept its own copy; the pin set is the publisher's alone.
-		expect(pin.state).toEqual({ pins: ["p1", "p2", "p3"] });
+		expect(pin.state).toEqual({ notes: ["p1", "p2", "p3"] });
 	});
 });
 

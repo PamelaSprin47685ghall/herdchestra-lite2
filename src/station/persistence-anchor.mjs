@@ -41,19 +41,6 @@ function ledgerOf(entry) {
 	return rest;
 }
 
-/**
- * The amends half of a plan, without its envelope fields.
- *
- * Same rule as `ledgerOf`, and for the same reason: forward everything the
- * planner produced. A hand-written field list loses whichever increment a later
- * change adds, and the loss is silent until a restore shows a list that is too
- * short.
- */
-function amendsOf(entry) {
-	const { version: _version, kind: _kind, ...rest } = entry;
-	return rest;
-}
-
 export function createPersistenceAnchor({
 	manager,
 	state,
@@ -63,7 +50,6 @@ export function createPersistenceAnchor({
 	serialize,
 	plan,
 	planLedger,
-	planAmends,
 	split,
 	type,
 	noteError,
@@ -75,14 +61,6 @@ export function createPersistenceAnchor({
 	// carries fork records and no serialized state, so it may not be the anchor
 	// but it is still the snapshot the next ledger delta subtracts from.
 	let lastLedgerEntryId = null;
-	// Each journal owns its accepted retired-beat baseline. The length supports
-	// suffix writes; the value snapshot detects edits through shared aliases.
-	let lastAmendsLength = null;
-	// The live array is publicly reachable and may be edited in place. Keep the
-	// accepted values independently so an equal-length replacement is detected.
-	let lastAmendsSnapshot = null;
-	let lastAmendsEntryId = null;
-	let lastAmendsArray = null;
 	let lastStateEntryId = initialEntryId;
 	let writes = 0;
 	// Entries appended since the last checkpoint, whatever half they carried.
@@ -373,7 +351,6 @@ export function createPersistenceAnchor({
 			const ancestry = resolveOnLeafPath([
 				lastStateEntryId,
 				lastLedgerEntryId,
-				lastAmendsEntryId,
 			]);
 			if (lastPersisted !== null || lastBrackets !== null) {
 				const anchorOk = lastPersisted === null || onLeafPath(lastStateEntryId, ancestry);
@@ -391,15 +368,6 @@ export function createPersistenceAnchor({
 					// is folded as a replacement rather than an overlay.
 					lastBrackets = null;
 					lastLedgerEntryId = null;
-				}
-			}
-			if (lastAmendsLength !== null) {
-				if (
-					lastAmendsArray !== state()?.amends ||
-					!onLeafPath(lastAmendsEntryId, ancestry)
-				) {
-					lastAmendsLength = null;
-					lastAmendsEntryId = null;
 				}
 			}
 			// Ledger first: it peeks the dirty mark that `serialize` clears.
@@ -433,35 +401,7 @@ export function createPersistenceAnchor({
 				noteError("ledger", new Error(`ledger write refused: ${ledgerPlan.refused}`));
 				return false;
 			}
-			// The retired-beat list is its own increment: a write names the keys it
-			// added, not the whole set. Read before `serialize`, which no longer
-			// copies the list into the core payload at all.
-			// A caller that has not been given the amends planner keeps the list
-			// out of this journal, which is the shape every existing test fixture
-			// and any reduced embedding already has. Naming the cost here is not
-			// optional for the real station: `station.mjs` injects it.
-			// Keep the array identity used to form this plan. The host append may
-			// synchronously reenter and replace it before returning; recording the
-			// new identity with the old plan's length would make the next write
-			// incorrectly treat a different list as an append to this one.
-			const plannedAmendsState = state();
-			const plannedAmendsArray = plannedAmendsState?.amends;
-			// Identity and length do not prove an exposed array's prefix stayed
-			// unchanged: callers may edit a slot in place. Compare with the last
-			// accepted values and request a full replacement if any changed.
-			const amendsSnapshot = Array.isArray(plannedAmendsArray)
-				? plannedAmendsArray.slice() : [];
-			let amendsBase = lastAmendsLength;
-			if (amendsBase !== null && (
-				lastAmendsSnapshot === null ||
-				lastAmendsSnapshot.length !== amendsBase ||
-				amendsSnapshot.length < amendsBase ||
-				lastAmendsSnapshot.some((key, index) => key !== amendsSnapshot[index])
-			)) amendsBase = null;
-			const amendsPlan =
-				typeof planAmends === "function"
-					? planAmends({ ...plannedAmendsState, amends: amendsSnapshot }, amendsBase)
-					: { entry: null, length: lastAmendsLength };
+			// The retired-beat list is gone: no per-turn bookkeeping is written.
 			const full = serialize(state());
 			const { core } = split(full);
 			let entry = plan(lastPersisted, core, writes);
@@ -483,14 +423,14 @@ export function createPersistenceAnchor({
 			if (
 				entry?.kind !== "checkpoint" &&
 				entriesSinceCheckpoint >= CHECKPOINT_ENTRY_LIMIT &&
-				(entry !== null || ledgerPlan.entry !== null || amendsPlan.entry !== null)
+				(entry !== null || ledgerPlan.entry !== null)
 			) {
 				// The planner's own answer for "no previous state" is the whole
 				// core, which is what a checkpoint carries: asking it that way
 				// keeps the shape of a checkpoint in the one place that defines it.
 				entry = plan(null, core, 0);
 			}
-			if (!entry && !ledgerPlan.entry && !amendsPlan.entry) return true;
+			if (!entry && !ledgerPlan.entry) return true;
 			// When both halves are owed they travel in one entry, so one append
 			// carries both and neither can land without the other. Two appends
 			// could land the ledger and fail the state, and the surviving half
@@ -502,14 +442,11 @@ export function createPersistenceAnchor({
 			// failed disk write still returns an id while the entry stays in
 			// memory. Advancing the baseline below therefore means "the host
 			// accepted this write", not "it is on durable media".
-			const amendsPart = amendsPlan.entry ? { amends: amendsOf(amendsPlan.entry) } : null;
 			const payload = entry
 				? ledgerPlan.entry
-					? { ...entry, ledger: ledgerOf(ledgerPlan.entry), ...amendsPart }
-					: { ...entry, ...amendsPart }
-				: ledgerPlan.entry
-					? { ...ledgerPlan.entry, ...amendsPart }
-					: amendsPlan.entry;
+					? { ...entry, ledger: ledgerOf(ledgerPlan.entry) }
+					: entry
+				: ledgerPlan.entry;
 			// Measured before the append. Once `appendCustomEntry` returns, the host
 			// has accepted the line: a failure reported after that point is a
 			// failure the retry repeats, and the journal gains a second copy of a
@@ -556,15 +493,6 @@ export function createPersistenceAnchor({
 				// delta against a snapshot the journal no longer holds.
 				lastLedgerEntryId = typeof entryId === "string" ? entryId : null;
 			}
-			// The journal now holds this list, so the next write owes only the keys
-			// appended after it. Advancing the count is the amends equivalent of
-			// advancing a baseline: it says what was accepted, not what is durable.
-			if (amendsPlan.entry) {
-				lastAmendsSnapshot = amendsSnapshot;
-				lastAmendsLength = amendsPlan.length;
-				lastAmendsEntryId = typeof entryId === "string" ? entryId : null;
-				lastAmendsArray = plannedAmendsArray;
-			}
 			// The host accepted this write, so nothing is owed any more. This is
 			// the only place the ledger's unsettled set is cleared: clearing it
 			// earlier would lose the intent when the append throws, and the retry
@@ -587,10 +515,6 @@ export function createPersistenceAnchor({
 		lastPersisted = null;
 		lastBrackets = null;
 		lastLedgerEntryId = null;
-		lastAmendsLength = null;
-		lastAmendsSnapshot = null;
-		lastAmendsEntryId = null;
-		lastAmendsArray = null;
 		writes = 0;
 		lastStateEntryId = null;
 	}

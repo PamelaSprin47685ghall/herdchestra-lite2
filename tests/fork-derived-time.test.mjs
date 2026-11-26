@@ -10,7 +10,7 @@ import { handleForkCall } from "../src/station/fork-controls.mjs";
 import { validateFork } from "../src/station/domain/fork-join.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { recordTurnSample } from "../src/scope/turn-stats.mjs";
-import * as descriptions from "../src/tools/descriptions.mjs";
+import { loadDoc } from "../src/prompts/index.mjs";
 
 function stationWith(ledger, spawned = []) {
 	return {
@@ -82,19 +82,24 @@ describe("fork time is derived from measured turns", () => {
 		expect(verdict.time).toBeUndefined();
 	});
 
-	test("the fork schema no longer offers a time field", () => {
-		const item = descriptions.forkParameters.properties.forks.items;
-		expect(item.properties.time).toBeUndefined();
-		expect(item.required).not.toContain("time");
-		// The tool stays strict: a stale caller that still sends time is rejected.
-		expect(item.additionalProperties).toBe(false);
+	test("the model-facing copy tells the model not to pass a clock", () => {
+		const doc = loadDoc("tools/fork-join");
+		// `time` is derived, so the only thing the model may do is leave it out.
+		// A copy that stopped saying so would invite a field the validator
+		// refuses, and the model would learn the rule only through an error.
+		expect(doc["fork.time"]).toBeDefined();
+		expect(doc["fork.time"]).toMatch(/Do not pass `time`/i);
+		expect(doc["fork.time"]).toMatch(/turns/i);
 	});
 
-	test("the model-facing fork copy does not ask for a wall clock", () => {
-		const copy = Object.entries(descriptions)
-			.filter(([name, value]) => name.startsWith("FORK_") && typeof value === "string")
+	test("the model-facing fork copy no longer asks the model to price a clock", () => {
+		const doc = loadDoc("tools/fork-join");
+		const copy = Object.entries(doc)
+			.filter(([name]) => name.startsWith("fork."))
 			.map(([, value]) => value)
 			.join("\n");
-		expect(copy).not.toMatch(/\bseconds?\b|wall[- ]clock|time budget/i);
+		// No instruction may ask for a duration in seconds: that is the system's
+		// derivation, and a model that supplies one is guessing.
+		expect(copy).not.toMatch(/time budget|wall[- ]clock budget/i);
 	});
 });

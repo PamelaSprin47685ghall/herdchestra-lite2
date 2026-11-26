@@ -213,6 +213,32 @@ function ToolBody({ view }: { view: ToolView }) {
               {view.output}
             </pre>
           )}
+          {view.children && view.children.length > 0 && (
+            <ul className="space-y-2">
+              {view.children.map((child, index) => (
+                <li
+                  key={`${index}-${child.id}`}
+                  className="bg-muted/20 rounded-md border px-2 py-1.5"
+                >
+                  <div className="flex items-center gap-2">
+                    <KindIcon view={child} />
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                      {child.title}
+                    </span>
+                    {child.path && child.path !== child.title && (
+                      <span className="text-muted-foreground hidden max-w-48 truncate font-mono text-[11px] sm:inline">
+                        {child.path}
+                      </span>
+                    )}
+                    <StatusIcon view={child} />
+                  </div>
+                  <div className="mt-1">
+                    <ToolBody view={child} />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       );
     case "search":

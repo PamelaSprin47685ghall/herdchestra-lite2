@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { chargeBranch, refundBranch } from "../src/scope/accounting.mjs";
+import { chargeBranch } from "../src/scope/accounting.mjs";
 import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
 import { createState } from "../src/scope/state.mjs";
 
@@ -34,7 +34,7 @@ describe("branch charging", () => {
     expect(charged.ok).toBe(false);
     expect(charged.code).toBe("ROOT_HAS_NO_BUDGET");
     expect(charged.reason).toContain("scope_fork");
-    expect(s.charges).toEqual({});
+    expect(ledger.forks.f1.spent).toEqual({ read: 0 });
   });
 
   test("the root cannot apply a staged edit directly", () => {
@@ -47,14 +47,14 @@ describe("branch charging", () => {
     });
     expect(refused.ok).toBe(false);
     expect(refused.code).toBe("ROOT_HAS_NO_BUDGET");
-    expect(s.charges).toEqual({});
+    expect(ledger.forks.f1.spent).toEqual({ read: 0 });
   });
 
   test("the root still runs free control tools and free protocol reads", () => {
     const s = state();
     const ledger = ledgerWith("f1", { read: 2 });
     for (const [toolName, input] of [
-      ["scope_context", { pin: { finding: "kept" } }],
+      ["scope_request", { target: "/api", message: "?" }],
       ["scope_fork", { forks: [] }],
       ["read", { path: "skill://tdd-crowdsource" }],
       ["write", { path: "xd://resolve" }],
@@ -69,7 +69,7 @@ describe("branch charging", () => {
       expect(charged.ok).toBe(true);
       expect(charged.free).toBe(true);
     }
-    expect(s.charges).toEqual({});
+    expect(ledger.forks.f1.spent).toEqual({ read: 0 });
   });
 
   test("a branch with no fork record has no budget either", () => {
@@ -95,22 +95,32 @@ describe("branch charging", () => {
     });
     expect(charged.ok).toBe(true);
     expect(charged.amount).toBe(1);
-    expect(s.charges.c1).toEqual({ ownerId: "f1", tool: "read", amount: 1 });
+    expect(ledger.forks.f1.spent.read).toBe(1);
     expect(ledger.forks.f1.remaining.read).toBe(1);
   });
 
-  test("a repeated tool call is charged once", () => {
+  test("a beat with three reads spends about one turn, not three", () => {
     const s = state();
-    const ledger = ledgerWith("f1", { read: 2 });
-    chargeBranch(s, ledger, { ownerId: "f1", toolCallId: "c1", toolName: "read" });
-    const again = chargeBranch(s, ledger, {
-      ownerId: "f1",
-      toolCallId: "c1",
-      toolName: "read",
+    const ledger = ledgerWith("f1", { read: 5 });
+    const beat = ["read", "read", "read"];
+    const amounts = beat.map((tool, index) => {
+      const charged = chargeBranch(s, ledger, {
+        ownerId: "f1",
+        toolCallId: `beat#${index}`,
+        toolName: tool,
+        groupKey: "beat",
+        beatTools: beat,
+        input: { path: `f${index}.mjs` },
+      });
+      expect(charged.ok).toBe(true);
+      return charged.amount;
     });
-    expect(again.ok).toBe(true);
-    expect(again.alreadyCharged).toBe(true);
-    expect(ledger.forks.f1.remaining.read).toBe(1);
+    // One assistant message spends exactly one turn however its calls divide;
+    // the two-decimal split may leave a hundredth behind.
+    const total = amounts.reduce((sum, amount) => sum + amount, 0);
+    expect(total).toBeGreaterThan(0.96);
+    expect(total).toBeLessThanOrEqual(1);
+    expect(ledger.forks.f1.spent.read).toBeCloseTo(total, 2);
   });
 
   test("free control tools cost nothing", () => {
@@ -119,7 +129,7 @@ describe("branch charging", () => {
     const charged = chargeBranch(s, ledger, {
       ownerId: "f1",
       toolCallId: "c1",
-      toolName: "scope_context",
+      toolName: "scope_request",
     });
     expect(charged.ok).toBe(true);
     expect(ledger.forks.f1.remaining.read).toBe(1);
@@ -136,41 +146,8 @@ describe("branch charging", () => {
     expect(charged.ok).toBe(true);
     expect(charged.panhandled).toBe(true);
     expect(charged.amount).toBe(0);
-    expect(s.charges.c1).toEqual({
-      ownerId: "f1",
-      tool: "read",
-      amount: 0,
-      panhandled: true,
-    });
     expect(ledger.forks.f1.remaining.read).toBe(0);
     expect(ledger.forks.f1.panhandles.map((entry) => entry.tool)).toEqual(["read"]);
   });
 
-  test("an amended beat returns exactly what its calls spent", () => {
-    const s = state();
-    const ledger = ledgerWith("f1", { read: 2 });
-    chargeBranch(s, ledger, { ownerId: "f1", toolCallId: "c1", toolName: "read" });
-    chargeBranch(s, ledger, { ownerId: "f1", toolCallId: "c2", toolName: "read" });
-    const refunded = refundBranch(s, ledger, {
-      ownerId: "f1",
-      toolCalls: [{ id: "c1" }, { id: "c2" }],
-    });
-    expect(refunded.ok).toBe(true);
-    expect(refunded.refunded).toBe(2);
-    expect(ledger.forks.f1.remaining.read).toBe(2);
-    expect(s.charges).toEqual({});
-  });
-
-  test("a refund from another branch never touches this budget", () => {
-    const s = state();
-    const ledger = ledgerWith("f1", { read: 2 });
-    chargeBranch(s, ledger, { ownerId: "f1", toolCallId: "c1", toolName: "read" });
-    const refunded = refundBranch(s, ledger, {
-      ownerId: "other",
-      toolCalls: [{ id: "c1" }],
-    });
-    expect(refunded.refunded).toBe(0);
-    expect(ledger.forks.f1.remaining.read).toBe(1);
-    expect(s.charges.c1).toBeTruthy();
-  });
 });

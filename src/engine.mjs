@@ -100,10 +100,14 @@ export const HOST_CONTRACT = Object.freeze({
 		"header",
 		"setMessages",
 		"appendHistory",
+		"settingsOf",
 		"abort",
 		"canRewindRoot",
 	]),
 	model: Object.freeze(["of", "thinkingOf", "parseSpec", "capabilities", "query"]),
+	// The confiscated tool set: `listSpecs` is the `.d.ts` input, `execute` is
+	// the funnel the js runtime calls for every non-control method.
+	tools: Object.freeze(["listSpecs", "execute"]),
 	accounting: Object.freeze(["usage", "pricing"]),
 	fork: Object.freeze([
 		"wiring",

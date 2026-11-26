@@ -2,22 +2,22 @@
 //
 // There is no rescue tool and there is no grant for it. A call whose turns are
 // gone still runs, and the record keeps the tool's name in `panhandles`, so the
-// overrun is read back where it happened: `forkBudgetText` ends the branch's
-// budget line with `panhandled Nx`, and the caller reads that line when the
-// branch returns. The cost of panhandling is not a refusal. It is that the
-// overrun is public, and it stays on the record after the work is done.
+// overrun is read back where it happened: the REPL probe's `remaining` object
+// carries `panhandled N`, and the caller reads it when the branch returns. The
+// cost of panhandling is not a refusal. It is that the overrun is public, and
+// it stays on the record after the work is done.
 //
-// Adding turns is a different act, and it is not a rescue: `amendFork`
-// calls `grantBudget` when a reused scope arrives with more work. Scope size
-// follows the work a scope holds, so the grant adds and never caps.
+// Adding turns is a different act, and it is not a rescue: `grantBudget` adds
+// when a scope is reused with more work. Scope size follows the work a scope
+// holds, so the grant adds and never caps.
 
 import {
   copyCounts,
   failure,
   isNonEmptyString,
-  isPlainObject,
   put,
 } from "./state.mjs";
+import { isPlainObject } from "./plain.mjs";
 import { isFreeTool, normalizeToolName } from "./turns.mjs";
 import { editRecord } from "./record-mutation.mjs";
 

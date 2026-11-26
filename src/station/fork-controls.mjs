@@ -6,6 +6,8 @@
 // wiring, not here.
 
 import {
+  abandon,
+  abandonDescendants,
   adoptFork,
   annotateFork,
   forkOf,
@@ -18,7 +20,7 @@ import {
   takeReady,
   unreceivedChildren,
 } from "../scope/forkjoin.mjs";
-import { allocateSiblingScopeId, childScopePath } from "../scope/path.mjs";
+import { allocateSiblingScopeId, childScopePath, findScopeByPath, normalizeScopePath } from "../scope/path.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { setRecordFields } from "../scope/record-mutation.mjs";
 import { releaseRecordText } from "../scope/forkjoin.mjs";
@@ -37,12 +39,12 @@ import {
   resetRootPromotion,
 } from "./domain/handoff.mjs";
 import { processedOf } from "./domain/tool-call-ledger.mjs";
-import { notifyWaiters } from "../scope/fork-registry.mjs";
+import { notifyWaiters, pulse, setOutcome } from "../scope/fork-registry.mjs";
+import { rejectPendingRequests } from "../scope/request-queue.mjs";
 import { targetsText } from "../scope/targets.mjs";
 import { joinReceipt } from "../transcript/replay.mjs";
 import { toolCalls } from "../transcript/messages.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
-import { handleSendCall } from "./send-controls.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 import { parseArgs } from "./messages.mjs";
 
@@ -100,6 +102,20 @@ function budgetText(turns) {
   const parts = [];
   for (const key of Object.keys(turns ?? {})) parts.push(`${key} ${turns[key]}`);
   return parts.length > 0 ? parts.join(", ") : "none";
+}
+
+/**
+ * The journal frame that carries this call.
+ *
+ * The js runtime mints a synthetic call id (`<frameId>#<index>`) so one script
+ * can issue several control calls; only the frame id exists as a tool call in
+ * the parent's assistant message, so that is the id the journal lookup, the
+ * branch session, and the UI attribution all read. A native call has no frame
+ * of its own and falls back to its own id.
+ */
+function frameOf(call) {
+  if (typeof call?.frameId === "string" && call.frameId !== "") return call.frameId;
+  return typeof call?.id === "string" ? call.id : "";
 }
 
 /** The record text a candidate would add to the parent's next request. */
@@ -322,7 +338,7 @@ export function childReceiptText(spec) {
       marker: scopeReceiptMarker(spec.scopeId ?? spec.forkId),
       depth: spec.childDepth,
       fsm: spec.fsm,
-      budget: budgetText(spec.budget),
+      remaining: budgetText(spec.budget),
       targets: targetsText(spec.targets),
     }),
     S["fork.child-return"],
@@ -511,7 +527,7 @@ export function handleForkCall(station, call, options = {}) {
     // The child's address, so its own station can name itself to the parent
     // and to any sibling without a second lookup.
     path: fork.path ?? null,
-    sourceToolCallId: baseId,
+    sourceToolCallId: frameOf(call),
     childDepth: fork.childDepth,
     fsm,
     profession: item.profession ?? fork.profession ?? "",
@@ -598,7 +614,7 @@ export function handleForkCall(station, call, options = {}) {
     }));
 
     // One item, one scope. Nothing here reuses or extends an existing record:
-    // a later message is a `scope_send`, not a second fork of the same name.
+    // a later message is a `scope_request`, not a second fork of the same name.
   }
 
   // Register the whole batch before any child starts. A spawner that throws,
@@ -637,49 +653,59 @@ export function handleForkCall(station, call, options = {}) {
     if (reset.changed) station.state.relay = reset.relay;
   }
 
+  // Plain summaries only. The model reads `details.result`; the prose receipt
+  // templates retired with the mailbox, and restating the object in markdown
+  // would spend the reader's attention on a second copy.
   const sections = [];
   if (started.length > 0) {
     sections.push(
-      render(F["fork.batch-started"], {
-        count: started.length,
-        depth,
-        lines: started
-          .map((entry) =>
-            render(F["fork.started-line"], {
-              forkId: entry.scopeId,
-              childDepth: entry.childDepth,
-              fsm: entry.fsm,
-            }),
-          )
-          .join("\n"),
-      }),
+      [
+        `Started (${started.length}) at depth ${depth}:`,
+        ...started.map(
+          (entry) =>
+            `- ${publicScopeId(forkOf(ledger, entry.forkId))} (depth ${entry.childDepth}): ${entry.fsm}`,
+        ),
+      ].join("\n"),
     );
   }
   if (failed.length > 0) {
     sections.push(
-      render(F["fork.batch-failed"], {
-        count: failed.length,
-        lines: failed
-          .map((entry) =>
-            render(F["fork.failed-line"], {
-              forkId: entry.scopeId,
-              fsm: entry.fsm,
-              reason: entry.reason,
-            }),
-          )
-          .join("\n"),
-      }),
+      [
+        `Failed to start (${failed.length}):`,
+        ...failed.map((entry) => `- ${entry.scopeId}: ${entry.fsm} — ${entry.reason}`),
+      ].join("\n"),
     );
   }
   // Keep every unreceived scope visible without repeating its assignment.
   const unreceived = unreceivedChildren(ledger, parentOwnerId)
     .map((id) => publicScopeId(forkOf(ledger, id)));
   if (unreceived.length > 0) {
-    sections.push(render(F["fork.unreceived"], { children: unreceived.join(", ") }));
+    sections.push(
+      `Still unreceived: ${unreceived.join(", ")}. Join them with scope_join before returning.`,
+    );
   }
+  // The model reads the object, not the prose: `details.result` is the
+  // info-rich channel the js runtime unwraps. `content` stays a short human
+  // summary for the TUI and for legacy readers.
+  const unreceivedPaths = unreceivedChildren(ledger, parentOwnerId).map((id) =>
+    publicScopeId(forkOf(ledger, id)),
+  );
   return textResult(sections.join("\n\n"), {
     started: started.map((entry) => entry.forkId),
     failed: failed.map((entry) => entry.forkId),
+    result: {
+      ok: failed.length === 0,
+      started: started.map((entry) => ({
+        path: entry.scopeId,
+        depth: entry.childDepth,
+        fsm: entry.fsm,
+      })),
+      failed: failed.map((entry, index) => ({
+        index,
+        error: entry.reason,
+      })),
+      unreceived: unreceivedPaths,
+    },
   });
 }
 
@@ -703,6 +729,81 @@ function levelKeyOf(station) {
  * this result's text. With no child ready the call refuses; the ticket layer
  * waits for one in the wired flow.
  */
+/**
+ * Close one child that will not return.
+ *
+ * `scope_abandon({ target })` names one exact path under this scope. The
+ * bracket closes as failed (a running child becomes ready-with-failure, so a
+ * parked join takes it), its descendants close with it, its agent stops, its
+ * queued requests reject, and the registry wakes every waiter. The record is
+ * kept: the join still reports what happened.
+ */
+export function handleAbandonCall(station, call) {
+  const ledger = ledgerOf(station);
+  if (!ledger) return errorResult("FORK_LEDGER_UNAVAILABLE", E["fork-ledger-unavailable"]);
+  const args = parseArgs(call);
+  const raw = typeof args?.target === "string" ? args.target.trim() : "";
+  const callerPath =
+    typeof station.selfScopePath === "function" ? station.selfScopePath() : "/";
+  const normalized = normalizeScopePath(callerPath, raw);
+  if (raw === "" || !normalized.ok) {
+    return errorResult(
+      "ABANDON_UNKNOWN_TARGET",
+      render(E["abandon-unknown-target"], { target: raw }),
+    );
+  }
+  const record = findScopeByPath(ledger, normalized.path);
+  if (!record) {
+    return errorResult(
+      "ABANDON_UNKNOWN_TARGET",
+      render(E["abandon-unknown-target"], { target: normalized.path }),
+    );
+  }
+  if (record.ownerId !== ownerIdOf(station)) {
+    return errorResult(
+      "ABANDON_NOT_OWNED",
+      render(E["abandon-not-owned"], { target: normalized.path }),
+    );
+  }
+  const reason = `abandoned by ${callerPath}`;
+  const subtree = abandonDescendants(ledger, record.forkId, reason);
+  if (record.status === "running") {
+    // A parked join takes only a ready record, so a running child closes as
+    // ready-with-failure; the outcome says it was abandoned.
+    markReady(ledger, record.forkId, { ok: false, reason, record: "" });
+  } else {
+    abandon(ledger, record.forkId, reason);
+  }
+  const wait = station.forkWaitPort?.() ?? null;
+  const registry = wait?.registry ?? station.registry ?? null;
+  if (registry && typeof registry === "object") {
+    setOutcome(registry, record.forkId, { failed: true, reason, record: "" });
+    rejectPendingRequests(registry, normalized.path, reason);
+    pulse(registry, ledger, record.forkId, { failed: true, reason, record: "" });
+    notifyWaiters(registry);
+  }
+  // The target stops too: its own agent may be the one that never returns.
+  const liveIds = [
+    record.forkId,
+    ...(subtree.runningIds ?? []),
+    ...(subtree.liveIds ?? []),
+  ];
+  station.abortChildrenPort?.(liveIds, subtree.abandonedIds ?? [], liveIds);
+  const closed = Array.isArray(subtree.abandonedIds) ? subtree.abandonedIds : [];
+  return textResult(render(F["abandon.tool"], { path: normalized.path }), {
+    result: {
+      ok: true,
+      abandoned: [
+        normalized.path,
+        ...closed.map((forkId) => {
+          const child = forkOf(ledger, forkId);
+          return child?.path ?? forkId;
+        }),
+      ],
+    },
+  });
+}
+
 export function handleJoinCall(station, call, options = {}) {
   const ledger = ledgerOf(station);
   if (!ledger) {
@@ -759,7 +860,7 @@ export function handleJoinCall(station, call, options = {}) {
   return renderJoinResult(station, taken.fork, {
     ledger,
     ownerId,
-    closeToolCallId: call.id,
+    closeToolCallId: frameOf(call),
     persisted,
   });
 }
@@ -844,6 +945,16 @@ export function renderJoinResult(station, record, options = {}) {
     joined: true,
     remaining,
     ...(persisted === undefined ? {} : { persisted }),
+    result: {
+      ok: !childFailed,
+      scope: publicScopeId(record),
+      failed: childFailed,
+      reason: childReason,
+      record: rendered,
+      note: "History only; do not re-execute it.",
+      unreceived: remaining.map((entry) => entry.scopeId),
+      persisted: persisted !== false,
+    },
   });
 }
 
@@ -855,7 +966,8 @@ export function renderJoinResult(station, record, options = {}) {
  * - Exact oath -> Child seals and delivers to parent (`stopLoop: true`);
  *   Root #1 rewinds for independent review (`stopLoop: true`);
  *   Root #2 consecutive promotes without rewind (`stopLoop: false`).
- * - Woken child -> forwards `dafny` to `..` via `scope_send` (`stopLoop: true`).
+ * - Woken child -> `dafny` forwards to `..`; the parent receives it as a new
+ *   `scope_request` and no second return is invented.
  */
 export function handleReturnCall(station, call, options = {}) {
   const args = parseArgs(call);
@@ -881,7 +993,7 @@ export function handleReturnCall(station, call, options = {}) {
   const callsInBeat = carrying ? toolCalls(carrying) : [];
   const mixedToolCalls =
     callsInBeat.length > 1 &&
-    callsInBeat.some((entry) => entry.id !== call?.id);
+    callsInBeat.some((entry) => entry.id !== frameOf(call));
 
   // Root rewinds require a real host session/manager capable of persisting the
   // compaction boundary. If the host explicitly reports `canRewindRoot(ctx) === false`,
@@ -941,27 +1053,6 @@ export function handleReturnCall(station, call, options = {}) {
     return errorResult("ORPHANS_WITHOUT_RECEIVER", E["orphans-without-receiver"]);
   }
 
-  // Woken child: forward dafny to parent via scope_send.
-  if (decision.kind === "forward") {
-    const forwarded = handleSendCall(station, {
-      id: call?.id,
-      name: "scope_send",
-      arguments: { target: "..", message: decision.dafny },
-    });
-    if (forwarded?.isError === true) return forwarded;
-    setRecordFields(record, { woken: false });
-    const where = Array.isArray(forwarded?.details?.delivered)
-      ? forwarded.details.delivered.join(", ")
-      : "the parent scope";
-    return textResult(`Sent to ${where}.`, {
-      forkId: selfForkId,
-      scopeId: publicScopeId(record),
-      accepted: true,
-      stopLoop: true,
-      forwardedToParent: true,
-    });
-  }
-
   // Child small handoff: keep bracket RUNNING, capture formatted generation
   // report, and let the spawn ticket rewind back to `originEntryId` after the
   // agent loop stops cleanly via `stopLoop: true`.
@@ -977,7 +1068,6 @@ export function handleReturnCall(station, call, options = {}) {
       typeof station.contextMessages === "function" ? station.contextMessages() : [];
     const report = formatGenerationReport(
       messages,
-      station.state?.amends ?? [],
       childRecordStart(messages, record),
       decision.dafny,
     );
@@ -1024,7 +1114,6 @@ export function handleReturnCall(station, call, options = {}) {
       typeof station.contextMessages === "function" ? station.contextMessages() : [];
     const report = formatGenerationReport(
       messages,
-      station.state?.amends ?? [],
       0,
       decision.dafny,
     );
@@ -1046,6 +1135,14 @@ export function handleReturnCall(station, call, options = {}) {
         big: decision.big,
         generation: pendingRewind.generation,
         stopLoop: true,
+        result: {
+          ok: true,
+          scope: "root",
+          rewind: true,
+          sealed: false,
+          big: decision.big,
+          generation: pendingRewind.generation,
+        },
       },
     );
   }
@@ -1070,7 +1167,6 @@ export function handleReturnCall(station, call, options = {}) {
       typeof station.contextMessages === "function" ? station.contextMessages() : [];
     renderedRecord = formatGenerationReport(
       messages,
-      station.state?.amends ?? [],
       childRecordStart(messages, record),
       decision.dafny,
     );
@@ -1115,12 +1211,7 @@ export function handleReturnCall(station, call, options = {}) {
     decision.receiverId === "root"
       ? "Root"
       : publicScopeId(forkOf(ledger, decision.receiverId));
-  const lines = [
-    render(F["return.receipt"], {
-      forkId: publicScopeId(record),
-      receiver: receiverText,
-    }),
-  ];
+  const lines = [`Sealed ${publicScopeId(record)}; delivered to ${receiverText}.`];
   if (decision.orphans.length > 0) {
     lines.push(
       `Reparented to ${receiverText}: ${decision.orphans.map((id) => publicScopeId(forkOf(ledger, id))).join(", ")}.`,
@@ -1140,17 +1231,15 @@ export function handleReturnCall(station, call, options = {}) {
     receiverText,
     accepted: true,
     stopLoop: true,
+    result: {
+      ok: true,
+      scope: publicScopeId(record),
+      sealed: true,
+      receiver: receiverText,
+      reparented: decision.orphans.map((id) => publicScopeId(forkOf(ledger, id))),
+      persisted,
+    },
   });
-}
-
-/** The receipt a child gets once the parent has taken its record. */
-export function returnAcceptedText(forkId, receiver) {
-  return render(F["return.receipt"], { forkId, receiver });
-}
-
-/** The receipt a child gets when a reused scope superseded its record. */
-export function returnSupersededText(forkId) {
-  return render(F["return.superseded"], { forkId });
 }
 
 export { levelKeyOf, ownerIdOf, depthOf };

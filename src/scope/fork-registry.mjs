@@ -69,11 +69,6 @@ export function setIdentity(registry, forkId, identity) {
       ? normalizeTargets(identity.targets)
       : null,
     childDepth: Number.isInteger(identity.childDepth) ? identity.childDepth : null,
-    // Beat keys the parent had already retired at fork time. The child copies
-    // them into its own state, so a later amend on either side stays local.
-    amends: Array.isArray(identity.amends)
-      ? identity.amends.filter((key) => typeof key === "string")
-      : [],
     // The bracket ledger is per conversation, not per agent. A child's tool
     // context may expose a different manager object, so the ledger must travel
     // with the identity; deriving it again from the child context can create a

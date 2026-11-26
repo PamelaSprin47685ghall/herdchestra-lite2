@@ -19,7 +19,7 @@ A skill may use another skill's concept, but it must not restate its rules. Link
 
 One fact, one home. If the same rule appears in two skills, decide which skill can enforce or decide it, and make the other a pointer. If neither can own it, the rule is not a rule; it is a preference.
 
-A skill is not a diary. Run-specific state, dates, results, and one-off values belong in pins or the ledger. The skill holds the reusable procedure, not the run.
+A skill is not a diary. Run-specific state, dates, results, and one-off values belong in the ledger or the return report. The skill holds the reusable procedure, not the run.
 
 ## When to create
 
@@ -33,7 +33,7 @@ Required-reading skills carry stance; on-demand skills carry deep method. Do not
 
 The entry is a map, not a warehouse. It states the job, the first move, the boundary, and links to siblings for detail. Siblings hold long procedures and examples; the entry stays stable.
 
-No code, no diary, no duplicated policy. If a detail belongs to one run, it belongs in a pin. If it belongs to one tool, it belongs in the tool document. If it belongs to judgment, it belongs in the skill.
+No code, no diary, no duplicated policy. If a detail belongs to one run, it belongs in the return report. If it belongs to one tool, it belongs in the tool document. If it belongs to judgment, it belongs in the skill.
 
 ## Maintenance
 

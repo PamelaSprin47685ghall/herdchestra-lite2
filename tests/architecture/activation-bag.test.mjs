@@ -141,7 +141,7 @@ test("the child's identity spends the child's budget, never the root's", () => {
 		}).ok,
 	).toBe(true);
 
-	const child = chargeBranch({ charges: {} }, ledger, {
+	const child = chargeBranch({}, ledger, {
 		ownerId: "fork_x",
 		toolCallId: "call-1",
 		toolName: "read",
@@ -151,7 +151,7 @@ test("the child's identity spends the child's budget, never the root's", () => {
 
 	// The root owns no record and therefore no turns: the same call at the
 	// root is refused. This is why a lost identity made every child tool fail.
-	const root = chargeBranch({ charges: {} }, ledger, {
+	const root = chargeBranch({}, ledger, {
 		ownerId: null,
 		toolCallId: "call-2",
 		toolName: "read",

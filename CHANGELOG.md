@@ -6,6 +6,170 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Added — `scope_abandon` closes a child that will not return
+
+A forked scope that never calls `scope_return` used to hold the parent's join
+open; `scope_return` refuses while a child is unreceived, so nothing
+model-facing could close it. One new verb closes the bracket. The join itself
+keeps waiting for as long as the child takes — a bound would waste a slow
+child's work — and a user message ends a parked join without a record.
+- `scope_abandon({ target })` closes one exact child: a running child becomes
+  ready-with-failure so a parked join takes it, its descendants close with it,
+  its agent stops, its queued `scope_request`s reject, and the registry wakes
+  every waiter. The record is kept so the join can report the failure.
+
+### Changed — one `js` tool replaces the native tool surface (breaking)
+
+The model sees exactly one tool. Every other capability — the host's file,
+shell and web tools, MCP tools, and this extension's own control plane — is an
+async method on the `api` object that the single `js` tool builds each turn.
+The point is not fewer tools for their own sake: a fixed `tools` array and a
+fixed system prompt are what let the provider cache survive every state
+transition, and a capability the model cannot name is one it cannot call.
+
+- `projectCapabilities()` in `src/station/domain/capabilities.mjs` is the one
+  owner of "what is bound this turn". It feeds three consumers from the same
+  projection: the methods the `js` ticket binds, the trailing REPL probe that
+  prints them, and the signature that decides whether a committed receipt can
+  be reused.
+- The trailing per-turn message is now a REPL transcript rather than an
+  `<additional-system-instructions>` block: `> ({ api: Object.keys(api), ...state })`
+  followed by one object literal, plus a `> delete api.<name>` line on the one
+  turn where a method disappears. Same `role`/`attribution`/`herdSkill`
+  envelope as before, so the web client keeps folding it into a step group.
+- The signature hashes the exact object the probe prints, not just the mode.
+  A mode-only signature let a stale `remaining`, scope list, or clock survive
+  every turn inside one mode and print a budget that had already been spent.
+  The probe is the last message, so rewriting it costs no cached prefix.
+- Four hard modes replace prose nagging: `AWAITING_REPLY` (only `scope_reply`),
+  `CONTEXT_LIMIT` (only `scope_return`), `FINAL_ANSWER` (no `api` methods), and
+  the default family (`CHILD`, `ROOT_MANUAL`, `ROOT_AUTOPILOT`). The order is
+  `AWAITING_REPLY` > `CONTEXT_LIMIT` > `FINAL_ANSWER` > default.
+- `scope_request({ target, message, interrupt })` replaces the asynchronous
+  `scope_send` mailbox. It waits for the target's `scope_reply(text)` and
+  rejects a wait-for cycle before parking, so a request can never deadlock the
+  tree. `interrupt: true` aborts through its own symbol, never through the
+  user's abort, so the web stop button still cancels the whole tree and a
+  request never does.
+- Tool results are info-rich objects (`{ ok, started, failed, unreceived }` for
+  fork, `{ ok, scope, reason, record, persisted, note }` for join) instead of
+  prose receipts. `scope_fork` keeps its explicit `{ forks: [...] }` batch.
+- Removed with the tool face: `pin`, `amend`, and every `scope_context`
+  argument; `todo` exposure; the fake first-turn `bash("pwd")` probe; the
+  append-only inbox and its glob engine; the retired `labels.md` prompt
+  document and the `ask-blocked` / `model-switch-warning` error keys; and
+  `resolveModelPolicy` with the rate-table parsing behind it.
+- The web client reads `toolResult.details.innerCalls` to rebuild a script's
+  inner calls as their own cards and as artifact-drawer entries, and gives the
+  scope control plane question/answer/subtask cards instead of raw JSON.
+
+### Fixed — a fork issued from the `js` sandbox passes validation
+
+The `js` tool compiles model code in a fresh `vm` context, so every object a
+script builds carries that context's `Object.prototype`. `isPlainObject`
+compared against this realm's prototype, so it answered no for every budget —
+an empty one included — and `scope_fork` refused all of them with
+`INVALID_BUDGET` while the item was otherwise valid. The single tool therefore
+could not start a single scope.
+
+- `src/scope/plain.mjs` is now the one owner of the predicate. It decides
+  shape, not realm: a null prototype, or a prototype whose own prototype is
+  null, is plain data; a class instance, `Date`, `Map` or array still is not.
+- `state`, `forkjoin`, `turns`, `panhandle`, and `persistence` import it
+  instead of carrying a copy; `forkjoin` held the second copy with the same
+  defect.
+- `tests/station/domain/fork-join.test.mjs` pins a budget built in another
+  realm as accepted, and a `Map` as still refused.
+
+### Fixed — the control plane's contract reaches the model again
+
+`js` is the only registered tool, so the five `scope_*` methods have no JSON
+schema, and the refactor deleted `src/tools/descriptions.mjs`, the only thing
+that carried `tools/fork-join.md` into one. The prose stayed, the tests kept
+asserting it, and the model stopped receiving it: a fork had to guess
+`budget` keys, the non-empty `targets` list, and the `"You are "` prefix, then
+learn each rule from a refusal.
+
+- `inject.mjs` compiles every section of `tools/fork-join.md` that declares no
+  placeholder into the managed block, between §scope-rules and the tool
+  declarations. A section that declares `{{…}}` is a receipt rendered
+  elsewhere, so it is skipped: no raw template enters the prompt.
+- The prose is trimmed in the same pass, 1 500 words to about 900, keeping
+  every rule and dropping what `system.md` §Run scopes already owns.
+- `system.md` drops the `Close the work` section that repeated §scope-rules,
+  and the free protocol-URI rule moves back to §Run scopes with the budget it
+  belongs to.
+- `receipts/scope.md` drops `receipt.branch`, `receipt.branch-missing`, and
+  `mode.remaining` (no renderer) and `context.nudge` (the hard mode replaced
+  it); `fork.child-status` says "Turns left", so the retired word `balance`
+  is gone from the model-facing copy.
+- `errors.md` loses the eight sections no path renders: the `scope_request`
+  and `js` refusals are worded in code, `mixed-return-tool-calls` duplicated
+  the live `mixed-return` under an unread key, and three accounting sections
+  were inlined with the panhandle long ago. `mixed-return` now says "script",
+  not the retired "tool-call batch".
+
+### Fixed — a forked scope is addressed by the frame that requested it
+
+The `js` runtime mints a synthetic call id for each inner call
+(`<frame>#<index>`), and the control plane used it as if it were the assistant
+tool call in the journal. A child session is built from that frame, so every
+fork refused with `NO_FORK_FRAME`; the refusal then left a joined scope in the
+address book that no session could answer — one idle scope that never settled.
+
+- `js-ticket` dispatches the enclosing frame beside the call id, and the
+  catalog, the tickets, the station cores, and the fork/join/return handlers
+  carry it. The synthetic id still keys the processed-call cache and the
+  ledger's `forkId`, so one script may fork several times.
+- The spawn spec writes `sourceToolCallId` from the frame, the join result
+  reports `closeToolCallId` from it, and the return batch check compares
+  against it.
+- `listAddressableScopePaths` drops a record whose outcome failed, so a scope
+  that never produced a session leaves `state.scopes`.
+- `scope_request` refuses a target that never started or already failed with
+  `REQUEST_UNREACHABLE`, instead of parking the caller on a promise nothing
+  can resolve.
+
+### Fixed — an inner tool resolves approval from the session, and a beat costs one turn
+
+- The host's extension wrapper derives the approval mode from
+  `context.settings`. An extension context carries none, so every host tool
+  called through `js` resolved to always-ask: the root prompted, and a child —
+  which has no interactive UI — threw `requires approval but no interactive UI
+  available` and could not run `bash`, `write`, or `edit` at all. The catalog
+  now attaches the session's own settings (`session.settingsOf` on the host
+  bag) to the dispatch context, so `tools.approvalMode` decides for root and
+  child alike.
+- `chargeBranch` charged every call the tool's whole share of the beat: three
+  reads in one script spent three turns. Each call now pays its tool's share
+  over that tool's call count, so one beat costs one turn (two-decimal split).
+- A child that fails or never publishes its record rejects its queued
+  `scope_request`s instead of leaving callers parked, and `scope_request`
+  refuses a finished scope with no wake hook with `REQUEST_UNREACHABLE`.
+- §CONTEXT_LIMIT said "fork the remainder" while only `scope_return` is bound;
+  the rules and the receipt now say to fork after the rewind, which
+  re-baselines the context.
+
+### Added — a stopped scope answers a request from its branch
+
+A scope that finished its return kept an idle prompt handle only while its
+process lived. Once that handle was gone — a reload, an abandoned cascade —
+`scope_request` had nothing to wake, and a caller either parked or was
+refused.
+
+- The fork record carries `branchTail`: the child branch's leaf after the
+  last completed turn, written by the spawn ticket wherever a turn is sent.
+  `validRecord` accepts a non-empty string or absence; no snapshot bump.
+- `resumeBranchSession` (host-omp) rebuilds one session over that branch —
+  the live proxy when it exists, otherwise a proxy opened at the recorded
+  leaf — and hands back a one-shot prompt.
+- `coldWakeEntry` drives it: one wake turn per queued request, then teardown.
+  The core installs the child identity for the wake and drops it after, so the
+  record, its address, and its liveness are exactly what they were: a live
+  scope stays live, a stopped one stays stopped.
+- The reachability guard reads the runtime table from the registry as well as
+  the station, so a live idle handle is never mistaken for a dead address.
+
 ## [5.1.0] — 2026-11-26
 
 ### Added — a scope that outgrows its context midpoint is asked to return

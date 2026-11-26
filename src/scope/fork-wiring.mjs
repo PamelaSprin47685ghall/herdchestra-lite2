@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 
 import {
 	adoptLedger,
+	clearIdentity,
 	createForkRegistry,
 	identityForAgent,
 	ledgerFor,
@@ -22,7 +23,10 @@ import {
 	setIdentity,
 	setOutcome,
 } from "./fork-registry.mjs";
+import { forkOf } from "./forkjoin.mjs";
+import { coldWakeEntry, pendingAt } from "../tools/cold-wake.mjs";
 import { createDisplayBinder } from "../station/display-holder.mjs";
+import { registerRuntime } from "./request-queue.mjs";
 import { buildChildIdentity } from "../station/domain/identity.mjs";
 import { selectForkLedger } from "../station/domain/fork-ledger.mjs";
 import {
@@ -203,10 +207,6 @@ function spawnPortFor(station, base, binder, options, wiring) {
 		// Prebind the generated host ID without changing the fork identity.
 		const identity = buildChildIdentity(spec, {
 			agentId,
-			// What the parent had retired before this fork. The child projects
-			// the same transcript, so it must drop the same beats or its outbound
-			// prefix stops matching the parent's.
-			amends: station.state?.amends ?? [],
 			display: binder.currentDisplay(),
 			displayHolder,
 			ledger: base.ledger,
@@ -232,7 +232,19 @@ function spawnPortFor(station, base, binder, options, wiring) {
 			unregisterRunning: (forkId) => runningMapOf(base).delete(forkId),
 			// A finished child keeps its prompt handle here so a message can wake
 			// it in place instead of forcing a new session.
-			registerIdle: (forkId, entry) => idleMapOf(base).set(forkId, entry),
+			registerIdle: (forkId, entry) => {
+				idleMapOf(base).set(forkId, entry);
+				// A finished scope stays addressable: a pending scope_request wakes
+				// it for one reply turn through the same idle prompt handle, which
+				// already drains the request queue.
+				const path = base.ledger?.forks?.[forkId]?.path;
+				if (typeof path === "string" && path !== "") {
+					registerRuntime(base.registry, path, {
+						state: "idle",
+						wake: () => station.childWakePort?.()?.(forkId),
+					});
+				}
+			},
 			unregisterIdle: (forkId) => idleMapOf(base).delete(forkId),
 			// A finished spawn is a ledger change too. The parent's branch
 			// persists it, not the child's disappearing one.
@@ -288,21 +300,24 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 	// handle the ticket registered, and the cascade deletes each entry before
 	// it runs, so one child is stopped once.
 	if (station && typeof station === "object") {
-		station.abortChildrenPort = (forkIds, abandonedIds = []) => {
+		station.abortChildrenPort = (forkIds, abandonedIds = [], liveIds = [...forkIds, ...abandonedIds]) => {
 			const running = runningMapOf(base);
 			const idle = idleMapOf(base);
-			for (const forkId of forkIds ?? []) {
+			const stopped = new Set();
+			const stop = (forkId, phase) => {
+				if (stopped.has(forkId)) return;
+				stopped.add(forkId);
 				const abort = running.get(forkId);
 				if (typeof abort === "function") {
 					running.delete(forkId);
 					try {
 						abort();
 					} catch (error) {
-						host.report?.("fork", error, { forkId, phase: "cascade" });
+						host.report?.("fork", error, { forkId, phase });
 					}
 				}
-				// A returned or joined child woken by `scope_send` still owns a
-				// live prompt loop. Stop it too and remove the idle entry.
+				// A returned or joined child woken by `scope_request` still owns a
+				// live prompt loop. Its record stays frozen, but the loop stops.
 				const entry = idle.get(forkId);
 				const idleAbort = entry?.abort;
 				if (typeof idleAbort === "function") {
@@ -310,15 +325,16 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 					try {
 						idleAbort();
 					} catch (error) {
-						host.report?.("fork", error, { forkId, phase: "cascade-idle" });
+						host.report?.("fork", error, { forkId, phase: `${phase}-idle` });
 					}
 				}
-			}
+			};
+			// Esc stops the conversation branch: every descendant that may still
+			// own an agent stops, whether the ledger could close it or not.
+			for (const forkId of liveIds ?? []) stop(forkId, "cascade");
 			// Drop stale idle handles for abandoned (now FAILED) branches so a
 			// cancelled scope cannot later be woken through a leftover entry.
-			for (const forkId of abandonedIds ?? []) {
-				idle.delete(forkId);
-			}
+			for (const forkId of abandonedIds ?? []) idle.delete(forkId);
 		};
 	}
 	const existing = base?.binder ? base : null;
@@ -346,14 +362,68 @@ export function bindHostForkPorts(station, wiring, options = {}) {
 	// A message that names a finished scope reaches this port, which drives the
 	// session the spawn ticket left idle. The ticket owns the loop; this only
 	// hands it the fork id.
-	station.childWakePort = () => (forkId) => {
-		const entry = idleMapOf(base).get(forkId);
-		if (!entry) return null;
+	const wakeOne = (entry, forkId) => {
 		const running = wakeIdleScope(entry, base.ledger, forkId);
 		running?.catch?.((error) => {
 			host.report?.("fork", error, { forkId, phase: "wake" });
 		});
 		return running;
+	};
+	station.childWakePort = () => (forkId) => {
+		const live = idleMapOf(base).get(forkId);
+		if (live) return wakeOne(live, forkId);
+		// A stopped scope may still be resumable: the host rebuilds a session over
+		// the branch the record's `branchTail` names. The identity exists for this
+		// wake only and is dropped after the reply, so the record, its address,
+		// and its liveness stay exactly what they were — a dead scope stays dead.
+		const record = forkOf(base.ledger, forkId);
+		if (!record || record.outcome === "failed" || record.status === "failed") return null;
+		const agentId =
+			typeof record.agentId === "string" && record.agentId !== "" ? record.agentId : null;
+		if (!agentId || typeof options.resumeIdle !== "function") return null;
+		setIdentity(
+			base.registry,
+			forkId,
+			buildChildIdentity(
+				{
+					forkId,
+					ownScopeId: record.scopeId,
+					path: record.path,
+					fsm: record.fsm,
+					budget: record.budget,
+					targets: record.targets,
+					childDepth: record.childDepth,
+					parentOwnerId: record.ownerId,
+				},
+				{ agentId, ledger: base.ledger },
+			),
+		);
+		return Promise.resolve(options.resumeIdle(forkId)).then(
+			(resumed) => {
+				if (!resumed) {
+					clearIdentity(base.registry, forkId);
+					return null;
+				}
+				return wakeOne(
+					coldWakeEntry({
+						prompt: resumed.prompt,
+						pending: () => pendingAt(base.registry, record.path),
+						// The identity exists for this wake alone. The record and its
+						// liveness are exactly what they were before it.
+						teardown: () => {
+							clearIdentity(base.registry, forkId);
+							return resumed.close?.();
+						},
+					}),
+					forkId,
+				);
+			},
+			(error) => {
+				host.report?.("fork", error, { forkId, phase: "wake-resume" });
+				clearIdentity(base.registry, forkId);
+				return null;
+			},
+		);
 	};
 	if (base && typeof base === "object") {
 		base.binder = binder;

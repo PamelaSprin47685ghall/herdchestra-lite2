@@ -4,8 +4,8 @@
 // subagent session (task/executor.ts). The main session has no `agent` field.
 // `readOnly` is the host's own verdict on the agent definition
 // (task/read-only-policy.ts), and it is authoritative. `tools` records every
-// tool the session was granted, including extension-owned tools (`scope`,
-// `amend`, `pin`), so it must never be read as a capability list on
+// tool the session was granted, including extension-owned ones (`js`,
+// `scope_request`), so it must never be read as a capability list on
 // its own. A read-only subagent is exempt from scope enforcement.
 //
 // This module is pure: it reads the context's branch and agent metadata, never
@@ -30,15 +30,8 @@ const READ_ONLY_TOOL_NAMES = new Set([
 	"rewind",
 ]);
 
-// Tools this extension registers itself. They record bookkeeping, not file
-// writes, so they must not turn a read-only agent into a read-write one when
-// only the legacy `tools` list is available.
-// `scope_context` is the current name. The retired `amend` and `pin` stay
-// listed because a persisted session_init may still name them.
-const NEUTRAL_TOOL_NAMES = new Set(["scope_context", "amend", "pin"]);
-
 function isReadTier(name) {
-	return READ_ONLY_TOOL_NAMES.has(name) || NEUTRAL_TOOL_NAMES.has(name);
+	return READ_ONLY_TOOL_NAMES.has(name);
 }
 
 export const MAIN_AGENT = "main";

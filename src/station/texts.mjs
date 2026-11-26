@@ -1,91 +1,51 @@
-// Station texts: every model-facing receipt string. The prose lives in
-// resources/prompts/receipts/scope.md; this module chooses and composes it.
+// Station texts: the model-facing nudge strings.
+//
+// The per-turn REPL probe is owned by `domain/capabilities.mjs`; this module
+// keeps only the steers the station delivers when the model tries to stop
+// against a hard mode. A hard mode already removed every other tool from
+// `api`, so a steer only has to name the one move that remains.
 
-import { forkBudgetText } from "../scope/index.mjs";
-import { listActiveScopePaths } from "../scope/path.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 
 const T = loadDoc("receipts/scope");
-
-function branchBudget(record, clock = null) {
-	return forkBudgetText(record, Date.now(), clock) || "none";
-}
-
-/** The pin receipt: the note is saved. */
-export const PIN_SAVED_TEXT = T["pin.saved"];
-
-function amendText(applied, record = null, clock = null) {
-	const refunded = Number.isInteger(applied.refunded) ? applied.refunded : 0;
-	const text = render(T["amend.undone"], { refunded });
-	return record ? `${text}\n${render(T["amend.remaining"], { budget: branchBudget(record, clock) })}` : text;
-}
 
 /** A steer when a branch tries to stop with unreceived work. */
 export function insideScopeNudge(openCount) {
 	return render(T["scope.stop-blocked"], { count: openCount });
 }
 
-/** A steer when Root stops naturally under autopilot before finishing via scope_return. */
+/** A steer when Root stops naturally under autopilot before sealing. */
 export function rootReturnNudge() {
 	return T["root.return-nudge"];
 }
 
-export function skillReceiptText(
-	state,
-	branch = null,
-	openCount = 0,
-	child = false,
-	clock = null,
-	chineseReminder = "on",
-	contextNudge = false,
-) {
-	const isChild = child || branch !== null;
-	const lines = [];
-	if (isChild) {
-		// A forked scope always has a budget to report. When the ledger holds no
-		// record for it, say the number is unknown instead of dropping the line:
-		// an absent line reads as "nothing to watch".
-		lines.push(
-			branch
-				? render(T["receipt.branch"], { budget: branchBudget(branch, clock) })
-				: T["receipt.branch-missing"],
-		);
+/**
+ * The one stop steer, chosen by mode.
+ *
+ * `FINAL_ANSWER` never steers: nothing is left to do but answer the user.
+ * `AWAITING_REPLY` outranks `CONTEXT_LIMIT` exactly as it does in the
+ * projection, so a half-full scope still unblocks its caller first.
+ *
+ * The second argument is `{ unreceived, from }`. A number is still accepted
+ * because a caller that only knows the open count has nothing else to add;
+ * `from` is the scope waiting on the reply, so the steer can name it.
+ */
+export function stopNudge(mode, options = 0) {
+	const opts =
+		options && typeof options === "object"
+			? options
+			: { unreceived: Number(options) || 0 };
+	const unreceived = Number.isInteger(opts.unreceived) ? opts.unreceived : 0;
+	switch (mode) {
+		case "AWAITING_REPLY":
+			return render(T["mode.awaiting-reply"], {
+				from: typeof opts.from === "string" && opts.from !== "" ? opts.from : "a peer scope",
+			});
+		case "CONTEXT_LIMIT":
+			return T["mode.context-limit"];
+		case "FINAL_ANSWER":
+			return null;
+		default:
+			return unreceived > 0 ? insideScopeNudge(unreceived) : null;
 	}
-	if (openCount > 0) {
-		lines.push(render(T["scope.unreceived"], { count: openCount }));
-	}
-	const relay = state?.relay;
-	if (!isChild) {
-		if (state?.autopilot) {
-			lines.push(T["receipt.autopilot"]);
-			if (openCount === 0) {
-				const readyToAnswer = relay?.canStop === true || (Number.isInteger(relay?.bigStreak) && relay.bigStreak >= 2);
-				lines.push(T[readyToAnswer ? "receipt.can-stop" : "receipt.return-required"]);
-			}
-		} else {
-			lines.push(T["receipt.manual"]);
-		}
-	}
-	const tree = scopeTreeText(state, branch);
-	const status = `<skill version="1.0" enforced>${lines.join(" ")}</skill>`;
-	// The context nudge rides this per-turn trailing block, never the system
-	// prompt: the block is rebuilt for every request and is not part of the
-	// cached prefix, so arming and disarming it costs the provider nothing.
-	const nudge = contextNudge
-		? ` <skill version="1.0" enforced>${T["context.nudge"]}</skill>`
-		: "";
-	const reminder = chineseReminder !== "off"
-		? ` <skill version="1.0" enforced>${T["language"]}</skill>`
-		: "";
-	return `<additional-system-instructions>${status}${tree}${nudge}${reminder}</additional-system-instructions>`;
 }
-
-function scopeTreeText(state, branch) {
-	const ledger = state?.brackets;
-	if (!ledger) return "";
-	const selfPath = branch?.path ?? (branch?.scopeId ? `/${branch.scopeId}` : "/");
-	const paths = listActiveScopePaths(ledger);
-	return `<skill version="1.0" enforced>Scope tree:\nActive scopes (self: ${selfPath}):\n${paths.join("\n")}\n</skill>`;
-}
-
-export { amendText };

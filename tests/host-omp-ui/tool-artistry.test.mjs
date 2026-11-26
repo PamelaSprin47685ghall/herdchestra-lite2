@@ -159,6 +159,142 @@ test("an unknown or MCP tool keeps args and result readable and prefers args.des
 	expect(view.isError).toBe(false);
 });
 
+test("a js card renders one child per inner call and strips the REPL echo", async () => {
+	const { describeToolCall } = await load();
+	const toolResult = {
+		content: [
+			{
+				type: "text",
+				text: "> await AsyncFunction('api', 'state', 'inputs', code)(api, state, inputs)\nwrote 1 file",
+			},
+		],
+		details: {
+			innerCalls: [
+				{ name: "write", args: { path: "src/a.mjs", content: "export const a = 1;" }, resultText: "ok" },
+				{ name: "bash", args: { command: "false" }, resultText: "exit 1", isError: true },
+			],
+		},
+	};
+	const view = describeToolCall({ name: "js", args: { code: "await api.write(...)" } }, toolResult);
+	expect(view.kind).toBe("eval");
+	// The echo line already travelled in the arguments; only the output is shown.
+	expect(view.output).toBe("wrote 1 file");
+	expect(view.children).toHaveLength(2);
+	expect(view.children[0].kind).toBe("write");
+	expect(view.children[0].path).toBe("src/a.mjs");
+	expect(view.children[1].kind).toBe("bash");
+	expect(view.children[1].isError).toBe(true);
+});
+
+test("a write inside js reaches the artifact drawer exactly like a direct write", async () => {
+	const { extractArtifacts } = await load();
+	const items = [
+		{ toolCall: { name: "read", args: { path: "src/b.mjs" } }, toolResult: { content: [] } },
+		{
+			toolCall: { name: "js", args: { code: "await api.write('src/a.mjs', ...)" } },
+			toolResult: {
+				content: [{ type: "text", text: "> await AsyncFunction(\nok" }],
+				details: {
+					innerCalls: [{ name: "write", args: { path: "src/a.mjs", content: "export const a = 1;" } }],
+				},
+			},
+		},
+	];
+	const artifacts = extractArtifacts(items);
+	const written = artifacts.find((artifact) => artifact.path === "src/a.mjs");
+	expect(written).toBeDefined();
+	expect(written.kind).toBe("write");
+	expect(written.content).toContain("export const a = 1");
+	// First call that names a path wins: the earlier read stays first.
+	expect(artifacts[0].path).toBe("src/b.mjs");
+});
+
+test("a js card without inner calls renders no children", async () => {
+	const { describeToolCall } = await load();
+	const view = describeToolCall(...call("js", { code: "1 + 1" }, "> await AsyncFunction(\n2"));
+	expect(view.children).toEqual([]);
+	expect(view.output).toBe("2");
+});
+
+test("scope_request reads as a question and shows the answer when it returns", async () => {
+	const { describeToolCall } = await load();
+	const waiting = describeToolCall(
+		...call("scope_request", { target: "/api", message: "字段名是 token 还是 accessToken？", interrupt: true }, ""),
+	);
+	expect(waiting.kind).toBe("ask");
+	expect(waiting.title).toBe("scope_request → /api");
+	expect(waiting.summary).toContain("字段名是 token 还是 accessToken？");
+	expect(waiting.summary).toContain("interrupt");
+
+	const polite = describeToolCall(...call("scope_request", { target: "/ui", message: "进度？", interrupt: false }, ""));
+	expect(polite.summary).toBe("→ /ui: 进度？");
+
+	// The same card carries the reply once the call has returned: one block
+	// reads top to bottom as the whole exchange.
+	const answered = describeToolCall(
+		...call("scope_request", { target: "/api", message: "字段名？" }, "accessToken，见 src/auth.mjs:42"),
+	);
+	expect(answered.summary).toContain("→ /api: 字段名？");
+	expect(answered.summary).toContain("← accessToken，见 src/auth.mjs:42");
+});
+
+test("scope_reply reads as an answer", async () => {
+	const { describeToolCall } = await load();
+	const reply = describeToolCall(...call("scope_reply", {}, "accessToken，见 src/auth.mjs:42"));
+	expect(reply.kind).toBe("ask");
+	expect(reply.title).toBe("scope_reply");
+	expect(reply.summary).toBe("← accessToken，见 src/auth.mjs:42");
+});
+
+test("scope_fork lists the batch and scope_join shows the record it brought", async () => {
+	const { describeToolCall } = await load();
+	const fork = describeToolCall(
+		...call(
+			"scope_fork",
+			{ forks: [{ scopeId: "api", fsm: "S1 audit\nS2 fix" }, { scopeId: "ui", fsm: "polish" }] },
+			"Started (2): /api, /ui",
+		),
+	);
+	expect(fork.kind).toBe("task");
+	expect(fork.title).toBe("scope_fork (2)");
+	expect(fork.agent).toBe("scope_fork");
+	expect(fork.prompt).toContain("api — S1 audit");
+	expect(fork.prompt).toContain("ui — polish");
+	expect(fork.result).toContain("Started (2)");
+
+	const join = describeToolCall(...call("scope_join", {}, "Record from /api: done"));
+	expect(join.kind).toBe("task");
+	expect(join.title).toBe("scope_join");
+	expect(join.result).toContain("Record from /api");
+
+	// A description wins the title, as it does for every other card.
+	const described = describeToolCall(...call("scope_fork", { description: "Split the audit", forks: [] }, ""));
+	expect(described.title).toBe("Split the audit");
+	expect(described.title).not.toBe("scope_fork (0)");
+});
+
+test("scope_return tells a rewind from a seal and names the scope", async () => {
+	const { describeToolCall } = await load();
+	const rewind = describeToolCall(...call("scope_return", { scope: "/api", dafny: "finished the audit" }, "Rewound."));
+	expect(rewind.kind).toBe("task");
+	expect(rewind.title).toBe("scope_return /api");
+	expect(rewind.prompt).toBe("rewind");
+	expect(rewind.result).toBe("Rewound.");
+
+	const seal = describeToolCall(
+		...call(
+			"scope_return",
+			{
+				dafny: "nothing left",
+				signed_sealed_hands_off_nothing_left_on_the_table: "a_ferocious_audacious_master_would_change_nothing",
+			},
+			"Sealed.",
+		),
+	);
+	expect(seal.title).toBe("scope_return");
+	expect(seal.prompt).toBe("seal");
+});
+
 test("extractArtifacts deduplicates file changes for the artifact drawer", async () => {
 	const { extractArtifacts } = await load();
 	const items = [
@@ -184,4 +320,104 @@ test("computeLineDiff counts added and removed lines", async () => {
 	expect(diff.added).toBe(2);
 	expect(diff.removed).toBe(1);
 	expect(diff.hunks.length).toBeGreaterThan(0);
+});
+
+// A script's work lives in `details.innerCalls`, not in the outer call. If the
+// mapper stopped walking that field, a write performed inside a script would
+// disappear from both its card and the artifact drawer, while every direct
+// write stayed visible — a silent loss with no error anywhere.
+test("js inner calls become their own cards and reach the artifact drawer", async () => {
+	const { describeToolCall, extractArtifacts } = await load();
+	const toolCall = { name: "js", args: { code: "await api.write('src/c.mjs', inputs.body)" } };
+	const toolResult = {
+		content: [{ type: "text", text: "> await AsyncFunction('api','state','inputs',code)(api,state,inputs)\nok" }],
+		isError: false,
+		details: {
+			innerCalls: [
+				{
+					id: "tc1#0",
+					name: "write",
+					args: { path: "src/c.mjs", content: "export const c = 3;" },
+					resultText: "ok",
+				},
+				{ id: "tc1#1", name: "read", args: { path: "src/d.mjs" }, resultText: "export const d = 4;" },
+			],
+		},
+	};
+
+	const view = describeToolCall(toolCall, toolResult);
+	expect(view.kind).toBe("eval");
+	// The echoed invocation already travelled in `code`; only output belongs here.
+	expect(view.output).toBe("ok");
+	expect(view.children.map((child) => child.kind)).toEqual(["write", "read"]);
+	expect(view.children[0].artifact.path).toBe("src/c.mjs");
+
+	const artifacts = extractArtifacts([{ toolCall, toolResult }]);
+	expect(artifacts.map((artifact) => artifact.path)).toEqual(["src/c.mjs", "src/d.mjs"]);
+	expect(artifacts[0].content).toBe("export const c = 3;");
+	expect(artifacts[0].kind).toBe("write");
+});
+
+// Rebuilding from history must produce the same cards as the live stream: the
+// block carries `details` only because the pairing copies it, so this pins the
+// handoff between transcript-model and the mapper.
+test("js without innerCalls renders one card and no children", async () => {
+	const { describeToolCall } = await load();
+	const view = describeToolCall(
+		{ name: "js", args: { code: "return 1 + inputs.one" } },
+		{ content: [{ type: "text", text: "> await AsyncFunction('api','state','inputs',code)(api,state,inputs)\n2" }] },
+	);
+	expect(view.kind).toBe("eval");
+	expect(view.output).toBe("2");
+	expect(view.children).toEqual([]);
+});
+
+// Once every native tool hides behind `js`, the scope tools are what the model
+// calls on most turns. Leaving them to the generic card puts raw JSON in the
+// transcript exactly where the user is watching the orchestration happen.
+test("the scope control plane gets question, answer and subtask cards", async () => {
+	const { describeToolCall } = await load();
+
+	const request = describeToolCall(
+		...call("scope_request", { target: "/api", message: "登录字段名？", interrupt: true }, "accessToken"),
+	);
+	expect(request.kind).toBe("ask");
+	expect(request.title).toContain("/api");
+	expect(request.summary).toContain("interrupt");
+	expect(request.summary).toContain("登录字段名？");
+	expect(request.summary).toContain("accessToken");
+
+	const reply = describeToolCall(...call("scope_reply", { text: "accessToken" }, "ok"));
+	expect(reply.kind).toBe("ask");
+	expect(reply.summary).toContain("accessToken");
+
+	const fork = describeToolCall(
+		...call(
+			"scope_fork",
+			{ forks: [{ scopeId: "api", fsm: "S1 read → S2 write" }, { scopeId: "ui" }] },
+			"Started (2): /api, /ui",
+		),
+	);
+	expect(fork.kind).toBe("task");
+	expect(fork.agent).toBe("scope_fork");
+	expect(fork.prompt.split("\n")).toEqual(["api — S1 read → S2 write", "ui"]);
+	expect(fork.result).toContain("/api");
+
+	const join = describeToolCall(...call("scope_join", {}, "History only; do not re-execute it."));
+	expect(join.kind).toBe("task");
+	expect(join.agent).toBe("scope_join");
+	expect(join.prompt).toBe("");
+	expect(join.result).toContain("History only");
+
+	const rewind = describeToolCall(...call("scope_return", { dafny: "done" }, "rewound"));
+	expect(rewind.kind).toBe("task");
+	expect(rewind.prompt).toBe("rewind");
+	const seal = describeToolCall(
+		...call(
+			"scope_return",
+			{ dafny: "done", signed_sealed_hands_off_nothing_left_on_the_table: "a_ferocious_audacious_master_would_change_nothing" },
+			"sealed",
+		),
+	);
+	expect(seal.prompt).toBe("seal");
 });

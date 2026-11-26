@@ -1,15 +1,15 @@
-// The catalog is the one place the host's five arguments meet a ticket's
-// declared parameters. `forkTicket` takes four arguments and a host bag, so
-// that is exactly what it must be called with: an extra argument in the host
-// position loses the bag, and the loss is silent because a dropped argument
-// raises nothing.
+// The core-tool table is the one place a ticket's four declared parameters and
+// its host bag meet the caller. `forkTicket` takes (station, toolCallId, args,
+// ctx, signal, host), so the table must bind the bag — an extra argument in the
+// host position would lose it silently, because a dropped argument raises
+// nothing. `scope_fork` is no longer a registered tool: the model reaches it
+// through `js`, so this table is the only path.
 
 import { expect, test } from "bun:test";
-import { createTools } from "../src/tools/catalog.mjs";
+import { createCoreTools } from "../src/tools/catalog.mjs";
 
-function toolNamed(name, { station, tickets }) {
-	const tools = createTools({ stationFor: () => station, tickets });
-	return tools.find((tool) => tool.name === name);
+function coreTool(name, { tickets }) {
+	return createCoreTools({ tickets })[name];
 }
 
 function brokenStation(message) {
@@ -27,12 +27,10 @@ test("scope_fork hands the ticket bundle to the ticket as its host bag", async (
 			record: (kind, error, meta) => recorded.push({ kind, error, meta }),
 		},
 	};
-	const fork = toolNamed("scope_fork", {
-		station: brokenStation("station refused the fork"),
-		tickets,
-	});
+	const station = brokenStation("station refused the fork");
+	const fork = coreTool("scope_fork", { tickets });
 
-	const result = await fork.execute("call-fork-1", {}, null, () => {}, {});
+	const result = await fork(station, "call-fork-1", {}, {}, null);
 
 	expect(result.details.code).toBe("FORK_INTERNAL_ERROR");
 	expect(recorded).toHaveLength(1);
@@ -43,12 +41,10 @@ test("scope_fork hands the ticket bundle to the ticket as its host bag", async (
 });
 
 test("scope_fork answers even when the host bag carries no report port", async () => {
-	const fork = toolNamed("scope_fork", {
-		station: brokenStation("boot"),
-		tickets: {},
-	});
+	const station = brokenStation("boot");
+	const fork = coreTool("scope_fork", { tickets: {} });
 
-	const result = await fork.execute("call-fork-2", {}, null, () => {}, {});
+	const result = await fork(station, "call-fork-2", {}, {}, null);
 
 	expect(result.isError).toBe(true);
 	expect(result.details.code).toBe("FORK_INTERNAL_ERROR");

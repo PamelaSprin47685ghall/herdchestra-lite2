@@ -8,11 +8,7 @@
 
 import { wireExtension, installCapture } from "./activation/index.mjs";
 import { installStatus, loadPricingCatalog } from "./host/index.mjs";
-import { record, total as diagnosticsTotal } from "./host/diagnostics.mjs";
-import {
-	loadSharedFirstTurn,
-	SHARED_FIRST_TURN_PATH,
-} from "./host/shared-first-turn.mjs";
+import { total as diagnosticsTotal } from "./host/diagnostics.mjs";
 import { CHILD_ACTIVITY_TYPE, registerToolCardComponent, renderChildActivity } from "./host/child-display.mjs";
 import { getHostTui } from "./host/tui-runtime.mjs";
 
@@ -38,7 +34,9 @@ export async function activate(pi, env = process.env) {
 		}
 	}
 	// Resolve the builtin at the extension entry so compiled omp can bind its
-	// embedded module rather than resolving from a transitive helper.
+	// embedded module rather than resolving from a transitive helper. The
+	// model never issues a slash command; a forked scope's own `model`
+	// selection is applied through this executor.
 	let builtinExecutor;
 	try {
 		const registry = await import("@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry");
@@ -48,22 +46,7 @@ export async function activate(pi, env = process.env) {
 	}
 	const diagnosis = await installCapture(pi, builtinExecutor);
 	const pricingCatalog = await loadPricingCatalog();
-	let sharedFirstTurn = null;
-	try {
-		sharedFirstTurn = loadSharedFirstTurn();
-	} catch (error) {
-		record("activation", error, {
-			phase: "shared-first-turn",
-			path: SHARED_FIRST_TURN_PATH,
-		});
-	}
-	const wired = wireExtension(
-		pi,
-		pricingCatalog,
-		diagnosis,
-		env,
-		sharedFirstTurn,
-	);
+	const wired = wireExtension(pi, pricingCatalog, diagnosis, env);
 	installStatus(pi, {
 		diagnostics: { total: diagnosticsTotal },
 		ports: wired.ports,

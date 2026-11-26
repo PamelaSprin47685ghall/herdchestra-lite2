@@ -96,7 +96,6 @@ test("a removed fork is deleted by id, not by rebuilding the tree", () => {
 
 test("a chain of checkpoints, deltas and ledger entries folds back", () => {
   const state = stateWithLedger();
-  state.charges.read = { tool: "read", amount: 1 };
   addFork(state, "w");
 
   const entries = [];
@@ -147,7 +146,7 @@ test("a chain of checkpoints, deltas and ledger entries folds back", () => {
   assert.equal(folded.seq, 1000);
   assert.deepEqual(Object.keys(folded.brackets.forks), ["w"]);
   assert.equal(folded.brackets.forks.w.record, "worker, returned");
-  assert.equal(folded.charges.read.amount, 1);
+  // The per-call charge trail is retired; the fold carries state and brackets.
 
   const restored = deserializeState(folded);
   assert.equal(restored.seq, 1000);

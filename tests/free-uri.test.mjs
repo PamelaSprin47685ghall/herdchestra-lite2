@@ -77,7 +77,7 @@ describe("built-in protocol calls are free", () => {
       });
       expect(charged).toEqual({ ok: true, free: true });
     }
-    expect(s.charges).toEqual({});
+    expect(s.charges ?? {}).toEqual({});
     expect(ledger.forks.f1.remaining.read).toBe(2);
     expect(ledger.forks.f1.remaining.write).toBe(2);
   });
@@ -97,7 +97,7 @@ describe("built-in protocol calls are free", () => {
       });
       expect(charged).toEqual({ ok: true, free: true });
     }
-    expect(s.charges).toEqual({});
+    expect(s.charges ?? {}).toEqual({});
 
     const paid = chargeBranch(s, ledger, {
       ownerId: "f1",

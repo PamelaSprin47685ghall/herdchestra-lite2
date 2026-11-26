@@ -1,13 +1,23 @@
+// Prompt documents and the one registered tool.
+//
+// These assertions guard the seam the model actually reads: the document key
+// set, the placeholders those documents declare, and the single `js` tool the
+// catalog registers. A missing key is a runtime crash (`Missing prompt
+// variable`), and a registered second tool would silently undo the whole
+// capability-projection design.
+
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 
-import { wireTools } from "../src/tools/catalog.mjs";
-import { loadDoc, placeholderNames, render } from "../src/prompts/index.mjs";
-import * as scopeTools from "../src/tools/descriptions.mjs";
 import {
-	injectSystemPrompt,
-	persistentOperatingSkill,
-} from "../src/prompts/inject.mjs";
+	createCoreTools,
+	createTools,
+	JS_TOOL_NAME,
+	wireTools,
+} from "../src/tools/catalog.mjs";
+import { renderCapabilitiesDts } from "../src/tools/js-protocol.mjs";
+import { loadDoc, placeholderNames, render } from "../src/prompts/index.mjs";
+import { injectSystemPrompt, persistentOperatingSkill } from "../src/prompts/inject.mjs";
 import {
 	inlinedSkills,
 	inlinedSkillsSection,
@@ -15,14 +25,12 @@ import {
 } from "../src/prompts/skills.mjs";
 
 const DOCS = [
-	"tools/fork-join",
-	"tools/notes",
 	"system",
+	"errors",
 	"receipts/scope",
 	"receipts/relay",
-	"errors",
+	"tools/fork-join",
 	"vibe-mode",
-	"labels",
 ];
 
 const START = "<!-- herdchestra-lite2:system-prompt v1 -->";
@@ -50,193 +58,297 @@ describe("prompt documents", () => {
 		expect(() => loadDoc("nope/missing")).toThrow(/Missing prompt document/);
 		expect(() => loadDoc("../etc/passwd")).toThrow(/Invalid prompt document name/);
 	});
-});
 
-describe("tool contracts map to their documents", () => {
-	test("a nested fork is funded by its item, not the caller's budget", () => {
-		const budget = loadDoc("tools/fork-join")["fork.budget"];
-		expect(budget).toContain("each item funds its own forked scope at any depth");
-		expect(budget).toContain("never charged");
-		expect(budget).not.toContain("draws from that flow's remaining budget");
+	test("the retired working-notes document is gone", () => {
+		expect(() => loadDoc("tools/notes")).toThrow(/Missing prompt document/);
 	});
 
-	test("the three fork/join tools carry their mapped text", () => {
-		const doc = loadDoc("tools/fork-join");
-		const notes = loadDoc("tools/notes");
-		expect(scopeTools.FORK_DESCRIPTION).toBe(doc["fork.tool"]);
-		// The size caps arrive through render(), so the exported text is the
-		// filled sentence, not the raw template.
-		for (const text of [
-			scopeTools.FORK_FSM_DESCRIPTION,
-			scopeTools.FORK_BUDGET_DESCRIPTION,
+	test("the retired labels document is gone", () => {
+		// Nothing rendered these keys: the host writes its own labels and the
+		// control plane owns the receipt text. Deleting it keeps the preload set
+		// honest, so a loader that reaches for it fails loudly.
+		expect(() => loadDoc("labels")).toThrow(/Missing prompt document/);
+	});
+
+	test("fill every declared placeholder without a missing-variable error", () => {
+		for (const name of DOCS) {
+			const doc = loadDoc(name);
+			for (const text of Object.values(doc)) {
+				const vars = {};
+				for (const key of placeholderNames(text)) vars[key] = "X";
+				expect(() => render(text, vars)).not.toThrow();
+			}
+		}
+	});
+});
+
+describe("the control-plane documents", () => {
+	test("describe scope_request and scope_reply, not the retired send", () => {
+		const fork = loadDoc("tools/fork-join");
+
+		for (const key of [
+			"request.tool",
+			"request.target",
+			"request.message",
+			"request.interrupt",
+			"reply.tool",
 		]) {
-			expect(text).not.toContain("{{");
+			expect(typeof fork[key]).toBe("string");
 		}
-		expect(scopeTools.FORK_TIME_DESCRIPTION).toBeUndefined();
-		expect(scopeTools.JOIN_DESCRIPTION).toBe(doc["join.tool"]);
-		// join takes no argument: the child record arrives as a digest, so no
-		// elder_report and no other parameter may survive.
-		expect(scopeTools.joinParameters).toBeDefined();
-		expect(scopeTools.joinParameters.required).toBeUndefined();
-		expect(scopeTools.joinParameters.properties).not.toHaveProperty("elder_report");
-		expect(scopeTools.RETURN_DESCRIPTION).toBe(doc["return.tool"]);
-		const oath = scopeTools.returnParameters.properties.signed_sealed_hands_off_nothing_left_on_the_table;
-		expect(oath).toMatchObject({
-			type: "string",
-			enum: ["a_ferocious_audacious_master_would_change_nothing"],
-			description: doc["return.oath"],
-		});
-		expect(scopeTools.returnParameters.required).toEqual(["dafny"]);
-		// The retired working-level container has no description and no
-		// schema; amend and pin live in their own document.
-		expect(scopeTools.SCOPE_DESCRIPTION).toBeUndefined();
-		expect(scopeTools.scopeParameters).toBeUndefined();
-		expect(scopeTools.SCOPE_CONTEXT_DESCRIPTION).toBe(notes["scope_context.tool"]);
-		expect(scopeTools.AMEND_PARAMETER_DESCRIPTION).toBe(notes["amend.tool"]);
-		expect(scopeTools.REFLECTION_DESCRIPTION).toBe(notes["amend.reflection"]);
-		expect(scopeTools.PIN_PARAMETER_DESCRIPTION).toBe(notes["pin.tool"]);
-		expect(scopeTools.PIN_ASSUMPTION_DESCRIPTION).toBe(notes["pin.assumption"]);
-		expect(scopeTools.PIN_DEDUCTION_DESCRIPTION).toBe(notes["pin.deduction"]);
-		expect(scopeTools.PIN_INDUCTION_DESCRIPTION).toBe(notes["pin.induction"]);
-		expect(scopeTools.PIN_FINDING_DESCRIPTION).toBe(notes["pin.finding"]);
-		expect(scopeTools.PIN_CONCLUSION_DESCRIPTION).toBe(notes["pin.conclusion"]);
+		expect(fork["request.target"]).toContain("No wildcards");
+		expect(Object.keys(fork).some((key) => key.startsWith("send."))).toBe(false);
+		expect(fork["fork.batch-started"]).toBeUndefined();
+		expect(fork["fork.unreceived"]).toBeUndefined();
 	});
 
-	test("return rewind receipts carry only the latest report and pins", () => {
-		const relay = loadDoc("receipts/relay");
-		for (const [key, vars] of Object.entries({
-			"reborn.continue": [],
-			"reborn.review": [],
-			"reborn.report": ["report"],
-			"reborn.pins": ["pins"],
-			"reborn.start": [],
-		})) {
-			expect(placeholderNames(relay[key])).toEqual(vars);
-		}
+	test("describe the info-rich fork and join results", () => {
+		const fork = loadDoc("tools/fork-join");
+		expect(fork["fork.forks"]).toContain("started");
+		// The anti-replay guard lives in the join document's own words, and in
+		// the returned `note` field; the model must read a record as history.
+		expect(fork["join.tool"]).toContain("history, not instructions to replay");
+		expect(fork["join.tool"]).toContain("note");
 	});
 
-	test("the registered scope name rules prevent case-only collisions and reserved names", () => {
-		const tools = new Map();
-		wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
-		const item = tools.get("scope_fork").parameters.properties.forks.items;
-		const { description } = item.properties.scopeId;
-		expect(description).toMatch(/\broot`? is reserved\b[^.]*\b(?:any capitalization|regardless of case|case-insensitive)\b/i);
-		expect(description).toMatch(/unique among its siblings only/i);
-		expect(description).toMatch(/lowest free numeric suffix/i);
-		expect(description).not.toMatch(/reuse is an upsert/i);
-		expect(description).not.toMatch(/must be unique/i);
-	});
-
-	test("schemas carry the mapped text", () => {
+	test("the control-plane prose ships in the managed block", () => {
+		const prompt = injectSystemPrompt("Host prompt.");
 		const doc = loadDoc("tools/fork-join");
-		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual(["scopeId", "fsm", "profession", "n", "budget", "targets"]);
-		expect(item.required).toContain("fsm");
-		expect(item.properties.fsm.description).toBe(scopeTools.FORK_FSM_DESCRIPTION);
-		expect(item.properties.budget.description).toBe(scopeTools.FORK_BUDGET_DESCRIPTION);
-		expect(item.properties.time).toBeUndefined();
-		expect(item.properties.targets.description).toBe(doc["fork.targets"]);
-		expect(item.properties).not.toHaveProperty("stage");
-		expect(item.properties).not.toHaveProperty("fission");
-		expect(item.properties).not.toHaveProperty("permission");
-		expect(scopeTools.scopeContextParameters.properties.amend.properties.reflection.description).toBe(
-			loadDoc("tools/notes")["amend.reflection"],
-		);
+		// No JSON schema carries these five controls any more, so the prose is
+		// the contract: a section that stops shipping takes the rule with it.
+		expect(prompt).toContain(doc["fork.budget"]);
+		expect(prompt).toContain(doc["return.dafny"]);
+		expect(prompt).toContain("### fork.budget");
+		// Receipt templates render with variables; none may ship raw.
+		expect(prompt).not.toContain("{{");
+	});
+
+	test("fork funding is documented where each half belongs", () => {
+		const budget = loadDoc("tools/fork-join")["fork.budget"];
+		expect(budget).toContain("needs no entry either");
+		expect(budget).toContain("panhandled");
+		expect(budget).toContain("state.remaining");
+		// The "a fork costs the caller nothing" rule is a planning rule, so it
+		// ships in the operating rules rather than the parameter description.
+		expect(persistentOperatingSkill).toContain("minted with the item that starts it");
+		expect(persistentOperatingSkill).toContain("untouched");
+	});
+
+	test("the model is never asked for a time budget", () => {
+		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
+	});
+
+	test("the relay receipts carry the return report, not pins", () => {
+		const relay = loadDoc("receipts/relay");
+		expect(relay["reborn.pins"]).toBeUndefined();
+		expect(placeholderNames(relay["reborn.report"])).toEqual(["report"]);
+		for (const key of ["reborn.continue", "reborn.review", "reborn.start"]) {
+			expect(placeholderNames(relay[key])).toEqual([]);
+		}
+	});
+
+	test("the scope receipts print remaining, not budget", () => {
+		// `fork.child-status` is the one receipt that prints a scope's turns;
+		// the retired `receipt.branch` had no renderer.
+		const names = placeholderNames(loadDoc("receipts/scope")["fork.child-status"]);
+		expect(names).toContain("remaining");
+		expect(names).not.toContain("budget");
+	});
+
+	test("each hard mode has its own receipt text", () => {
+		const scope = loadDoc("receipts/scope");
+		expect(placeholderNames(scope["mode.awaiting-reply"])).toEqual(["from"]);
+		expect(typeof scope["mode.context-limit"]).toBe("string");
+		expect(typeof scope["mode.final-answer"]).toBe("string");
+	});
+
+	test("the context-limit text names only the move that is bound", () => {
+		// `CONTEXT_LIMIT` binds `scope_return` alone; forking is a later turn,
+		// after the rewind re-baselines the context.
+		const copy = loadDoc("receipts/scope")["mode.context-limit"];
+		expect(copy).not.toContain("fork the remainder");
+		expect(copy).toContain("after the rewind");
+		expect(persistentOperatingSkill).not.toContain("fork the remainder");
+		expect(persistentOperatingSkill).toContain("after the rewind");
+	});
+
+	test("the errors document carries the text the code actually renders", () => {
+		const errors = loadDoc("errors");
+		// Each key here is read by a literal lookup in the station or the
+		// accounting path; a section nothing looks up is copy the model can
+		// never receive.
+		for (const key of [
+			"abandon-unknown-target",
+			"abandon-not-owned",
+			"mixed-return",
+			"return-unreceived",
+			"root-has-no-budget",
+			"no-branch-budget",
+			"fork-context-exceeded",
+			"join-context-exceeded",
+			"invalid-return-oath",
+			"no-unreceived-work",
+			"fork-register-failed",
+		]) {
+			expect(typeof errors[key]).toBe("string");
+		}
+		for (const key of [
+			"scope-context-empty",
+			"amend-reflection",
+			"pin-empty",
+			"pin-unavailable",
+			"pin-internal",
+			// Retired with the tool face: `ask` is absent from `api` under
+			// autopilot, and the model-switch warning is host-owned text.
+			"ask-blocked",
+			"model-switch-warning",
+		]) {
+			expect(errors[key]).toBeUndefined();
+		}
 	});
 });
 
-describe("system prompts map to their documents", () => {
-	test("system pieces", () => {
-		const doc = loadDoc("system");
-		expect(doc["common-rules"]).toBeUndefined();
-		expect(persistentOperatingSkill).toBe(doc["persistent-rules"]);
-		expect(persistentOperatingSkill).toContain("强制以简体中文");
-		expect(inlinedSkillsSection).toContain("reproduced in full below");
-		for (const name of SKILL_NAMES) {
-			expect(inlinedSkillsSection).toContain(`<inlined-skill name="${name}">`);
-			expect(persistentOperatingSkill).not.toContain(`skill://${name}`);
-		}
-	});
-
-	test("stage guidance ships as inlined skills, not a prompt block", () => {
-		expect(SKILL_NAMES).toEqual([
-			"constitution",
-			"decision-framing",
-			"polish",
-			"prompt-craft",
-			"skill-authoring",
-			"tdd-crowdsource",
+describe("the capabilities block", () => {
+	test("compiles host specs into one declaration interface", () => {
+		const dts = renderCapabilitiesDts([
+			{
+				name: "bash",
+				description: "Run a shell command.",
+				parameters: {
+					type: "object",
+					required: ["command"],
+					properties: { command: { type: "string", description: "Shell command." } },
+				},
+			},
 		]);
-		expect(inlinedSkillsSection).toContain("reproduced in full below");
-		for (const name of SKILL_NAMES) {
-			expect(inlinedSkillsSection).toContain(`<inlined-skill name="${name}">`);
+
+		expect(dts).toContain("declare interface Api");
+		expect(dts).toContain('"bash"(args: BashArgs)');
+		expect(dts).toContain("interface BashArgs");
+		expect(dts).toContain("command");
+	});
+
+	test("declares the control plane by its real names", () => {
+		const dts = renderCapabilitiesDts([]);
+		for (const name of ["scope_fork", "scope_join", "scope_return", "scope_request", "scope_reply"]) {
+			expect(dts).toContain(`"${name}"`);
 		}
-		expect(persistentOperatingSkill).not.toContain("Stage Prompts block");
+		expect(dts).toContain("AWAITING_REPLY");
+		expect(dts).toContain("CONTEXT_LIMIT");
 	});
 
-	test("constitution is a shipped skill with a loadable description", () => {
-		const text = readFileSync(
-			new URL("../resources/skills/constitution/SKILL.md", import.meta.url),
-			"utf8",
-		);
-		expect(text.startsWith("---\nname: constitution\n")).toBe(true);
-		expect(text).toContain("description:");
-		expect(text).toContain("Read before work.");
-		const body = inlinedSkills.find((skill) => skill.name === "constitution").body;
-		expect(body.startsWith("# Constitution")).toBe(true);
-		expect(body.startsWith("---")).toBe(false);
+	test("never declares the executor itself or the retired todo", () => {
+		const dts = renderCapabilitiesDts([
+			{ name: "js", description: "", parameters: { type: "object" } },
+			{ name: "todo", description: "", parameters: { type: "object" } },
+		]);
+		expect(dts).not.toContain('"js"(');
+		expect(dts).not.toContain('"todo"(');
 	});
 
-	test("every skill the persistent rules name is inlined", () => {
-		const shipped = readdirSync(new URL("../resources/skills/", import.meta.url), {
-			withFileTypes: true,
-		})
-			.filter((entry) => entry.isDirectory())
-			.map((entry) => entry.name)
-			.sort();
-		expect(shipped).toEqual([...SKILL_NAMES]);
+	test("the fork and return call shapes survive only here", () => {
+		// No JSON Schema reaches the model for the control plane, so the
+		// declaration block is the single place a fork's required fields are
+		// spelled out. Losing them would leave scope_fork uncallable.
+		const dts = renderCapabilitiesDts([]);
+		expect(dts).toContain("ScopeForkArgs");
+		for (const field of ["scopeId", "fsm", "profession", "n", "budget", "targets"]) {
+			expect(dts).toContain(field);
+		}
+		expect(dts).toContain("ScopeReturnArgs");
+		expect(dts).toContain("dafny");
+	});
 
-		const named = inlinedSkills.map((skill) => skill.name).sort();
-		expect(named).toEqual(shipped);
+	test("the js tool description points at the probe for the live surface", () => {
+		const [jsTool] = createTools({ stationFor: () => null, tickets: {} });
+		expect(jsTool.description).toContain("REPL probe");
+		expect(jsTool.description).toContain("api");
+		expect(jsTool.description).toContain("inputs");
+	});
+});
 
-		for (const name of shipped) {
-			expect(persistentOperatingSkill).not.toContain(`skill://${name}`);
+describe("the one registered tool", () => {
+	test("the catalog builds exactly one tool, named js", () => {
+		const tools = createTools({ stationFor: () => null, tickets: {} });
+		expect(tools).toHaveLength(1);
+		expect(tools[0].name).toBe(JS_TOOL_NAME);
+		expect(tools[0].loadMode).toBe("essential");
+		expect(tools[0].interruptible).toBe(true);
+		expect(tools[0].handlesToolInterrupt).toBe(true);
+	});
+
+	test("its schema takes code and an optional inputs sidecar", () => {
+		const [jsTool] = createTools({ stationFor: () => null, tickets: {} });
+		const parameters = jsTool.parameters;
+		expect(parameters.required).toEqual(["code"]);
+		expect(parameters.properties.code.type).toBe("string");
+		expect(parameters.properties.code.minLength).toBe(1);
+		expect(parameters.properties.inputs.type).toBe("object");
+		expect(parameters.required).not.toContain("inputs");
+	});
+
+	test("wiring registers no second tool and no native scope tool", () => {
+		const registered = [];
+		wireTools({ registerTool: (tool) => registered.push(tool) }, () => null);
+
+		expect(registered.map((tool) => tool.name)).toEqual([JS_TOOL_NAME]);
+	});
+
+	test("the core table holds the six controls and nothing registered", () => {
+		const core = createCoreTools({});
+		expect(Object.keys(core).sort()).toEqual([
+			"scope_abandon",
+			"scope_fork",
+			"scope_join",
+			"scope_reply",
+			"scope_request",
+			"scope_return",
+		]);
+		for (const name of Object.keys(core)) {
+			expect(typeof core[name]).toBe("function");
+		}
+	});
+});
+
+describe("the operating rules", () => {
+	test("name the one tool and the live api binding", () => {
+		expect(persistentOperatingSkill).toContain("exactly one tool: `js`");
+		expect(persistentOperatingSkill).toContain("live binding");
+		expect(persistentOperatingSkill).toContain("Object.keys(api)");
+	});
+
+	test("name every hard mode so the model can read the probe", () => {
+		for (const mode of ["AWAITING_REPLY", "CONTEXT_LIMIT", "FINAL_ANSWER"]) {
+			expect(persistentOperatingSkill).toContain(mode);
 		}
 	});
 
-	test("the task-nature menu stays out of the rules", () => {
-		expect(persistentOperatingSkill).not.toContain("Choose by task nature.");
-		expect(persistentOperatingSkill).not.toContain("A refactor counts as development:");
+	test("teach the balance as remaining, never as budget", () => {
+		expect(persistentOperatingSkill).toContain("state.remaining");
+		expect(persistentOperatingSkill).not.toContain("state.budget");
 	});
 
-	test("every level hears the free-fork tip before the handout", () => {
-		expect(persistentOperatingSkill).toContain("Every level, root included");
-		expect(persistentOperatingSkill).toContain("Word to the wise, at every depth");
-		expect(persistentOperatingSkill).toContain(
-			"Plan the split the moment the task arrives",
-		);
-		expect(persistentOperatingSkill).toContain("already started cramming");
-		expect(persistentOperatingSkill).toContain("forking is cheaper than any handout");
+	test("the scope rules retire todo and the old send channel", () => {
+		const rules = loadDoc("system")["scope-rules"];
+		expect(rules).toContain("no `todo` tool");
+		expect(rules).toContain("scope_request");
+		expect(rules).not.toContain("scope_send");
+		expect(rules).not.toContain("scope_context");
 	});
 
-	test("an exhausted budget runs the call and marks it panhandled", () => {
-		const text = loadDoc("errors")["tool-budget-exhausted"];
-		expect(text).toContain("runs anyway");
-		expect(text).toContain("panhandled");
-		expect(text).toContain("scope_fork");
-		expect(text).not.toContain("scope_panhandle");
+	test("the system document holds exactly the two rule blocks", () => {
+		expect(Object.keys(loadDoc("system")).sort()).toEqual(["persistent-rules", "scope-rules"]);
 	});
 
-	test("a built-in protocol read or write is free wherever the budget is explained", () => {
-		expect(persistentOperatingSkill).toContain("built-in protocol URI");
-		expect(persistentOperatingSkill).toContain("no turn, at any depth");
-		expect(persistentOperatingSkill).not.toContain("may read `skill://` paths");
-		expect(loadDoc("tools/fork-join")["fork.budget"]).toContain(
-			"is free at any depth, so it needs no entry either",
-		);
-		expect(loadDoc("errors")["root-has-no-budget"]).toContain(
-			"built-in protocol URI",
-		);
+	test("no retired concept survives in either rule block", () => {
+		const system = loadDoc("system");
+		for (const text of Object.values(system)) {
+			expect(text).not.toMatch(/\bamend\b/i);
+			expect(text).not.toMatch(/\bpin\b/i);
+			expect(text).not.toContain("scope_context");
+			expect(text).not.toContain("scope_send");
+			expect(text).not.toContain("readProtocol");
+			expect(text).not.toContain("scope_seal");
+		}
 	});
 });
 
@@ -253,6 +365,19 @@ describe("template rendering", () => {
 });
 
 describe("inlined skills", () => {
+	test("every shipped skill is inlined and named once", () => {
+		const shipped = readdirSync(new URL("../resources/skills/", import.meta.url), {
+			withFileTypes: true,
+		})
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name)
+			.sort();
+
+		expect(shipped).toEqual([...SKILL_NAMES]);
+		expect(inlinedSkills.map((skill) => skill.name).sort()).toEqual(shipped);
+		expect(inlinedSkillsSection).toContain("reproduced in full below");
+	});
+
 	test("every body appears exactly once and reinjection is byte-identical", () => {
 		const first = injectSystemPrompt("Host prompt.");
 		for (const { name, body } of inlinedSkills) {
@@ -260,11 +385,6 @@ describe("inlined skills", () => {
 			expect(first).toContain(`<inlined-skill name="${name}">`);
 		}
 		expect(injectSystemPrompt(first)).toBe(first);
-
-		const array = injectSystemPrompt(["Host prompt."]);
-		const text = array.join("\n");
-		for (const { body } of inlinedSkills) expect(text.split(body)).toHaveLength(2);
-		expect(injectSystemPrompt(array)).toEqual(array);
 	});
 
 	test("frontmatter stays on disk and is stripped from the injected body", () => {
@@ -276,6 +396,9 @@ describe("inlined skills", () => {
 				"utf8",
 			);
 			expect(file.startsWith("---\n")).toBe(true);
+			// The skills are the model's rules; none may name the retired calls.
+			expect(body).not.toContain("scope_context");
+			expect(body).not.toMatch(/\bamend\b/i);
 		}
 	});
 });
@@ -285,8 +408,7 @@ describe("injectSystemPrompt", () => {
 		const output = injectSystemPrompt("Host prompt.");
 		expect(output.startsWith(`${START}\n`)).toBe(true);
 		expect(output.endsWith(`${END}\n\nHost prompt.`)).toBe(true);
-		const again = injectSystemPrompt(output);
-		expect(again).toBe(output);
+		expect(injectSystemPrompt(output)).toBe(output);
 	});
 
 	test("replaces a stale managed block", () => {
@@ -298,11 +420,14 @@ describe("injectSystemPrompt", () => {
 		expect(output.endsWith(`${END}\n\nBody.`)).toBe(true);
 	});
 
-	test("does not repeat repo rules the host prompt already carries", () => {
-		const host = "# Repo-aware Rules\n\nAlready here.";
-		const output = injectSystemPrompt(host);
-		expect(output).toContain(persistentOperatingSkill);
-		expect(output.split("# Repo-aware Rules").length - 1).toBe(1);
+	test("keeps the rules inside the managed block and the skills balanced", () => {
+		const text = injectSystemPrompt("Host prompt.");
+		const block = text.slice(text.indexOf(START), text.indexOf(END));
+		expect(block).toContain(persistentOperatingSkill);
+		expect(block).toContain(loadDoc("system")["scope-rules"]);
+		expect((text.match(/<skill\b/g) ?? []).length).toBe(
+			(text.match(/<\/skill>/g) ?? []).length,
+		);
 	});
 
 	test("prepends one block to an array without mutating it", () => {
@@ -312,161 +437,11 @@ describe("injectSystemPrompt", () => {
 		expect(output.length).toBe(3);
 		expect(output.slice(1)).toEqual(host);
 		expect(host).toEqual(["First block.", "Second block."]);
-		expect(injectSystemPrompt(output)).toEqual(output);
 	});
 
 	test("returns non-string, non-array input unchanged", () => {
 		const value = { prompt: "Host prompt." };
 		expect(injectSystemPrompt(value)).toBe(value);
 		expect(injectSystemPrompt(null)).toBe(null);
-	});
-
-	test("keeps the scope rules inside a skill element", () => {
-		const text = injectSystemPrompt("Host prompt.");
-		const modeAt = text.indexOf("### Close the work");
-		const lastOpen = text.lastIndexOf("<skill");
-		const lastClose = text.lastIndexOf("</skill>");
-
-		expect(modeAt).toBeGreaterThan(lastOpen);
-		expect(modeAt).toBeLessThan(lastClose);
-		expect((text.match(/<skill\b/g) ?? []).length).toBe(
-			(text.match(/<\/skill>/g) ?? []).length,
-		);
-		expect(text).toContain(persistentOperatingSkill);
-		expect(text.endsWith(`${END}\n\nHost prompt.`)).toBe(true);
-	});
-});
-
-describe("fork item schema", () => {
-	test("does not ask the model for a time budget", () => {
-		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).not.toContain("time");
-		expect(item.properties.time).toBeUndefined();
-		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
-	});
-
-	test("n is required on every item and documented as an estimate", () => {
-		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toContain("n");
-		expect(item.properties.n.type).toBe("integer");
-		expect(item.properties.n.minimum).toBe(0);
-		expect(item.properties.n.description).toMatch(/for later audit/i);
-		expect(item.properties.n.description).toMatch(/provided for later audit/i);
-		expect(item.properties.n.description).toMatch(/sizes a scope from/);
-	});
-
-	test("a repeated sibling name is renamed, and every field is required", () => {
-		const item = scopeTools.forkParameters.properties.forks.items;
-		expect(item.required).toEqual(["scopeId", "fsm", "profession", "n", "budget", "targets"]);
-		expect(item.required).toContain("fsm");
-		expect(item.properties.fsm.description).toBe(scopeTools.FORK_FSM_DESCRIPTION);
-		expect(item.properties.scopeId.description).toMatch(/lowest free numeric suffix/i);
-		expect(item.properties.scopeId.description).not.toMatch(/supersedes/i);
-		expect(item.properties).not.toHaveProperty("blocked");
-	});
-
-	test("the reuse-only errors are gone", () => {
-		const errors = loadDoc("errors");
-		for (const key of ["scope-reuse-empty", "scope-not-amendable"]) {
-			expect(errors[key]).toBeUndefined();
-		}
-		expect(typeof errors["missing-fsm"]).toBe("string");
-	});
-});
-
-describe("scope size is sqrt(2n), with no cap anywhere", () => {
-	test("no exported description leaks a template placeholder", () => {
-		const leaked = Object.entries(scopeTools)
-			.filter(([, value]) => typeof value === "string" && value.includes("{{"))
-			.map(([name]) => name);
-		expect(leaked).toEqual([]);
-	});
-
-	test("the fork fsm names no cap and leaves sizing to the operating rules", () => {
-		const fsm = scopeTools.FORK_FSM_DESCRIPTION;
-		expect(fsm).toContain("subtree");
-		expect(fsm).not.toContain("sqrt");
-		expect(fsm).not.toMatch(/\b(?:18|27)\b/);
-		expect(fsm).not.toMatch(/never more than/i);
-	});
-
-	test("the budget runs an overspent call and marks it panhandled", () => {
-		const budget = scopeTools.FORK_BUDGET_DESCRIPTION;
-		expect(budget).toContain("Size the entry from `n`");
-		expect(budget).not.toContain("sqrt");
-		expect(budget).toContain("panhandled");
-		expect(budget).not.toMatch(/\b(?:18|27)\b/);
-		expect(budget).toContain("each item funds its own forked scope at any depth");
-		expect(budget).toContain("never charged");
-		expect(budget).toContain("is free at any depth, so it needs no entry either");
-	});
-
-	test("the batch sets no fanout ceiling and still has no schema gate", () => {
-		const forks = scopeTools.forkParameters.properties.forks;
-		expect(forks.description).not.toMatch(/never more than/i);
-		expect(forks.description).toContain(
-			"Include the whole plan you are ready to run now",
-		);
-		// The cap is gone, and the schema never gated it either.
-		expect(forks.maxItems).toBeUndefined();
-		const budget = scopeTools.forkParameters.properties.forks.items.properties.budget;
-		expect(budget.additionalProperties.maximum).toBeUndefined();
-	});
-
-	test("the operating rules teach sqrt(2n) and say why two, once", () => {
-		const text = persistentOperatingSkill;
-		// The sizing rule names sqrt(2n) twice inside one sentence; the "why two"
-		// clause that explains it appears exactly once, and nowhere else.
-		expect(text.match(/twice the ideal estimate/g)).toHaveLength(1);
-		expect(text).toMatch(/match `sqrt\(2n\)` turns[^.]*`sqrt\(2n\)` scopes/);
-		expect(text).toContain("fork as much as the work allows");
-		expect(text).not.toMatch(/never more than/i);
-		expect(text).not.toMatch(/scope_panhandle/);
-		expect(text).toContain("panhandled");
-	});
-
-	test("every other model-facing copy points at the owner", () => {
-		const owner = "resources/prompts/system.md";
-		const n = scopeTools.forkParameters.properties.forks.items.properties.n;
-		expect(n.description).not.toContain("sqrt");
-		expect(n.description).toContain(owner);
-
-		const skill = readFileSync(
-			new URL("../.agent/skills/scope-orchestration/SKILL.md", import.meta.url),
-			"utf8",
-		);
-		const sizing = skill.split("## Sizing")[1].split("## Tradeoffs")[0];
-		expect(sizing).not.toContain("sqrt");
-		expect(sizing).toContain(owner);
-
-		// The human doc states the rule, and states it once.
-		const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-		expect(readme.match(/sqrt\(2n\)/g)).toHaveLength(1);
-	});
-
-	test("no cap section survives, so nothing rebukes a large batch", () => {
-		const fork = loadDoc("tools/fork-join");
-		expect(fork["fork.over-budget"]).toBeUndefined();
-		expect(fork["fork.over-fanout"]).toBeUndefined();
-	});
-});
-
-describe("depth has no policy and the panhandle has no tool", () => {
-	test("no receipt or guidance states a depth rule", () => {
-		const status = loadDoc("receipts/scope")["fork.child-status"];
-		expect(status).toContain("{{depth}}");
-		expect(status).toContain("{{marker}}");
-		expect(status).not.toMatch(/recommended|default depth/i);
-		const fork = loadDoc("tools/fork-join");
-		expect(fork["fork.deep-nesting"]).toBeUndefined();
-		expect(fork["fork.fsm"]).not.toMatch(/recommended|default depth|one layer|two layers/i);
-	});
-
-	test("the panhandle is a receipt word, not a tool", () => {
-		expect(scopeTools.PANHANDLE_DESCRIPTION).toBeUndefined();
-		expect(scopeTools.panhandleParameters).toBeUndefined();
-		const tools = new Map();
-		wireTools({ registerTool: (tool) => tools.set(tool.name, tool) }, {});
-		expect(tools.has("scope_panhandle")).toBe(false);
 	});
 });

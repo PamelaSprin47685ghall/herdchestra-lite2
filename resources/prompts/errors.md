@@ -1,38 +1,14 @@
-## scope-context-empty
+## foreign-scope-id
 
-Give at least one of `pin` or `amend`; the call changed nothing.
+That scope id belongs to another owner. Use a path from `state.scopes`.
 
-## amend-reflection
+## not-a-child
 
-Provide a non-empty `reflection` to replace the beat.
+This scope is not a forked scope, so that lifecycle call has nothing to act on. At root, answer the user or fork the work.
 
-## amend-unavailable
+## request-unreachable
 
-Amend is unavailable. The record is unchanged; continue from the current record.
-
-## pin-empty
-
-Name at least one field with content: `assumption`, `deduction`, `induction`, `finding`, or `conclusion`.
-
-## pin-unavailable
-
-Pin is unavailable; the note is absent. Continue without it, or retry when the pin port is available.
-
-## pin-internal
-
-The note is absent; retry or continue without it.
-
-## pin-internal-error
-
-The pin failed. Treat the note as not saved.
-
-## ask-blocked
-
-Autopilot is on. Only the user can turn it off with `/herd-autopilot`.
-
-## model-switch-warning
-
-Could not verify {{command}}: {{reason}}. Use the model the host reports.
+`{{target}}` never started or already failed, so no turn can answer there. Ask a scope listed in `state.scopes`, or fork the work again.
 
 ## invalid-scope-id
 
@@ -50,10 +26,6 @@ Start `profession` with "You are " and name the role of the LLM in the new scope
 
 `budget` maps tool names to non-negative integer turns. Free tools need no entry; neither does a `read` or `write` of a built-in protocol URI, which spends no turn at any level.
 
-## invalid-time
-
-Do not pass `time`. The system derives the scope's time limit from the session's mean LLM-request duration and the sum of the item's turns.
-
 ## invalid-argument
 
 `model` is a string or null.
@@ -61,18 +33,6 @@ Do not pass `time`. The system derives the scope's time limit from the session's
 ## invalid-targets
 
 `targets` must be a non-empty array of strings, each a natural-language description of what this scope expects to create, read, update, or delete. A file path is only one kind; `["fix any defect you find", "the parts of the source that involve caching"]` is valid. If it is empty, how could a scope with no output be a separate scope?
-
-## invalid-scope-target
-
-`target` is one path or a non-empty array of paths, each resolved against this scope's own path. `.` is yourself, `..` the parent, `/` the root, and `*` or `**` a wildcard over active scopes.
-
-## unknown-scope-target
-
-No scope at `{{target}}`. An exact path must name a scope that exists in this session; the fork receipt and the scope tree both show the paths that do.
-
-## no-matching-scopes
-
-`{{target}}` matched no active scope. A wildcard reaches only scopes that are still running; name a finished scope by its exact path to wake it.
 
 ## fork-ledger-unavailable
 
@@ -110,7 +70,7 @@ Omit `signed_sealed_hands_off_nothing_left_on_the_table` to rewind, or give it t
 
 ## mixed-return
 
-Call `scope_return` alone in its tool-call batch.
+`scope_return` must be the only call in its script: call it alone.
 
 ## return-unreceived
 
@@ -140,21 +100,21 @@ The root is outside all scopes and has no ordinary tool budget. Delegate the wor
 
 Scope `{{ownerId}}` has no fork record, so it has no budget. Return with `scope_return` or fork the work.
 
-## accounting-failed-closed
-
-Scope accounting failed closed: {{error}}. No tool ran. Retry the call; if it fails again, report the accounting error.
-
 ## no-unreceived-work
 
 This scope owns no unreceived work. This call created no receipt. Fork a new scope, or continue your own.
 
-## tool-budget-exhausted
-
-Tool `{{tool}}` has no budget left on this scope (remaining {{remaining}}/{{budget}}). The call runs anyway, and the receipt marks it panhandled. That mark is the whole cost, and it is enough: the scope that forked you reads it on return, and it says your sizing was wrong. The cheap exit is `scope_fork` (free) for whatever another scope can own; `scope_return` is the other.
-
 ## model-unknown
 
 forks[{{index}}]: model `{{selector}}` is not available. Available: {{available}}. Omit `model` to inherit the calling scope's model.
+
+## abandon-unknown-target
+
+No scope answers to `{{target}}`. Use the exact path from the fork result or `state.scopes`.
+
+## abandon-not-owned
+
+`{{target}}` belongs to another scope. A scope can abandon only a child it forked itself.
 
 ## fork-register-failed
 

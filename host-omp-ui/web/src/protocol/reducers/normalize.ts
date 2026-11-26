@@ -126,6 +126,10 @@ export function normalizeBlock(raw: unknown): MessageBlock | null {
         typeof raw.resultText === "string" ? raw.resultText : undefined,
       isError: Boolean(raw.isError),
       status: statusFromRaw(raw),
+      // A `js` call carries its inner calls here; the card and the artifact
+      // pane rebuild file writes from them, so the field must survive
+      // normalization.
+      ...(raw.details !== undefined ? { details: raw.details } : {}),
     };
   }
   if (type === "tool") {

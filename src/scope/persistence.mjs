@@ -5,12 +5,12 @@ import { createHash } from "node:crypto";
 
 import {
   VERSION,
-  isPlainObject,
   isNonEmptyString,
   put,
   copyCounts,
   createState,
 } from "./state.mjs";
+import { isPlainObject } from "./plain.mjs";
 import { copyRelay, createRelay, isValidRelay } from "../relay/state.mjs";
 import {
   createBracketLedger,
@@ -21,40 +21,28 @@ import {
   validLedger,
 } from "./forkjoin.mjs";
 import { ledgerMeta, markLedgerStructDirty, netChangeSince } from "./ledger-cache.mjs";
-import {
-  adoptInbox,
-  createAppendOnlyInbox,
-  isAppendOnlyInbox,
-  sharedPrefixFor,
-} from "./append-only-inbox.mjs";
-
-function copyPins(pins) {
-  return Array.isArray(pins) ? pins.filter(isNonEmptyString) : [];
-}
 
 // -- Structural sharing for cold fields ------------------------------------
 //
 // `diffState` identifies an unchanged field by object identity. A field that
 // is rebuilt on every turn therefore never takes that fast path: the delta
 // walker descends into it, compares every scalar, finds nothing, and leaves a
-// copy behind for the collector. `charges` is the expensive case, since it
-// grows with every tool call while a turn usually adds none.
+// copy behind for the collector. `modelCaches` is the expensive case, since it
+// is rewritten on every request while a turn usually adds nothing.
 //
 // These caches answer identity for content: a source object whose keys and
 // per-key values are the same objects as last time yields the copy already
-// made from them. The comparison is Θ(keys) pointer reads with no allocation,
-// which replaces a Θ(keys × fields) recursive walk plus one allocation per
-// charge. The returned object is never written through: it is the baseline a
-// delta subtracts from, and a caller that mutates a serialized state already
-// has to use `serializeState`.
+// made from them. The comparison is Θ(keys) pointer reads with no allocation.
+// The returned object is never written through: it is the baseline a delta
+// subtracts from, and a caller that mutates a serialized state already has to
+// use `serializeState`.
 
 const copyCache = new WeakMap();
 
 function cachedCopy(source, copy) {
-  // Arrays are shared too: `pins` and `amends` are rebuilt slices otherwise,
-  // and a sliced array is never identical to the baseline's copy. An element
-  // edited in place on the source array changes no reference, so the caller
-  // that owns one must pass a new array; both lists here are append-only.
+  // Arrays are shared too: a rebuilt slice is never identical to the
+  // baseline's copy. An element edited in place on the source array changes no
+  // reference, so the caller that owns one must pass a new array.
   if (source === null || typeof source !== "object") return copy(source);
   const keys = Reflect.ownKeys(source);
   const hit = copyCache.get(source);
@@ -77,49 +65,12 @@ function cachedCopy(source, copy) {
   return out;
 }
 
-function sharedCharges(charges) {
-  return isPlainObject(charges) ? cachedCopy(charges, copyCharges) : {};
-}
-
-function sharedModelCaches(caches) {
-  return isPlainObject(caches) ? cachedCopy(caches, copyModelCaches) : {};
-}
-
-function sharedPins(pins) {
-  return Array.isArray(pins) ? cachedCopy(pins, copyPins) : [];
-}
-
-// `modelCaches` is deliberately not shared. Its entries are rewritten in place
-// (`touchModelCache` moves `cachedUntilPos`), so a reference comparison would
+// `modelCaches` is not shared by identity: its entries are rewritten in place
+// (`touchModelCache` refreshes `lastUsedAt`), so a reference comparison would
 // miss the change; the table holds one entry per model, and rebuilding it costs
 // nothing worth a correctness risk.
 
-function copyCharges(source) {
-  const out = {};
-  if (!isPlainObject(source)) return out;
-  for (const key of Reflect.ownKeys(source)) {
-    if (typeof key !== "string") continue;
-    const charge = source[key];
-    if (!isPlainObject(charge)) continue;
-    const copied = {
-      tool: charge.tool,
-      amount: charge.amount,
-    };
-    // `ownerId` is the fork record that spent the call. A snapshot written
-    // before the fork ledger carries the retired `scopeId` instead; reading it
-    // as the owner keeps an old charge attributable without restoring a scope.
-    if (typeof charge.ownerId === "string") copied.ownerId = charge.ownerId;
-    else if (typeof charge.scopeId === "string") copied.ownerId = charge.scopeId;
-    if (typeof charge.groupKey === "string") copied.groupKey = charge.groupKey;
-    // Without this flag a zero-amount charge reads as corrupt on reload.
-    if (charge.panhandled === true) copied.panhandled = true;
-    put(out, key, copied);
-  }
-  return out;
-}
-
-
-// Model cache entries: { cachedUntilPos, lastUsedAt, tokensPerChar }.
+// Model cache entries: { lastUsedAt, tokensPerChar, fixedOverheadTokens }.
 function copyModelCaches(source) {
   const out = {};
   if (!isPlainObject(source)) return out;
@@ -128,14 +79,14 @@ function copyModelCaches(source) {
     const entry = source[key];
     if (!isPlainObject(entry)) continue;
     const copied = {};
-    if (Number.isInteger(entry.cachedUntilPos) && entry.cachedUntilPos >= 0) {
-      put(copied, "cachedUntilPos", entry.cachedUntilPos);
-    }
     if (Number.isFinite(entry.lastUsedAt) && entry.lastUsedAt >= 0) {
       put(copied, "lastUsedAt", entry.lastUsedAt);
     }
     if (Number.isFinite(entry.tokensPerChar) && entry.tokensPerChar >= 0) {
       put(copied, "tokensPerChar", entry.tokensPerChar);
+    }
+    if (Number.isFinite(entry.fixedOverheadTokens) && entry.fixedOverheadTokens >= 0) {
+      put(copied, "fixedOverheadTokens", entry.fixedOverheadTokens);
     }
     if (Object.keys(copied).length > 0) put(out, key, copied);
   }
@@ -186,7 +137,7 @@ export function serializeStateShared(state) {
  * not move come back as the objects a previous call returned.
  */
 export function serializeStateCore(state) {
-  const { brackets: _brackets, amends: _amends, ...core } = serializeStateWith(state, () => null, false, true);
+  const { brackets: _brackets, ...core } = serializeStateWith(state, () => null, false, true);
   return core;
 }
 
@@ -195,28 +146,15 @@ export function serializeStateCore(state) {
  * a previous call already made. Only the two read-only entry points ask for it;
  * `serializeState` promises objects the caller owns and must copy eagerly.
  */
-function serializeStateWith(state, serializeBrackets, includeAmends = true, share = false) {
+function serializeStateWith(state, serializeBrackets, _includeAmends = true, share = false) {
   return {
     version: VERSION,
     startedAt: Number.isFinite(state.startedAt) ? state.startedAt : Date.now(),
     seq: state.seq ?? 0,
-    charges: isPlainObject(state.charges) && share
-      ? sharedCharges(state.charges)
-      : copyCharges(state.charges),
-    ...(includeAmends
-      ? {
-          amends: !Array.isArray(state.amends)
-            ? []
-            : share
-              ? cachedCopy(state.amends, (list) => list.slice())
-              : state.amends.slice(),
-        }
-      : {}),
     brackets: serializeBrackets(state.brackets),
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
     autopilot: state.autopilot === true,
-    pins: share ? sharedPins(state.pins) : copyPins(state.pins),
     relay: copyRelay(state.relay),
     baseModelSpec:
       typeof state.baseModelSpec === "string" ? state.baseModelSpec : null,
@@ -225,7 +163,9 @@ function serializeStateWith(state, serializeBrackets, includeAmends = true, shar
         ? state.baseModelKey
         : null,
     modelRecovery: copyModelRecovery(state.modelRecovery),
-    modelCaches: copyModelCaches(state.modelCaches),
+    modelCaches: share && isPlainObject(state.modelCaches)
+      ? cachedCopy(state.modelCaches, copyModelCaches)
+      : copyModelCaches(state.modelCaches),
   };
 }
 
@@ -252,43 +192,6 @@ function validAmountCounts(value) {
 }
 
 
-function validCharges(value) {
-  if (!isPlainObject(value)) return false;
-  for (const key of Reflect.ownKeys(value)) {
-    if (typeof key !== "string") return false;
-    const charge = value[key];
-    if (!isPlainObject(charge)) return false;
-    if (!isNonEmptyString(charge.tool)) return false;
-    if (
-      charge.ownerId !== undefined &&
-      charge.ownerId !== null &&
-      typeof charge.ownerId !== "string"
-    ) {
-      return false;
-    }
-    if (
-      typeof charge.amount !== "number" ||
-      !Number.isFinite(charge.amount) ||
-      charge.amount < 0
-    ) {
-      return false;
-    }
-    if (charge.panhandled !== undefined && typeof charge.panhandled !== "boolean") {
-      return false;
-    }
-    // A panhandled call is admitted at zero: the branch had nothing left to
-    // spend, and the call still ran. It is the only zero-amount charge that
-    // may be stored. Rejecting it here discarded the whole session on reload,
-    // because one unreadable charge failed `validCharges` and `deserializeState`
-    // starts over from `createState`.
-    if (charge.amount === 0 && charge.panhandled !== true) return false;
-    if (charge.groupKey !== undefined && typeof charge.groupKey !== "string") {
-      return false;
-    }
-  }
-  return true;
-}
-
 function validModelCaches(value) {
   if (value === undefined) return true;
   if (!isPlainObject(value)) return false;
@@ -296,12 +199,6 @@ function validModelCaches(value) {
     if (typeof key !== "string" || key === "") return false;
     const entry = value[key];
     if (!isPlainObject(entry)) return false;
-    if (
-      entry.cachedUntilPos !== undefined &&
-      (!Number.isInteger(entry.cachedUntilPos) || entry.cachedUntilPos < 0)
-    ) {
-      return false;
-    }
     if (
       entry.lastUsedAt !== undefined &&
       (!Number.isFinite(entry.lastUsedAt) || entry.lastUsedAt < 0)
@@ -353,25 +250,6 @@ export function deserializeState(input) {
     if (data.version === VERSION && !isValidRelay(data.relay)) {
       return createState();
     }
-    if (!validCharges(data.charges)) return createState();
-    const amends = Array.isArray(data.amends) ? data.amends : [];
-    if (!amends.every((key) => typeof key === "string")) {
-      return createState();
-    }
-    // `scopes` and `collapses` are retired history: a snapshot that still
-    // carries them loads them by dropping both, never by rebuilding a second
-    // account.
-    if (data.brackets !== undefined && !validLedger(data.brackets)) {
-      // A half-readable tree is worse than an honest reset: the brackets must
-      // describe the same history.
-      return createState();
-    }
-    if (
-      data.epoch !== undefined &&
-      (!Number.isInteger(data.epoch) || data.epoch < 0)
-    ) {
-      return createState();
-    }
     if (!validModelCaches(data.modelCaches)) return createState();
     if (!validModelRecovery(data.modelRecovery)) return createState();
     for (const key of ["baseModelSpec", "baseModelKey"]) {
@@ -396,11 +274,8 @@ export function deserializeState(input) {
       seq: Number.isInteger(data.seq) && data.seq >= 0 ? data.seq : 0,
       epoch:
         Number.isInteger(data.epoch) && data.epoch >= 0 ? data.epoch : 0,
-      charges: copyCharges(data.charges),
-      amends: amends.slice(),
       brackets: restoredBrackets.ledger,
       autopilot: data.autopilot === true,
-      pins: copyPins(data.pins),
       relay: data.version === VERSION ? copyRelay(data.relay) : createRelay(),
       baseModelSpec:
         typeof data.baseModelSpec === "string" ? data.baseModelSpec : null,
@@ -933,79 +808,6 @@ export function planStateEntry(prev, next, writesSinceCheckpoint = 0) {
 }
 
 /**
- * The retired-beat list as its own increment.
- *
- * `amends` is append-only and deduplicated: the only writer pushes a key it has
- * just proved absent. That makes its length the whole story of what the journal
- * is missing, so a write names the suffix — the keys added since the last
- * accepted write — instead of restating the set and letting a deep diff compare
- * it element by element. The steady state is Θ(added); a full restatement
- * happens once per process, and again after a restore installs a list the
- * caller has no recorded length for.
- *
- * `previousLength` is a count, not a snapshot, so two stations with different
- * journals do not share the answer: each tracks its own. A length that moved
- * backwards means the list was reset (a restore, a test fixture), and the
- * caller must restate it whole rather than emit a suffix that would append to a
- * different list on replay.
- *
- * A count cannot see a replacement of the same length, and this function does
- * not pretend to. That is sound only while the premise above holds — the sole
- * writer pushes a key it has just proved absent, so the list only grows — and
- * the caller owns the premise. A caller that installs a different list of the
- * same length into a live anchor (a restore or a branch rewrite that reuses the
- * count) must pass null for that write and let it restate the list. The
- * alternative, comparing elements on every write, would put the whole list back
- * on the steady-state path this increment exists to keep it off.
- *
- * @param {{amends?: unknown}} state
- * @param {number|null} previousLength Length this caller's journal already has.
- * @returns {{entry: object|null, length: number}}
- */
-export function planAmendsEntry(state, previousLength = null) {
-  const amends = Array.isArray(state?.amends) ? state.amends : [];
-  const length = amends.length;
-  if (previousLength === null || length < previousLength) {
-    return {
-      entry: { version: STATE_ENTRY_VERSION, kind: "amends", amends: amends.slice() },
-      length,
-    };
-  }
-  if (length === previousLength) return { entry: null, length: previousLength };
-  return {
-    entry: {
-      version: STATE_ENTRY_VERSION,
-      kind: "amends",
-      amendsAppend: amends.slice(previousLength),
-    },
-    length,
-  };
-}
-
-/**
- * Fold one amends entry over the list an older entry left.
- *
- * A whole list replaces; a suffix appends. Both are needed: the first write of
- * a process (and any write after a reset) restates the list, and every write
- * after that names only what it added. An entry that carries neither leaves the
- * previous list alone, which is what an unrelated kind does when it is read
- * through this function.
- */
-function foldAmendsEntry(previous, entry) {
-  if (Array.isArray(entry.amends)) return cloneValue(entry.amends);
-  if (Array.isArray(entry.amendsAppend)) {
-    // The replay owns its working list: whole-list entries are cloned above,
-    // and a missing baseline starts with a fresh list. Append to that working
-    // list rather than recopying its complete prefix for every journal entry.
-    // Clone the incoming suffix so neither the entries nor the result alias.
-    const base = Array.isArray(previous) ? previous : [];
-    for (const key of entry.amendsAppend) base.push(cloneValue(key));
-    return base;
-  }
-  return previous;
-}
-
-/**
  * Split a serialized state into the fields every write copies and the bracket
  * ledger, which changes only where a fork moved.
  *
@@ -1341,41 +1143,12 @@ export function planLedgerEntry(state, previousBrackets = null) {
   const orderOps = full ? null : arrayOps(previousBrackets.order, next.order);
   const queuesOps = full ? null : mapOfArraysOps(previousBrackets.queues, next.queues);
   const levelsOps = full ? null : mapOfArraysOps(previousBrackets.levels, next.levels);
-  // Root messages are ordered and may repeat. Unlike id lists, they must not
-  // be deduplicated during replay. Preserve the whole list only for a baseline
-  // or a non-append edit; append-only changes write the new suffix once.
-  const oldInbox = previousBrackets?.rootInbox ?? [];
-  const newInbox = next.rootInbox ?? [];
-  // A snapshot taken from a closed mailbox carries the number of leading
-  // entries it proved identical to the one before it, so the walk starts
-  // there. Without the mark the walk starts at zero, exactly as before: the
-  // hint can only shorten a check, never replace one.
-  let inboxPrefix = !full && oldInbox.length <= newInbox.length;
-  if (inboxPrefix && oldInbox !== newInbox) {
-    const from = Math.min(sharedPrefixFor(newInbox, oldInbox), oldInbox.length);
-    for (let index = from; inboxPrefix && index < oldInbox.length; index += 1) {
-      if (oldInbox[index] === newInbox[index]) continue;
-      const before = oldInbox[index];
-      const after = newInbox[index];
-      // Both sides are the mailbox copies, so a flat pair takes the cheap answer
-      // and anything else keeps the general comparison unchanged.
-      const same =
-        isFlatEntry(before) && isFlatEntry(after)
-          ? sameFlatEntry(before, after)
-          : sameJson(before, after);
-      if (!same) {
-        inboxPrefix = false;
-      }
-    }
-  }
-  const inboxChanged = full || !inboxPrefix || oldInbox.length !== newInbox.length;
   const structDirty =
     full ||
     del.length > 0 ||
     orderOps !== null ||
     queuesOps !== null ||
     levelsOps !== null ||
-    inboxChanged ||
     LEDGER_HEAD_FIELDS.some((field) => previousBrackets[field] !== next[field]);
   if (changed === 0 && del.length === 0 && !structDirty) {
     return { entry: null, brackets: next };
@@ -1401,9 +1174,6 @@ export function planLedgerEntry(state, previousBrackets = null) {
             ...(queuesOps ? { queuesOps } : null),
             ...(levelsOps ? { levelsOps } : null),
           }),
-      ...(full || !inboxPrefix
-        ? { rootInbox: newInbox }
-        : inboxChanged ? { rootInboxAppend: newInbox.slice(oldInbox.length) } : {}),
       head: structDirty
         ? {
             version: next.version,
@@ -1416,54 +1186,6 @@ export function planLedgerEntry(state, previousBrackets = null) {
     },
     brackets: next,
   };
-}
-
-// The mailbox prefix check compared two full serializations of every message,
-// so a long session allocated two copies of its whole transcript on every
-// snapshot. This is the same comparison — key order included, as
-// `JSON.stringify` produces — without building the strings.
-// The mailbox copies that reach `sameJson` are flat by construction — scalars
-// only — and a session can hold a million such entries. `sameJson` allocates two
-// key arrays per entry per frame; this answers the same question for flat
-// entries with no allocation and no recursion. `undefined` counts as absent,
-// because the copy drops those fields and the comparison must keep saying so.
-function isFlatEntry(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return false;
-  // A plain prototype is not enough. `sameFlatEntry` compares a child by
-  // identity, and that is the same answer as `sameJson` only when every child
-  // is a scalar; a nested mailbox entry compared this way reads as changed on
-  // every snapshot, which turns an append into a full mailbox rewrite — the
-  // pause this whole path exists to remove.
-  for (const key in value) {
-    if (!Object.hasOwn(value, key)) continue;
-    const child = value[key];
-    if (child === undefined || child === null) continue;
-    const kind = typeof child;
-    if (kind !== "string" && kind !== "number" && kind !== "boolean") return false;
-  }
-  return true;
-}
-
-function sameFlatEntry(a, b) {
-  if (a === b) return true;
-  if (!isFlatEntry(a) || !isFlatEntry(b)) return false;
-  for (const key in a) {
-    if (!Object.hasOwn(a, key)) continue;
-    const left = a[key];
-    if (left === undefined) continue;
-    const right = Object.hasOwn(b, key) ? b[key] : undefined;
-    if (left === right) continue;
-    if (typeof left === "number" && typeof right === "number" && !Number.isFinite(left) && !Number.isFinite(right)) continue;
-    return false;
-  }
-  for (const key in b) {
-    if (!Object.hasOwn(b, key)) continue;
-    if (b[key] === undefined) continue;
-    if (!Object.hasOwn(a, key) || a[key] === undefined) return false;
-  }
-  return true;
 }
 
 function sameJson(a, b) {
@@ -1519,7 +1241,7 @@ const LEDGER_HEAD_FIELDS = [
 
 // Every key a head may carry, including the id lists that older entries wrote
 // whole. Folding reads through this list, so an entry from either shape lands.
-const LEDGER_HEAD_KEYS = [...LEDGER_HEAD_FIELDS, "order", "queues", "levels", "rootInbox"];
+const LEDGER_HEAD_KEYS = [...LEDGER_HEAD_FIELDS, "order", "queues", "levels"];
 
 function foldLedgerEntry(ledger, entry) {
   // A `full` entry rebuilds the tree from scratch. Older ledger entries stay on
@@ -1579,25 +1301,6 @@ function foldLedgerEntry(ledger, entry) {
       if (Object.hasOwn(entry.head, key)) put(base, key, cloneValue(entry.head[key]));
     }
   }
-  // A baseline names the lists whole; an increment names only what moved. The
-  // two forms are applied in this order so an entry may carry either.
-  if (Array.isArray(entry.rootInbox)) {
-    // A whole mailbox replaces what was there: a new ledger or a reloaded one
-    // starts from this list, it does not append to the previous one. The list
-    // arrives as plain JSON, so it is adopted into a closed mailbox here — a
-    // plain array left on the ledger would make every later snapshot re-read
-    // the whole history.
-    base.rootInbox = createAppendOnlyInbox();
-    for (const message of entry.rootInbox) base.rootInbox.push(cloneValue(message));
-  }
-  if (Array.isArray(entry.rootInboxAppend)) {
-    // An append extends whatever the ledger already holds. Adopting the field
-    // keeps those entries: building an empty mailbox here would drop the prefix
-    // the append is a suffix of, and replay would then start the conversation
-    // halfway through.
-    if (!isAppendOnlyInbox(base.rootInbox)) base.rootInbox = adoptInbox(base.rootInbox);
-    for (const message of entry.rootInboxAppend) base.rootInbox.push(cloneValue(message));
-  }
   if (Array.isArray(entry.order)) base.order = cloneValue(entry.order);
   if (isPlainObject(entry.queues)) base.queues = cloneValue(entry.queues);
   if (isPlainObject(entry.levels)) base.levels = cloneValue(entry.levels);
@@ -1625,18 +1328,12 @@ function foldLedgerEntry(ledger, entry) {
 export function foldStateChain(entries) {
   let base = null;
   let ledger = null;
-  // The retired-beat list travels as its own increments, so it is folded the
-  // same way the ledger is: collected here and attached last, after the state
-  // chain has been replayed. A delta's ops still set `amends: []` (the core no
-  // longer carries the list), and this overwrites that with the real one.
-  let amends = null;
   for (const raw of entries) {
     const entry = normalizeStateEntry(raw);
-    if (isPlainObject(entry.amends)) amends = foldAmendsEntry(amends, entry.amends);
-    if (entry.kind === "amends") {
-      amends = foldAmendsEntry(amends, entry);
-      continue;
-    }
+    // An `amends` entry is a retired journal kind: the amend feature is gone,
+    // but a journal written before the cutover still carries these lines. It is
+    // skipped rather than rejected so an old session still loads.
+    if (entry.kind === "amends") continue;
     // A commit carries its ledger increment inside the same entry as its state
     // payload, so one append is one *write unit*: the two halves cannot land
     // apart from each other. The host writes one JSONL line per call and hands
@@ -1690,8 +1387,8 @@ export function foldStateChain(entries) {
     // A chain that holds only increments still describes something: the ledger
     // and the retired-beat list are each folded independently of the state
     // payload, so either one alone is a readable fragment.
-    if (ledger === null && amends === null) return null;
-    base = { version: VERSION, amends: amends ?? [] };
+    if (ledger === null) return null;
+    base = { version: VERSION };
   }
   if (ledger !== null) {
     // Materialize only once, after all list edits have been folded. The
@@ -1706,7 +1403,6 @@ export function foldStateChain(entries) {
     }
     base.brackets = ledger;
   }
-  if (amends !== null) base.amends = amends;
   return base;
 }
 

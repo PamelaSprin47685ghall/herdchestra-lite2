@@ -45,7 +45,7 @@ function checkpointState() {
           ownerId: "root",
           status: "running",
           targets: ["t1", "t2"],
-          charges: { call1: { tool: "read", amount: 1 } },
+          budget: { read: 3 },
         },
       },
       order: ["alpha"],
@@ -53,9 +53,7 @@ function checkpointState() {
       levels: {},
       totals: { panhandles: 0 },
     },
-    pins: ["p1"],
     relay: null,
-    charges: { call0: { tool: "bash", amount: 1 } },
   };
 }
 
@@ -63,7 +61,6 @@ function nextStates() {
   const s0 = checkpointState();
 
   const s1 = structuredClone(s0);
-  s1.pins.push("p2");
   s1.brackets.seq = 3;
   s1.brackets.forks.alpha.status = "joined";
   s1.brackets.forks.alpha.targets.push("t3");
@@ -77,13 +74,12 @@ function nextStates() {
   };
   s2.brackets.order.push("beta");
   s2.brackets.queues = { alpha: ["beta"] };
-  delete s2.brackets.forks.alpha.charges.call1;
+  delete s2.brackets.forks.alpha.budget.read;
   s2.brackets.totals.panhandles = 2;
 
   const s3 = structuredClone(s2);
   s3.brackets.levels = { "alpha/beta": ["beta"] };
   s3.relay = { action: "join", scopeId: "alpha" };
-  s3.charges.call2 = { tool: "grep", amount: 2 };
 
   return [s0, s1, s2, s3];
 }
@@ -133,7 +129,6 @@ describe("foldStateChain", () => {
     folded.brackets.seq = 99;
     folded.brackets.forks.alpha.status = "tampered";
     folded.brackets.order.push("ghost");
-    folded.pins.push("tampered");
     expect(entries).toEqual(before);
     expect(states[0].brackets.seq).toBe(2);
   });
@@ -206,12 +201,9 @@ describe("the shared hot path", () => {
     return {
       startedAt: 1_000,
       seq: 0,
-      charges: {},
-      amends: [],
       brackets: ledger,
       epoch: 0,
       autopilot: false,
-      pins: [],
       relay: null,
       baseModelSpec: null,
       baseModelKey: null,

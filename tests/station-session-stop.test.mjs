@@ -20,6 +20,13 @@ function station(overrides = {}) {
 		rewoundThisTurn: overrides.rewoundThisTurn ?? false,
 		forkOwnerId: () => overrides.ownerId ?? null,
 		forkLedgerPort: () => overrides.ledger ?? null,
+		// The stop gate asks the station for its mode; a stub answers with the
+		// one fact the rule reads.
+		projectionFor: () => ({
+			mode:
+				overrides.mode ??
+				((overrides.state?.autopilot ?? true) ? "ROOT_AUTOPILOT" : "ROOT_MANUAL"),
+		}),
 	};
 }
 

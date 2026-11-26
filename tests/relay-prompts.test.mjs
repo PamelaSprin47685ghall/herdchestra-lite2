@@ -135,7 +135,7 @@ describe("commitRootRewind", () => {
 		return { station, manager, entries, setMessagesCalls };
 	}
 
-	test("compacts history, restores verbatim user prompts/steers as real user messages, and keeps pins", () => {
+	test("compacts history and restores verbatim user prompts/steers as real user messages", () => {
 		const { station, manager, setMessagesCalls } = rewindHarness([
 			{ role: "user", content: FIRST },
 			{ role: "assistant", content: [{ type: "text", text: "Working" }] },
@@ -143,7 +143,6 @@ describe("commitRootRewind", () => {
 			{ role: "user", content: "system steer", attribution: "agent" },
 			{ role: "user", content: childReturnNudge() },
 		]);
-		station.state.pins = ["**Finding:** root cause is X"];
 		station.state.relay.generation = 1;
 		station.state.relay.pendingRewind = {
 			report: 'read(path="a.mjs")\n\nverified part 1',
@@ -160,7 +159,8 @@ describe("commitRootRewind", () => {
 		const rebuilt = manager.buildSessionContext().messages;
 		expect(setMessagesCalls).toHaveLength(1);
 		expect(rebuilt[0].role).toBe("compactionSummary");
-		expect(rebuilt[0].summary).toContain("**Finding:** root cause is X");
+		// The return report is the only carried-forward evidence: the retired
+		// pin list has no counterpart, so the report alone must survive the cut.
 		expect(rebuilt[0].summary).toContain('read(path="a.mjs")');
 		expect(rebuilt[0].summary).toContain("verified part 1");
 		// Verbatim user prompts & steers are restored as real user messages.

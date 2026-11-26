@@ -25,15 +25,9 @@ function isChild(station) {
 
 /**
  * Shared state reset after either a Root or Child rewind rewrote the live branch.
- *
- * `keepAmends` preserves inherited parent amends on a Child rewind; Root passes
- * an empty list because its compaction supersedes all prior beats.
  */
-export function finishRewind(station, { keepAmends = [], rebaseAnchor = false } = {}) {
+export function finishRewind(station, { rebaseAnchor = false } = {}) {
 	truncateForHostBoundary(station.state);
-	station.state.amends = Array.isArray(keepAmends)
-		? keepAmends.filter((key) => typeof key === "string" && key !== "")
-		: [];
 	station.contextCache = null;
 	station.hostBoundaryScan = null;
 	station.resetUsageWatermark?.();
@@ -128,12 +122,12 @@ export function clearPendingRootRewind(station, plan = null) {
  *
  * Writes:
  * 1. Merge real user prompts/steers into `state.relay.userPrompts`.
- * 2. Append one handoff compaction entry carrying pins + formatted generation
+ * 2. Append one handoff compaction entry carrying the formatted generation
  *    report + continuation/review directive.
  * 3. Append verbatim user prompts & steers as real `role: "user"` entries right
  *    after the compaction boundary so the reborn Root inherits them verbatim.
- * 4. Clear `pendingRewind`, bump `epoch`, clear `charges`/`amends`, reset usage
- *    watermark, persist, and replace live `agent.state.messages` with the fresh
+ * 4. Clear `pendingRewind`, reset the usage watermark, persist, and replace
+ *    live `agent.state.messages` with the fresh
  *    projection from `manager.buildSessionContext()`.
  */
 export function commitRootRewind(station, ctx, plan = null) {
@@ -157,7 +151,6 @@ export function commitRootRewind(station, ctx, plan = null) {
 	);
 	const summary = formatRebornPrompt({
 		report: pending.report,
-		pins: station.state.pins ?? [],
 		big: pending.big === true,
 	});
 	const manager = station.manager ?? null;
@@ -193,7 +186,7 @@ export function commitRootRewind(station, ctx, plan = null) {
 		userPrompts,
 		pendingRewind: null,
 	};
-	finishRewind(station, { keepAmends: [], rebaseAnchor: false });
+	finishRewind(station, { rebaseAnchor: false });
 	if (manager && typeof manager.buildSessionContext === "function") {
 		try {
 			const rebuilt = station.contextMessages();

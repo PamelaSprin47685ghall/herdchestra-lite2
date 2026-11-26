@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import {
-  createBracketLedger,
-  forkBudgetText,
-  registerFork,
-} from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
+import { forkRemaining } from "../src/station/domain/capabilities.mjs";
 import { createClockOn } from "../src/scope/clock.mjs";
 
 describe("remaining clock rendering", () => {
@@ -24,7 +21,11 @@ describe("remaining clock rendering", () => {
     );
     expect(registered.ok).toBe(true);
     // 57.1s left must read 0:57, not 0:58.
-    const line = forkBudgetText(registered.fork, 1_002_900);
-    expect(line).toContain("time remaining 0:57/1:00");
+    const remaining = forkRemaining(
+      registered.fork,
+      1_002_900,
+      createClockOn(() => 1_002_900),
+    );
+    expect(String(remaining.time)).toContain("0:57");
   });
 });

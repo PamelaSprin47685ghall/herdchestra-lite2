@@ -37,6 +37,8 @@ export type ToolCallBlock = {
   argsText?: string;
   result?: unknown;
   resultText?: string;
+  /** `js` inner calls: `{ innerCalls: [{ name, args, resultText, isError }] }`. */
+  details?: unknown;
   isError?: boolean;
   status?: ToolStatus;
 };
@@ -48,6 +50,7 @@ export type ToolBlock = {
   status?: ToolStatus;
   args?: unknown;
   result?: unknown;
+  details?: unknown;
 };
 export type ImageBlock = { type: "image"; url?: string; alt?: string };
 export type MessageBlock =
@@ -367,6 +370,8 @@ export type ToolExecution = {
   argsText?: string;
   partialResult?: unknown;
   result?: unknown;
+  /** `js` inner calls, copied from the paired block on a rebuilt history. */
+  details?: unknown;
   isError?: boolean;
   messageId?: string;
 };

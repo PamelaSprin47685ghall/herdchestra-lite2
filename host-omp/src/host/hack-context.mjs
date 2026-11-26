@@ -198,12 +198,19 @@ export function commitSkillReceipt(manager, messages, source = null) {
 			const sameTurn = typeof persisted.herdSkillTurn === "string"
 				? persisted.herdSkillTurn === key
 				: sameTurnMessage(lastTurnMessage(journal), lastTurnMessage(prefix));
-			// A mode, branch, or canStop change regenerates the receipt for the same
-			// turn. Its committed bytes must not win over the new mode.
-			const modeChanged =
-				(proposed.autopilot ?? null) !== (persisted.autopilot ?? null) ||
-				(proposed.branch ?? null) !== (persisted.branch ?? null) ||
-				(proposed.canStop ?? null) !== (persisted.canStop ?? null);
+			// The capability signature changes whenever the mode, the callable tool
+			// set, the autopilot flag, or canStop changes, so one comparison now
+			// covers what the three old booleans could only approximate. A receipt
+			// written before the signature existed still regenerates on a legacy
+			// field change instead of reusing stale bytes.
+			const signatureChanged = (proposed.capSig ?? null) !== (persisted.capSig ?? null);
+			const legacyChanged =
+				proposed.capSig === undefined &&
+				persisted.capSig === undefined &&
+				((proposed.autopilot ?? null) !== (persisted.autopilot ?? null) ||
+					(proposed.branch ?? null) !== (persisted.branch ?? null) ||
+					(proposed.canStop ?? null) !== (persisted.canStop ?? null));
+			const modeChanged = signatureChanged || legacyChanged;
 			const replace = hasNewNote || (modeChanged && sameTurn);
 			const matches = sameMessage(proposed, persisted) || sameTurn;
 			if (!matches && !replace) {

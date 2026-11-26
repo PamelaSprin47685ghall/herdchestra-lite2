@@ -1,8 +1,8 @@
 // End-to-end scope_return tail-call rewind contracts:
 // - Child small handoff rewinds BranchManager to originEntryId (O(1) depth),
-//   keeps forkId/path/ownerId/inbox/budget/panhandles/originAmends, drops
-//   old-generation noise, merges birth receipt + pins + report + concurrent
-//   inbox into one user message, and delivers cleanly on final oath.
+//   keeps forkId/path/ownerId/budget/panhandles, drops old-generation noise,
+//   merges birth receipt + report into one user message, and delivers cleanly
+//   on final oath.
 // - Multi-generation child rewind replaces the previous report instead of
 //   compounding generations.
 // - Root small handoff, first oath (review), small reset, second consecutive
@@ -31,7 +31,6 @@ import {
 } from "../src/scope/fork-registry.mjs";
 import { notePanhandled } from "../src/scope/panhandle.mjs";
 import { handleForkCall, handleJoinCall, handleReturnCall } from "../src/station/fork-controls.mjs";
-import { handleSendCall } from "../src/station/send-controls.mjs";
 import { executeReturn } from "../src/station/execute.mjs";
 import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
 
@@ -150,8 +149,6 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 		});
 
 		const parent = createTestStation(SessionStation, shared, {}, {}, null, null);
-		parent.state.amends = ["parent-retired-beat"];
-		parent.state.pins = ["**Assumption:** shared invariant"];
 		const attached = attachForkPorts(parent, wiring, {
 			conversationKey: "session:rewind-session-1",
 			ownerSession: ownerSession(),
@@ -211,9 +208,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 								const record = forkOf(attached.ledger, spec.forkId);
 
 								if (generation === 1) {
-									// Gen 1: noisy exploration, local amend, pin, panhandle, concurrent sibling send, then small scope_return.
-									childStation.state.amends.push("gen1-local-amend");
-									childStation.state.pins.push("**Finding:** gen1 clue");
+									// Gen 1: noisy exploration, a panhandle, then a small scope_return.
 									notePanhandled(record, "read", { callId: "over-1" });
 									const noise1 = {
 										role: "assistant",
@@ -235,12 +230,6 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 									config.sessionManager.appendMessage(noiseRes);
 									session.agent.state.messages.push(noiseRes);
 
-									// Simulate concurrent scope_send arriving during gen 1.
-									handleSendCall(parent, {
-										id: "send-1",
-										arguments: { target: "/worker", message: "remember edge case Z" },
-									});
-
 									const retCall = {
 										role: "assistant",
 										content: [{ type: "toolCall", id: "ret-1", name: "scope_return", arguments: { dafny: "gen1 distilled summary" } }],
@@ -259,14 +248,11 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 								}
 
 								if (generation === 2) {
-									// Gen 2: verify inherited originAmends survived while gen1 local amend was cleared,
-									// and prompt carries birth receipt + pins + gen1 report + concurrent inbox.
-									expect(childStation.state.amends).toEqual(["parent-retired-beat"]);
+									// Gen 2: the prompt carries the birth receipt and the previous
+									// generation's report, and nothing else from gen 1.
 									expect(text.startsWith("You are now in the scope /worker,")).toBe(true);
 									expect(text).toContain("gen1 distilled summary");
 									expect(text).toContain('read(path="noisy.mjs")');
-									expect(text).toContain("**Finding:** gen1 clue");
-									expect(text).toContain("remember edge case Z");
 
 									// Second small handoff: gen 2 report replaces gen 1 report.
 									const work2 = {
@@ -367,7 +353,7 @@ describe("mixed tool-call batch refusal and stopAfterScopeReturn", () => {
 			],
 		};
 		const station = {
-			state: { amends: [], relay: { generation: 0, bigStreak: 0, canStop: false, userPrompts: [], pendingRewind: null } },
+			state: { relay: { generation: 0, bigStreak: 0, canStop: false, userPrompts: [], pendingRewind: null } },
 			forkLedgerPort: () => ledger,
 			forkIdentityPort: () => ({ forkId: "f1", parentOwnerId: "root" }),
 			contextMessages: () => [carrying],

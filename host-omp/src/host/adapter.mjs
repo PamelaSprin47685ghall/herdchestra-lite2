@@ -76,6 +76,32 @@ export function messagesOf(ctx) {
 	return Array.isArray(messages) ? messages : null;
 }
 
+/**
+ * One tool's JSON Schema, as the host declares it.
+ *
+ * Current hosts use callable ArkType schemas; JSON.stringify would silently
+ * omit those functions and undercount the tool header. An extension-registered
+ * tool already carries a plain JSON Schema object and passes through. Null
+ * means "this tool's schema cannot be read", so callers degrade instead of
+ * sending a wrong shape to the model.
+ */
+export function jsonSchemaOf(tool) {
+	let parameters = tool?.parameters;
+	if (typeof parameters === "function") {
+		if (typeof parameters.toJsonSchema !== "function") return null;
+		try {
+			parameters = parameters.toJsonSchema({
+				target: "draft-2020-12",
+				fallback: (value) => value.base,
+			});
+		} catch {
+			return null;
+		}
+	}
+	if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return null;
+	return parameters;
+}
+
 /** Serializable request header used to estimate a new model's fixed cost. */
 export function contextHeaderOf(ctx) {
 	const state = agentState(sessionOf(ctx));
@@ -87,17 +113,8 @@ export function contextHeaderOf(ctx) {
 	try {
 		const definitions = [];
 		for (const tool of tools) {
-			let parameters = tool.parameters;
-			// Current hosts use callable ArkType schemas. JSON.stringify would
-			// silently omit those functions and undercount the tool header.
-			if (typeof parameters === "function") {
-				if (typeof parameters.toJsonSchema !== "function") return null;
-				parameters = parameters.toJsonSchema({
-					target: "draft-2020-12",
-					fallback: (value) => value.base,
-				});
-			}
-			if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return null;
+			const parameters = jsonSchemaOf(tool);
+			if (!parameters) return null;
 			definitions.push({ name: tool.name, description: tool.description, parameters });
 		}
 		return JSON.parse(JSON.stringify({ systemPrompt, tools: definitions }));

@@ -23,7 +23,7 @@ class FakeSession {
 }
 captureTranscriptSubscriptions(FakeSession.prototype);
 
-run("scope header and settled todo checklist card render cleanly under omp 19.2 pi-tui", async () => {
+run("scope header renders cleanly under omp 19.2 pi-tui", async () => {
 	const tui = await import(`${BASE}/pi-tui`);
 	const { paintNode } = await import(`${BASE}/pi-tui/src/term/paint.ts`);
 	const { loadThemeSync } = await import(`${BASE}/pi-tui/src/theme/loader.ts`);
@@ -42,37 +42,9 @@ run("scope header and settled todo checklist card render cleanly under omp 19.2 
 	expect(tui.isUiNode(output)).toBe(true);
 	expect(errors).toHaveLength(0);
 	expect(paintNode(env, headerNode, 80).rows.map(strip).join("\n")).toContain("Worker");
-
-	const root = new FakeSession();
-	const seen = [];
-	root.subscribe((event) => seen.push(event));
-	childDisplayFor(root);
-	root.emit({ type: "tool_execution_start", toolCallId: "t1", toolName: "todo", args: { op: "init" } });
-	root.emit({
-		type: "tool_execution_end",
-		toolCallId: "t1",
-		toolName: "todo",
-		args: { op: "init" },
-		result: {
-			content: [{ type: "text", text: "ok" }],
-			details: {
-				op: "init",
-				phases: [
-					{ name: "诊断", tasks: [{ content: "定位思考中断", status: "completed" }, { content: "修复级联取消", status: "in_progress" }] },
-				],
-			},
-		},
-		isError: false,
-	});
-	const todoMessage = seen.find((event) => event.message?.customType === CHILD_ACTIVITY_TYPE)?.message;
-	const todoNode = renderChildActivity(todoMessage, { expanded: false }, theme, tui);
-	const paintedTodo = paintNode(env, todoNode, 80).rows.map(strip).join("\n");
-	expect(paintedTodo).toContain("Todo 1/2");
-	expect(paintedTodo).toContain("定位思考中断");
-	expect(paintedTodo).toContain("修复级联取消");
 });
 
-run("root todo retires into scrollback and long child thinking streams end-to-end without stopping mid-stream", async () => {
+run("a retired todo tool no longer paints a card, and long child thinking streams end-to-end without stopping mid-stream", async () => {
 	const tui = await import(`${BASE}/pi-tui`);
 	const { TermBackend } = await import(`${BASE}/pi-tui/src/term/backend.ts`);
 	const { loadThemeSync } = await import(`${BASE}/pi-tui/src/theme/loader.ts`);
@@ -188,8 +160,8 @@ run("root todo retires into scrollback and long child thinking streams end-to-en
 	const display = childDisplayFor(root);
 	display.attach("Subscope", child);
 
-	// 1. Root completes a todo init; it must settle immediately and scroll out
-	// into history rather than staying pinned at the top of the viewport.
+	// 1. A synthetic todo event no longer produces a card: `todo` is not a
+	// bound capability, so nothing stays pinned at the top of the viewport.
 	root.emit({ type: "tool_execution_start", toolCallId: "todo-1", toolName: "todo", args: { op: "init" } });
 	root.emit({
 		type: "tool_execution_end",
@@ -206,8 +178,7 @@ run("root todo retires into scrollback and long child thinking streams end-to-en
 		isError: false,
 	});
 	backend.renderNow();
-	expect(todoBlock).not.toBeNull();
-	expect(tui.isSettled(todoBlock.node)).toBe(true);
+	expect(todoBlock ?? null).toBeNull();
 
 	// 2. Child streams 30 paragraphs of thinking far taller than the 12-row viewport.
 	child.emit({ type: "message_start", message: { role: "assistant", content: [] } });
@@ -229,8 +200,10 @@ run("root todo retires into scrollback and long child thinking streams end-to-en
 	}
 
 	// Root todo has retired cleanly into scrollback (not pinned at top of viewport).
-	expect(backend.retired(todoBlock.node)).toBe(true);
-	expect(historyRows.join("\n")).toContain("根任务一");
+	expect(todoBlock).toBeNull();
+	// A retired `todo` card leaves no history row behind: there is nothing to
+	// retire, which is the point of dropping the capability.
+	expect(historyRows.join("\n")).not.toContain("根任务一");
 	expect(latestViewport.join("\n")).not.toContain("根任务一");
 
 	// Live thinking continues showing the newest tail while settled earlier

@@ -27,7 +27,7 @@ import { borrowInstalledAddon, borrowStaleAddon } from "./host-native.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
 const AGENT_SESSION = join(HOST, "packages/coding-agent/src/session/agent-session.ts");
-const REQUIRED_TOOLS = ["scope_fork", "scope_join", "scope_return", "scope_send", "scope_context"];
+const REQUIRED_TOOLS = ["js"];
 const STRICT = process.env.OMP_SMOKE_STRICT === "1";
 
 const results = [];
@@ -248,9 +248,10 @@ await check("activate() completes", async () => {
 	return "no throw";
 });
 
-await check("all five control tools register", () => {
+await check("the single js tool registers", () => {
 	const missing = REQUIRED_TOOLS.filter((name) => !harness.tools.has(name));
 	assert(missing.length === 0, `not registered: ${missing.join(", ")}`);
+	assert(!harness.tools.has("scope_fork"), "a retired scope tool is still registered");
 	return REQUIRED_TOOLS.join(", ");
 });
 
@@ -329,8 +330,8 @@ await check("a created flow session takes the requested model", async () => {
 		systemPrompt: ["You are the owner."],
 		// Name the tool view explicitly: this check is about the model seam,
 		// and the plugin's capture has already wrapped the live session class.
-		toolNames: ["read", "scope_fork", "todo"],
-		activeToolNames: ["read", "scope_fork"],
+		toolNames: ["js"],
+		activeToolNames: ["js"],
 		mountedToolNames: [],
 	};
 	const requestedId = `${requested.provider}/${requested.id}`;
@@ -384,8 +385,8 @@ await check("flow construction inputs match the owner fixture", async () => {
 		settings: {},
 		asyncJobManager: {},
 		costGate: {},
-		getEnabledToolNames: () => ["read", "scope_fork", "todo"],
-		getActiveToolNames: () => ["read", "scope_fork"],
+		getEnabledToolNames: () => ["js"],
+		getActiveToolNames: () => ["js"],
 		getMountedToolCommandNames: () => [],
 		preparedExtensions: ["prepared"],
 		extensionPaths: [],
@@ -449,7 +450,7 @@ function memoryManager() {
 await check("a fresh session writes a checkpoint first", () => {
 	const manager = memoryManager();
 	const station = createTestStation(SessionStation, manager, {}, {}, null, null);
-	station.state.pins = ["smoke"];
+	station.state.autopilot = true;
 	station.persist();
 	assert(manager.entries.length === 1, `wrote ${manager.entries.length} entries`);
 	assert(
@@ -462,36 +463,29 @@ await check("a fresh session writes a checkpoint first", () => {
 await check("a later write appends a delta and restores", () => {
 	const manager = memoryManager();
 	const station = createTestStation(SessionStation, manager, {}, {}, null, null);
-	station.state.pins = ["smoke"];
 	station.persist();
-	station.state.pins.push("second");
+	station.state.autopilot = true;
 	station.persist();
 	const kinds = manager.entries.map((entry) => entry.data.kind ?? "legacy");
 	assert(kinds[0] === "checkpoint", `first entry was ${kinds[0]}`);
 	assert(kinds[1] === "delta", `second entry was ${kinds[1]}`);
 	const restored = restoreState(manager);
-	assert(
-		restored.pins.join(",") === "smoke,second",
-		`restored pins: ${restored.pins.join(",")}`,
-	);
+	assert(restored.autopilot === true, `restored autopilot: ${restored.autopilot}`);
 	return kinds.join(" → ");
 });
 
 await check("a reopened session continues with deltas", () => {
 	const manager = memoryManager();
 	const first = createTestStation(SessionStation, manager, {}, {}, null, null);
-	first.state.pins = ["kept"];
+	first.state.autopilot = true;
 	first.persist();
 	const reopened = createTestStation(SessionStation, manager, {}, {}, null, null);
-	reopened.state.pins.push("added");
+	reopened.state.autopilot = false;
 	reopened.persist();
 	const kinds = manager.entries.map((entry) => entry.data.kind ?? "legacy");
 	assert(kinds.at(-1) === "delta", `last entry was ${kinds.at(-1)}`);
 	const restored = restoreState(manager);
-	assert(
-		restored.pins.join(",") === "kept,added",
-		`restored pins: ${restored.pins.join(",")}`,
-	);
+	assert(restored.autopilot === false, `restored autopilot: ${restored.autopilot}`);
 	return `${kinds.join(" → ")}`;
 });
 

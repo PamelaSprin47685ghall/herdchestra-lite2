@@ -187,27 +187,27 @@ async function exerciseHost(host, start) {
 
 async function checkReturnStop({ Agent, createMockModel, type }) {
 	const mock = createMockModel({ responses: [
-		{ content: [{ type: "toolCall", id: "refused-return", name: "scope_return", arguments: {} }] },
-		{ content: [{ type: "toolCall", id: "promoted-return", name: "scope_return", arguments: {} }] },
-		{ content: [{ type: "toolCall", id: "accepted-return", name: "scope_return", arguments: {} }] },
+		{ content: [{ type: "toolCall", id: "refused-js", name: "js", arguments: {} }] },
+		{ content: [{ type: "toolCall", id: "promoted-js", name: "js", arguments: {} }] },
+		{ content: [{ type: "toolCall", id: "accepted-js", name: "js", arguments: {} }] },
 		{ content: ["this request must never be sent"] },
 	] });
 	const agent = new Agent({
 		initialState: {
 			model: mock.model,
-			systemPrompt: ["Test scope_return."],
+			systemPrompt: ["Test the js tool."],
 			tools: [{
-				name: "scope_return",
-				label: "Return",
-				description: "Return the child's work.",
+				name: "js",
+				label: "js",
+				description: "Evaluate JavaScript with `api` in scope.",
 				parameters: type({}),
 				execute: async (id) => {
-					if (id === "refused-return") {
+					if (id === "refused-js") {
 						return { content: [{ type: "text", text: "Not accepted" }], details: {}, isError: true };
 					}
 					return {
 						content: [{ type: "text", text: "Accepted" }],
-						details: { accepted: true, stopLoop: id === "accepted-return" },
+						details: { accepted: true, stopLoop: id === "accepted-js" },
 					};
 				},
 			}],
@@ -220,10 +220,10 @@ async function checkReturnStop({ Agent, createMockModel, type }) {
 		assert.equal(mock.calls.length, 3, "a refusal or promotion must continue; a terminal return must stop");
 		assert.equal(agent.state.error, undefined);
 		assert.equal(agent.state.messages.at(-1)?.role, "toolResult");
-		assert.equal(agent.state.messages.at(-1)?.toolCallId, "accepted-return");
+		assert.equal(agent.state.messages.at(-1)?.toolCallId, "accepted-js");
 		assert.equal(agent.state.messages.at(-1)?.isError, false);
 		assert.equal(agent.state.messages.some((message) => message.stopReason === "aborted"), false);
-		console.log("PASS scope_return: accepted tool result is retained; no extra provider call or aborted assistant frame");
+		console.log("PASS stopLoop: a js result that halts the turn is retained; no extra provider call or aborted assistant frame");
 	} finally {
 		detach();
 	}
@@ -248,25 +248,24 @@ async function checkRootRewindE2E({ createMockModel }) {
 		hostModule("packages/coding-agent/src/sdk.ts"),
 		hostModule("packages/coding-agent/src/session/session-manager.ts"),
 	]);
-	const oath = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 	const mock = createMockModel({
 		responses: [
 			{
 				content: [
 					{ type: "text", text: "Gen 0 investigating." },
-					{ type: "toolCall", id: "root-ret-0", name: "scope_return", arguments: { dafny: "gen 0 report: narrowed root cause" } },
+					{ type: "toolCall", id: "root-ret-0", name: "js", arguments: { code: 'await api.scope_return({ dafny: "gen 0 report: narrowed root cause" })' } },
 				],
 			},
 			{
 				content: [
 					{ type: "text", text: "Gen 1 completing fix." },
-					{ type: "toolCall", id: "root-ret-1", name: "scope_return", arguments: { dafny: "gen 1 report: fix and tests pass", ...oath } },
+					{ type: "toolCall", id: "root-ret-1", name: "js", arguments: { code: `await api.scope_return({ dafny: "gen 1 report: fix and tests pass", ${RETURN_OATH_KEY}: ${JSON.stringify(RETURN_OATH_VALUE)} })` } },
 				],
 			},
 			{
 				content: [
 					{ type: "text", text: "Gen 2 reviewing independently." },
-					{ type: "toolCall", id: "root-ret-2", name: "scope_return", arguments: { dafny: "gen 2 review: nothing left on the table", ...oath } },
+					{ type: "toolCall", id: "root-ret-2", name: "js", arguments: { code: `await api.scope_return({ dafny: "gen 2 review: nothing left on the table", ${RETURN_OATH_KEY}: ${JSON.stringify(RETURN_OATH_VALUE)} })` } },
 				],
 			},
 			{

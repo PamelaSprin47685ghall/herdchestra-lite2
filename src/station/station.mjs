@@ -25,15 +25,16 @@
  */
 
 import {
+	chargeBranch,
 	createBracketLedger,
 	abandonRequest,
 	beginRequest,
 	createTurnClock,
 	createUsageLedger,
 	finishRequest,
+	isFreeCall,
 	markLedgerStructDirty,
 	normalizeTotals,
-	planAmendsEntry,
 	planLedgerEntry,
 	planStateEntry,
 	serializeState,
@@ -42,9 +43,9 @@ import {
 	forkOf,
 	unreceivedChildren,
 } from "../scope/index.mjs";
+import { listAddressableScopePaths } from "../scope/path.mjs";
 import { takeReturnNudge } from "../scope/return-nudge.mjs";
 import { recordTurnSample } from "../scope/turn-stats.mjs";
-import { notePanhandled } from "../scope/panhandle.mjs";
 import {
 	adoptLedger,
 	conversationKeyOf,
@@ -52,9 +53,7 @@ import {
 } from "../scope/fork-registry.mjs";
 
 import {
-	findAmendTarget,
 	findToolCallIndex,
-	lastStructuralCallId,
 	toolCalls,
 } from "../transcript/index.mjs";
 import {
@@ -65,16 +64,22 @@ import {
 } from "../core/policy.mjs";
 import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
-import { handleAmendCall } from "./controls.mjs";
 import {
-	directAmend,
-	executePin,
-	executeAmend,
-	executeContext,
+	currentRequest,
+	markRequestDelivered,
+	runtimeTable,
+} from "../scope/request-queue.mjs";
+import {
+	forkRemaining,
+	projectCapabilities,
+	renderConsoleReceipt,
+} from "./domain/capabilities.mjs";
+import { handleReplyToolCall, handleRequestToolCall } from "./request-controls.mjs";
+import {
+	executeAbandon,
 	executeFork,
 	executeJoin,
 	executeReturn,
-	executeSend,
 } from "./execute.mjs";
 import {
 	confirmJoinPersistence,
@@ -98,10 +103,8 @@ import {
 	onSessionCompact,
 	onSessionStop,
 	onSessionSwitch,
-	onToolCall,
 	prepareRequest,
 } from "./gates.mjs";
-import { controlsIn, processedKey } from "./messages.mjs";
 import {
 	projectContext,
 	shouldRebase,
@@ -124,37 +127,8 @@ import {
 	restoreState,
 	SESSION_STATE_TYPE,
 } from "./restore.mjs";
-import { skillReceiptText } from "./texts.mjs";
 import { createPersistenceAnchor } from "./persistence-anchor.mjs";
 import { nudgeDecision } from "./nudge.mjs";
-
-export function receiptTextOf(message) {
-	const content = message?.content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((block) => block?.type === "text")
-		.map((block) => block.text)
-		.join("\n");
-}
-
-/**
- * The amend arguments a control call carries, or null when it carries none.
- * A retired `amend` call is still in old transcripts, so the scan path reads
- * both names; the new name nests the same object under `amend`.
- */
-function amendArgumentsOf(call) {
-	if (call?.name === "amend") return call.arguments ?? {};
-	if (call?.name !== "scope_context") return null;
-	let args = call.arguments;
-	if (typeof args === "string") {
-		try {
-			args = JSON.parse(args);
-		} catch {
-			return null;
-		}
-	}
-	return args?.amend ?? null;
-}
 
 /**
  * A station can receive capabilities from two places: the composition root's
@@ -191,6 +165,7 @@ export function shapeHost(host) {
 			header: pick(session.header, source.contextHeaderOf),
 			setMessages: pick(session.setMessages, source.setAgentMessages),
 			appendHistory: pick(session.appendHistory, source.appendHistoryMessage),
+			settingsOf: pick(session.settingsOf, source.settingsOf),
 			abort: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
 			canRewindRoot: pick(session.canRewindRoot, source.canRewindRoot),
 		},
@@ -200,6 +175,12 @@ export function shapeHost(host) {
 			parseSpec: pick(model.parseSpec, source.preparseModelSpec),
 			capabilities: pick(model.capabilities, source.capabilities),
 			query: pick(model.query, source.models),
+		},
+		// The confiscated tools. A host that predates this seam leaves both
+		// undefined, and the js runtime then binds only the control plane.
+		tools: {
+			listSpecs: pick(source.tools?.listSpecs, source.listToolSpecs),
+			execute: pick(source.tools?.execute, source.executeTool),
 		},
 		accounting: {
 			usage: pick(accounting.usage, source.usage),
@@ -250,7 +231,6 @@ export class SessionStation {
 			serialize: serializeStateCore,
 			plan: planStateEntry,
 			planLedger: planLedgerEntry,
-			planAmends: planAmendsEntry,
 			split: splitState,
 			type: SESSION_STATE_TYPE,
 			noteError: (domain, error) => this.noteError(domain, error),
@@ -360,8 +340,6 @@ export class SessionStation {
 			: Object.freeze({ ...portTable });
 		this.ports = Object.freeze({
 			clock: implementations.clock,
-			pin: implementations.pin.bindState(this.state),
-			amend: implementations.amend.bindState(this.state),
 			herd: implementations.herd.bindState(this.state),
 		});
 	}
@@ -385,17 +363,6 @@ export class SessionStation {
 		this.forkLedgerPort = () => ledger;
 		this.forkWaitPort = () => ({ registry, ledger });
 		this.forkIdentityPort = () => identity;
-		// A forked scope projects the parent's transcript, so it inherits the
-		// beats the parent had retired before the fork. Without them the child
-		// re-includes an amended beat and its request prefix stops matching the
-		// parent's. The keys land in this station's own array: an amend made here
-		// later never reaches the parent's ledger, and the reverse holds too.
-		if (this.state && Array.isArray(identity?.amends)) {
-			for (const key of identity.amends) {
-				if (typeof key !== "string" || key === "") continue;
-				if (!this.state.amends.includes(key)) this.state.amends.push(key);
-			}
-		}
 		this.forkOwnerId = () =>
 			typeof identity?.forkId === "string" && identity.forkId !== ""
 				? identity.forkId
@@ -600,74 +567,9 @@ export class SessionStation {
 		return { messages, index, message: messages[index] };
 	}
 
+	/** The assistant message that carries this tool call. */
 	messageForToolCall(toolCallId) {
-		return this.toolCallLedger.messageForToolCall(toolCallId) ??
-			this.assistantForToolCall(toolCallId)?.message;
-	}
-
-	prepareToolDispatch(message, id, name) {
-		this.toolCallLedger.prepare(message, id, name);
-		// Waiting on the other bracket is not this branch's work. A join or a
-		// return may block for as long as the counterpart needs, so it never
-		// carries the branch clock's limit.
-		if (name === "scope_join" || name === "scope_return") return false;
-		// A bounded clock keeps the gate open so the debt can be recorded; the
-		// deadline itself is never handed to a host as a call limit.
-		return this.clockPort().info(this.branchRecord())?.bounded === true;
-	}
-
-	toolGateVerdict(toolCallId) {
-		return this.toolCallLedger.toolGateVerdict(toolCallId);
-	}
-
-	rememberToolGate(toolCallId, verdict) {
-		this.toolCallLedger.rememberToolGate(toolCallId, verdict);
-	}
-
-	admitToolDispatch(id, name, ctx, receipt = null) {
-		if (receipt) {
-			// A receipt is the post-execution half of a guarded call, so it
-			// normally follows an admission and this cache check is a hit. If
-			// the bounded gate cache evicted the id, or a host uses only this
-			// seam, admit now instead of letting a result skip the branch's
-			// budget. Charging is idempotent through `state.charges`.
-			//
-			// A call that ends past the deadline keeps its result: the overrun
-			// is a debt in the same count as a spent turn, never a kill.
-			const record = this.branchRecord();
-			if (record && this.clockPort().info(record)?.overtime) {
-				notePanhandled(record, name, { callId: id });
-			}
-			if (!this.toolGateVerdict(id).hit) {
-				const verdict = this.admitToolDispatch(id, name, ctx);
-				if (verdict?.block) return verdict;
-			}
-			return undefined;
-		}
-		// Two seams admit one tool call: the host's `tool_call` hook and this
-		// dispatch seam. `onToolCall` caches its verdict by tool-call id, so
-		// whichever seam runs second is a cache read and never a second charge.
-		// Reconstruct the arguments from the carrying message so a free skill
-		// read or a staged-preview resolution is not charged as ordinary work.
-		const carrying = this.messageForToolCall(id);
-		const call = toolCalls(carrying).find((candidate) => candidate.id === id);
-		let input = call?.arguments ?? {};
-		if (typeof input === "string") {
-			try {
-				input = JSON.parse(input);
-			} catch {
-				input = {};
-			}
-		}
-		const verdict = onToolCall(
-			this,
-			{ toolCallId: id, toolName: name, input },
-			ctx,
-		);
-		if (verdict) return verdict;
-		if (name === "scope_join" || name === "scope_return") return undefined;
-		const limitMs = this.toolTimeLimit();
-		return limitMs === null ? undefined : { limitMs };
+		return this.assistantForToolCall(toolCallId)?.message ?? null;
 	}
 
 	/** The fork record of this branch, or null at the root. */
@@ -749,92 +651,186 @@ export class SessionStation {
 		return this.usage.usageArrivedFor(message);
 	}
 
-	usagePricingHint() {
-		return this.usage.pricingHint();
-	}
-
 	resetUsageWatermark() {
 		this.usage.resetWatermark();
 	}
 
-	findAmendTarget(base, currentIndex, boundary = null) {
-		return findAmendTarget(
-			this.state,
-			base,
-			currentIndex,
-			boundary ?? this.amendBoundary(currentIndex),
-		);
-	}
+	// -- js capability projection (sync) ---------------------------------------
 
-	/** The branch boundary an amend may reach, with its ledger and owner. */
-	amendBoundary(currentIndex, currentMessage = null) {
+	/**
+	 * The raw point-in-time facts a projection needs. One gatherer for the
+	 * probe, the cache signature and the vm binding, so the three cannot drift.
+	 */
+	capabilitySnapshot(ctx) {
 		const ledger =
 			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
 		const ownerId =
 			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
-		const messages = this.contextMessages();
-		const boundary = {
-			ownerId,
-			ledger,
-			afterToolCallId: lastStructuralCallId(messages, currentIndex) ?? null,
-			record: ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null,
-		};
-		if (currentMessage) boundary.currentMessage = currentMessage;
-		return boundary;
-	}
-
-	// -- Message processing ----------------------------------------------------
-
-	processAssistantMessage(message) {
-		const controls = controlsIn(message);
-		if (controls.length === 0) return;
-		const key = processedKey(controls);
-		if (this.toolCallLedger.hasMessage(key)) return;
-
-		const existing = this.contextMessages();
-		const firstIndex = findToolCallIndex(existing, controls[0].id);
-		const currentPersisted = firstIndex >= 0;
-		const base = currentPersisted ? existing : [...existing, message];
-		const currentIndex = currentPersisted ? firstIndex : base.length - 1;
-		let changed = false;
-		for (const call of controls) {
-			const amendArgs = amendArgumentsOf(call);
-			if (amendArgs === null) continue;
-			if (this.toolCallLedger.hasCall(call.id)) continue;
-			const boundary = this.amendBoundary(currentIndex, message);
-			const result = handleAmendCall(
-				this,
-				{ id: call.id, name: "amend", arguments: amendArgs },
-				base,
-				currentIndex,
-				boundary,
-			);
-			this.toolCallLedger.setHandled(call.id, result);
-			// Mark after the work succeeded. A throw must leave both the call
-			// and the message unmarked, so the scan path can retry it; the
-			// tool path stays idempotent because a completed call is marked.
-			this.toolCallLedger.markCall(call.id);
-			changed = true;
+		const record = ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null;
+		const isChild = ownerId !== null;
+		const selfPath = record?.path ?? (isChild ? `/${ownerId}` : "/");
+		const registry = this.registry ?? null;
+		const pendingRequest = registry ? currentRequest(registry, selfPath) : null;
+		const specs = (() => {
+			try {
+				return typeof this.host?.tools?.listSpecs === "function"
+					? this.host.tools.listSpecs(ctx) ?? []
+					: [];
+			} catch {
+				return [];
+			}
+		})();
+		const hostToolNames = [];
+		for (const spec of Array.isArray(specs) ? specs : []) {
+			if (typeof spec?.name === "string" && spec.name !== "") hostToolNames.push(spec.name);
 		}
-
-		this.toolCallLedger.markMessage(key);
-		if (changed) this.persist();
+		// A projection always needs a mode, even when a station carries no clock
+		// port: the nudge path reads only the mode, and `remaining` is the one
+		// field that needs time. A missing clock must not fail the projection.
+		let clock = null;
+		try {
+			clock = typeof this.clockPort === "function" ? (this.clockPort() ?? null) : null;
+		} catch {
+			clock = null;
+		}
+		return {
+			isChild,
+			autopilot: this.state?.autopilot === true,
+			unreceived: ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0,
+			canStop: this.state?.relay?.canStop === true,
+			contextOverHalf: this.contextNudgeArmed(),
+			pendingRequest:
+				pendingRequest && typeof pendingRequest === "object" ? pendingRequest : null,
+			remaining: clock ? forkRemaining(record, Date.now(), clock) : null,
+			selfPath,
+			// `state.scopes` is the model's address book for `scope_request`
+			// fanout, so it lists every scope that can still answer — not only
+			// the ones currently running.
+			activePaths: ledger ? listAddressableScopePaths(ledger) : ["/"],
+			hostToolNames,
+		};
 	}
 
-	processControlsForTool(toolCallId) {
-		const found = this.assistantForToolCall(toolCallId);
-		if (!found) return;
-		this.processAssistantMessage(found.message);
+	/**
+	 * The path this scope answers to. Root is `/`; a child reads its own fork
+	 * record first, because the path is the address every other scope already
+	 * knows it by.
+	 */
+	selfScopePath() {
+		const ledger =
+			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+		const ownerId =
+			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+		if (ownerId === null || ownerId === undefined) return "/";
+		const record = ledger ? (ledger.forks?.[ownerId] ?? null) : null;
+		const path = record?.path;
+		if (typeof path === "string" && path !== "") return path;
+		return `/${ownerId}`;
+	}
+
+	/**
+	 * The cross-scope delivery table, shared by every station through the one
+	 * fork registry. A request must reach a target another station owns, so the
+	 * table cannot live on a single station.
+	 */
+	get requestRuntime() {
+		const registry = this.registry;
+		if (!registry || typeof registry !== "object") return null;
+		return runtimeTable(registry);
+	}
+
+	// -- scope_request / scope_reply (sync translation) ------------------------
+
+	/** One `scope_request` call: resolve, queue, deliver, then park. */
+	handleScopeRequest({ toolCallId, params, ctx }) {
+		return handleRequestToolCall(
+			this,
+			{ id: toolCallId, name: "scope_request", arguments: params },
+			ctx,
+		);
+	}
+
+	/** One `scope_reply(text)` call: answer the delivered queue head. */
+	handleScopeReply({ toolCallId, params, ctx }) {
+		return handleReplyToolCall(
+			this,
+			{ id: toolCallId, name: "scope_reply", arguments: params },
+			ctx,
+		);
+	}
+
+	/** The frozen projection for this beat. */
+	projectionFor(ctx) {
+		return projectCapabilities(this.capabilitySnapshot(ctx));
+	}
+
+	/** The cache signature only; no side effects. */
+	capSignature(ctx) {
+		return this.projectionFor(ctx).signature;
+	}
+
+	/**
+	 * Pre-check of one js beat: the frozen projection the ticket binds into the
+	 * vm. Returns `{ mode, tools, state, signature }`; the ticket reads `tools`
+	 * and `state`.
+	 */
+	beginJsCall(ctx) {
+		return this.projectionFor(ctx);
+	}
+
+	/**
+	 * Reconcile of one js beat: settle the beat's accounting in one atomic
+	 * step. Every inner call is charged through the same branch budget the
+	 * native tools used; the outer tool-call id groups the shares so a
+	 * multi-call script is charged exactly as one parallel native batch was.
+	 * Never throws: the ticket's outcome must not be replaced by an accounting
+	 * failure.
+	 */
+	finishJsCall(toolCallId, calls, ctx) {
+		try {
+			const ledger =
+				typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+			const ownerId =
+				typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+			if (ownerId === null || !ledger) return;
+			const list = Array.isArray(calls) ? calls : [];
+			const beatTools = list.map((call) => ({
+				name: call.name,
+				free: isFreeCall(call.name, call.args),
+			}));
+			let changed = false;
+			for (const call of list) {
+				const charged = chargeBranch(this.state, ledger, {
+					ownerId,
+					toolCallId: call.id,
+					toolName: call.name,
+					groupKey: toolCallId,
+					beatTools,
+					input: call.args,
+				});
+				if (charged?.ok === false) {
+					this.noteError?.(
+						"accounting",
+						new Error(charged.reason ?? charged.code ?? "charge refused"),
+					);
+					continue;
+				}
+				if (charged?.alreadyCharged !== true && charged?.amount !== 0) changed = true;
+			}
+			if (changed) this.persist();
+		} catch (error) {
+			this.noteError?.("accounting", error);
+		}
 	}
 
 	// -- Execute cores (called by tickets) -------------------------------------
 
-	executeFork(toolCallId, params, ctx) {
-		return executeFork(this, toolCallId, params, ctx);
+	executeFork(toolCallId, params, ctx, frameId) {
+		return executeFork(this, toolCallId, params, ctx, frameId);
 	}
 
-	executeJoin(toolCallId, params, ctx) {
-		return executeJoin(this, toolCallId, params, ctx);
+	executeJoin(toolCallId, params, ctx, frameId) {
+		return executeJoin(this, toolCallId, params, ctx, frameId);
 	}
 
 	/**
@@ -842,7 +838,7 @@ export class SessionStation {
 	 * The station caches the result, so a later replay of the same call sees
 	 * the same answer instead of looking for a child that is already closed.
 	 */
-	finalizeJoin(toolCallId, record, ctx) {
+	finalizeJoin(toolCallId, record, ctx, frameId) {
 		const persisted = confirmJoinPersistence(this);
 		if (persisted === false) {
 			this.noteError?.("fork", new Error("join receipt was not persisted"), {
@@ -851,7 +847,7 @@ export class SessionStation {
 			});
 		}
 		const result = renderJoinResult(this, record, {
-			closeToolCallId: toolCallId,
+			closeToolCallId: frameId ?? toolCallId,
 			persisted,
 		});
 		const processed = processedOf(this);
@@ -861,42 +857,18 @@ export class SessionStation {
 		return result;
 	}
 
-	executeSend(toolCallId, params, ctx) {
-		return executeSend(this, toolCallId, params, ctx);
+	executeReturn(toolCallId, params, ctx, frameId) {
+		return executeReturn(this, toolCallId, params, ctx, frameId);
 	}
 
-	executeReturn(toolCallId, params, ctx) {
-		return executeReturn(this, toolCallId, params, ctx);
+	executeAbandon(toolCallId, params, ctx) {
+		return executeAbandon(this, toolCallId, params, ctx);
 	}
 
-	executeAmend(toolCallId, params) {
-		return executeAmend(this, toolCallId, params);
-	}
-
-	executePin(toolCallId, params) {
-		return executePin(this, toolCallId, params);
-	}
-
-	// The three session ports are bound to this station's persisted state in
-	// the constructor. One object per station; no per-call factory.
-	pinPort() {
-		return this.ports.pin;
-	}
-
-	amendPort() {
-		return this.ports.amend;
-	}
-
+	// The scope port is bound to this station's persisted state in the
+	// constructor. One object per station; no per-call factory.
 	herdPort() {
 		return this.ports.herd;
-	}
-
-	directAmend(toolCallId, params) {
-		return directAmend(this, toolCallId, params);
-	}
-
-	executeContext(toolCallId, params) {
-		return executeContext(this, toolCallId, params);
 	}
 
 	observeActualModel(ctx) {
@@ -913,7 +885,7 @@ export class SessionStation {
 
 	// -- Nudge -----------------------------------------------------------------
 
-	maybeNudge(message, _ctx) {
+	maybeNudge(message, ctx) {
 		if (!message || message.role !== "assistant") return;
 		if (message.stopReason === "aborted" || message.stopReason === "error") return;
 		if (this.nudged.has(message)) return;
@@ -921,12 +893,15 @@ export class SessionStation {
 			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
 		const ownerId =
 			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+		const projection = this.projectionFor(ctx);
 		const decision = nudgeDecision({
 			hasToolCalls: toolCalls(message).length > 0,
 			ledger,
 			ownerId,
-			autopilot: this.state?.autopilot === true,
+			mode: projection.mode,
+			unreceived: projection.state?.unreceived ?? 0,
 			relay: this.state?.relay ?? null,
+			from: projection.state?.request?.from ?? null,
 		});
 		if (decision.kind === "none") return;
 		// A steer the host refuses was never delivered, so it must not spend the
@@ -949,14 +924,14 @@ export class SessionStation {
 
 	// -- Context transform (sync) -----------------------------------------------
 
-	transformContext(original, ctx, firstTurn = null) {
+	transformContext(original, ctx) {
 		try {
 			const model = actualModel(ctx, this.host);
 			const key = modelKey(model);
 			const needsRebase = this.anchor.needsRebase();
 			const tree = needsRebase ? this.contextMessages() : null;
 			const projection = projectContext(
-				{ amends: this.state.amends },
+				{},
 				{
 					original,
 					tree,
@@ -964,7 +939,6 @@ export class SessionStation {
 					ports: this.portTable,
 					modelKey: key,
 					header: key ? (this.host?.session?.header?.(ctx) ?? null) : null,
-					firstTurn,
 				},
 			);
 			// Commit: the projection is complete. Write the host rebase and the
@@ -1023,33 +997,32 @@ export class SessionStation {
 		return onMessageEnd(this, event, ctx);
 	}
 
-	onToolCall(event, ctx) {
-		return onToolCall(this, event, ctx);
-	}
-
 	/**
-	 * Build one Skill for the next request. The before-model adapter commits it
-	 * before extension context handlers run. Earlier receipts remain unchanged.
+	 * Build the per-turn REPL probe. It is level-triggered: the whole current
+	 * projection is printed every turn, so a lost transition cannot hide the
+	 * truth. On the one turn where keys disappear, edge lines print first.
+	 *
+	 * The receipt carries `capSig`, the exact signature the probe was rendered
+	 * from; `receiptMatches` compares it instead of the retired mode booleans.
 	 */
-	skillReceipt(_ctx) {
-		const ledger =
-			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+	skillReceipt(ctx) {
+		const projection = this.projectionFor(ctx);
+		const previous = Array.isArray(this.lastCapKeys) ? this.lastCapKeys : [];
+		const removedKeys = previous.filter((key) => !projection.tools.includes(key));
+		this.lastCapKeys = projection.tools.slice();
+		// The receipt is where the question becomes visible to the model, so the
+		// delivery marker is written here and nowhere else: a projection computed
+		// for the cache signature must never consume a delivery.
+		const registry = this.registry ?? null;
+		if (projection.state?.request && registry) {
+			markRequestDelivered(registry, projection.state.scope);
+		}
+		const text = renderConsoleReceipt(projection, {
+			removedKeys,
+			chineseReminder: this.portTable.chineseReminder,
+		});
 		const ownerId =
 			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
-		const branch = ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null;
-		const open = ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0;
-		const text = skillReceiptText(
-			this.state,
-			branch,
-			open,
-			ownerId !== null,
-			this.clockPort(),
-			this.portTable.chineseReminder,
-			// The nudge is a per-turn trailing skill, so the flag is read where
-			// the block is built. It never enters the system prompt, whose bytes
-			// the provider caches.
-			this.contextNudgeArmed(),
-		);
 		return {
 			role: "user",
 			content: [{ type: "text", text }],
@@ -1059,6 +1032,7 @@ export class SessionStation {
 			branch: ownerId !== null,
 			canStop: this.state.relay?.canStop === true,
 			herdSkill: true,
+			capSig: projection.signature,
 		};
 	}
 
@@ -1066,8 +1040,8 @@ export class SessionStation {
 		return prepareRequest(this, ctx, previous, history);
 	}
 
-	onContext(messages, ctx, firstTurn = null) {
-		return onContext(this, messages, ctx, firstTurn);
+	onContext(messages, ctx) {
+		return onContext(this, messages, ctx);
 	}
 
 	onSessionStop(ctx, evidence = null) {

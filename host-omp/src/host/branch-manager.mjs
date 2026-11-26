@@ -514,13 +514,13 @@ export function createBranchManager(shared, options = {}) {
 	operations.discardEntryDurably = () => {
 		throw new BranchManagerError(
 			"BRANCH_UNSUPPORTED",
-			"discardEntryDurably() rewrites the shared journal by entry id; a flow amends through its own state.amends instead",
+			"discardEntryDurably() rewrites the shared journal by entry id; a flow corrects itself through its own return report instead",
 		);
 	};
 	operations.discardEntriesDurably = () => {
 		throw new BranchManagerError(
 			"BRANCH_UNSUPPORTED",
-			"discardEntriesDurably() removes journal entries across every flow; a flow amends through its own state.amends instead",
+			"discardEntriesDurably() removes journal entries across every flow; a flow corrects itself through its own return report instead",
 		);
 	};
 	operations.ingestReplicatedEntry = () => {

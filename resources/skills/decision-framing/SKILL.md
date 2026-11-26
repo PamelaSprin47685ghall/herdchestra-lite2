@@ -28,7 +28,7 @@ A decision begins with attention. You are part of the situation you are trying t
    State the non-default move and its asymmetry: the downside is bounded, the upside is real, and the cost of being wrong is less than the cost of never trying. Say what it buys if right, what it costs if wrong, and why the upside is worth that cost. Once the bet is clear, act. Present the concrete result, not a plan for it, before asking the next question. Do not re-litigate a settled bet.
 
 7. Record what the next person needs.
-   Pin the goal, the selected and rejected alternatives, the default refused, the bet, what would prove the bet wrong, the fatal assumptions, the non-goals, and the residuals. A residual is not a new idea; it is the part of this decision that needs another decision. A record that cannot tell the next person what would prove it wrong is a diary, not a decision. Write the record under `.agent/skills/<name>/SKILL.md`, not `docs/`. Pin the path. Leave a path a successor can take over.
+   Record the goal, the selected and rejected alternatives, the default refused, the bet, what would prove the bet wrong, the fatal assumptions, the non-goals, and the residuals. A residual is not a new idea; it is the part of this decision that needs another decision. A record that cannot tell the next person what would prove it wrong is a diary, not a decision. Write the record under `.agent/skills/<name>/SKILL.md`, not `docs/`. Name the path. Leave a path a successor can take over.
 
 ## Leverage
 

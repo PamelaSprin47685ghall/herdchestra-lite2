@@ -51,7 +51,7 @@ describe("adoption follows the current receiver", () => {
     expect(out.isError).toBeUndefined();
     expect(out.details.receiver).toBe("g");
     expect(forkOf(ledger, "c").ownerId).toBe("g");
-    expect(out.content[0].text).toContain("has been handed to");
+    expect(out.content[0].text).toContain("delivered to");
   });
 });
 

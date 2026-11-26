@@ -3,9 +3,7 @@
 // call through the station's injected capability bundle.
 
 import {
-	chargeBranch,
 	forkOf,
-	isFreeCall,
 	RUNNING,
 	truncateForHostBoundary,
 	unreceivedChildren,
@@ -13,23 +11,16 @@ import {
 import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
 import { abandonDescendants } from "../scope/forkjoin.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
-import { beatKey, toolCalls } from "../transcript/index.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
 import { continueFeedback } from "../tools/results.mjs";
-import { controlsIn, hostBoundaryKey } from "./messages.mjs";
-import { firstTurnMessage, prependFirstTurn } from "./domain/context.mjs";
-import { decideToolCall } from "./domain/tool-call.mjs";
-import { dispatchOf, processedOf } from "./domain/tool-call-ledger.mjs";
-import { insideScopeNudge, rootReturnNudge } from "./texts.mjs";
+import { hostBoundaryKey } from "./messages.mjs";
 import {
 	clearPendingRootRewind,
 	pendingRootRewindPlan,
 	syncRootUserPrompts,
 } from "./handoff-state.mjs";
-import { loadDoc, render } from "../prompts/index.mjs";
-
-const E = loadDoc("errors");
+import { insideScopeNudge, rootReturnNudge, stopNudge } from "./texts.mjs";
 
 /** The branch's own fork id, or null at the root. */
 function ownerIdOf(station) {
@@ -56,9 +47,9 @@ function onAssistantMessage(station, message, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
 	try {
 		station.onUsageMessage(message, ctx);
-		dispatchOf(station).setPreparing(message);
-		dispatchOf(station).rememberGroups(message);
-		station.processAssistantMessage(message);
+		// A js call carries its own accounting in `finishJsCall`; the message
+		// event only updates usage and asks whether this turn ended without
+		// the move the current mode requires.
 		station.maybeNudge(message, ctx);
 	} catch (error) {
 		noteFailure(station, error);
@@ -69,115 +60,13 @@ function onAssistantMessage(station, message, ctx) {
 function onMessageEnd(station, event, ctx) {
 	if (event?.message?.role !== "assistant") return undefined;
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return undefined;
-	const message = event.message;
 	try {
-		station.onUsageMessage(message, ctx);
-		dispatchOf(station).rememberGroups(message);
-		const controls = controlsIn(message);
-		if (controls.length > 0) {
-			station.processAssistantMessage(message);
-		}
-		station.maybeNudge(message, ctx);
+		station.onUsageMessage(event.message, ctx);
+		station.maybeNudge(event.message, ctx);
 	} catch (error) {
 		noteFailure(station, error);
 	}
 	return undefined;
-}
-
-function onToolCall(station, event, ctx) {
-	const { toolName, toolCallId } = event;
-	const cached = station.toolGateVerdict?.(toolCallId);
-	if (cached?.hit) return cached.verdict;
-	const input = event.input ?? event.arguments ?? {};
-	try {
-		const state = station.state;
-		const ownerId = ownerIdOf(station);
-		const found =
-			typeof station.assistantForToolCall === "function"
-				? station.assistantForToolCall(toolCallId)
-				: null;
-		if (found && typeof dispatchOf(station)?.rememberGroups === "function") {
-			dispatchOf(station).rememberGroups(found.message);
-		}
-		const groupKey =
-			dispatchOf(station)?.groupKeyFor?.(toolCallId) ??
-			(found ? beatKey(found.message) : undefined);
-		const carrying =
-			found?.message ??
-			(typeof station.messageForToolCall === "function"
-				? station.messageForToolCall(toolCallId)
-				: null);
-		const beatTools = toolCalls(carrying).map((call) => ({
-			name: call.name,
-			free: isFreeCall(call.name, call.arguments),
-		}));
-		const handled =
-			typeof processedOf(station)?.hasHandled === "function"
-				? processedOf(station).hasHandled(toolCallId)
-				: false;
-		const decision = decideToolCall({
-			state: {
-				autopilot: state.autopilot,
-				charges: state.charges,
-			},
-			processed: {
-				handled,
-				hasCall:
-					typeof processedOf(station)?.hasCall === "function"
-						? processedOf(station).hasCall(toolCallId)
-						: false,
-			},
-			dispatch: { found: Boolean(found), groupKey, beatTools },
-			call: { toolName, toolCallId, input },
-			policy: station.policy(ctx),
-			relay: {
-				ownerId,
-				timeLimitMs: null,
-			},
-		});
-		if (decision.controls.process) station.processControlsForTool(toolCallId);
-		if (
-			decision.controls.directAmend &&
-			!processedOf(station)?.hasHandled?.(toolCallId)
-		) {
-			station.directAmend(toolCallId, decision.controls.directAmend.args);
-		}
-		if (decision.charge) {
-			const ledger =
-				typeof station.forkLedgerPort === "function"
-					? station.forkLedgerPort()
-					: null;
-			const charged = chargeBranch(state, ledger, decision.charge.request);
-			if (!charged.ok) {
-				// A block without a reason reaches the model as the host's
-				// generic "blocked by an extension" sentence. The refusal must
-				// always say what was refused.
-				const reason =
-					typeof charged.reason === "string" && charged.reason !== ""
-						? charged.reason
-						: `Tool "${toolName}" was refused by scope accounting (${charged.code ?? "REFUSED"}).`;
-				const verdict = { block: true, reason };
-				station.rememberToolGate?.(toolCallId, verdict);
-				return verdict;
-			}
-		}
-		if (decision.persist) station.persist();
-		const verdict =
-			decision.verdict === "block"
-				? { block: true, reason: decision.block?.reason ?? "Tool blocked." }
-				: undefined;
-		station.rememberToolGate?.(toolCallId, verdict);
-		return verdict;
-	} catch (error) {
-		const verdict = {
-			block: true,
-			reason: render(E["accounting-failed-closed"], {
-				error: String(error?.message ?? error),
-			}),
-		};
-		station.rememberToolGate?.(toolCallId, verdict);
-		return verdict;
-	}
 }
 
 /**
@@ -212,20 +101,23 @@ function managesRequest(station, ctx) {
 	return station.policy(ctx) !== READ_ONLY_SUBAGENT;
 }
 
-// Prepare state before the host copies the live loop for context extensions.
-// The host adapter commits the returned receipt to all three histories.
-function receiptMatches(station, message) {
+/**
+ * A committed receipt is still current when its `capSig` matches the
+ * projection this request would print. The signature hashes the mode, the
+ * queued request id, the tool names and the whole printed `state`, so it
+ * changes whenever a probe byte would change — `remaining` included.
+ */
+function receiptMatches(station, message, ctx) {
 	if (message?.herdSkill !== true) return false;
-	return message.autopilot === (station.state.autopilot === true) &&
-		message.branch === (ownerIdOf(station) !== null) &&
-		message.canStop === (station.state.relay?.canStop === true);
+	if (typeof message.capSig !== "string" || message.capSig === "") return false;
+	return message.capSig === station.capSignature(ctx);
 }
 
 function prepareRequest(station, ctx, previous, history) {
 	if (!managesRequest(station, ctx)) return null;
 	// Commit every transition before dispatching. `restoreScopedModel` detaches
 	// a ticket, and its synchronous prefix must observe a fully prepared
-	// request, not a half-updated one.
+	// request, not a half-updated state.
 	const contextMessages = station.contextMessages();
 	observeHostBoundary(station, contextMessages);
 	if (ownerIdOf(station) === null) {
@@ -238,57 +130,28 @@ function prepareRequest(station, ctx, previous, history) {
 	const restore = station.tickets?.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
 	const receipt = (message) =>
-		receiptMatches(station, message) ? message : station.skillReceipt(ctx);
+		receiptMatches(station, message, ctx) ? message : station.skillReceipt(ctx);
 	// `skillReceipt` builds the receipt synchronously before dispatch.
 	const next = req
 		? null
-		: receiptMatches(station, previous) ? previous : station.skillReceipt(ctx);
+		: receiptMatches(station, previous, ctx) ? previous : station.skillReceipt(ctx);
 	// Tail position: the restore ticket.
 	if (req) return restore(station, ctx, req, previous, receipt);
 	return next;
 }
 
-// A projection can lose the opening in two ways: it throws, or it returns the
-// list it was given. Presence, not length, decides restoration: an amendment
-// legitimately shortens the list while still carrying the opening, so a length
-// test would inject a second copy on every amended request.
-function carriesFirstTurn(messages, turn) {
-	const head = turn.map(firstTurnMessage);
-	let at = 0;
-	while (at < messages.length) {
-		const role = messages[at]?.role;
-		if (role !== "system" && role !== "developer") break;
-		at += 1;
-	}
-	if (at + head.length > messages.length) return false;
-	return head.every((message, index) => {
-		const actual = messages[at + index];
-		return actual?.role === message.role &&
-			JSON.stringify(actual?.content) === JSON.stringify(message.content);
-	});
-}
-
-function onContext(station, messages, ctx, firstTurn = null) {
+function onContext(station, messages, ctx) {
 	const original = Array.isArray(messages) ? messages : [];
-	const injected = () => ({ messages: prependFirstTurn(original, firstTurn) });
 	// The host applies whatever this handler returns as the outbound list. A
-	// thrown error is swallowed by the extension runner, and a projection that
-	// failed returns the original list unchanged, so both failures look exactly
-	// like a first turn that was never configured: no injection, no symptom the
-	// provider can report. The opening is therefore restored on both paths.
+	// thrown error is swallowed by the extension runner, so both a refusal and
+	// a failed projection return the original list unchanged instead of an
+	// undefined outbound request.
 	try {
-		if (!managesRequest(station, ctx)) return injected();
-		// Context handlers receive a clone. Adding a Skill here would make it
-		// temporary and leave the running tool loop without it on the next call.
-		const result = station.transformContext(original, ctx, firstTurn);
-		if (Array.isArray(firstTurn) && firstTurn.length > 0) {
-			const projected = Array.isArray(result?.messages) ? result.messages : [];
-			if (!carriesFirstTurn(projected, firstTurn)) return injected();
-		}
-		return result;
+		if (!managesRequest(station, ctx)) return { messages: original };
+		return station.transformContext(original, ctx);
 	} catch (error) {
 		station.noteError("context", error);
-		return injected();
+		return { messages: original };
 	}
 }
 
@@ -318,8 +181,8 @@ export function cancelTree(station, rootOwnerId = "root", reason = CANCELLED_BY_
 	if (!ledger || typeof ledger !== "object") {
 		return { abandonedIds: [], runningIds: [] };
 	}
-	const { abandonedIds, runningIds } = abandonDescendants(ledger, rootOwnerId, reason);
-	if (abandonedIds.length === 0 && runningIds.length === 0) {
+	const { abandonedIds, runningIds, liveIds } = abandonDescendants(ledger, rootOwnerId, reason);
+	if (abandonedIds.length === 0 && runningIds.length === 0 && liveIds.length === 0) {
 		return { abandonedIds, runningIds };
 	}
 	const wait =
@@ -332,8 +195,11 @@ export function cancelTree(station, rootOwnerId = "root", reason = CANCELLED_BY_
 	if (typeof station.persistLedger === "function") station.persistLedger();
 	else if (typeof station.persist === "function") station.persist();
 	// Tail position: every state commit above lands before the agents stop.
-	if ((runningIds.length > 0 || abandonedIds.length > 0) && typeof station.abortChildrenPort === "function") {
-		station.abortChildrenPort(runningIds, abandonedIds);
+	// The first two lists describe what the ledger did; the third names every
+	// descendant that may still own a live agent — running, returned, or
+	// joined — because Esc stops the branch, not only the closed records.
+	if (liveIds.length > 0 && typeof station.abortChildrenPort === "function") {
+		station.abortChildrenPort(runningIds, abandonedIds, liveIds);
 	}
 	return { abandonedIds, runningIds };
 }
@@ -391,18 +257,27 @@ function onSessionStop(station, ctx, evidence = null) {
 	if (ownerIdOf(station) === null && station.state?.relay?.pendingRewind) {
 		return undefined;
 	}
-	const ledger =
-		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
-	const ownerId = ownerIdOf(station);
+	const projection = station.projectionFor(ctx);
+	const unreceived = projection.state?.unreceived ?? 0;
+	// A hard mode has exactly one legal move. Stopping without it is a missed
+	// turn, so the steer names that move and nothing else.
+	if (projection.mode === "AWAITING_REPLY" || projection.mode === "CONTEXT_LIMIT") {
+		return continueFeedback(
+			stopNudge(projection.mode, {
+				unreceived,
+				from: projection.state?.request?.from,
+			}),
+		);
+	}
+	if (projection.mode === "FINAL_ANSWER") return undefined;
 	// Unreceived children (running or ready) outrank every other stop rule,
 	// for both Root (even with autopilot off) and child scopes.
-	const unreceived =
-		ledger && typeof unreceivedChildren === "function"
-			? unreceivedChildren(ledger, ownerId ?? "root").length
-			: 0;
 	if (unreceived > 0) {
 		return continueFeedback(insideScopeNudge(unreceived));
 	}
+	const ledger =
+		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
+	const ownerId = ownerIdOf(station);
 	// Child scope natural stop backstop: nudge to call `scope_return` while
 	// the bracket is still RUNNING and its shared allowance remains.
 	if (ownerId !== null && ledger) {
@@ -447,8 +322,17 @@ function onBeforeAgentStart(station, event, ctx) {
 	// No mode or scope argument: the managed block is the same bytes for an
 	// owner and a forked scope, so an inherited prompt comes back untouched and
 	// the host keeps the provider cache key it handed to the branch.
+	//
+	// The tool declarations are compiled once from the confiscated tools' own
+	// JSON schemas and cached by name set inside `injectSystemPrompt`, so a
+	// long session does not rebuild them and the prefix stays byte-identical.
+	const specs =
+		typeof station.host?.tools?.listSpecs === "function"
+			? station.host.tools.listSpecs(ctx) ?? []
+			: [];
 	const prompt = injectSystemPrompt(event?.systemPrompt, {
 		...station.portTable,
+		toolSpecs: specs,
 	});
 	const promptChanged = prompt !== event?.systemPrompt;
 	const result = promptChanged ? { systemPrompt: prompt } : undefined;
@@ -480,7 +364,6 @@ function onAutopilotCommand(station, args) {
 export {
 	onAssistantMessage,
 	onMessageEnd,
-	onToolCall,
 	onAutopilotCommand,
 	prepareRequest,
 	onContext,

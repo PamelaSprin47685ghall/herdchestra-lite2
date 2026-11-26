@@ -11,8 +11,8 @@ import { readSwitch, resolvePorts } from "../src/core/ports/resolve.mjs";
 const EMPTY = {};
 
 describe("port registry", () => {
-	test("nine ports, each with a default that is one of its implementations", () => {
-		expect(PORT_NAMES).toHaveLength(9);
+	test("seven ports, each with a default that is one of its implementations", () => {
+		expect(PORT_NAMES).toHaveLength(7);
 		for (const port of PORT_NAMES) {
 			const entry = PORTS[port];
 			expect(entry.implementations.length).toBeGreaterThanOrEqual(2);

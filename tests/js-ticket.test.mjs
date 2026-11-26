@@ -134,9 +134,7 @@ describe("the api surface is exactly the projection", () => {
 
 	test("state is the projection's read-only snapshot", async () => {
 		const { result } = await run("[state.scope, state.remaining.read, state.mode]");
-		expect(body(result)).toContain("'/api'");
-		expect(body(result)).toContain("'2/3'");
-		expect(body(result)).toContain("'CHILD'");
+		expect(body(result)).toBe("- /api\n- 2/3\n- CHILD");
 	});
 
 	test("every api key is the real tool name, one to one", async () => {

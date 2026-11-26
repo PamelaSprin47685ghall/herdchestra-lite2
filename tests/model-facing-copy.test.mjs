@@ -13,6 +13,7 @@ import {
 	renderConsoleReceipt,
 } from "../src/station/domain/capabilities.mjs";
 import { SessionStation } from "../src/station/station.mjs";
+import { probeOf } from "./helpers/probe-view.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 import { createBracketLedger, markReady, registerFork, takeReady } from "../src/scope/index.mjs";
 
@@ -25,11 +26,7 @@ const probeRequirement = "强制以简体中文思考，以简体中文词开头
 const chineseParenthetical = "（宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）";
 const chineseReminderSkill = ` <skill version="1.0" enforced>${chineseParenthetical}${chineseRequirement}</skill>`;
 
-/** The single object literal the REPL probe prints, evaluated as JavaScript. */
-function probeOf(text) {
-	const line = text.split("\n").find((candidate) => candidate.trimStart().startsWith("{ api:"));
-	return new Function(`return (${line})`)();
-}
+// The probe body is parsed by tests/helpers/probe-view.mjs.
 
 for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 	test(`the ${typeof hostPrompt === "string" ? "string" : "array"} system prompt stays idempotent when reinjected`, () => {

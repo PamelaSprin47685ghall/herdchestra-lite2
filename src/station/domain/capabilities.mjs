@@ -13,8 +13,8 @@
 // host import, no mutation of inputs, no I/O.
 
 import { createHash } from "node:crypto";
-import { inspect } from "node:util";
 import { deadlineInfo } from "../../scope/clock.mjs";
+import { renderYamlView } from "../../format/yaml-view.mjs";
 
 // Free control-plane primitives every normal scope keeps. `scope_reply` is
 // deliberately absent: it exists only inside the AWAITING_REPLY mode.
@@ -189,9 +189,9 @@ const CHINESE_REMINDER_LINE =
  * The probe is level-triggered: it prints the whole current projection every
  * turn, so a lost or compacted transition never hides the truth. On the one
  * turn where keys disappear, edge highlight lines (`> delete api.<k>` / true)
- * precede the level printout. The view is one single-line JS object literal
- * produced by `util.inspect`, so every value sits next to its key and the
- * text itself is valid JavaScript the model could evaluate.
+ * precede the level printout. The view is block YAML rendered by
+ * `renderYamlView`, so nested tables and long values stay readable and the
+ * same renderer also prints js results.
  */
 export function renderConsoleReceipt(
 	projection,
@@ -203,10 +203,7 @@ export function renderConsoleReceipt(
 		lines.push(`> delete api.${key}`, "true");
 	}
 	const view = { api: projection?.tools ?? [], ...(projection?.state ?? {}) };
-	lines.push(
-		PROBE_COMMAND,
-		inspect(view, { compact: true, breakLength: Infinity, depth: 3 }),
-	);
+	lines.push(PROBE_COMMAND, renderYamlView(view, { depth: 3 }));
 	if (chineseReminder !== "off") {
 		lines.push(CHINESE_REMINDER_LINE);
 	}

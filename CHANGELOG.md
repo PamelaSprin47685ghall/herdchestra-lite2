@@ -6,6 +6,22 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — the REPL probe and js results print block YAML
+
+The probe used to end with one `util.inspect` line, and a js result used the
+same renderer: multi-line text arrived as `\n` escapes and a deep table sat
+on one row. Both now go through `renderYamlView`, which prints block mappings
+and sequences, a `|`/`|-` literal block for multi-line strings, and quoted
+scalars only where YAML would read them differently. Bun's own `stringify`
+stays out of the display path: on 1.4.4 it emits one flow line, keeps newlines
+escaped and throws on `BigInt`.
+- The probe's command line stays
+  `> ({ api: Object.keys(api), ...state })`, a valid JS expression; the js
+  tool renders its value with the same `renderYamlView`, so the printed
+  document is what that command returns.
+- Strings still pass through raw in a js result; only non-string values render
+  as YAML.
+
 ### Added — `scope_abandon` closes a child that will not return
 
 A forked scope that never calls `scope_return` used to hold the parent's join

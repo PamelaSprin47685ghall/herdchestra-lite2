@@ -39,7 +39,7 @@
  */
 
 import vm from "node:vm";
-import { inspect } from "node:util";
+import { renderYamlView } from "../format/yaml-view.mjs";
 import { errorResult, textResult } from "./results.mjs";
 
 /**
@@ -103,12 +103,12 @@ function capText(text) {
 
 /**
  * Render one value the way a REPL would print it. Strings pass through raw —
- * a file read or a patch stays readable source instead of an escaped JSON
- * blob — everything else goes through `util.inspect`.
+ * a file read or a patch stays readable source instead of an escaped blob —
+ * everything else becomes block YAML through `renderYamlView`.
  */
 function formatOne(value) {
 	if (typeof value === "string") return value;
-	return inspect(value, { depth: 4, maxStringLength: 20_000, maxArrayLength: 1_000 });
+	return renderYamlView(value, { depth: 4, maxStringLength: 20_000 });
 }
 
 /**
@@ -236,7 +236,7 @@ export async function jsTicket(station, toolCallId, params, ctx, signal = null, 
 				throw error;
 			}
 			entry.isError = false;
-			entry.resultText = capText(typeof value === "string" ? value : inspect(value, { depth: 4, maxStringLength: RESULT_TEXT_CAP }));
+			entry.resultText = capText(typeof value === "string" ? value : renderYamlView(value, { depth: 4, maxStringLength: RESULT_TEXT_CAP }));
 			outputs.push(value);
 			return value;
 		};

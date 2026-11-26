@@ -11,6 +11,7 @@ import {
 	renderConsoleReceipt,
 } from "../src/station/domain/capabilities.mjs";
 import { unreceivedChildren } from "../src/scope/index.mjs";
+import { probeOf } from "./helpers/probe-view.mjs";
 import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 import { injectSystemPrompt } from "../src/prompts/inject.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
@@ -188,11 +189,7 @@ describe("the prompt gate on an inherited prompt", () => {
 	}
 });
 
-/** The single object literal the REPL probe prints, evaluated as JavaScript. */
-function probeOf(text) {
-	const line = text.split("\n").find((candidate) => candidate.trimStart().startsWith("{ api:"));
-	return new Function(`return (${line})`)();
-}
+// The probe body is parsed by tests/helpers/probe-view.mjs.
 
 const childBranch = {
 	fsm: "child work",

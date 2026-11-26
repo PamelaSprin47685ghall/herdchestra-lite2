@@ -16,6 +16,7 @@ import {
 	renderConsoleReceipt,
 } from "../src/station/domain/capabilities.mjs";
 import { SessionStation } from "../src/station/station.mjs";
+import { PROBE_COMMAND, probeOf } from "./helpers/probe-view.mjs";
 
 function projection(overrides = {}) {
 	return {
@@ -33,29 +34,20 @@ function projection(overrides = {}) {
 	};
 }
 
-/** The single object-literal line the probe prints, without its command line. */
-function probeLine(text) {
-	const lines = text.split("\n");
-	const at = lines.indexOf("> ({ api: Object.keys(api), ...state })");
-	return { lines, objectLine: lines[at + 1], at };
-}
+// The probe body is parsed by tests/helpers/probe-view.mjs.
 
 describe("renderConsoleReceipt", () => {
-	test("prints the REPL command, then one line of valid JS", () => {
+	test("prints the REPL command, then a block YAML document", () => {
 		const text = renderConsoleReceipt(projection());
-		const { objectLine } = probeLine(text);
 
-		expect(text).toContain("> ({ api: Object.keys(api), ...state })");
-		expect(objectLine).toContain("api: [");
-		expect(objectLine).toContain("mode: 'CHILD'");
-		// One line, no embedded newline: the model reads it as a single value.
-		expect(objectLine.includes("\n")).toBe(false);
-		// Valid JavaScript: the object literal is re-evaluable as written, which
-		// is what makes the printed probe and the runtime `api` the same truth.
-		const evaluated = new Function(`return (${objectLine})`)();
-		expect(evaluated.api).toEqual(["read", "scope_fork", "scope_request"]);
-		expect(evaluated.scope).toBe("/api");
-		expect(evaluated.remaining).toEqual({ read: "2/3" });
+		expect(text).toContain(PROBE_COMMAND);
+		// Block YAML: the tool list is a sequence, not one flow line.
+		expect(text).toContain("api:");
+		expect(text).toContain("mode: CHILD");
+		const view = probeOf(text);
+		expect(view.api).toEqual(["read", "scope_fork", "scope_request"]);
+		expect(view.scope).toBe("/api");
+		expect(view.remaining).toEqual({ read: "2/3" });
 	});
 
 	test("shows an edge highlight only for keys that just disappeared", () => {
@@ -64,7 +56,7 @@ describe("renderConsoleReceipt", () => {
 
 		expect(lines[0]).toBe("> delete api.ask");
 		expect(lines[1]).toBe("true");
-		expect(lines[2]).toBe("> ({ api: Object.keys(api), ...state })");
+		expect(lines[2]).toBe(PROBE_COMMAND);
 
 		const withoutEdge = renderConsoleReceipt(projection());
 		expect(withoutEdge).not.toContain("> delete api.");
@@ -105,8 +97,7 @@ describe("renderConsoleReceipt", () => {
 				},
 			}),
 		);
-		const { objectLine } = probeLine(text);
-		const view = new Function(`return (${objectLine})`)();
+		const view = probeOf(text);
 
 		expect(view.api).toEqual(["scope_reply"]);
 		expect(view.request).toEqual({ from: "/", message: "token or accessToken?" });
@@ -138,7 +129,7 @@ describe("skillReceipt envelope", () => {
 		expect(message.herdSkill).toBe(true);
 		expect(message.content).toHaveLength(1);
 		expect(message.content[0].type).toBe("text");
-		expect(message.content[0].text).toContain("> ({ api: Object.keys(api), ...state })");
+		expect(message.content[0].text).toContain(PROBE_COMMAND);
 	});
 
 	test("stamps the projection's signature as the cache key", () => {

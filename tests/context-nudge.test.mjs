@@ -18,14 +18,11 @@ import {
 	projectCapabilities,
 	renderConsoleReceipt,
 } from "../src/station/domain/capabilities.mjs";
+import { probeOf } from "./helpers/probe-view.mjs";
 
 const nudgeSteer = loadDoc("receipts/scope")["mode.context-limit"];
 
-/** The single object literal the REPL probe prints, evaluated as JavaScript. */
-function probeOf(text) {
-	const line = text.split("\n").find((candidate) => candidate.trimStart().startsWith("{ api:"));
-	return new Function(`return (${line})`)();
-}
+// The probe body is parsed by tests/helpers/probe-view.mjs.
 
 /** A ledger whose window is fixed by the test, not by a host. */
 function ledgerWith(window) {

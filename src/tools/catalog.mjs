@@ -24,7 +24,7 @@ const ESSENTIAL = "essential";
 export const JS_TOOL_NAME = "js";
 
 const JS_DESCRIPTION =
-	"Run one async JavaScript program against the live `api` object. `code` is an expression or a statement body with `api`, `state`, and `inputs` in scope; await every api call. `inputs` carries raw payloads (file bodies, patch strings) so large text never has to be escaped into a JS string. The set of methods actually bound this turn is printed in the trailing REPL probe; a method absent there does not exist at runtime.";
+	"Run one async JavaScript program against the live `api` object. `code` is an expression or a statement body with `api`, `state`, and `inputs` in scope; await every api call. I used to inline a whole patch into `code`, and it blew up: the text crossed a JSON string and then a JS literal, one backtick or `${` inside the patch ended the literal, and every retry meant escaping the entire thing again. So now every large literal — file body, patch, heredoc — goes in `inputs`: it crosses one JSON layer and arrives verbatim at `inputs.<key>`. The set of methods actually bound this turn is printed in the trailing REPL probe; a method absent there does not exist at runtime.";
 
 /**
  * The scope control plane as plain async functions.

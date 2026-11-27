@@ -65,7 +65,7 @@ export function chargeBranch(_state, ledger, params = {}) {
     if (charged.code !== "BUDGET_EXHAUSTED") return charged;
     // Turns are a ledger, not a fence. A branch that has spent its turns still
     // runs the call: the charge stops at zero, and the record keeps the tool's
-    // name, so the REPL probe's `remaining` ends with `panhandled N` where the
+    // name, so the REPL probe's `remaining` ends with `panhandled: N` where the
     // caller reads it.
     const marked = notePanhandled(record, charged.tool, { callId: toolCallId });
     return {

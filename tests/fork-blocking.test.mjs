@@ -13,7 +13,7 @@ import { joinTicket, returnTicket } from "../src/tools/tickets.mjs";
 import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
 
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
-import { createForkWiring } from "../src/scope/fork-wiring.mjs";
+import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
@@ -21,7 +21,7 @@ import {
   registerFork,
   takeReady,
 } from "../src/scope/forkjoin.mjs";
-import { notifyWaiters, pulse } from "../src/scope/fork-registry.mjs";
+import { pulse } from "../src/scope/fork-registry.mjs";
 
 function stateOf() {
   return {
@@ -62,10 +62,6 @@ function stationOf(registry, ledger, identity = null) {
     return result;
   };
   return station;
-}
-
-function assistant(text) {
-  return { role: "assistant", content: [{ type: "text", text }], timestamp: 1 };
 }
 
 function opened(ledger, forkId, ownerId = "root") {

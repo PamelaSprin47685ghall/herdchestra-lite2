@@ -7,46 +7,60 @@
 // samples even when the restored tree has no open forks.
 
 import { normalizeTotals } from "../../scope/turn-stats.mjs";
-import { markLedgerStructDirty } from "../../scope/ledger-cache.mjs";
+import { replaceTotals } from "../../scope/ledger-cache.mjs";
 
 /**
  * Choose the ledger a station must use.
  *
- * Returns `{ ledger, source, filled }`:
- * - source: "identity" | "indexed" | "restored" | "none"
+ * Returns `{ ledger, source, filled, adopt }`:
+ * - source: "identity" | "indexed" | "restored" | "created" | "none"
  * - filled: true when the chosen ledger received the other candidate's totals.
+ * - adopt: true when the caller must publish the chosen ledger back to the
+ *   registry, that is whenever it is not the live index.
+ *
+ * `create` is the one difference between the two callers: the wiring never
+ * mints a ledger, and the station constructor mints an empty one when neither
+ * candidate exists.
  */
 export function selectForkLedger({
 	identity = null,
 	indexed = null,
 	restored = null,
+	create = null,
 } = {}) {
 	if (identity?.ledger && typeof identity.ledger === "object") {
-		return { ledger: identity.ledger, source: "identity", filled: false };
+		return { ledger: identity.ledger, source: "identity", filled: false, adopt: true };
 	}
 	const indexedLive = (indexed?.order?.length ?? 0) > 0;
-	const chosen = indexedLive ? indexed : (restored ?? indexed ?? null);
-	const other = chosen === indexed ? restored : indexed;
+	const restoredLive = (restored?.order?.length ?? 0) > 0;
+	let ledger = null;
+	if (indexedLive) ledger = indexed;
+	else if (restoredLive) ledger = restored;
+	else if (typeof create === "function") ledger = indexed ?? restored ?? create();
+	else ledger = restored ?? indexed ?? null;
+	// A live index is already published, so only the station republishing it is
+	// a no-op; an empty index still has to be adopted.
+	const adopt = !(indexedLive && ledger === indexed);
+	const other = ledger === indexed ? restored : indexed;
 	let filled = false;
 	// Never sum or overwrite two sampled ledgers.
-	if (chosen && other && chosen !== other) {
-		const chosenTotals = normalizeTotals(chosen.totals);
+	if (ledger && other && ledger !== other) {
+		const chosenTotals = normalizeTotals(ledger.totals);
 		const otherTotals = normalizeTotals(other.totals);
 		const chosenHasSamples = chosenTotals.turns > 0 || chosenTotals.turnMs > 0;
 		const otherHasSamples = otherTotals.turns > 0 || otherTotals.turnMs > 0;
 		if (!chosenHasSamples && otherHasSamples) {
-			chosen.totals = otherTotals;
-			// The shared snapshot reuses the previous ledger copy, so a replaced
-			// totals object must be announced or the next persist keeps zeros.
-			markLedgerStructDirty(chosen);
+			replaceTotals(ledger, otherTotals);
 			filled = true;
 		}
 	}
 	const source =
-		chosen === null
+		ledger === null
 			? "none"
-			: chosen === restored && !indexedLive
-				? "restored"
-				: "indexed";
-	return { ledger: chosen, source, filled };
+			: ledger === indexed
+				? "indexed"
+				: ledger === restored
+					? "restored"
+					: "created";
+	return { ledger, source, filled, adopt };
 }

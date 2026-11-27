@@ -7,7 +7,7 @@
 import {
 	attachBaseForkPorts,
 	bindHostForkPorts,
-} from "../../src/scope/fork-wiring.mjs";
+} from "../../src/wiring/fork-wiring.mjs";
 
 export function attachForkPorts(station, wiring, options = {}) {
 	const base = attachBaseForkPorts(station, wiring, options);

@@ -3,7 +3,7 @@
 // There is no rescue tool and there is no grant for it. A call whose turns are
 // gone still runs, and the record keeps the tool's name in `panhandles`, so the
 // overrun is read back where it happened: the REPL probe's `remaining` object
-// carries `panhandled N`, and the caller reads it when the branch returns. The
+// carries `panhandled: N`, and the caller reads it when the branch returns. The
 // cost of panhandling is not a refusal. It is that the overrun is public, and
 // it stays on the record after the work is done.
 //

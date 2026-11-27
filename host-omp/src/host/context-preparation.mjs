@@ -3,17 +3,17 @@
 
 import { rememberSession, sessionMatchesContext } from "./capture.mjs";
 import { messagesOf } from "./adapter.mjs";
+import { commitSkillReceipt } from "./hack-context.mjs";
 import {
-	commitSkillReceipt,
+	INPUT_ROLES,
+	committedToolCallIds,
 	journalOmits,
-	sameAssistantFrame,
-	samePersistedInputMessage,
-} from "./hack-context.mjs";
+	samePersistedMessage,
+	toolCallIds,
+} from "./message-identity.mjs";
 import { record } from "./diagnostics.mjs";
-import { isDeepStrictEqual } from "node:util";
 
-const PREPARATION = Symbol.for("herdchestra-lite2.context-preparation.v1");
-const INPUT_ROLES = new Set(["user", "developer", "custom", "fileMention", "hookMessage"]);
+import { PREPARATION } from "./process-symbols.mjs";
 
 function failure(code, message, cause, extra = null) {
 	const error = new Error(message, cause === undefined ? undefined : { cause });
@@ -37,49 +37,6 @@ function checkState(station, stamp) {
 	if (station.state !== stamp.state || station.state?.epoch !== stamp.epoch) {
 		throw failure("CONTEXT_PREPARATION_STALE", "The station state changed while the request was being prepared.");
 	}
-}
-
-function toolCallIds(message) {
-	const ids = new Set();
-	const content = message?.content;
-	if (!Array.isArray(content)) return ids;
-	for (const item of content) {
-		if (item?.type === "toolCall" && typeof item.id === "string") ids.add(item.id);
-	}
-	return ids;
-}
-
-// AgentSession persists an enriched snapshot of the emitted message. Its
-// persistence key is the host's stable identity for that separate object.
-function samePersistedMessage(live, committed) {
-	if (sameAssistantFrame(live, committed) || isDeepStrictEqual(live, committed)) return true;
-	if (samePersistedInputMessage(live, committed)) return true;
-	if (live?.role !== committed?.role) return false;
-	const sameContent = Array.isArray(live.content) && Array.isArray(committed.content) &&
-		isDeepStrictEqual(live.content, committed.content);
-	if (!sameContent) return false;
-	if (live.role === "assistant") {
-		return Number.isFinite(committed.timestamp) &&
-			live.timestamp === committed.timestamp &&
-			live.provider === committed.provider &&
-			live.model === committed.model &&
-			(live.responseId ?? "") === (committed.responseId ?? "") &&
-			live.stopReason === committed.stopReason;
-	}
-	if (live.role === "toolResult") {
-		return live.timestamp === committed.timestamp &&
-			live.toolCallId === committed.toolCallId &&
-			live.toolName === committed.toolName;
-	}
-	return false;
-}
-
-function committedToolCallIds(prefix) {
-	for (let index = prefix.length - 1; index >= 0; index -= 1) {
-		const message = prefix[index];
-		if (message?.role === "assistant") return toolCallIds(message);
-	}
-	return new Set();
 }
 
 /**

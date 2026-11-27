@@ -223,14 +223,7 @@ const LIMIT_DETAIL = Object.freeze({
 		"Either the owner session or the flow session exposes no TokenRateMeter with the expected methods, so a flow's generation rate cannot be forwarded to the session the status bar reads.",
 });
 
-function read(target, key) {
-	if (!target || typeof target !== "object") return undefined;
-	try {
-		return target[key];
-	} catch {
-		return undefined;
-	}
-}
+import { isNonEmptyString, read } from "./object-read.mjs";
 
 /**
  * The owner's mounted tool names, newest host API first.
@@ -265,10 +258,6 @@ function limitation(code) {
 
 function refusal(reason, extra = {}) {
 	return { ok: false, reason, detail: DETAIL[reason], ...extra };
-}
-
-function isNonEmptyString(value) {
-	return typeof value === "string" && value.length > 0;
 }
 
 // One session-scoped lease per shared manager. It is never released: the owner

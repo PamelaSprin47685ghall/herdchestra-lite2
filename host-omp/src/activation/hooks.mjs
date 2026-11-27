@@ -11,7 +11,7 @@ import { installContextPreparation } from "../host/context-preparation.mjs";
 import { wireProviderObservation } from "../host/provider-observer.mjs";
 
 
-const USER_ABORT_CAPTURE = Symbol.for("herdchestra-lite2.user-abort-capture.v1");
+import { USER_ABORT_CAPTURE } from "../host/process-symbols.mjs";
 
 // The one-turn wake a waiting peer gives an idle root. The projection turns the
 // queued request into AWAITING_REPLY on the next request, so the prompt only has

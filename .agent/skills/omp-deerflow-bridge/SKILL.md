@@ -56,7 +56,8 @@ host-omp-ui/
     main.mjs                          # 唯一入口 activate(pi, env)（纯启动排序，零业务）
     station/
       ui-bridge-station.mjs           # 充血聚合根 UiBridgeStation（严禁 async/await；三段式 Compute→Commit→Dispatch）
-      domain/                         # 10 个纯无状态领域核（零 I/O、零 @oh-my-pi/* 依赖）
+      domain/                         # 14 个纯无状态领域核（零 I/O、零 @oh-my-pi/* 依赖）
+                                      # 新增：history-window（分页窗口索引/切片）、artifact-hydration（toolCall 判定与分块 artifact 投影）、fence-lifecycle（篱笆启停纯决策）、snapshot-doc（快照纯投影）
         protocol-codec.mjs            # 同层 WS 上/下行帧与 HTTP payload 的 schema、校验、构造；token 提取与路径穿越校验
         transcript-model.mjs          # SessionEntry/AgentMessage/AssistantMessageEvent/tool_execution_* 归约、toolCall 配对与显示分组
         tool-artistry.mjs             # 工具卡片艺术映射（read/write/edit diff/bash/search/web/todo/task/ask/generic）、artifact 提取、ANSI strip 与行级 diff
@@ -78,11 +79,12 @@ host-omp-ui/
       launch-context.mjs              # 一次性 0600 启动凭据（port/token）与陈旧文件清理
       tmux-launch.mjs                 # tmux 启动结果判定：会话存活时不因后续命令失败误删凭据
       diagnostics.mjs                 # 宿主诊断记录
-      bridge-tickets.mjs              # 公开出口：转出 ./tickets/ 的 createHostTickets 与 createUiBridge，保持组装与测试 seam 稳定
-      tickets/
+      tickets/                        # 工单协程，调用方直接 import；转发桶已删除
         host-tickets.mjs              # 宿主工单协程（提交、模型/模式切换、广播、计划评审等），每个方法至多跨一次 await，失败不外抛
         interaction-bridge.mjs        # Web ↔ TUI 对话桥：待决交互账本、双路竞速与幂等中止
         dialog-protocol.mjs           # 纯对话协议映射：TUI 位置参数 → Web typed payload，Web 答案 → 原生 TUI 结果
+        fence-ticket.mjs              # TUI 篱笆安装与退出序列的异步执行
+        delta-merger.mjs              # transcript 增量合并的定时调度（在 Station 之外）
     manager/                          # 全机管理器
       server.mjs                      # 固定端口 loopback、浏览器/实例 WS 路由、鉴权、静态托管与生命周期
       machine-catalog.mjs             # 只读扫描全机 JSONL 会话头，跨项目、续写链与自定义 session-dir
@@ -93,6 +95,9 @@ host-omp-ui/
       tickets.mjs                     # 工单能力工厂与统一命令回执（保留 clientId/requestId，状态以宿主回读为准）
       hooks.mjs                       # 机械事件转发：pi.on(...) → station.onXxx(...)
       commands.mjs                    # 注册 /web 命令打印访问 URL 与状态
+  shared/                             # 同构纯 ESM（零 Node/DOM API），Node 侧与 Web 侧共用同一实现
+    tool-view.mjs                     # 工具卡片投影、ANSI strip、行级 diff、REPL echo 的唯一实现
+    transcript-groups.mjs             # isRealUser 与显示分组谓词
   web/                                # 同源 React 19 SPA（直接复用 ../../deer-flow/frontend/src/components/ui/*、ai-elements/*、styles/globals.css）
     package.json                      # 独立精简依赖（含 @tailwindcss/cli）；install:safe 把 node_modules 软链到 ${TMPDIR}，避开 /home 空间红线
     tsconfig.json                     # jsx: react-jsx，@/* → ../../../deer-flow/frontend/src/*

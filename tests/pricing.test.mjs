@@ -4,9 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	charsToTokens,
-	createEmptyCatalog,
 	loadPricingCatalog,
-} from "../host-omp/src/host/index.mjs";
+} from "../host-omp/src/host/pricing.mjs";
 import { preparseModelSpec } from "../host-omp/src/host/pricing.mjs";
 
 const savedEnv = {

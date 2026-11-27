@@ -5,9 +5,11 @@
 // earlier one while both calls report success. Nothing on the dispatch chain
 // serialized them; this queue does now.
 //
-// The queue is module-level, not per gateway and not per agent: every scope in
-// one process shares these files, and a per-agent or per-context lock would let
-// two scopes race the same path.
+// One queue instance belongs to one process, not to a gateway and not to an
+// agent: every scope in one process shares these files, and a per-agent or
+// per-context lock would let two scopes race the same path. The module exports
+// the default instance's `serializeWrite`, so callers that never build a queue
+// share exactly one, while a test can build its own and inspect it.
 //
 // Four properties carry the correctness, and each one costs something:
 //   - A write whose targets cannot be named takes the exclusive key, never a
@@ -31,12 +33,6 @@ const WRITE_TOOLS = new Set(["edit", "write", "ast_edit", "apply_patch", "manage
 
 /** The key of a write whose targets cannot be named: it excludes every other write. */
 export const EXCLUSIVE = "*";
-
-/** The write this task already runs inside, if any. */
-const HELD = new AsyncLocalStorage();
-
-/** The ancestor set of a top-level write: nothing to ignore. */
-const NO_ANCESTORS = new Set();
 
 /** True when this tool name can write a file and must take the lock. */
 export function isWriteTool(name) {
@@ -103,16 +99,16 @@ export function normalizeTargetPath(raw, cwd) {
 	if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(trimmed)) return `url:${trimmed}`;
 	const base = typeof cwd === "string" && cwd.trim() !== "" ? cwd : null;
 	let expanded = trimmed;
-	if (expanded === "~" || expanded.startsWith("~/") || expanded.startsWith("~\\\\")) {
+	if (expanded === "~" || expanded.startsWith("~/") || expanded.startsWith("~\\")) {
 		expanded = os.homedir() + expanded.slice(1);
-	} else if (/^~[^/\\\\]/.test(expanded)) {
+	} else if (/^~[^/\\]/.test(expanded)) {
 		// `~user` names another account's home. Its real path is unknown here, and
 		// resolving it under the cwd would invent a key no other call shares.
 		return null;
 	}
 	// A bare root is the host's workspace-root alias, which means the cwd.
 	if (expanded === "/" || expanded === "//") return base ? canonicalize(path.resolve(base)) : null;
-	const isDrive = /^[A-Za-z]:[\\\\/]/.test(expanded);
+	const isDrive = /^[A-Za-z]:[\\/]/.test(expanded);
 	const isAbsolute = isDrive || expanded.startsWith("/");
 	let resolved;
 	if (isDrive && process.platform !== "win32") {
@@ -274,125 +270,153 @@ export function targetKeys(name, args, cwd) {
 	return { exclusive: true, keys: [] };
 }
 
-/** Entries waiting for their turn, in arrival order. */
-const queue = [];
-
-/** Every entry now running. This set is the only record of who holds what. */
-const activeEntries = new Set();
-
-/** True when these two entry footprints may not run at the same time. */
-function footprintsConflict(left, right) {
-	if (left.exclusive || right.exclusive) return true;
-	for (const key of left.keys) if (right.keySet.has(key)) return true;
-	return false;
-}
-
-/** True when `outer` already holds every target of `inner`. */
-function covers(outer, inner) {
-	if (outer.exclusive) return true;
-	if (inner.exclusive) return false;
-	for (const key of inner.keys) if (!outer.keySet.has(key)) return false;
-	return true;
-}
-
-function launch(entry) {
-	if (entry.detach) entry.detach();
-	activeEntries.add(entry);
-	let result;
-	try {
-		// A write this task dispatches from inside `run` inherits the held entry, so
-		// it can decide whether the outer call already covers its targets.
-		result = Promise.resolve(HELD.run(entry, entry.run));
-	} catch (error) {
-		result = Promise.reject(error);
-	}
-	const release = () => {
-		activeEntries.delete(entry);
-		drain();
-	};
-	result.then(entry.resolve, entry.reject).then(release, release);
-}
-
 /**
- * Start every queued write that conflicts with nothing ahead of it.
+ * One write queue: the mutable half of this module, owned by exactly one value.
  *
- * The scan keeps a running footprint of the entries it passed, so one call can
- * neither overtake an earlier call on the same file nor starve behind an
- * exclusive one. That is the whole fairness argument: order is arrival order per
- * resource, and each pass launches the longest prefix that is free. A nested call
- * skips only its own ancestors, so it waits for every sibling write yet never for
- * the write that dispatched it.
+ * The entries waiting (`queue`), the entries running (`activeEntries`), and the
+ * held-entry storage (`HELD`) are the queue's whole state. They live in this
+ * closure so no second copy can appear and so a test can build a queue it owns.
  */
-function drain() {
-	const blocked = [...activeEntries];
-	let index = 0;
-	while (index < queue.length) {
-		const entry = queue[index];
-		let conflicts = false;
-		for (const other of blocked) {
-			if (entry.ancestors.has(other)) continue;
-			if (footprintsConflict(entry, other)) {
-				conflicts = true;
-				break;
+export function createWriteQueue() {
+	/** The write this task already runs inside, if any. */
+	const HELD = new AsyncLocalStorage();
+
+	/** The ancestor set of a top-level write: nothing to ignore. */
+	const NO_ANCESTORS = new Set();
+
+	/** Entries waiting for their turn, in arrival order. */
+	const queue = [];
+
+	/** Every entry now running. This set is the only record of who holds what. */
+	const activeEntries = new Set();
+
+	/** True when these two entry footprints may not run at the same time. */
+	function footprintsConflict(left, right) {
+		if (left.exclusive || right.exclusive) return true;
+		for (const key of left.keys) if (right.keySet.has(key)) return true;
+		return false;
+	}
+
+	/** True when `outer` already holds every target of `inner`. */
+	function covers(outer, inner) {
+		if (outer.exclusive) return true;
+		if (inner.exclusive) return false;
+		for (const key of inner.keys) if (!outer.keySet.has(key)) return false;
+		return true;
+	}
+
+	function launch(entry) {
+		if (entry.detach) entry.detach();
+		activeEntries.add(entry);
+		let result;
+		try {
+			// A write this task dispatches from inside `run` inherits the held entry, so
+			// it can decide whether the outer call already covers its targets.
+			result = Promise.resolve(HELD.run(entry, entry.run));
+		} catch (error) {
+			result = Promise.reject(error);
+		}
+		const release = () => {
+			activeEntries.delete(entry);
+			drain();
+		};
+		result.then(entry.resolve, entry.reject).then(release, release);
+	}
+
+	/**
+	 * Start every queued write that conflicts with nothing ahead of it.
+	 *
+	 * The scan keeps a running footprint of the entries it passed, so one call can
+	 * neither overtake an earlier call on the same file nor starve behind an
+	 * exclusive one. That is the whole fairness argument: order is arrival order per
+	 * resource, and each pass launches the longest prefix that is free. A nested call
+	 * skips only its own ancestors, so it waits for every sibling write yet never for
+	 * the write that dispatched it.
+	 */
+	function drain() {
+		const blocked = [...activeEntries];
+		let index = 0;
+		while (index < queue.length) {
+			const entry = queue[index];
+			let conflicts = false;
+			for (const other of blocked) {
+				if (entry.ancestors.has(other)) continue;
+				if (footprintsConflict(entry, other)) {
+					conflicts = true;
+					break;
+				}
+			}
+			if (conflicts) {
+				blocked.push(entry);
+				index += 1;
+				continue;
+			}
+			queue.splice(index, 1);
+			launch(entry);
+			blocked.push(entry);
+		}
+	}
+
+	/**
+	 * Run one write behind this queue.
+	 *
+	 * A call whose signal is already aborted is refused here and never reaches the
+	 * disk. A queued call whose signal aborts leaves the queue at once, so the calls
+	 * behind it are not held by a cancelled one.
+	 */
+	function serializeWrite(name, args, cwd, run, signal) {
+		if (signal?.aborted) return Promise.reject(abortedError(signal));
+		const footprint = targetKeys(name, args, cwd);
+		const keySet = new Set(footprint.keys);
+		const held = HELD.getStore();
+		// The outer write holds every target of this one, so running now keeps the
+		// order the outer call already owns and cannot deadlock.
+		if (held && covers(held, { exclusive: footprint.exclusive, keys: footprint.keys, keySet })) {
+			try {
+				return Promise.resolve(run());
+			} catch (error) {
+				return Promise.reject(error);
 			}
 		}
-		if (conflicts) {
-			blocked.push(entry);
-			index += 1;
-			continue;
-		}
-		queue.splice(index, 1);
-		launch(entry);
-		blocked.push(entry);
+		const ancestors = held ? new Set([...held.ancestors, held]) : NO_ANCESTORS;
+		return new Promise((resolve, reject) => {
+			const entry = {
+				exclusive: footprint.exclusive,
+				keys: footprint.keys,
+				keySet,
+				ancestors,
+				run,
+				resolve,
+				reject,
+				detach: null,
+			};
+			if (signal && typeof signal.addEventListener === "function") {
+				const onAbort = () => {
+					const at = queue.indexOf(entry);
+					if (at === -1) return;
+					queue.splice(at, 1);
+					entry.detach();
+					reject(abortedError(signal));
+					drain();
+				};
+				signal.addEventListener("abort", onAbort, { once: true });
+				entry.detach = () => signal.removeEventListener("abort", onAbort);
+			}
+			queue.push(entry);
+			drain();
+		});
 	}
+
+	return { serializeWrite };
 }
 
+/** The one process-wide queue. Every caller that never builds a queue shares it. */
+const defaultQueue = createWriteQueue();
+
 /**
- * Run one write behind the queue.
+ * Run one write behind the process-wide queue.
  *
- * A call whose signal is already aborted is refused here and never reaches the
- * disk. A queued call whose signal aborts leaves the queue at once, so the calls
- * behind it are not held by a cancelled one.
+ * This is the default instance's method, exported for callers that do not need
+ * their own queue; the behavior is the module's single queue, unchanged.
  */
-export function serializeWrite(name, args, cwd, run, signal) {
-	if (signal?.aborted) return Promise.reject(abortedError(signal));
-	const footprint = targetKeys(name, args, cwd);
-	const keySet = new Set(footprint.keys);
-	const held = HELD.getStore();
-	// The outer write holds every target of this one, so running now keeps the
-	// order the outer call already owns and cannot deadlock.
-	if (held && covers(held, { exclusive: footprint.exclusive, keys: footprint.keys, keySet })) {
-		try {
-			return Promise.resolve(run());
-		} catch (error) {
-			return Promise.reject(error);
-		}
-	}
-	const ancestors = held ? new Set([...held.ancestors, held]) : NO_ANCESTORS;
-	return new Promise((resolve, reject) => {
-		const entry = {
-			exclusive: footprint.exclusive,
-			keys: footprint.keys,
-			keySet,
-			ancestors,
-			run,
-			resolve,
-			reject,
-			detach: null,
-		};
-		if (signal && typeof signal.addEventListener === "function") {
-			const onAbort = () => {
-				const at = queue.indexOf(entry);
-				if (at === -1) return;
-				queue.splice(at, 1);
-				entry.detach();
-				reject(abortedError(signal));
-				drain();
-			};
-			signal.addEventListener("abort", onAbort, { once: true });
-			entry.detach = () => signal.removeEventListener("abort", onAbort);
-		}
-		queue.push(entry);
-		drain();
-	});
-}
+export const serializeWrite = defaultQueue.serializeWrite;

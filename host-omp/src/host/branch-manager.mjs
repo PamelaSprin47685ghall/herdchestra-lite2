@@ -102,8 +102,9 @@ class BranchManagerError extends Error {
 	}
 }
 
-/** Marker every flow proxy carries; Symbol.for keeps it stable across instances. */
-const BRANCH_MANAGER = Symbol.for("herdchestra-lite2.branch-manager.v1");
+// Marker every flow proxy carries; the registry keeps the key stable across
+// instances and across extension copies.
+import { BRANCH_MANAGER } from "./process-symbols.mjs";
 
 /** True only for a proxy built by createBranchManager(). */
 export function isBranchManager(value) {

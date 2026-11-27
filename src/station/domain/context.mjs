@@ -49,3 +49,31 @@ export function projectContext(_snapshot = {}, input = {}) {
 		usage,
 	};
 }
+
+/**
+ * The live model's input limit, or null when no exact window is known.
+ *
+ * One owner for the window: the nudge arithmetic, the join admission, the fork
+ * wiring and the receipt projection resolve it here instead of rebuilding the
+ * catalog order in their own file. The argument is any station-shaped object,
+ * so a test double answers through the same path.
+ */
+export function resolveContextWindow(station) {
+	const port = station?.forkWindowPort;
+	if (typeof port === "function") {
+		const window = port();
+		if (Number.isFinite(window) && window > 0) return window;
+	}
+	const live = station?.usage?.lastCtxModel;
+	if (Number.isFinite(live?.contextWindow) && live.contextWindow > 0) {
+		return live.contextWindow;
+	}
+	const key = station?.state?.baseModelKey;
+	const catalog = station?.pricingCatalog;
+	if (catalog && typeof key === "string" && key !== "") {
+		const entry = catalog.byFullId?.get?.(key) ?? catalog.byId?.get?.(key) ?? null;
+		const window = entry?.contextWindow;
+		if (Number.isFinite(window) && window > 0) return window;
+	}
+	return null;
+}

@@ -21,6 +21,19 @@ function metaOf(ledger) {
   return ledgers.get(ledger) ?? null;
 }
 
+/**
+ * Replace a ledger's turn samples and announce the structural change.
+ *
+ * A replaced totals object is a new identity, and the shared snapshot reuses
+ * the previous ledger copy; without the announcement the next persist would
+ * keep the old numbers. The pair lives here once so no caller can set one half.
+ */
+export function replaceTotals(ledger, totals) {
+	if (!ledger || typeof ledger !== "object") return;
+	ledger.totals = totals;
+	markLedgerStructDirty(ledger);
+}
+
 /** Start tracking one ledger. Called where a ledger is born, never by a reader. */
 export function registerLedger(ledger) {
   if (!ledger || typeof ledger !== "object") return null;

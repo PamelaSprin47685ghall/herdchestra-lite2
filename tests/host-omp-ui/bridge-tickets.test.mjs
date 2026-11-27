@@ -1,12 +1,14 @@
 import { describe, test, expect } from "bun:test";
 
-const MODULE = "../../host-omp-ui/src/host/bridge-tickets.mjs";
+const TICKETS = "../../host-omp-ui/src/host/tickets/host-tickets.mjs";
+const BRIDGE = "../../host-omp-ui/src/host/tickets/interaction-bridge.mjs";
 
 async function load() {
 	try {
-		return await import(MODULE);
+		const [tickets, bridge] = await Promise.all([import(TICKETS), import(BRIDGE)]);
+		return { createHostTickets: tickets.createHostTickets, createUiBridge: bridge.createUiBridge };
 	} catch (error) {
-		throw new Error(`Red contract: ${MODULE} is not implemented yet (${error.message})`);
+		throw new Error(`Red contract: ${TICKETS} is not implemented yet (${error.message})`);
 	}
 }
 

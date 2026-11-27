@@ -23,42 +23,6 @@ function trimText(value) {
 	return typeof value === "string" ? value.trim() : "";
 }
 
-function controlsIn(message) {
-	return toolCalls(message).filter((call) => CONTROL_TOOLS.has(call.name));
-}
-
-function processedKey(calls) {
-	return calls
-		.map((call) => call.id)
-		.sort()
-		.join(",");
-}
-
-function cloneMessage(message) {
-	if (!message || typeof message !== "object") return message;
-	return {
-		...message,
-		...(Array.isArray(message.content)
-			? {
-					content: message.content.map((block) =>
-						block && typeof block === "object" ? { ...block } : block,
-					),
-				}
-			: {}),
-	};
-}
-
-function finishedResultMessage(toolCallId, report, finishedReport) {
-	return {
-		role: "toolResult",
-		toolCallId,
-		toolName: "scope_join",
-		content: [{ type: "text", text: finishedReport(report) }],
-		isError: false,
-		timestamp: Date.now(),
-	};
-}
-
 function tailKey(message) {
 	if (!message || typeof message !== "object") return "";
 	if (message.role === "toolResult") return `toolResult:${message.toolCallId}`;
@@ -112,10 +76,6 @@ export {
 	CONTROL_TOOLS,
 	parseArgs,
 	trimText,
-	controlsIn,
-	processedKey,
-	cloneMessage,
-	finishedResultMessage,
 	tailKey,
 	hostBoundaryKey,
 	sameTail,

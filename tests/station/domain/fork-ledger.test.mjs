@@ -58,4 +58,32 @@ describe("selectForkLedger", () => {
 		expect(chosen.filled).toBe(false);
 		expect(indexed.totals).toEqual({ turns: 2, turnMs: 10 });
 	});
+
+	test("a create fallback mints a ledger when both candidates are absent", () => {
+		const minted = ledger([]);
+		const chosen = selectForkLedger({ create: () => minted });
+		expect(chosen.ledger).toBe(minted);
+		expect(chosen.source).toBe("created");
+		expect(chosen.adopt).toBe(true);
+	});
+
+	test("the live index is used in place, so the caller does not adopt it", () => {
+		const indexed = ledger(["live"]);
+		const chosen = selectForkLedger({
+			indexed,
+			restored: ledger(["restored"]),
+			create: () => ledger([]),
+		});
+		expect(chosen.ledger).toBe(indexed);
+		expect(chosen.source).toBe("indexed");
+		expect(chosen.adopt).toBe(false);
+	});
+
+	test("an empty index is not live, so the caller still adopts it", () => {
+		const indexed = ledger([]);
+		const chosen = selectForkLedger({ indexed, create: () => ledger([]) });
+		expect(chosen.ledger).toBe(indexed);
+		expect(chosen.source).toBe("indexed");
+		expect(chosen.adopt).toBe(true);
+	});
 });

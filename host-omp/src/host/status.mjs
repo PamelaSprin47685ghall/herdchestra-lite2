@@ -103,7 +103,7 @@ function hostLabelFromProcess() {
  * the owner can write the widget; a flow that records usage hands the line to
  * the last host that could draw it.
  */
-const STATE_KEY = Symbol.for("herdchestra-lite2.status-state.v1");
+import { STATUS_STATE as STATE_KEY } from "./process-symbols.mjs";
 
 function sharedState() {
 	let state = globalThis[STATE_KEY];

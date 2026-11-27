@@ -6,7 +6,6 @@ import {
 	forkOf,
 	RUNNING,
 	truncateForHostBoundary,
-	unreceivedChildren,
 } from "../scope/index.mjs";
 import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
 import { abandonDescendants } from "../scope/forkjoin.mjs";
@@ -27,7 +26,7 @@ import { insideScopeNudge, rootReturnNudge, stopNudge } from "./texts.mjs";
 
 /** The branch's own fork id, or null at the root. */
 function ownerIdOf(station) {
-	return typeof station.forkOwnerId === "function" ? station.forkOwnerId() : null;
+	return station.forkOwnerId?.() ?? null;
 }
 
 /**
@@ -180,7 +179,7 @@ export function cancelDescendants(station, reason = CANCELLED_BY_PARENT) {
  */
 export function cancelTree(station, rootOwnerId = "root", reason = CANCELLED_BY_PARENT) {
 	const ledger =
-		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
+		station.forkLedgerPort?.() ?? null;
 	if (!ledger || typeof ledger !== "object") {
 		return { abandonedIds: [], runningIds: [] };
 	}
@@ -291,7 +290,7 @@ function onSessionStop(station, ctx, evidence = null) {
 		return continueFeedback(insideScopeNudge(unreceived));
 	}
 	const ledger =
-		typeof station.forkLedgerPort === "function" ? station.forkLedgerPort() : null;
+		station.forkLedgerPort?.() ?? null;
 	const ownerId = ownerIdOf(station);
 	// Child scope natural stop backstop: nudge to call `scope_return` while
 	// the bracket is still RUNNING and its shared allowance remains.

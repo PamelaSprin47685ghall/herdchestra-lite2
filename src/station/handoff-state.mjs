@@ -20,7 +20,7 @@ import {
 } from "./domain/handoff.mjs";
 
 function isChild(station) {
-	return typeof station.forkOwnerId === "function" && station.forkOwnerId() !== null;
+	return (station.forkOwnerId?.() ?? null) !== null;
 }
 
 /**

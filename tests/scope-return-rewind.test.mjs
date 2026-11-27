@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 
 import { createBranchSession } from "../host-omp/src/host/branch-session.mjs";
 import { stopAfterScopeReturn } from "../host-omp/src/host/branch-context.mjs";
-import { createForkWiring } from "../src/scope/fork-wiring.mjs";
+import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { createTestStation } from "./helpers/station-ports.mjs";
@@ -157,8 +157,8 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 	test("small handoff rewinds BranchManager to originEntryId, preserves identity/panhandles/inbox/originAmends, and final oath delivers clean generation", async () => {
 		const wiring = createForkWiring();
 		const shared = sharedManager();
-		const rootMsg = shared.appendMessage({ role: "user", content: "root prompt" });
-		const forkFrame = shared.appendMessage({
+		shared.appendMessage({ role: "user", content: "root prompt" });
+		shared.appendMessage({
 			role: "assistant",
 			content: [{ type: "toolCall", id: "fork-rewind", name: "scope_fork", arguments: {} }],
 		});

@@ -7,6 +7,7 @@ import {
   put,
 } from "./state.mjs";
 import { isPlainObject } from "./plain.mjs";
+import { formatAmount } from "./amount.mjs";
 
 // Charge amounts are real numbers with at most two decimal places. One turn is
 // split into 100 hundredths so an assistant message spends exactly one turn
@@ -116,11 +117,6 @@ export function roundAmount(value) {
   return Math.round(value * CHARGE_SCALE) / CHARGE_SCALE;
 }
 
-/** Render an amount with the fixed two-decimal display precision. */
-export function formatAmount(value) {
-  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
-}
-
 /**
  * Split one turn across the tools called in a single assistant
  * message, in proportion to their call counts. The shares sum to exactly one
@@ -165,4 +161,4 @@ export function beatShares(items) {
   return shares;
 }
 
-export { CHARGE_SCALE, validBudget, normalizeBudget };
+export { CHARGE_SCALE, validBudget, normalizeBudget, formatAmount };

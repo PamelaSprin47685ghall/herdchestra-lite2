@@ -7,7 +7,8 @@
  */
 
 import { wireExtension, installCapture } from "./activation/index.mjs";
-import { installStatus, loadPricingCatalog } from "./host/index.mjs";
+import { installStatus } from "./host/status.mjs";
+import { loadPricingCatalog } from "./host/pricing.mjs";
 import { total as diagnosticsTotal } from "./host/diagnostics.mjs";
 import { CHILD_ACTIVITY_TYPE, registerToolCardComponent, renderChildActivity } from "./host/child-display.mjs";
 import { getHostTui } from "./host/tui-runtime.mjs";

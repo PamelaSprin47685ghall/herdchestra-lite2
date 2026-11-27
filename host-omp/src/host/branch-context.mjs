@@ -13,8 +13,7 @@
 import { installContextPreparation } from "./context-preparation.mjs";
 import { record } from "./diagnostics.mjs";
 
-const TERMINAL_RESULT = Symbol.for("pi-agent-core.terminal-tool-result");
-const RETURN_STOP = Symbol.for("herdchestra-lite2.scope-return-stop.v1");
+import { RETURN_STOP, TERMINAL_RESULT } from "./process-symbols.mjs";
 
 export function hasScopeReturnStop(agent) {
 	return Boolean(agent?.[RETURN_STOP] && agent.afterToolCall === agent[RETURN_STOP].hook);

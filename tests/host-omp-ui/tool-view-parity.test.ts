@@ -1,8 +1,8 @@
-// The browser maps a tool execution to a card with its own copy of the mapper:
-// `host-omp-ui/web/src/protocol/tool-view.ts` cannot import the extension's
-// `tool-artistry.mjs`, so the two are mirrors by hand. A mirror that drifts is
-// invisible until a user reloads a session and every card changes shape, so the
-// same behaviours are pinned here against the web copy.
+// Both card mappers are built on one shared core: `station/domain/tool-artistry.mjs`
+// (the extension) and `web/src/protocol/tool-view.ts` (the browser) take their
+// stripping, language table and scope-control projection from
+// `host-omp-ui/shared/tool-view.mjs`. This file is the cross-surface check that
+// the two thin wrappers keep producing the same cards from that core.
 //
 // The cases below are the ones the Node suite pins for the extension copy: a
 // `js` call showing one child per inner call, and the scope control plane that

@@ -1,41 +1,40 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-	buildChildIdentity,
-	resolveForkLedger,
-} from "../../src/station/domain/identity.mjs";
+import { buildChildIdentity } from "../../src/station/domain/identity.mjs";
+import { selectForkLedger } from "../../src/station/domain/fork-ledger.mjs";
 
-describe("resolveForkLedger", () => {
+
+describe("selectForkLedger", () => {
 	const identityLedger = { id: "identity", order: [] };
 	const liveIndex = { id: "index", order: ["f1"] };
 	const restored = { id: "restored", order: [] };
 
 	test("an identity ledger wins over every index", () => {
 		expect(
-			resolveForkLedger({
+			selectForkLedger({
 				identity: { ledger: identityLedger },
 				indexed: liveIndex,
 				restored,
-			}),
+			}).ledger,
 		).toBe(identityLedger);
 	});
 
 	test("a live index wins over a restored tree", () => {
-		expect(resolveForkLedger({ indexed: liveIndex, restored })).toBe(liveIndex);
+		expect(selectForkLedger({ indexed: liveIndex, restored }).ledger).toBe(liveIndex);
 	});
 
 	test("an empty index falls back to the restored tree", () => {
 		const empty = { id: "empty", order: [] };
-		expect(resolveForkLedger({ indexed: empty, restored })).toBe(restored);
+		expect(selectForkLedger({ indexed: empty, restored }).ledger).toBe(restored);
 	});
 
 	test("without a restored tree the empty index is the answer", () => {
 		const empty = { id: "empty", order: [] };
-		expect(resolveForkLedger({ indexed: empty })).toBe(empty);
+		expect(selectForkLedger({ indexed: empty }).ledger).toBe(empty);
 	});
 
 	test("a missing everything is null", () => {
-		expect(resolveForkLedger({})).toBeNull();
+		expect(selectForkLedger({}).ledger).toBeNull();
 	});
 });
 

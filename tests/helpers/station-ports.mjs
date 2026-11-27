@@ -5,7 +5,7 @@
 
 import { buildPorts } from "../../src/core/ports/build.mjs";
 import { record } from "../../host-omp/src/host/diagnostics.mjs";
-import { createForkWiring } from "../../src/scope/fork-wiring.mjs";
+import { createForkWiring } from "../../src/wiring/fork-wiring.mjs";
 import { PORT_NAMES } from "../../src/core/ports/registry.mjs";
 import { IMPLEMENTATION_KEYS } from "../../src/station/ports-contract.mjs";
 

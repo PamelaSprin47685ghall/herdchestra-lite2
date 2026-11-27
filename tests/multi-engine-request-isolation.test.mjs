@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { createEngine } from "../src/engine.mjs";
-import { createForkWiring } from "../src/scope/fork-wiring.mjs";
+import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { setIdentity, setOutcome } from "../src/scope/fork-registry.mjs";
 import {
 	currentRequest,
@@ -358,7 +358,7 @@ describe("multi-engine shared ForkRegistry isolation and poka-yoke", () => {
 			agent: { kind: "sub", id: "beta-agent" },
 			identity: { forkId: betaForkId, parentOwnerId: "root", ownScopeId: "beta", path: "/beta", ledger },
 		};
-		const alphaStation = alphaEngine.station(alphaCtx);
+		alphaEngine.station(alphaCtx);
 		const betaStation = betaEngine.station(betaCtx);
 
 		// /beta runs in betaEngine, /alpha asks /beta from alphaEngine.

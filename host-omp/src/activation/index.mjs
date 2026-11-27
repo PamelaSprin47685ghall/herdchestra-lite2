@@ -13,7 +13,8 @@ import {
 	thinkingOf,
 } from "../host/adapter.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
-import { registerUserAbortListener, sessionFor, setAgentMessages } from "../host/capture.mjs";
+import { sessionFor, setAgentMessages } from "../host/capture.mjs";
+import { abortChildSession, registerProcessUserAbortEngine } from "../host/user-abort.mjs";
 import { createToolGateway, installToolConfiscation } from "../host/tool-confiscation.mjs";
 import { charsToTokens, createEmptyCatalog, preparseModelSpec } from "../host/pricing.mjs";
 import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
@@ -29,10 +30,11 @@ import { buildTickets } from "./tickets.mjs";
 import { installCapture } from "./capture.mjs";
 import { wireHooks } from "./hooks.mjs";
 import { bindScopeView } from "../host/child-display.mjs";
-import { releaseScopeReturnDrain } from "../host/branch-context.mjs";
 import { canRewindRoot } from "../host/host-tickets.mjs";
 
 export { installCapture };
+
+import { FORK_WIRING_KEY } from "../host/process-symbols.mjs";
 
 /**
  * One fork wiring per process. A fork tree spans agents, and the host binds
@@ -41,90 +43,6 @@ export { installCapture };
  * here is also what keeps every scope on the same ledger and the same shared
  * journal: a per-engine wiring would give each child its own tree.
  */
-const FORK_WIRING_KEY = Symbol.for("herdchestra-lite2.fork-wiring.v1");
-const USER_ABORT_KEY = Symbol.for("herdchestra-lite2.user-abort.v1");
-const USER_ABORT_ENGINES_KEY = Symbol.for("herdchestra-lite2.user-abort-engines.v1");
-
-// The reason a child agent is stopped by a cascade. Distinct from the tool
-// interrupt: that one wakes a parked join and keeps the child alive, while
-// this one ends the child because its parent is gone.
-const CASCADE_ABORT_REASON = Symbol.for("herdchestra-lite2.scope-cascade-abort.v1");
-
-/**
- * Stop one live child agent. The host owns the session shape; the core only
- * receives this closure through the fork wiring. A throwing abort must not
- * turn a cascade into an exception: the ledger already holds the reason.
- *
- * Stop `session.agent` synchronously first so any in-flight LLM call or tool
- * signal cuts immediately, then call `session.abort()` without a user-interrupt
- * label so retry backoff, prompt setup, bash, eval, and post-prompt tasks also
- * unwind without re-entering the user-abort cascade gate.
- */
-function abortChildSession(session) {
-	if (!session) return;
-	try {
-		session?.agent?.abort?.(CASCADE_ABORT_REASON);
-	} catch (error) {
-		record("activation", error, { phase: "cascade-abort" });
-	}
-	try {
-		if (typeof session.abort === "function") {
-			const pending = session.abort();
-			pending?.catch?.((error) => record("activation", error, { phase: "cascade-abort" }));
-		}
-	} catch (error) {
-		record("activation", error, { phase: "cascade-abort" });
-	}
-}
-
-/**
- * Route a host-level USER_ABORT (from native Esc via `AgentSession.prototype.abort`
- * or from the sibling Web UI extension) to the engine that owns `ctx` without
- * creating stray stations or letting a child activation overwrite the root.
- */
-function registerProcessUserAbortEngine(engine) {
-	let engines = globalThis[USER_ABORT_ENGINES_KEY];
-	if (!engines) {
-		engines = new Set();
-		Object.defineProperty(globalThis, USER_ABORT_ENGINES_KEY, {
-			value: engines,
-			enumerable: false,
-			configurable: true,
-		});
-	}
-	engines.add(engine);
-	if (typeof globalThis[USER_ABORT_KEY] !== "function") {
-		Object.defineProperty(globalThis, USER_ABORT_KEY, {
-			value: (ctx, evidence = null) => {
-				let matched = false;
-				let lastResult;
-				for (const candidate of [...engines]) {
-					if (typeof candidate.hasStation === "function" && candidate.hasStation(ctx)) {
-						matched = true;
-						lastResult = candidate.userAbort?.(ctx, evidence);
-					}
-				}
-				if (matched) return lastResult;
-				// Fallback when a host invokes abort before any station hook saw `ctx`.
-				const fallback = [...engines].at(-1);
-				return fallback?.userAbort?.(ctx, evidence);
-			},
-			enumerable: false,
-			configurable: true,
-			writable: true,
-		});
-	}
-	return registerUserAbortListener((session, evidence) => {
-		if (typeof engine.hasStation === "function" && !engine.hasStation(session)) return;
-		try {
-			engine.userAbort?.(session, evidence);
-		} catch (error) {
-			record("activation", error, { phase: "session-user-abort" });
-		} finally {
-			releaseScopeReturnDrain(session);
-		}
-	});
-}
 
 function globalForkWiring(wiring = null) {
 	if (wiring && !globalThis[FORK_WIRING_KEY]) {

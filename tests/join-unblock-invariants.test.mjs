@@ -4,7 +4,6 @@ import {
 	FAILED,
 	JOINED,
 	READY,
-	RUNNING,
 	abandon,
 	adoptFork,
 	assertPairing,
@@ -30,7 +29,7 @@ import { scopeActivity } from "../src/scope/activity.mjs";
 import {
 	attachBaseForkPorts,
 	createForkWiring,
-} from "../src/scope/fork-wiring.mjs";
+} from "../src/wiring/fork-wiring.mjs";
 import { joinTicket } from "../src/tools/tickets.mjs";
 import {
 	handleForkCall,

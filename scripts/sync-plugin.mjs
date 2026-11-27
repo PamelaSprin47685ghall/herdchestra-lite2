@@ -116,8 +116,7 @@ const FINGERPRINTS = [
  */
 const TREE_FINGERPRINTS = [
   { file: "src/tools/js-ticket.mjs", needle: "> await AsyncFunction(", min: 1 },
-  { file: "host-omp-ui/src/station/domain/tool-artistry.mjs", needle: "> await AsyncFunction(", min: 1 },
-  { file: "host-omp-ui/web/src/protocol/tool-view.ts", needle: "> await AsyncFunction(", min: 1 },
+  { file: "host-omp-ui/shared/tool-view.mjs", needle: "> await AsyncFunction(", min: 1 },
 ];
 const checkOnly = process.argv.includes("--check");
 const vendorRequested =

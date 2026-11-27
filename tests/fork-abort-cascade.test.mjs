@@ -17,7 +17,7 @@ import {
 	attachBaseForkPorts,
 	bindHostForkPorts,
 	createForkWiring,
-} from "../src/scope/fork-wiring.mjs";
+} from "../src/wiring/fork-wiring.mjs";
 import { cancelDescendants, onSessionStop } from "../src/station/gates.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { spawnChildTicket } from "../src/tools/spawn-ticket.mjs";
@@ -176,11 +176,8 @@ describe("abort cascade", () => {
 		root.childSpawnPort()({ forkId: "child", receipt: "work", fsm: "one state" });
 		const childPorts = spawns.at(-1).ports;
 		const aborts = [];
-		let prompts = 0;
 		childPorts.registerIdle("child", {
-			prompt: () => {
-				prompts += 1;
-			},
+			prompt: () => {},
 			drain: async () => false,
 			abort: () => aborts.push("child"),
 		});

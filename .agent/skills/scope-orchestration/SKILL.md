@@ -72,8 +72,9 @@ The owner of each input is fixed:
   the last request returned.
 - **Window** — `Station.contextWindowTokens()`, the single resolution order:
   the fork window port, then the live model object the host resolved, then the
-  catalog entry for the persisted base key. `fork-controls.mjs` reads the same
-  method, so admission and pressure cannot disagree about the limit.
+  catalog entry for the persisted base key. The resolution itself lives in
+  `resolveContextWindow` (`src/station/domain/context.mjs`); `src/station/fork-reads.mjs`
+  reads the same method, so admission and pressure cannot disagree about the limit.
 
 Three states refuse to arm: an unmeasured baseline, an unmeasured occupancy,
 and an unknown window. An unknown never produces a nudge, and it never reaches
@@ -129,5 +130,6 @@ Owners, so no fact is written twice:
 ## Known gaps
 
 - `README.md` is the user-facing account; `resources/prompts/**` is the model-facing account. This page owns the internal boundaries and the reasons they hold.
+- Module layout after the clean break: `src/scope/forkjoin.mjs` and `src/scope/persistence.mjs` are re-export facades over `ledger-{brackets,serialize,charge}.mjs` and `state-codec.mjs` / `entry-plan.mjs` / `state-delta.mjs` / `ledger-entry.mjs`; `src/station/fork-controls.mjs` is the facade over `fork-reads.mjs`, `join-controls.mjs`, `return-controls.mjs`, `abandon-controls.mjs`; the one-per-process fork wiring lives in `src/wiring/fork-wiring.mjs`.
 - `CONTROL_TOOLS` in `src/scope/state.mjs` is the live control surface: `scope_request`, `scope_fork`, `scope_join`, `scope_reply`, `scope_return`, `scope_abandon`, `wait`. `pin`, `amend`, `scope_context`, and `scope_send` no longer exist, in code or in the prompt documents; `resources/prompts/system.md` lists only live tools and must not be changed back.
 - A request's result is composed from data, not from a template: the queue resolves `{ ok, from, reply }`, and `fork-join.md` §request.tool states that shape in the prose the managed block carries. A template nothing renders is a second source of truth; delete the key rather than fill it.

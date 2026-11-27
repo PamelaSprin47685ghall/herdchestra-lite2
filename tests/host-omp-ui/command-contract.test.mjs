@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 
 import { buildBridgeCapabilities } from "../../host-omp-ui/src/activation/tickets.mjs";
-import { createHostTickets } from "../../host-omp-ui/src/host/bridge-tickets.mjs";
+import { createHostTickets } from "../../host-omp-ui/src/host/tickets/host-tickets.mjs";
 
 // Red contract for the manager-style command channel.
 //

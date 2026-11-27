@@ -2,6 +2,8 @@
 // transcript model. Persisted roles are camelCase; matching snake_case here
 // would silently drop every tool result.
 
+import { stripAnsi as sharedStripAnsi } from "../../../shared/tool-view.mjs";
+
 function textOf(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -70,10 +72,11 @@ function blocksOf(content) {
   });
 }
 
-const ANSI_RE = /\u001b\[[0-?]*[ -\/]*[@-~]/g;
-function stripAnsi(value) {
-  return typeof value === "string" ? value.replace(ANSI_RE, "") : value;
-}
+// Stripping lives in the shared mapper: the copy that used to sit here knew CSI
+// only, so OSC payloads (titles, hyperlinks) leaked into the transcript while the
+// two card mappers already dropped them.
+const stripAnsi = (value) =>
+  typeof value === "string" ? sharedStripAnsi(value) : value;
 function cleanBlocks(blocks) {
   return blocks.map((block) =>
     block && typeof block.text === "string" ? { ...block, text: stripAnsi(block.text) } : block,
@@ -633,9 +636,11 @@ function hasVisibleText(text) {
   return typeof text === "string" && text.trim().length > 0;
 }
 
-export function isRealUser(item) {
-  return item?.role === "user" && item.attribution === "user" && item.synthetic !== true;
-}
+// The turn boundary rule is shared with the web client, which groups the same
+// messages from frames; two copies drifted before.
+import { isRealUser } from "../../../shared/transcript-groups.mjs";
+
+export { isRealUser };
 
 function stepFromBlock(block, message) {
   if (block.type === "thinking" && hasVisibleText(block.text)) {

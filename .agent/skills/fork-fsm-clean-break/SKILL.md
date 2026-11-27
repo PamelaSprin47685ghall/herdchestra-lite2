@@ -21,7 +21,7 @@ No `intent` alias, no dual-read, no compatibility shim. An old snapshot is rejec
 | In-memory identity | `identity.fsm` | `src/scope/fork-registry.mjs`, `src/station/domain/identity.mjs` |
 | Spawn spec | `spec.fsm` | same information, third copy — must change in the same batch |
 | Domain request | `s.fsm` | `validateFork` reads it directly; no normalization step |
-| Tool schema | `fsm` | `src/tools/descriptions.mjs` — already correct, do not touch |
+| Tool schema | `fsm` | `resources/prompts/tools/fork-join.md`, injected by `src/prompts/inject.mjs` — already correct, do not touch |
 | Receipt template | `{{fsm}}` | `resources/prompts/receipts/scope.md`, `resources/prompts/tools/fork-join.md` |
 | Render key | `fsm` | passed to `render(...)` / `childReceiptText(...)` |
 | Queue of later texts | `requirements[]` | keeps its name: it is a queue of fsm texts, not one fsm |
@@ -29,7 +29,7 @@ No `intent` alias, no dual-read, no compatibility shim. An old snapshot is rejec
 
 ### Do not rename
 
-- `src/station/gates.mjs`, `src/station/domain/tool-call.mjs`, `resources/prompts/skills/constitution/SKILL.md` — there `intent` is the plain English word.
+- `src/station/gates.mjs`, `src/station/domain/tool-call-ledger.mjs`, `resources/prompts/features.md` (`constitution.core` / `constitution.full`) — there `intent` is the plain English word.
 - `host-omp-ui/web/**` and `tests/host-omp-ui/**` — `ScrollIntent` is a different concept.
 
 ## Ledger
@@ -61,8 +61,8 @@ Each non-zero value is the character count of that rendered text plus the identi
 
 | Slice | Files |
 |---|---|
-| S1 | `src/scope/forkjoin.mjs`, `src/scope/fork-registry.mjs`, `src/station/domain/identity.mjs`, `src/station/domain/fork-join.mjs` |
-| S2 | `src/station/fork-controls.mjs` (both constant removals, `pricedChars` production side, send path) |
+| S1 | `src/scope/forkjoin.mjs` (re-export facade) over `src/scope/ledger-brackets.mjs`, `src/scope/ledger-serialize.mjs`, `src/scope/ledger-charge.mjs`; `src/scope/fork-registry.mjs`, `src/station/domain/identity.mjs`, `src/station/domain/fork-join.mjs` |
+| S2 | `src/station/fork-controls.mjs` (facade) and `src/station/fork-reads.mjs` (both constant removals, `pricedChars` production side, send path) |
 | S3 | `resources/prompts/**` placeholders and copy (`{{intent}}` → `{{fsm}}`) |
 | T1, T2 | `tests/**` mechanical rename and the new cases |
 

@@ -9,6 +9,7 @@
  * no request history and makes no claim about a provider's actual cache hits.
  */
 import { createHash } from "node:crypto";
+import { isObject } from "./object-read.mjs";
 
 const FIELDS = Object.freeze([
 	"namespace",
@@ -27,10 +28,6 @@ function digest(value) {
 	const text = JSON.stringify(value);
 	if (typeof text !== "string") throw new TypeError("Value has no JSON form");
 	return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-function isObject(value) {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

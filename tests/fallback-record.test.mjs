@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createForkWiring } from "../src/scope/fork-wiring.mjs";
+import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { ledgerFor, outcomeOf } from "../src/scope/fork-registry.mjs";
 import { spawnChildTicket } from "../src/tools/spawn-ticket.mjs";
 import { markReady, registerFork } from "../src/scope/forkjoin.mjs";

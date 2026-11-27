@@ -7,7 +7,7 @@
 
 import { buildPorts } from "./core/ports/build.mjs";
 import { createStationRegistry } from "./station/registry.mjs";
-import { createForkWiring } from "./scope/fork-wiring.mjs";
+import { createForkWiring } from "./wiring/fork-wiring.mjs";
 import { createScopes } from "./scope/scopes.mjs";
 import { createTools } from "./tools/catalog.mjs";
 import { preloadDocs, render } from "./prompts/index.mjs";

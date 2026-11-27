@@ -6,7 +6,7 @@ import {
   attachBaseForkPorts,
   bindHostForkPorts,
   createForkWiring,
-} from "../src/scope/fork-wiring.mjs";
+} from "../src/wiring/fork-wiring.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { spawnChildTicket } from "../src/tools/spawn-ticket.mjs";
 import {
@@ -17,7 +17,7 @@ import {
   setOutcome,
   waitForReady,
 } from "../src/scope/fork-registry.mjs";
-import { markReady, openChildren, registerFork, RUNNING } from "../src/scope/forkjoin.mjs";
+import { markReady, registerFork, RUNNING } from "../src/scope/forkjoin.mjs";
 import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 
 function stationOf() {
@@ -635,7 +635,7 @@ describe("ledger sharing across stations", () => {
 
   test("two stations of one conversation share one ledger", async () => {
     const { SessionStation } = await import("../src/station/station.mjs");
-    const { createForkWiring } = await import("../src/scope/fork-wiring.mjs");
+    const { createForkWiring } = await import("../src/wiring/fork-wiring.mjs");
     const wiring = createForkWiring();
     const registry = {
       forkWiring: () => wiring,
@@ -655,7 +655,7 @@ describe("ledger sharing across stations", () => {
 
   test("two conversations never share a ledger", async () => {
     const { SessionStation } = await import("../src/station/station.mjs");
-    const { createForkWiring } = await import("../src/scope/fork-wiring.mjs");
+    const { createForkWiring } = await import("../src/wiring/fork-wiring.mjs");
     const wiring = createForkWiring();
     const registry = { forkWiring: () => wiring, ports: () => ({}) };
     const one = { getSessionId: () => "conversation-1" };
@@ -675,7 +675,7 @@ describe("ledger sharing across stations", () => {
 
   test("a shared ledger carries a fork registered by one station to the other", async () => {
     const { SessionStation } = await import("../src/station/station.mjs");
-    const { createForkWiring } = await import("../src/scope/fork-wiring.mjs");
+    const { createForkWiring } = await import("../src/wiring/fork-wiring.mjs");
     const wiring = createForkWiring();
     const registry = {
       forkWiring: () => wiring,

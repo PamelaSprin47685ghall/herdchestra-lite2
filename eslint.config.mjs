@@ -52,7 +52,12 @@ export default [
 		// are what a ticket parks on, not a station method. Every other file in
 		// these three domains stays synchronous.
 		ignores: ["src/scope/fork-registry.mjs"],
-		files: ["src/station/**/*.mjs", "src/scope/**/*.mjs", "src/relay/**/*.mjs"],
+		files: [
+			"src/station/**/*.mjs",
+			"src/scope/**/*.mjs",
+			"src/relay/**/*.mjs",
+			"src/wiring/**/*.mjs",
+		],
 		languageOptions: {
 			ecmaVersion: 2024,
 			sourceType: "module",
@@ -80,6 +85,48 @@ export default [
 				"error",
 				{
 					patterns: [
+						{
+							group: [
+								"../host/*",
+								"../../host/*",
+								"**/host/*",
+								"../activation/*",
+								"../../activation/*",
+								"@oh-my-pi/*",
+								"herdchestra-host-omp",
+								"herdchestra-host-omp/*",
+							],
+							message:
+								"Core code receives host capabilities through an injected bag; a direct host import is a layering error.",
+						},
+					],
+				},
+			],
+		},
+	},
+	{
+		// The domain layer points one way. A station calls into the domain, and a
+		// ticket may call both; the domain never reaches back into a station, a
+		// tool, or the wiring that assembles them. That single rule is what keeps
+		// this directory a domain instead of a second composition root.
+		files: ["src/scope/**/*.mjs"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: [
+								"../station/*",
+								"../../station/*",
+								"../tools/*",
+								"../../tools/*",
+								"../wiring/*",
+								"../../wiring/*",
+							],
+							message:
+								"The domain layer never imports a station, a tool, or the wiring; those depend on it, not the reverse.",
+						},
 						{
 							group: [
 								"../host/*",

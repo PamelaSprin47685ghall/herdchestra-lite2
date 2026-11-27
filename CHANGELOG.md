@@ -6,6 +6,39 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [6.2.1] — 2026-11-27
+
+### Changed — one module per responsibility across the ledger, the stations, and the host
+
+Five modules had grown into catch-alls: `src/scope/forkjoin.mjs` (1554 lines),
+`src/scope/persistence.mjs` (1418), `src/station/fork-controls.mjs` (927),
+`host-omp/src/host/pricing.mjs` (595), and `host-omp/src/host/host-tickets.mjs` (578).
+Each now sits behind single-purpose modules:
+
+- `src/scope/ledger-{entry,brackets,charge,serialize}.mjs` plus `state-delta.mjs`,
+  `state-codec.mjs`, `amount.mjs`, and `entry-plan.mjs` carry the ledger;
+  `forkjoin.mjs` and `persistence.mjs` keep only their own coordination.
+- `src/station/{fork-reads,join-controls,return-controls,abandon-controls}.mjs` split the
+  `scope_fork` / `scope_join` / `scope_return` / `scope_abandon` controls out of
+  `fork-controls.mjs`.
+- `host-omp/src/host/tickets/{prompt,model,model-identifiers,rewind,steer}.mjs` replace
+  `host-tickets.mjs`; `host-omp/src/host/pricing/` replaces `pricing.mjs`;
+  `host-omp-ui/src/host/tickets/{delta-merger,fence-ticket}.mjs` replace `bridge-tickets.mjs`.
+- `host-omp-ui/src/station/domain/{artifact-hydration,fence-lifecycle,history-window,snapshot-doc}.mjs`
+  split `ui-bridge-station.mjs`.
+
+### Changed — the tool-view protocol is shared source, not two copies
+
+`host-omp-ui/shared/tool-view.mjs` and `shared/transcript-groups.mjs` now hold the
+rendering protocol that the extension and the web bundle both read, and `shared/` joined
+the package `files` list. `web/src/protocol/tool-view.ts` keeps only the web-side types,
+and its parity test runs against the shared module.
+
+### Changed — `src/wiring/fork-wiring.mjs` is the single wiring module
+
+`src/scope/fork-wiring.mjs` and `host-omp/src/host/index.mjs` are gone; the composition
+root lives in `src/wiring/` and nothing outside it assembles tickets.
+
 ### Changed — the probe's clock entry states its direction
 
 `state.remaining.time` printed `6:46/6:58`, which reads as an elapsed span as

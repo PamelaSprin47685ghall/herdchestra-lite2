@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { hostname, userInfo } from "node:os";
-import { createStatusRuntime } from "../host-omp/src/host/index.mjs";
+import { createStatusRuntime } from "../host-omp/src/host/status.mjs";
 
 function makeUi() {
 	const working = [];

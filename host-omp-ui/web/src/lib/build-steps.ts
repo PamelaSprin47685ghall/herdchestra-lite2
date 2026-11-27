@@ -47,9 +47,12 @@ function hasVisibleText(text: unknown): text is string {
   return typeof text === "string" && text.trim().length > 0;
 }
 
-export function isRealUser(message: UiMessage): boolean {
-  return message.role === "user" && message.attribution === "user";
-}
+// One turn boundary rule for both views. The copy that used to live here lacked
+// the `synthetic` guard, so an injected input opened a turn on the web while the
+// station folded it into a step.
+import { isRealUser } from "../../../shared/transcript-groups.mjs";
+
+export { isRealUser };
 
 export function resolveHistoryCursor(
   oldestId: string | null | undefined,

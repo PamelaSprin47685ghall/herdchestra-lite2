@@ -34,7 +34,6 @@ import {
 	finishRequest,
 	isFreeCall,
 	markLedgerStructDirty,
-	normalizeTotals,
 	planLedgerEntry,
 	planStateEntry,
 	serializeState,
@@ -113,7 +112,9 @@ import {
 import {
 	projectContext,
 	shouldRebase,
+	resolveContextWindow,
 } from "./domain/context.mjs";
+import { selectForkLedger } from "./domain/fork-ledger.mjs";
 import {
 	createToolCallLedger,
 	processedOf,
@@ -285,36 +286,37 @@ export class SessionStation {
 				? ((this.host?.fork?.ledgerFor ?? ledgerFor)(forkWiring.registry, key) ?? null)
 				: null;
 		const restored = this.state.brackets ?? null;
-		const indexedLive = (indexed?.order?.length ?? 0) > 0;
-		const restoredLive = (restored?.order?.length ?? 0) > 0;
-		const chosen = indexedLive
-			? indexed
-			: restoredLive
-				? restored
-				: (indexed ?? restored ?? createBracketLedger());
-		// The tree choice stays order-based, but the turn samples must survive a
-		// reload even when the restored tree has no open forks. Fill an empty
-		// chosen ledger from the other candidate; never sum two live samples.
-		const other = chosen === indexed ? restored : indexed;
-		if (chosen && other && chosen !== other) {
-			const chosenTotals = normalizeTotals(chosen.totals);
-			const otherTotals = normalizeTotals(other.totals);
-			const chosenHasSamples = chosenTotals.turns > 0 || chosenTotals.turnMs > 0;
-			const otherHasSamples = otherTotals.turns > 0 || otherTotals.turnMs > 0;
-			if (!chosenHasSamples && otherHasSamples) {
-				chosen.totals = otherTotals;
-				// The shared serializer reuses the previous copy of a ledger, so
-				// a replaced totals object must be announced before the next write.
-				markLedgerStructDirty(chosen);
-			}
-		}
+		// The tree choice and the totals fill live in the domain helper; passing
+		// `create` states that a fresh session needs an empty ledger minted.
+		const { ledger: chosen, adopt } = selectForkLedger({
+			indexed,
+			restored,
+			create: createBracketLedger,
+		});
 		this.brackets = chosen;
-		if (forkWiring && key !== null && (chosen !== indexed || !indexedLive)) {
+		if (forkWiring && key !== null && adopt) {
 			(this.host?.fork?.adoptLedger ?? adoptLedger)(forkWiring.registry, key, this.brackets);
 		}
 		this.state.brackets = this.brackets;
 		// Attached by the host wiring; null means this station cannot wait.
 		this.forkWaitPort = null;
+		// Fork ports the host wiring overrides. Each default answers a plain
+		// value, so a reader calls the port without a `typeof` probe: attaching
+		// replaces the default. `forkDepthPort` reports the root depth until a
+		// child identity supplies its own. `setChildOutcome` is the exception,
+		// kept null: root has no parent to hand a record to, and a return there
+		// must not render one.
+		this.forkLedgerPort = () => null;
+		this.forkOwnerId = () => null;
+		this.forkIdentityPort = () => null;
+		this.forkDepthPort = () => 0;
+		this.forkWindowPort = () => null;
+		this.forkReservePort = () => undefined;
+		this.forkMarginPort = () => undefined;
+		this.childOutcomePort = () => null;
+		this.setChildOutcome = null;
+		this.abortChildrenPort = () => 0;
+		this.persistLedger = () => this.persist?.();
 		this.forkReports = new Map();
 		this.selfForkId = null;
 		this.parentOwnerId = null;
@@ -391,8 +393,13 @@ export class SessionStation {
 				: this.forkOwnerId()
 					? 1
 					: 0;
-		this.childOutcomePort = childOutcomePort;
-		this.setChildOutcome = setChildOutcome;
+		// A null port is an absent capability, not a missing default. The
+		// outcome reader answers null; the sink stays null because a station
+		// without one has nobody to hand a rendered record to.
+		this.childOutcomePort =
+			typeof childOutcomePort === "function" ? childOutcomePort : () => null;
+		this.setChildOutcome =
+			typeof setChildOutcome === "function" ? setChildOutcome : null;
 		if (typeof identity?.persistRoot === "function") {
 			this.persistLedger = identity.persistRoot;
 		} else if (!identity) {
@@ -512,7 +519,7 @@ export class SessionStation {
 		// context can still say `kind: "main"`), so the bound fork identity is
 		// the authoritative marker. Without this check a child is treated as
 		// read-only and every station transition stops.
-		if (typeof this.forkOwnerId === "function" && this.forkOwnerId() !== null) {
+		if (this.forkOwnerId() !== null) {
 			return READ_WRITE_SUBAGENT;
 		}
 		if (this.agentPolicy !== null) return this.agentPolicy;
@@ -592,10 +599,8 @@ export class SessionStation {
 
 	/** The fork record of this branch, or null at the root. */
 	branchRecord() {
-		const ledger =
-			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
-		const ownerId =
-			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+		const ledger = this.forkLedgerPort();
+		const ownerId = this.forkOwnerId();
 		return ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null;
 	}
 
@@ -635,23 +640,7 @@ export class SessionStation {
 	 * the catalog in its own order.
 	 */
 	contextWindowTokens() {
-		if (typeof this.forkWindowPort === "function") {
-			const window = this.forkWindowPort();
-			if (Number.isFinite(window) && window > 0) return window;
-		}
-		const live = this.usage?.lastCtxModel;
-		if (Number.isFinite(live?.contextWindow) && live.contextWindow > 0) {
-			return live.contextWindow;
-		}
-		const key = this.state?.baseModelKey;
-		const catalog = this.pricingCatalog;
-		if (catalog && typeof key === "string" && key !== "") {
-			const entry =
-				catalog.byFullId?.get?.(key) ?? catalog.byId?.get?.(key) ?? null;
-			const window = entry?.contextWindow;
-			if (Number.isFinite(window) && window > 0) return window;
-		}
-		return null;
+		return resolveContextWindow(this);
 	}
 
 	/** True when the next request must carry the return nudge. */
@@ -680,11 +669,9 @@ export class SessionStation {
 	 * probe, the cache signature and the vm binding, so the three cannot drift.
 	 */
 	capabilitySnapshot(ctx) {
-		const ledger =
-			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
-		const ownerId =
-			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
-		const record = ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null;
+		const ledger = this.forkLedgerPort();
+		const ownerId = this.forkOwnerId();
+		const record = this.branchRecord();
 		const isChild = ownerId !== null;
 		const selfPath = record?.path ?? (isChild ? `/${ownerId}` : "/");
 		const registry = this.forkRegistry();
@@ -736,13 +723,9 @@ export class SessionStation {
 	 * knows it by.
 	 */
 	selfScopePath() {
-		const ledger =
-			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
-		const ownerId =
-			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+		const ownerId = this.forkOwnerId();
 		if (ownerId === null || ownerId === undefined) return "/";
-		const record = ledger ? (ledger.forks?.[ownerId] ?? null) : null;
-		const path = record?.path;
+		const path = this.branchRecord()?.path;
 		if (typeof path === "string" && path !== "") return path;
 		return `/${ownerId}`;
 	}
@@ -779,7 +762,7 @@ export class SessionStation {
 		// An unbound child station also reports "/"; the identity is the proof
 		// that this is the conversation root and not a child before its fork
 		// record is attached.
-		if (typeof this.forkOwnerId === "function" && this.forkOwnerId() !== null) {
+		if (this.forkOwnerId() !== null) {
 			return false;
 		}
 		if (this.selfScopePath() !== "/") return false;
@@ -797,7 +780,7 @@ export class SessionStation {
 		const registry = this.forkRegistry();
 		if (
 			!registry ||
-			(typeof this.forkOwnerId === "function" && this.forkOwnerId() !== null) ||
+			(this.forkOwnerId() !== null) ||
 			this.selfScopePath() !== "/"
 		) {
 			return null;
@@ -911,9 +894,9 @@ export class SessionStation {
 	finishJsCall(toolCallId, calls, ctx) {
 		try {
 			const ledger =
-				typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+				this.forkLedgerPort();
 			const ownerId =
-				typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+				this.forkOwnerId();
 			if (ownerId === null || !ledger) return;
 			const list = Array.isArray(calls) ? calls : [];
 			const beatTools = list.map((call) => ({
@@ -1012,9 +995,9 @@ export class SessionStation {
 		if (message.stopReason === "aborted" || message.stopReason === "error") return;
 		if (this.nudged.has(message)) return;
 		const ledger =
-			typeof this.forkLedgerPort === "function" ? this.forkLedgerPort() : null;
+			this.forkLedgerPort();
 		const ownerId =
-			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+			this.forkOwnerId();
 		const projection = this.projectionFor(ctx);
 		const decision = nudgeDecision({
 			hasToolCalls: toolCalls(message).length > 0,
@@ -1135,10 +1118,9 @@ export class SessionStation {
 		// The receipt is where the question becomes visible to the model, so the
 		// delivery marker is written here and nowhere else: a projection computed
 		// for the cache signature must never consume a delivery.
-		const registry =
-			typeof this.forkRegistry === "function"
-				? this.forkRegistry()
-				: (this.forkWaitPort?.()?.registry ?? this.forkWiring?.registry ?? null);
+		// `forkRegistry()` is a class method and always answers; a second path
+		// here only hid which one owned the table.
+		const registry = this.forkRegistry();
 		if (projection.state?.request && registry) {
 			markRequestDelivered(registry, projection.state.scope);
 		}
@@ -1147,7 +1129,7 @@ export class SessionStation {
 			chinese: this.state?.features?.chinese ?? "on",
 		});
 		const ownerId =
-			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
+			this.forkOwnerId();
 		return {
 			role: "user",
 			content: [{ type: "text", text }],

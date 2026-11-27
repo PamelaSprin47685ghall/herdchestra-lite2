@@ -6,12 +6,6 @@
 // the live display holder's inner state. It may carry the two turn totals onto
 // the chosen ledger when that ledger has no samples yet.
 
-// The ledger precedence moved to src/station/domain/fork-ledger.mjs so the
-// rule lives on the station side of the boundary and the wiring only executes
-// it.
-
-import { selectForkLedger } from "./fork-ledger.mjs";
-
 /**
  * Build the identity a child station reads back from the registry.
  *
@@ -43,15 +37,6 @@ export function buildChildIdentity(spec = {}, deps = {}) {
 		persistRoot:
 			typeof deps.persistRoot === "function" ? deps.persistRoot : null,
 	};
-}
-
-/**
- * Compatibility wrapper: the precedence rule lives in
- * `src/station/domain/fork-ledger.mjs`; callers that only need the ledger use
- * this function.
- */
-export function resolveForkLedger(args = {}) {
-	return selectForkLedger(args).ledger;
 }
 
 

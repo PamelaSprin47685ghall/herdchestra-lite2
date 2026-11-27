@@ -20,7 +20,6 @@ import {
 	finalizeAssistantStream,
 	buildChildAssistantMessage,
 	buildChildAssistantDelta,
-	partsText,
 	partsSignature,
 } from "./activity.mjs";
 
@@ -34,8 +33,10 @@ const scopes = () => scopeView ?? { of: () => null, status: () => null, label: (
 
 export const CHILD_ACTIVITY_TYPE = "herd.fork-activity";
 export const ACTIVE_TOOLS_WIDGET_KEY = "herd-tools";
-const CAPTURE = Symbol.for("herdchestra-lite2.transcript-subscribe.v1");
-const STATE = Symbol.for("herdchestra-lite2.transcript-listeners.v1");
+import {
+	TRANSCRIPT_LISTENERS as STATE,
+	TRANSCRIPT_SUBSCRIBE as CAPTURE,
+} from "./process-symbols.mjs";
 const transcript = globalThis[STATE] ??= new WeakMap();
 const noopRepaint = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
 // One stable identity: the host detach only clears the slot it installed.

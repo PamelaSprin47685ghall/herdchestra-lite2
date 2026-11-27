@@ -14,10 +14,12 @@
 import { createHeadlessTuiContext } from "./headless-tui.mjs";
 import { captureTranscriptSubscriptions } from "./child-display.mjs";
 
-const STATE_KEY = Symbol.for("herdchestra-lite2.session-capture.v2");
-const VIBE_PATCH = Symbol.for("herdchestra-lite2.vibe-tools.v2");
-const RUNNER_GETTER_PATCH = Symbol.for("herdchestra-lite2.runner-getter.v2");
-const ABORT_PATCH = Symbol.for("herdchestra-lite2.session-abort.v1");
+import {
+	ABORT_PATCH,
+	RUNNER_GETTER_PATCH,
+	SESSION_CAPTURE_STATE as STATE_KEY,
+	VIBE_PATCH,
+} from "./process-symbols.mjs";
 // Upstream interrupt labels from pi-coding-agent/src/session/transcript/messages.ts.
 // Native TUI Esc, Web UI ctx.abort(), ACP cancel, and parent kill all enter
 // AgentSession.prototype.abort with one of these labels. Internal lifecycle

@@ -14,9 +14,7 @@
  *   visible under the owning task (or Main) in Agent Hub.
  */
 
-function isNonEmptyString(value) {
-	return typeof value === "string" && value !== "";
-}
+import { isNonEmptyString } from "./object-read.mjs";
 
 function matchesExpected(ref, expected) {
 	return expected === undefined || ref === expected || ref.session === expected;

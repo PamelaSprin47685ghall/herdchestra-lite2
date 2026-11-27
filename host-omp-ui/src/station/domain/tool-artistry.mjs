@@ -2,15 +2,15 @@
 // DeerFlow cards render. The mapper is intentionally pure: no ANSI reaches the
 // browser, and no tool result is shown as raw JSON unless it is a generic tool.
 
-const MAX_OUTPUT = 12_000;
+import {
+  MAX_OUTPUT,
+  describeScopeCall,
+  languageFor,
+  stripAnsi,
+  stripReplEcho,
+} from "../../../shared/tool-view.mjs";
 
-export function stripAnsi(text) {
-  if (typeof text !== "string") return "";
-  return text
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "");
-}
+export { stripAnsi };
 
 function resultText(result) {
   if (!result) return "";
@@ -21,29 +21,6 @@ function resultText(result) {
     .filter((block) => block && block.type === "text")
     .map((block) => block.text ?? "")
     .join("\n");
-}
-
-function languageFor(path) {
-  const extension = String(path ?? "").split(".").pop()?.toLowerCase();
-  const map = {
-    js: "javascript",
-    mjs: "javascript",
-    cjs: "javascript",
-    ts: "typescript",
-    tsx: "tsx",
-    jsx: "jsx",
-    py: "python",
-    rs: "rust",
-    go: "go",
-    json: "json",
-    md: "markdown",
-    css: "css",
-    html: "html",
-    sh: "bash",
-    yml: "yaml",
-    yaml: "yaml",
-  };
-  return map[extension] ?? "text";
 }
 
 export function computeLineDiff(oldText, newText) {
@@ -108,16 +85,6 @@ function readRange(args) {
   if (offset === null || limit === null) return "";
   // `limit` counts lines, so the range ends at offset + limit - 1.
   return limit > 0 ? `${offset}-${offset + limit - 1}` : `${offset}-`;
-}
-
-// The js result's first line is a fixed echo of the invocation; the code itself
-// already travelled in the call's arguments, so the card shows the output only.
-const REPL_ECHO_PREFIX = "> await AsyncFunction(";
-
-function stripReplEcho(text) {
-  if (!text.startsWith(REPL_ECHO_PREFIX)) return text;
-  const at = text.indexOf("\n");
-  return at === -1 ? "" : text.slice(at + 1);
 }
 
 /**
@@ -240,71 +207,10 @@ export function describeToolCall(toolCall, toolResult) {
   }
 
   // The scope control plane is the orchestration surface once every native tool
-  // hides behind `js`. Without these branches each call falls through to the
-  // generic card, and the transcript fills with JSON blobs exactly where the
-  // model is coordinating work.
-  if (name === "scope_request") {
-    const target = String(args.target ?? "");
-    const message = String(args.message ?? "");
-    const interrupt = args.interrupt === true ? " · interrupt" : "";
-    return {
-      kind: "ask",
-      title: `scope_request → ${target || "?"}`,
-      summary: [`→ ${target}${interrupt}: ${message}`, output && `← ${output}`]
-        .filter(Boolean)
-        .join("\n"),
-      isError,
-    };
-  }
-
-  if (name === "scope_reply") {
-    const reply = String(args.text ?? args.reply ?? args.message ?? output);
-    return {
-      kind: "ask",
-      title: "scope_reply",
-      summary: `← ${reply}`,
-      isError,
-    };
-  }
-
-  if (name === "scope_fork") {
-    const forks = Array.isArray(args.forks) ? args.forks : [];
-    const requested = forks.map((fork) => {
-      const spec = fork ?? {};
-      const id = String(spec.scopeId ?? spec.name ?? "?");
-      const fsm = String(spec.fsm ?? "").slice(0, 80);
-      return fsm ? `${id} — ${fsm}` : id;
-    });
-    return {
-      kind: "task",
-      title: args.description ?? `scope_fork (${forks.length})`,
-      agent: "scope_fork",
-      prompt: requested.join("\n"),
-      result: output,
-      isError,
-    };
-  }
-
-  if (name === "scope_join" || name === "scope_return") {
-    const scope = String(args.scope ?? "");
-    const oath = args.signed_sealed_hands_off_nothing_left_on_the_table;
-    const plan =
-      name === "scope_return"
-        ? oath === "a_ferocious_audacious_master_would_change_nothing"
-          ? "seal"
-          : oath === "unfinished"
-            ? "continue"
-            : "rewind"
-        : "";
-    return {
-      kind: "task",
-      title: scope ? `${name} ${scope}` : name,
-      agent: name,
-      prompt: plan,
-      result: output,
-      isError,
-    };
-  }
+  // hides behind `js`; its exact titles and plan words live in the shared mapper
+  // so this copy and the browser copy cannot disagree.
+  const scopeView = describeScopeCall(name, args, output);
+  if (scopeView) return { ...scopeView, isError };
 
   if (name === "todo") {
     const phases = Array.isArray(args.phases) ? args.phases : [];

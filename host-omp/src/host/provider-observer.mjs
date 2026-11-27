@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import { record } from "./diagnostics.mjs";
 import { captureRequestFrame, compareRequestFrames } from "./request-frames.mjs";
+import { isObject } from "./object-read.mjs";
 
 const APIS = new Set([
 	"anthropic-messages",
@@ -30,10 +31,6 @@ const GOOGLE_CONTROLS = [
 	"cachedContent", "thinkingConfig", "toolConfig", "responseMimeType",
 	"responseSchema", "responseJsonSchema",
 ];
-
-function isObject(value) {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function hash(value) {
 	try {

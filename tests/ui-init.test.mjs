@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { activate } from "../host-omp/src/main.mjs";
-import { createForkWiring } from "../src/scope/fork-wiring.mjs";
+import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { registerFork } from "../src/scope/forkjoin.mjs";

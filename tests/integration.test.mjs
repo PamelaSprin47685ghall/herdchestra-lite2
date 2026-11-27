@@ -6,11 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { activate } from "../host-omp/src/main.mjs";
 import { CHILD_ACTIVITY_TYPE } from "../host-omp/src/host/child-display.mjs";
-import {
-	projectCapabilities,
-	renderConsoleReceipt,
-} from "../src/station/domain/capabilities.mjs";
-import { installVibeTools } from "../host-omp/src/host/index.mjs";
+import { installVibeTools } from "../host-omp/src/host/capture.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";
 import { buildTickets } from "../host-omp/src/activation/tickets.mjs";
 import { createHostBag } from "../host-omp/src/activation/index.mjs";
@@ -347,7 +343,7 @@ describe("root rewind host lifecycle", () => {
 		let nextJob = 0;
 		const listeners = new Set();
 		const externalEvents = [];
-		const { host, ctx, session, plan, events, settle, paused, ticket, terminalReturn } = bindRewind();
+		const { host, ctx, session, events, settle, paused, ticket, terminalReturn } = bindRewind();
 		session.getAgentId = () => "main-agent";
 		session.asyncJobManager = {
 			register(_type, _label, executor, options) {

@@ -2,58 +2,8 @@
 
 import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { identityForAgent } from "../scope/fork-registry.mjs";
-import { SessionStation } from "./station.mjs";
+import { SessionStation, shapeHost } from "./station.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
-
-/**
- * The registry takes the grouped `host` shape. A test double written against
- * the older flat bag is widened here, in one place, so no station carries a
- * second convention.
- */
-function normalizeHost(host) {
-	const source = host && typeof host === "object" ? host : {};
-	if (source.session || source.model || source.tools || source.accounting || source.fork || source.report) {
-		return source;
-	}
-	const session = Object.freeze({
-		managerOf: source.managerOf,
-		conversationKey: source.conversationKeyOf,
-		branch: source.branchOf,
-		agent: source.agentOf,
-		header: source.contextHeaderOf,
-		setMessages: source.setAgentMessages,
-		appendHistory: source.appendHistoryMessage,
-		abort: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
-		canRewindRoot: source.canRewindRoot,
-	});
-	const model = Object.freeze({
-		of: source.modelOf,
-		thinkingOf: source.thinkingOf,
-		parseSpec: source.preparseModelSpec,
-		capabilities: source.capabilities,
-	});
-	return Object.freeze({
-		session,
-		model,
-		accounting: Object.freeze({
-			usage: source.usage,
-			pricing: source.pricing && {
-				...source.pricing,
-				emptyCatalog: source.createEmptyCatalog,
-			},
-		}),
-		fork: Object.freeze({
-			wiring: source.forkWiring,
-			attachBaseForkPorts: source.attachBaseForkPorts,
-			identityForAgent: source.identityForAgent,
-			agentIdOf: source.agentIdOf,
-			sameManager: source.sameManager,
-			ledgerFor: source.ledgerFor,
-			adoptLedger: source.adoptLedger,
-		}),
-		report: Object.freeze({ record: source.record }),
-	});
-}
 
 /**
  * Read the one wiring shape the composition root sends:
@@ -108,7 +58,9 @@ function readWiring(input) {
  */
 export function createStationRegistry(options = {}) {
 	const { tickets, pricingCatalog = null } = options;
-	const host = normalizeHost(options.host);
+	// One host adapter: `shapeHost` widens a flat double and passes a grouped bag
+	// through, so the registry and the station cannot drift apart.
+	const host = shapeHost(options.host);
 	const defaultAgentId = () => null;
 	if (
 		!tickets ||

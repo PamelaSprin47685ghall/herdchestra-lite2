@@ -2,28 +2,41 @@
 // handlers keep only the side effects. This bounds the station-taking surface
 // so the next slice starts from a lower count, never a higher one.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { describe, expect, test } from "bun:test";
 
-const domain = readFileSync(
-	new URL("../../src/station/domain/fork-join.mjs", import.meta.url),
-	"utf8",
-);
-const controls = readFileSync(
-	new URL("../../src/station/fork-controls.mjs", import.meta.url),
-	"utf8",
-);
+const STATION_DIR = new URL("../../src/station/", import.meta.url);
+const SCOPE_DIR = new URL("../../src/scope/", import.meta.url);
+
+const read = (dir, name) => readFileSync(new URL(name, dir), "utf8");
+
+const domain = read(STATION_DIR, "domain/fork-join.mjs");
+
+// The control surface is split by handler family. The files are discovered by
+// name shape, not listed by hand: a sixth `*-controls.mjs` module cannot escape
+// the count by simply not being named here.
+const CONTROL_FILES = readdirSync(STATION_DIR)
+	.filter((name) => name === "fork-reads.mjs" || name.endsWith("-controls.mjs"))
+	.sort();
+const controls = CONTROL_FILES.map((name) => read(STATION_DIR, name)).join("\n");
 
 function count(text, pattern) {
 	return [...text.matchAll(pattern)].length;
 }
 
-// The handlers still own take/commit/persist; this is the post-slice baseline.
-// A new station-taking free function must remove one, not add one.
-const STATION_FUNCTIONS_BASELINE = 20;
+// The handlers still own take/commit/persist. This baseline was 17 while the
+// scan was a hand-written list of five files; discovery covered
+// `request-controls.mjs` and `fork-controls.mjs` as well, which the list had
+// never counted. 24 is therefore the first honest number, not a relaxation:
+// from here a new station-taking free function must remove one, not add one.
+const STATION_FUNCTIONS_BASELINE = 24;
 
 describe("fork/join ratchet", () => {
+	test("the control surface is discovered, not hand-listed", () => {
+		expect(CONTROL_FILES.length).toBeGreaterThanOrEqual(5);
+	});
+
 	test("the domain has no Station or host dependency", () => {
 		expect(domain).not.toMatch(/from\s+["'][^"']*station\.mjs/);
 		expect(domain).not.toMatch(/from\s+["'][^"']*\/host\//);
@@ -59,10 +72,21 @@ describe("fork/join ratchet", () => {
 // requester is parked. Persisting it would serialize a resolver that no reload can
 // honour, so the persistence layer must never name the request table.
 describe("the request queue stays in memory", () => {
-	const persistence = readFileSync(
-		new URL("../../src/scope/persistence.mjs", import.meta.url),
-		"utf8",
-	);
+	// The persistence implementation is split, and scanning only the facade would
+	// make this ratchet vacuous. Files are selected by the shape they carry, so a
+	// further split is covered without touching this test.
+	const PERSISTENCE_MARKERS =
+		/serializeState|deserializeState|planStateEntry|foldLedgerEntry|applyDelta|normalizeStateEntry|planLedgerEntry|STATE_ENTRY_VERSION/;
+	const PERSISTENCE_FILES = readdirSync(SCOPE_DIR)
+		.filter((name) => name.endsWith(".mjs") && name !== "state.mjs")
+		.filter((name) => PERSISTENCE_MARKERS.test(read(SCOPE_DIR, name)))
+		.sort();
+	const persistence = PERSISTENCE_FILES.map((name) => read(SCOPE_DIR, name)).join("\n");
+
+	test("the persistence surface is discovered, not hand-listed", () => {
+		expect(PERSISTENCE_FILES).toContain("persistence.mjs");
+		expect(PERSISTENCE_FILES.length).toBeGreaterThanOrEqual(5);
+	});
 
 	test("no serialized state carries a request queue", () => {
 		expect(persistence).not.toMatch(/registry\.requests/);

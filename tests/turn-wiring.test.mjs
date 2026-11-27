@@ -14,7 +14,7 @@ import {
 	createForkRegistry,
 	ledgerFor,
 } from "../src/scope/fork-registry.mjs";
-import { resolveForkLedger } from "../src/station/domain/identity.mjs";
+import { selectForkLedger } from "../src/station/domain/fork-ledger.mjs";
 import {
 	createBracketLedger,
 	restoreLedger,
@@ -100,7 +100,7 @@ describe("a reload with no open forks keeps the turn totals", () => {
 		indexed.totals = { turnMs: 30_000, turns: 1 };
 		const restored = createBracketLedger();
 		restored.order.push("f");
-		const chosen = resolveForkLedger({ indexed, restored });
+		const chosen = selectForkLedger({ indexed, restored }).ledger;
 		expect(chosen).toBe(restored);
 		expect(chosen.totals).toEqual({ turnMs: 30_000, turns: 1 });
 	});
@@ -110,7 +110,7 @@ describe("a reload with no open forks keeps the turn totals", () => {
 		indexed.order.push("f");
 		indexed.totals = { turnMs: 10_000, turns: 1 };
 		const restored = createBracketLedger();
-		const chosen = resolveForkLedger({ indexed, restored });
+		const chosen = selectForkLedger({ indexed, restored }).ledger;
 		expect(chosen).toBe(indexed);
 		expect(chosen.totals).toEqual({ turnMs: 10_000, turns: 1 });
 	});
@@ -122,7 +122,7 @@ describe("a reload with no open forks keeps the turn totals", () => {
 		const restored = createBracketLedger();
 		restored.order.push("g");
 		restored.totals = { turnMs: 20_000, turns: 2 };
-		const chosen = resolveForkLedger({ indexed, restored });
+		const chosen = selectForkLedger({ indexed, restored }).ledger;
 		expect(chosen).toBe(indexed);
 		expect(chosen.totals).toEqual({ turnMs: 10_000, turns: 1 });
 		expect(restored.totals).toEqual({ turnMs: 20_000, turns: 2 });

@@ -37,16 +37,13 @@ import { forkRegistryOf } from "./ports-contract.mjs";
 const E = loadDoc("errors");
 
 function ledgerOf(station) {
-  if (typeof station.forkLedgerPort === "function") {
-    const ledger = station.forkLedgerPort();
-    if (ledger && typeof ledger === "object") return ledger;
-  }
+  const ledger = station.forkLedgerPort?.() ?? null;
+  if (ledger && typeof ledger === "object") return ledger;
   return station.brackets ?? null;
 }
 
 function identityOf(station) {
-  if (typeof station.forkIdentityPort !== "function") return null;
-  const identity = station.forkIdentityPort();
+  const identity = station.forkIdentityPort?.() ?? null;
   return identity && typeof identity === "object" ? identity : null;
 }
 

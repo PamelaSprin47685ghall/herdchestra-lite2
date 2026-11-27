@@ -6,14 +6,19 @@
 
 import type { MessageBlock, ToolExecution, ToolStatus } from "./types";
 import { asRecord } from "./guards";
+import {
+  MAX_OUTPUT,
+  describeScopeCall,
+  languageFor as sharedLanguageFor,
+  stripAnsi,
+  stripReplEcho,
+} from "../../../shared/tool-view.mjs";
 
-const MAX_OUTPUT = 12_000;
+export { MAX_OUTPUT, stripAnsi };
 
-export function stripAnsi(text: string): string {
-  return text
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "");
+/** The browser names every language the extension knows, and eighteen more. */
+export function languageFor(path: string | undefined): string {
+  return sharedLanguageFor(path, true);
 }
 
 export type AnsiSegment = { text: string; color?: string; backgroundColor?: string; bold?: boolean; underline?: boolean };
@@ -183,47 +188,6 @@ export function basename(path: string): string {
   const normalized = path.replace(/[\\/]+$/, "");
   const index = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
   return index >= 0 ? normalized.slice(index + 1) : normalized;
-}
-
-export function languageFor(path: string | undefined): string {
-  const extension = String(path ?? "").split(".").pop()?.toLowerCase();
-  const map: Record<string, string> = {
-    js: "javascript",
-    mjs: "javascript",
-    cjs: "javascript",
-    ts: "typescript",
-    tsx: "tsx",
-    jsx: "jsx",
-    py: "python",
-    rs: "rust",
-    go: "go",
-    json: "json",
-    md: "markdown",
-    css: "css",
-    scss: "scss",
-    html: "html",
-    htm: "html",
-    sh: "bash",
-    bash: "bash",
-    zsh: "bash",
-    yml: "yaml",
-    yaml: "yaml",
-    toml: "toml",
-    sql: "sql",
-    diff: "diff",
-    xml: "xml",
-    java: "java",
-    c: "c",
-    h: "c",
-    cpp: "cpp",
-    hpp: "cpp",
-    rb: "ruby",
-    php: "php",
-    swift: "swift",
-    kt: "kotlin",
-    lua: "lua",
-  };
-  return map[extension ?? ""] ?? "text";
 }
 
 export type DiffLine = {
@@ -416,16 +380,6 @@ function titleOf(name: string, args: Record<string, unknown>, fallback: string):
   return description || path || command || fallback || name;
 }
 
-// The js result's first line is a fixed echo of the invocation; the code itself
-// already travelled in the call's arguments, so the card shows the output only.
-const REPL_ECHO_PREFIX = "> await AsyncFunction(";
-
-function stripReplEcho(text: string): string {
-  if (!text.startsWith(REPL_ECHO_PREFIX)) return text;
-  const at = text.indexOf("\n");
-  return at === -1 ? "" : text.slice(at + 1);
-}
-
 /**
  * The inner tool calls a `js` script dispatched, read from
  * `result.details.innerCalls`. Each entry is described by this same function so
@@ -586,70 +540,24 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
     };
   }
 
-  // Mirrors the Node mapper: the scope control plane is the orchestration
-  // surface once every native tool hides behind `js`, so its calls get a card
-  // instead of a JSON blob.
-  if (name === "scope_request") {
-    const target = String(args.target ?? "");
-    const message = String(args.message ?? "");
-    const interrupt = args.interrupt === true ? " · interrupt" : "";
+  // The scope control plane is described once, in the shared mapper; the two
+  // bundles spread the same fields so their cards cannot drift apart.
+  const scopeView = describeScopeCall(name, args, output.text) as
+    | {
+        kind: ToolView["kind"];
+        title: string;
+        summary?: string;
+        agent?: string;
+        prompt?: string;
+        result?: string;
+      }
+    | null;
+  if (scopeView) {
     return {
       ...base,
-      kind: "ask",
-      title: `scope_request → ${target || "?"}`,
-      summary: [`→ ${target}${interrupt}: ${message}`, output.text && `← ${output.text}`]
-        .filter(Boolean)
-        .join("\n"),
-    };
-  }
-
-  if (name === "scope_reply") {
-    const reply = String(args.text ?? args.reply ?? args.message ?? output.text);
-    return {
-      ...base,
-      kind: "ask",
-      title: "scope_reply",
-      summary: `← ${reply}`,
-    };
-  }
-
-  if (name === "scope_fork") {
-    const forks = Array.isArray(args.forks) ? args.forks : [];
-    const requested = forks.map((fork) => {
-      const spec: Record<string, unknown> = asRecord(fork) ?? {};
-      const id = String(spec.scopeId ?? spec.name ?? "?");
-      const fsm = String(spec.fsm ?? "").slice(0, 80);
-      return fsm ? `${id} — ${fsm}` : id;
-    });
-    return {
-      ...base,
-      kind: "task",
-      title: titleOf(name, args, `scope_fork (${forks.length})`),
-      agent: "scope_fork",
-      prompt: requested.join("\n"),
-      result: output.text,
-    };
-  }
-
-  if (name === "scope_join" || name === "scope_return") {
-    const scope = String(args.scope ?? "");
-    const oath = args.signed_sealed_hands_off_nothing_left_on_the_table;
-    const plan =
-      name === "scope_return"
-        ? oath === "a_ferocious_audacious_master_would_change_nothing"
-          ? "seal"
-          : oath === "unfinished"
-            ? "continue"
-            : "rewind"
-        : "";
-    return {
-      ...base,
-      kind: "task",
-      title: scope ? `${name} ${scope}` : name,
-      agent: name,
-      prompt: plan,
-      result: output.text,
-    };
+      ...scopeView,
+      title: titleOf(name, args, scopeView.title),
+    } as ToolView;
   }
 
   if (name === "todo") {

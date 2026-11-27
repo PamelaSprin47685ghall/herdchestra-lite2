@@ -10,18 +10,12 @@ import {
   closeInteraction,
   listOpenInteractions,
 } from "./domain/interaction-race.mjs";
+import { applyAgentEvent, messageOrdinalOfId } from "./domain/transcript-model.mjs";
+import { createHistoryWindow } from "./domain/history-window.mjs";
+import { stripAnsi } from "./domain/tool-artistry.mjs";
+import { collectArtifacts } from "./domain/artifact-hydration.mjs";
+import { capMessage } from "./domain/snapshot-fit.mjs";
 import {
-  applyAgentEvent,
-  buildHistoryIndex,
-  extendHistoryIndex,
-  messageOrdinalOfId,
-  reconstructRange,
-  reconstructTranscriptFromEntries,
-} from "./domain/transcript-model.mjs";
-import { createArtifactCollector, stripAnsi } from "./domain/tool-artistry.mjs";
-import { capArtifact, capMessage, capTool, fitSnapshot } from "./domain/snapshot-fit.mjs";
-import {
-  alignToTurnStart,
   MAX_HISTORY_LIMIT,
   normalizeHistoryLimit,
   planHistoryPage,
@@ -31,62 +25,13 @@ import { arbitrateDraft } from "./domain/draft-arbiter.mjs";
 import { normalizeMetaPatch } from "./domain/meta-normalize.mjs";
 import { applyTspOpsToDocument, createEmptyDocument } from "./domain/surface-fence.mjs";
 import { parseClientCommand } from "./domain/protocol-codec.mjs";
+import { projectSnapshot } from "./domain/snapshot-doc.mjs";
 
-const clonePlainObject = (value) => ({ ...value });
+// The timer that coalesces deltas belongs to the ticket side, not the Station.
+// Imported and re-exported here because callers import it from this module.
+import { createDeltaMerger } from "../host/tickets/delta-merger.mjs";
 
-function mapIfArray(value) {
-  return Array.isArray(value) ? value.map(clonePlainObject) : value;
-}
-
-function copyIfArray(value) {
-  return Array.isArray(value) ? [...value] : value;
-}
-
-export function createDeltaMerger(dispatch, schedule = (run) => setTimeout(run, 16)) {
-  let pending = null;
-  let timer = null;
-  let scheduled = false;
-  const cancel = () => {
-    if (timer != null && typeof clearTimeout === "function") clearTimeout(timer);
-    timer = null;
-    scheduled = false;
-  };
-  const flush = () => {
-    cancel();
-    if (!pending) return;
-    const frame = pending;
-    pending = null;
-    dispatch(frame);
-  };
-  const push = (frame) => {
-    const payload = frame?.payload;
-    const mergeable =
-      frame?.type === "transcript.delta" &&
-      (payload?.kind === "text_delta" || payload?.kind === "thinking_delta");
-    if (!mergeable) {
-      flush();
-      dispatch(frame);
-      return;
-    }
-    if (
-      pending &&
-      pending.payload.kind === payload.kind &&
-      pending.payload.messageId === payload.messageId &&
-      pending.payload.blockIndex === payload.blockIndex
-    ) {
-      pending.payload.delta += payload.delta ?? "";
-      if (typeof frame.seq === "number") pending.seq = Math.max(pending.seq ?? 0, frame.seq);
-    } else {
-      flush();
-      pending = { type: "transcript.delta", seq: frame.seq, payload: { ...payload } };
-    }
-    if (!scheduled) {
-      scheduled = true;
-      timer = schedule(flush);
-    }
-  };
-  return { push, flush };
-}
+export { createDeltaMerger };
 
 function wireDelta(event, next) {
   const update = event.assistantMessageEvent;
@@ -272,267 +217,65 @@ export function createUiBridgeStation(options) {
     }));
   }
 
-  // A frame plus the turn-alignment back-scan. Anything older than this is not
-  // held as messages at all: it stays in the host's branch and is rebuilt when
-  // a page asks for it.
-  const HISTORY_WINDOW = 512;
-  // Hydration projects artifacts in contiguous runs, never one ordinal at a
-  // time. The bound keeps a run's projection (and its pairing maps) small while
-  // still amortizing the per-call allocation across many messages.
-  const HYDRATE_ARTIFACT_CHUNK = 256;
+  // The window itself lives in the domain kernel: the rebase rule, the stitch
+  // rule and the trim floor are one file's worth of invariants over the state
+  // bag's `history` and `messages`.
+  const history = createHistoryWindow(state);
 
-  // Artifacts describe the whole branch, so hydration has to read all of it —
-  // but only the entries that can contribute to the list. The predicate is the
-  // exact condition under which a projected message can hold a tool-call block:
-  //
-  //   blocks come from `blocksOf(content)`, whose only tool-call branch is
-  //   `block.type === "toolCall"` — no alias, no case folding, and `cleanBlocks`
-  //   only strips ANSI, never dropping a block. So a message has a tool-call
-  //   block exactly when its content array carries one of that type.
-  //
-  // The three execution roles below build their blocks without reading content
-  // (`bashExecution`, `pythonExecution`) or carry no blocks at all
-  // (`fileMention`), so a tool call inside their content could never reach the
-  // list.
-  function mayCarryToolCall(entry) {
-    const message = entry?.message;
-    if (!message) return false;
-    const role = message.role;
-    if (role === "bashExecution" || role === "pythonExecution" || role === "fileMention") return false;
-    const content = message.content;
-    if (!Array.isArray(content)) return false;
-    for (const block of content) {
-      if (block?.type === "toolCall") return true;
-    }
-    return false;
-  }
-
-  /**
-   * How many display messages there are.
-   *
-   * The branch has what it has, and the live window may already hold messages
-   * the branch does not: an event appends a message before the host writes its
-   * entry. The transcript is therefore as long as the later of the two, and a
-   * frame at the tail must see the live message rather than the branch's older
-   * count.
-   */
-  /**
-   * The current index of the branch, rebuilt when the host grew it.
-   *
-   * The host owns `entries` and may append to that very array. An index built
-   * before the append still claims the old length, and every ordinal past it
-   * answers as absent: a page for a message the branch already holds would be
-   * reported stale. Identity and length are the cheap signals; a mismatch
-   * rebuilds once, with the same call hydration made.
-   */
   function currentHistoryIndex() {
-    const entries = state.history.entries;
-    if (!entries) return null;
-    const index = state.history.index;
-    // Equal length alone does not mean the branch is the same. A rewound and
-    // re-appended branch has the same size and different contents, and the
-    // index would then name ids that are gone while answering -1 for the ones
-    // that are there. The tail reference catches a rewrite that replaces the
-    // end; it is the cheapest signal available, not a proof that earlier entries
-    // are untouched — that case is the host's explicit branch switch, which
-    // goes through `resetHistory`.
-    if (
-      index &&
-      index.source === entries &&
-      index.entryCount === entries.length &&
-      index.tailRef === (entries.length > 0 ? entries[entries.length - 1] : null)
-    ) {
-      return index;
-    }
-    // An append is the common case: the host adds to its own array between two
-    // frames, so the index only has to learn the tail. A replaced or shorter
-    // array is not a growth, and `extendHistoryIndex` answers it with a full
-    // build — the same call hydration makes.
-    const grew =
-      Boolean(index) && index.source === entries && entries.length > index.entryCount;
-    const rebuilt = extendHistoryIndex(index, entries);
-    state.history.index = rebuilt;
-    if (!grew) {
-      // The branch was rewound, replaced or rewritten in place. The held window
-      // was built from entries that no longer exist, so paging would answer with
-      // the old conversation's messages and a cursor naming a new one would read
-      // as stale. The branch part of the window is therefore rebuilt — but only
-      // that part: everything at an ordinal the branch does not cover exists
-      // nowhere else. This runs from the trim, which runs after a live append,
-      // so discarding the live tail here would delete the message that was just
-      // streamed.
-      const branch = rebuilt.entryOfMessage.length;
-      const start = Math.max(0, branch - HISTORY_WINDOW);
-      const fromBranch = reconstructRange(entries, start, branch, rebuilt);
-      const liveTail = state.messages.slice(Math.max(0, branch - state.history.base));
-      state.history.base = start;
-      state.messages = [...fromBranch, ...liveTail];
-    }
-    return rebuilt;
+    return history.currentIndex();
   }
 
   function historyTotal() {
-    const index = currentHistoryIndex();
-    const branch = index ? index.entryOfMessage.length : 0;
-    return Math.max(branch, state.history.base + state.messages.length);
+    return history.total();
   }
 
   /**
    * The messages for ordinals `[from, to)`.
    *
    * Inside the held window this is a slice. Outside it, the range is rebuilt
-   * from the branch: the host's entries are the source of truth, so an old page
-   * costs a tour of that page, not of the session. A strip that crosses the
-   * window's head is stitched: the branch answers what it has, and the window
-   * answers the live tail the branch has not caught up with.
+   * from the branch, so an old page costs a tour of that page, not of the
+   * session. A strip that crosses the window's head is stitched: the branch
+   * answers what it has, and the window answers the live tail the branch has not
+   * caught up with.
    */
   function messagesInRange(from, to) {
-    const entries = state.history.entries;
-    const index = currentHistoryIndex();
-    if (!entries || !index) return state.messages.slice(from, to);
-    const total = historyTotal();
-    const start = Math.max(0, Math.min(from, total));
-    const end = Math.max(start, Math.min(to, total));
-    const base = state.history.base;
-    if (start >= base && end <= base + state.messages.length) {
-      return state.messages.slice(start - base, end - base);
-    }
-    const branch = index.entryOfMessage.length;
-    if (end <= branch) {
-      const rebuilt = reconstructRange(entries, start, end, index);
-      if (end === total && end - start <= HISTORY_WINDOW) {
-        state.messages = rebuilt;
-        state.history.base = start;
-      }
-      return rebuilt;
-    }
-    // The strip crosses what the branch covers and what only the held window
-    // has. They have to meet exactly once: the branch answers up to the window's
-    // first ordinal, and the window answers from there. Cutting the branch at
-    // its own length instead repeats every ordinal the window also holds above
-    // that length, and skipping to the window's head loses the ones between.
-    const boundary = Math.min(end, Math.max(start, base));
-    const head = start < boundary ? reconstructRange(entries, start, boundary, index) : [];
-    const tail = state.messages.slice(
-      Math.max(0, boundary - base),
-      Math.max(0, end - base),
-    );
-    return [...head, ...tail];
+    return history.range(from, to);
   }
 
-  /**
-   * Adopt a branch, keeping only its tail.
-   *
-   * The host already holds every entry; what a long session cannot afford is a
-   * second full projection of them. Only the window a frame can read is built
-   * here, and the rest is rebuilt on demand from the same entries — so the
-   * messages a page shows are produced by the same kernel as the ones a frame
-   * shows, and cannot drift.
-   */
   function resetHistory(entries) {
-    const list = entries ?? [];
-    const index = buildHistoryIndex(list);
-    const total = index.entryOfMessage.length;
-    const start = Math.max(0, total - HISTORY_WINDOW);
-    state.history = { entries: list, index, base: start };
-    state.messages = reconstructRange(list, start, total, index);
+    history.reset(entries);
   }
 
-  /** Drop the oldest held messages once the window grows past its bound. */
   function trimHistoryWindow() {
-    // Only what the branch can answer again may be dropped. A live message the
-    // host has not written yet exists nowhere else: the branch has nothing at
-    // that ordinal, so trimming it away would lose it from every later frame —
-    // the conversation would silently skip the messages it just streamed.
-    // The branch length must be the current one. The host appends to its own
-    // array, so the index built at hydration describes a shorter branch than
-    // exists now, and a floor capped by that stale length keeps messages in the
-    // window that the branch can already rebuild — the window grows with the
-    // conversation instead of staying bounded by it.
-    const current = currentHistoryIndex();
-    const branch = current ? current.entryOfMessage.length : 0;
-    const ideal = state.history.base + state.messages.length - HISTORY_WINDOW;
-    // The window may start no later than the branch's end: everything past it
-    // exists only here. When the live run outgrows the window, the window grows
-    // with it — a bounded window that drops unpersisted messages is not bounded,
-    // it is lossy.
-    const floor = Math.max(state.history.base, Math.min(ideal, branch));
-    const drop = floor - state.history.base;
-    if (drop <= 0) return;
-    state.messages = state.messages.slice(drop);
-    state.history.base = floor;
+    history.trim();
+  }
+
+  // Interaction commits, one per transition. `openInteraction` and
+  // `resolveInteraction` both dispatch, so an entrypoint that commits calls
+  // these and never another entrypoint: a chain would send the frame twice.
+  function commitOpenInteraction(request) {
+    const result = openInteraction(ledger, request);
+    if (!result.ok) return result;
+    dispatch({ type: "interaction.open", payload: request });
+    return result;
+  }
+
+  function commitResolveInteraction(id, source, value) {
+    const result = resolveInteraction(ledger, id, source, value);
+    if (!result.accepted) return result;
+    dispatch({ type: "interaction.close", payload: { requestId: id, resolvedBy: source } });
+    return result;
   }
 
   function snapshot(limit) {
-    const requested = Number.isInteger(limit) && limit > 0 ? limit : 80;
-    const total = historyTotal();
-    const size = Math.min(requested, total);
-    const rawStart = Math.max(0, total - size);
-    // The alignment walk reaches back at most TURN_ALIGN_LIMIT messages, so the
-    // rebuild covers that floor. Asking for exactly the frame would cut the walk
-    // short and start the window inside a turn.
-    const floor = Math.max(0, rawStart - TURN_ALIGN_LIMIT);
-    const window = messagesInRange(floor, total);
-    const start = floor + alignToTurnStart(window, rawStart - floor);
-    // Keep the whole turn-aligned window. A trailing slice here would undo the
-    // alignment and can push the current turn's user message out of the window.
-    const messages = window.slice(start - floor).map(capMessage);
-    const tools = Object.values(state.toolExecutions).slice(-32).map(capTool);
-    const doc = {
-      seq: state.seq ?? 0,
-      session: { ...state.session },
-      messages,
-      // fitSnapshot derives displayGroups from the trimmed window; computing
-      // it here too would group the same window twice per frame.
-      history: { hasMore: start > 0, oldestId: messages[0]?.id ?? null },
-      artifacts: state.artifacts.slice(-16).map(capArtifact),
-      todos: mapIfArray(state.todos),
-      usage: state.usage
-        ? {
-            ...state.usage,
-            tokens: state.usage.tokens ? { ...state.usage.tokens } : state.usage.tokens,
-            cost: state.usage.cost ? { ...state.usage.cost } : state.usage.cost,
-          }
-        : state.usage,
-      meta: { ...state.meta },
-      draft: {
-        ...state.draft,
-        images: copyIfArray(state.draft?.images),
-        texts: copyIfArray(state.draft?.texts),
-        composer: state.draft?.composer && typeof state.draft.composer === "object"
-          ? { ...state.draft.composer }
-          : state.draft?.composer,
-      },
-      completion: {
-        ...state.completion,
-        items: mapIfArray(state.completion?.items),
-      },
-      pendingInteractions: pendingInteractions(),
-      widgets: Object.entries(state.widgets).map(([key, lines]) => ({
-        key,
-        lines: copyIfArray(lines),
-      })),
-      surface: state.surface ? { ...state.surface } : state.surface,
-      toasts: mapIfArray(state.toasts),
-      streaming: Boolean(state.meta.busy),
-      models: copyIfArray(state.models),
-      thinkingLevel: state.meta.thinkingLevel,
-      thinkingLevels: state.meta.thinkingLevels,
-      modes: state.meta.modes,
-      sessions: mapIfArray(state.sessions),
-      queue: {
-        steering: copyIfArray(state.queue?.steering),
-        followUp: copyIfArray(state.queue?.followUp),
-      },
-      fence: state.meta.fence && typeof state.meta.fence === "object"
-        ? { ...state.meta.fence }
-        : state.meta.fence,
-      fenceStatus: state.fenceStatus && typeof state.fenceStatus === "object"
-        ? { ...state.fenceStatus }
-        : state.fenceStatus,
-      toolExecutions: Object.fromEntries(tools.map((entry) => [entry.toolCallId, entry])),
-    };
-    return fitSnapshot(doc);
+    return projectSnapshot({
+      state,
+      total: historyTotal(),
+      range: messagesInRange,
+      interactions: pendingInteractions(),
+      limit,
+    });
   }
 
   // One session-switch transition shared by every entrypoint. Entrypoints must
@@ -555,6 +298,55 @@ export function createUiBridgeStation(options) {
     state.queue = { steering: [], followUp: [] };
     dispatch({ type: "session.switched", seq: state.seq ?? 0, payload: { snapshot: snapshot() } });
     return { ok: true };
+  }
+
+  // Private synchronous transitions. An entrypoint must never call another
+  // entrypoint: every one of them dispatches, so a chain sends the same frame
+  // twice. The paths that commit meta or a draft call these instead.
+  function commitMeta(patch) {
+    const next = normalizeMetaPatch(patch);
+    state.meta = { ...state.meta, ...next };
+    dispatch({ type: "meta.update", payload: next });
+    return { ok: true };
+  }
+
+  function commitDraft(input) {
+    const text = String(input?.text ?? "");
+    const origin = input?.source === "web" ? "web" : "tui";
+    const clientId = input?.clientId;
+    const requestId = input?.requestId;
+    // Pure arbitration: the module decides, the Station commits.
+    const decision = arbitrateDraft(
+      { rev: state.draft.rev, text: state.draft.text, trail: state.draftTrail },
+      { text, origin },
+    );
+    if (decision.kind === "noop") {
+      if (origin === "web" && clientId && requestId) {
+        dispatch({
+          type: "sendClientFrame",
+          payload: { clientId, frame: { type: "command.result", requestId, ok: true } },
+        });
+      }
+      return { rev: state.draft.rev };
+    }
+    state.draftTrail = decision.trail;
+    if (decision.kind === "echo") return { rev: state.draft.rev };
+    const rev = decision.rev;
+    state.draft = {
+      ...state.draft,
+      rev,
+      origin,
+      text,
+      cursor: input?.cursor ?? state.draft.cursor,
+      images: input?.images ?? state.draft.images,
+      texts: input?.texts ?? state.draft.texts,
+      composer: input?.composer ?? state.draft.composer,
+    };
+    dispatch({
+      type: origin === "tui" ? "draft.sync" : "syncEditorDraft",
+      payload: { rev, origin, text, cursor: state.draft.cursor, clientId, requestId },
+    });
+    return { rev };
   }
 
   const station = {
@@ -627,17 +419,11 @@ export function createUiBridgeStation(options) {
     },
 
     openInteraction(request) {
-      const result = openInteraction(ledger, request);
-      if (!result.ok) return result;
-      dispatch({ type: "interaction.open", payload: request });
-      return result;
+      return commitOpenInteraction(request);
     },
 
     resolveInteraction(id, source, value) {
-      const result = resolveInteraction(ledger, id, source, value);
-      if (!result.accepted) return result;
-      dispatch({ type: "interaction.close", payload: { requestId: id, resolvedBy: source } });
-      return result;
+      return commitResolveInteraction(id, source, value);
     },
 
     closeInteraction(id) {
@@ -672,42 +458,7 @@ export function createUiBridgeStation(options) {
     },
 
     applyDraft(input) {
-      const text = String(input?.text ?? "");
-      const origin = input?.source === "web" ? "web" : "tui";
-      const clientId = input?.clientId;
-      const requestId = input?.requestId;
-      // Pure arbitration: the module decides, the Station commits.
-      const decision = arbitrateDraft(
-        { rev: state.draft.rev, text: state.draft.text, trail: state.draftTrail },
-        { text, origin },
-      );
-      if (decision.kind === "noop") {
-        if (origin === "web" && clientId && requestId) {
-          dispatch({
-            type: "sendClientFrame",
-            payload: { clientId, frame: { type: "command.result", requestId, ok: true } },
-          });
-        }
-        return { rev: state.draft.rev };
-      }
-      state.draftTrail = decision.trail;
-      if (decision.kind === "echo") return { rev: state.draft.rev };
-      const rev = decision.rev;
-      state.draft = {
-        ...state.draft,
-        rev,
-        origin,
-        text,
-        cursor: input?.cursor ?? state.draft.cursor,
-        images: input?.images ?? state.draft.images,
-        texts: input?.texts ?? state.draft.texts,
-        composer: input?.composer ?? state.draft.composer,
-      };
-      dispatch({
-        type: origin === "tui" ? "draft.sync" : "syncEditorDraft",
-        payload: { rev, origin, text, cursor: state.draft.cursor, clientId, requestId },
-      });
-      return { rev };
+      return commitDraft(input);
     },
 
     submitComposer(input) {
@@ -774,43 +525,11 @@ export function createUiBridgeStation(options) {
       // every message to find six file paths spent two thirds of hydration on a
       // whole-transcript tour; projecting the ones that can answer costs the
       // tool calls, which is what the answer is made of.
-      const collector = createArtifactCollector();
       const list = entries ?? [];
       const index = state.history.index;
-      const total = index ? index.entryOfMessage.length : 0;
-      // Project contiguous runs of candidate ordinals instead of one ordinal at
-      // a time. Each `reconstructRange` call allocates its pairing maps, so a
-      // whole-transcript tour paid two Maps per message; a run pays them once.
-      // The run is capped by HYDRATE_ARTIFACT_CHUNK so a long branch never holds
-      // a whole projection at once, and it stops at the first ordinal that
-      // cannot contribute, so a sparse branch still skips the messages between.
-      let runStart = -1;
-      const projectRun = (end) => {
-        const built = reconstructRange(list, runStart, end, index);
-        collector.add(
-          built
-            .filter(
-              (message) =>
-                message.role === "toolResult" ||
-                message.blocks?.some((block) => block.type === "toolCall"),
-            )
-            .map((message) => ({
-              toolCall: message.blocks?.find((block) => block.type === "toolCall"),
-              toolResult: message.role === "toolResult" ? message : undefined,
-            })),
-        );
-        runStart = -1;
-      };
-      for (let ordinal = 0; ordinal < total; ordinal += 1) {
-        if (!mayCarryToolCall(list[index.entryOfMessage[ordinal]])) {
-          if (runStart >= 0) projectRun(ordinal);
-          continue;
-        }
-        if (runStart >= 0 && ordinal - runStart >= HYDRATE_ARTIFACT_CHUNK) projectRun(ordinal);
-        if (runStart < 0) runStart = ordinal;
-      }
-      if (runStart >= 0) projectRun(total);
-      state.artifacts = collector.list();
+      // Whole-branch projection lives in the domain kernel: only candidates are
+      // read, and contiguous runs of them share one pairing-map allocation.
+      state.artifacts = collectArtifacts({ entries: list, index });
       dispatch({ type: "snapshot", seq: state.seq ?? 0, payload: snapshot() });
       return { ok: true };
     },
@@ -877,10 +596,7 @@ export function createUiBridgeStation(options) {
     },
 
     onMetaUpdate(patch) {
-      const next = normalizeMetaPatch(patch);
-      state.meta = { ...state.meta, ...next };
-      dispatch({ type: "meta.update", payload: next });
-      return { ok: true };
+      return commitMeta(patch);
     },
 
     onModelsUpdate(models) {
@@ -959,20 +675,20 @@ export function createUiBridgeStation(options) {
       const { outcomes } = ticketResultOutcomes(event, result);
       const rest = [];
       for (const outcome of outcomes) {
-        // A meta patch is a state commit: onMetaUpdate writes it and dispatches
-        // the same frame, so the wiring must not broadcast it a second time.
-        if (outcome.kind === "meta") station.onMetaUpdate(outcome.patch);
+        // A meta patch is a state commit, and the commit broadcasts its own
+        // frame: the wiring must not send it a second time.
+        if (outcome.kind === "meta") commitMeta(outcome.patch);
         else rest.push(outcome);
       }
       return { outcomes: rest };
     },
 
     onTuiDraftChanged(draft) {
-      return station.applyDraft({ source: "tui", ...draft });
+      return commitDraft({ source: "tui", ...draft });
     },
 
     onPlanReviewRequested(review) {
-      return station.openInteraction({
+      return commitOpenInteraction({
         id: review?.reviewId ?? review?.id,
         kind: "plan_review",
         payload: review,
@@ -980,7 +696,7 @@ export function createUiBridgeStation(options) {
     },
 
     onPlanReviewResolved(review) {
-      return station.resolveInteraction(review?.reviewId ?? review?.id, "tui", review);
+      return commitResolveInteraction(review?.reviewId ?? review?.id, "tui", review);
     },
   };
 

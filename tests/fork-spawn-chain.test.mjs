@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { createBranchSession } from "../host-omp/src/host/branch-session.mjs";
-import { createForkWiring } from "../src/scope/fork-wiring.mjs";
+import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";

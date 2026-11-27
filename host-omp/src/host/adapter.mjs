@@ -7,14 +7,7 @@
 
 import { sessionFor, sessionMatchesContext } from "./capture.mjs";
 
-function read(target, key) {
-	if (!target || typeof target !== "object") return undefined;
-	try {
-		return target[key];
-	} catch {
-		return undefined;
-	}
-}
+import { read } from "./object-read.mjs";
 
 function agentState(target) {
 	return read(read(target, "agent"), "state");

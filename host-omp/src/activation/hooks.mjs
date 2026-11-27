@@ -9,6 +9,12 @@ import { wireProviderObservation } from "../host/provider-observer.mjs";
 
 const USER_ABORT_CAPTURE = Symbol.for("herdchestra-lite2.user-abort-capture.v1");
 
+// The one-turn wake a waiting peer gives an idle root. The projection turns the
+// queued request into AWAITING_REPLY on the next request, so the prompt only has
+// to start the turn; the model answers through `scope_reply`.
+const ROOT_REQUEST_WAKE =
+	"A peer scope is waiting on your answer. Only `scope_reply` is bound this turn; answer in one string.";
+
 /**
  * Wrap one context's abort method once. The host invokes the same function for
  * native Esc and for programmatic cancellation; the scope domain needs the
@@ -90,15 +96,32 @@ export function wireHooks(pi, engine) {
 		}
 	};
 	installUserAbortCapture(pi, userAbortOf);
-	const bindDispatch = (ctx) => {
-		const station = stationOf(ctx);
-		const session = dispatchSession(ctx);
-		if (session) {
-			stopAfterScopeReturn(session.agent, session);
-			installContextPreparation(session, { station, ctx });
-		}
-		return station;
-	};
+  const bindDispatch = (ctx) => {
+    const station = stationOf(ctx);
+    const session = dispatchSession(ctx);
+    if (session) {
+      stopAfterScopeReturn(session.agent, session);
+      installContextPreparation(session, { station, ctx });
+    }
+    // The root has no spawn ticket to register its idle handle. Without one a
+    // peer request to "/" would be refused as unreachable; the station refuses
+    // to stomp a live beat, so a running root keeps its interrupt hook.
+    if (station && typeof station.noteRootRuntime === "function") {
+      station.noteRootRuntime(() => {
+        try {
+          const pending = pi.sendUserMessage?.(ROOT_REQUEST_WAKE, {
+            attribution: "agent",
+          });
+          pending?.catch?.((error) =>
+            record("hooks", error, { phase: "root-wake" }),
+          );
+        } catch (error) {
+          record("hooks", error, { phase: "root-wake" });
+        }
+      });
+    }
+    return station;
+  };
 	wireProviderObservation(pi, engine);
 	pi.on("before_provider_request", (_event, ctx) => {
 		const station = stationOf(ctx);

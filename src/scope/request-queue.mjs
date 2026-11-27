@@ -238,7 +238,7 @@ export function resolveRequest(registry, path, text) {
   const queue = map.get(path);
   queue.shift();
   if (queue.length === 0) map.delete(path);
-  removeWaitEdge(registry, head.from, path);
+  if (head.edgeRemoved !== true) removeWaitEdge(registry, head.from, path);
   try {
     head.resolve(String(text ?? ""));
   } catch (error) {
@@ -260,12 +260,42 @@ export function cancelRequest(registry, targetPath, id) {
   if (index < 0) return false;
   const [entry] = queue.splice(index, 1);
   if (queue.length === 0) map.delete(targetPath);
-  removeWaitEdge(registry, entry.from, targetPath);
+  if (entry.edgeRemoved !== true) removeWaitEdge(registry, entry.from, targetPath);
   try {
     entry.reject(new Error("The request was withdrawn before the target read it."));
   } catch {
     // The caller already settled its own Promise; a rejection nobody awaits is
     // not an error.
+  }
+  return true;
+}
+
+/**
+ * Withdraw one request whose caller is gone, even after the target printed it.
+ *
+ * A delivered entry left at the FIFO head would starve every later request
+ * behind a reply nobody is waiting for. Removing it lets the next request
+ * become the head; the target's later scope_reply simply finds no pending
+ * request instead of stealing a sibling's answer.
+ */
+export function withdrawRequest(
+  registry,
+  targetPath,
+  id,
+  reason = "The requesting scope interrupted before the answer arrived.",
+) {
+  const map = requestsOf(registry);
+  const queue = map.get(targetPath);
+  if (!Array.isArray(queue)) return false;
+  const index = queue.findIndex((entry) => entry.id === id);
+  if (index < 0) return false;
+  const [entry] = queue.splice(index, 1);
+  if (queue.length === 0) map.delete(targetPath);
+  if (entry.edgeRemoved !== true) removeWaitEdge(registry, entry.from, targetPath);
+  try {
+    entry.reject(new Error(reason));
+  } catch {
+    // Already settled.
   }
   return true;
 }
@@ -285,7 +315,7 @@ export function rejectPendingRequests(
   map.delete(path);
   let rejected = 0;
   for (const entry of queue) {
-    removeWaitEdge(registry, entry.from, path);
+    if (entry.edgeRemoved !== true) removeWaitEdge(registry, entry.from, path);
     try {
       entry.reject(new Error(reason));
       rejected += 1;
@@ -339,7 +369,57 @@ export function registerRuntime(registry, path, entry) {
   if (!entry || typeof entry !== "object") return null;
   const table = runtimeTable(registry);
   const current = table.get(path);
-  const next = { ...(current && typeof current === "object" ? current : {}), ...entry };
+  const next = { ...(current && typeof current === "object" ? current : {}) };
+  // `parked` is a Set of park ids, not a boolean. A string adds one id, a Set
+  // merges, `null` clears. `parkedRemove` removes exactly one id, so two
+  // concurrent joins in one beat cannot erase each other's marker.
+  const parked = current?.parked instanceof Set
+    ? new Set(current.parked)
+    : typeof current?.parked === "string" && current.parked !== ""
+      ? new Set([current.parked])
+      : new Set();
+  let parkedTouched = false;
+  if (Object.hasOwn(entry, "parked")) {
+    parkedTouched = true;
+    if (entry.parked === null) parked.clear();
+    else if (typeof entry.parked === "string" && entry.parked !== "") parked.add(entry.parked);
+    else if (entry.parked instanceof Set) {
+      for (const id of entry.parked) if (typeof id === "string" && id !== "") parked.add(id);
+    }
+  }
+  if (typeof entry.parkedRemove === "string" && entry.parkedRemove !== "") {
+    parkedTouched = true;
+    parked.delete(entry.parkedRemove);
+  }
+  if (parkedTouched) {
+    if (parked.size > 0) next.parked = parked;
+    else delete next.parked;
+  }
+  // Yield hooks are keyed by park id. A request yields every current join,
+  // because one join returning cannot free a beat parked on two.
+  const yieldJoins = current?.yieldJoins instanceof Map
+    ? new Map(current.yieldJoins)
+    : new Map();
+  if (Object.hasOwn(entry, "yieldJoin")) {
+    if (typeof entry.parked === "string" && entry.parked !== "") {
+      if (typeof entry.yieldJoin === "function") yieldJoins.set(entry.parked, entry.yieldJoin);
+      else yieldJoins.delete(entry.parked);
+    } else if (entry.yieldJoin === null || entry.yieldJoin === undefined) {
+      delete next.yieldJoin;
+      yieldJoins.clear();
+    } else {
+      next.yieldJoin = entry.yieldJoin;
+    }
+  }
+  if (typeof entry.parkedRemove === "string" && entry.parkedRemove !== "") {
+    yieldJoins.delete(entry.parkedRemove);
+  }
+  if (yieldJoins.size > 0) next.yieldJoins = yieldJoins;
+  else delete next.yieldJoins;
+  for (const [key, value] of Object.entries(entry)) {
+    if (key === "parked" || key === "parkedRemove" || key === "yieldJoin") continue;
+    next[key] = value;
+  }
   table.set(path, next);
   return next;
 }

@@ -47,15 +47,12 @@
 import vm from "node:vm";
 import { renderYamlView } from "../format/yaml-view.mjs";
 import { errorResult, textResult } from "./results.mjs";
-import {
-	BEAT_CLOSED,
-	JS_INTERRUPTED,
-	JS_STEERED,
-	createBeat,
-} from "./beat.mjs";
+import { JS_INTERRUPTED, JS_STEERED, createBeat } from "./beat.mjs";
 import {
 	REQUEST_INTERRUPT_REASON,
+	pendingRequestCount,
 	registerRuntime,
+	runtimeOf,
 } from "../scope/request-queue.mjs";
 
 /**
@@ -66,11 +63,6 @@ import {
  */
 export const REPL_ECHO =
 	"> await AsyncFunction('api', 'state', 'inputs', code)(api, state, inputs)";
-
-// Inner results recorded into `details.innerCalls` feed the web UI's artifact
-// pane. They are journal metadata, not model context, so a generous cap keeps
-// the JSONL honest without losing ordinary reads.
-const RESULT_TEXT_CAP = 50_000;
 
 /**
  * Compile user code into an async function with `(api, state, inputs)` in
@@ -111,12 +103,6 @@ export function compileAsync(sandbox, code) {
 	throw bodyError;
 }
 
-function capText(text) {
-	if (typeof text !== "string") return text;
-	if (text.length <= RESULT_TEXT_CAP) return text;
-	return `${text.slice(0, RESULT_TEXT_CAP)}\n… [truncated at ${RESULT_TEXT_CAP} chars]`;
-}
-
 /**
  * Render one value the way a REPL would print it. Strings pass through raw —
  * a file read or a patch stays readable source instead of an escaped blob —
@@ -124,7 +110,10 @@ function capText(text) {
  */
 function formatOne(value) {
 	if (typeof value === "string") return value;
-	return renderYamlView(value, { depth: 4, maxStringLength: 20_000 });
+	return renderYamlView(value, {
+		depth: Number.POSITIVE_INFINITY,
+		maxStringLength: Number.POSITIVE_INFINITY,
+	});
 }
 
 /**
@@ -174,13 +163,21 @@ function unwrapResult(res) {
  */
 function registerRootBeat(station, ctx, toolCallId, host) {
 	const registry = station?.registry;
-	if (!registry || typeof registerRuntime !== "function") return false;
+	if (!registry || typeof registerRuntime !== "function") return null;
 	const selfPath =
 		typeof station?.selfScopePath === "function" ? station.selfScopePath() : null;
-	if (selfPath !== "/") return false;
+	if (selfPath !== "/") return null;
 	try {
+		// One root can run more than one js beat (a script started in one turn
+		// does not serialize the next). Keep every beat id so the first one to
+		// finish cannot report the root idle while a sibling is still running.
+		const beatId = `${toolCallId}#${Date.now()}#${Math.random().toString(36).slice(2)}`;
+		const current = runtimeOf(registry, "/");
+		const beats = current?.beats instanceof Set ? new Set(current.beats) : new Set();
+		beats.add(beatId);
 		registerRuntime(registry, "/", {
 			state: "running",
+			beats,
 			interrupt: () => {
 				try {
 					station.host?.session?.abort?.(ctx, REQUEST_INTERRUPT_REASON);
@@ -193,14 +190,44 @@ function registerRootBeat(station, ctx, toolCallId, host) {
 				}
 			},
 		});
-		return true;
+		return beatId;
 	} catch (error) {
 		host?.report?.record?.("tickets", error, {
 			kind: "js",
 			phase: "root-runtime",
 			toolCallId,
 		});
-		return false;
+		return null;
+	}
+}
+
+/**
+ * Release one root beat. The root reports idle only when the last beat leaves,
+ * and an idle root with a queued request is woken once: a peer request that
+ * interrupted this beat has no spawn loop behind it to drive the reply turn.
+ */
+function finishRootBeat(station, beatId, toolCallId, host) {
+	const registry = station?.registry;
+	if (!registry || typeof registerRuntime !== "function" || !beatId) return;
+	try {
+		const current = runtimeOf(registry, "/");
+		const beats = current?.beats instanceof Set ? new Set(current.beats) : new Set();
+		beats.delete(beatId);
+		if (beats.size > 0) {
+			registerRuntime(registry, "/", { state: "running", beats });
+			return;
+		}
+		registerRuntime(registry, "/", { state: "idle", interrupt: null, beats: null });
+		if (pendingRequestCount(registry, "/") > 0) {
+			const idle = runtimeOf(registry, "/");
+			if (typeof idle?.wake === "function") idle.wake();
+		}
+	} catch (error) {
+		host?.report?.record?.("tickets", error, {
+			kind: "js",
+			phase: "root-runtime",
+			toolCallId,
+		});
 	}
 }
 
@@ -262,6 +289,10 @@ export async function jsTicket(
 	for (const name of toolNames) {
 		if (typeof name !== "string" || name === "") continue;
 		const fn = async (args = {}) => {
+			// The beat owns the interrupt verdict, so it answers before halted or
+			// mixed-return checks: an aborted turn's stable error is BEAT_CLOSED,
+			// and the refusal is counted even if scope_return landed first.
+			beat.rejectIfClosed(name);
 			if (halted) {
 				throw new Error(
 					`Turn already terminated by scope_return: api.${name} is no longer available.`,
@@ -296,7 +327,7 @@ export async function jsTicket(
 				raw = await beat.attach(op, rawPromise, entry);
 			} catch (error) {
 				entry.isError = true;
-				entry.resultText = capText(String(error?.message ?? error));
+				entry.resultText = String(error?.message ?? error);
 				beat.endOp(op);
 				throw error;
 			}
@@ -319,15 +350,17 @@ export async function jsTicket(
 				value = unwrapResult(raw);
 			} catch (error) {
 				entry.isError = true;
-				entry.resultText = capText(String(error?.message ?? error));
+				entry.resultText = String(error?.message ?? error);
 				throw error;
 			}
 			entry.isError = false;
-			entry.resultText = capText(
+			entry.resultText =
 				typeof value === "string"
 					? value
-					: renderYamlView(value, { depth: 4, maxStringLength: RESULT_TEXT_CAP }),
-			);
+					: renderYamlView(value, {
+							depth: Number.POSITIVE_INFINITY,
+							maxStringLength: Number.POSITIVE_INFINITY,
+						});
 			outputs.push(value);
 			return value;
 		};
@@ -349,6 +382,7 @@ export async function jsTicket(
 
 	let outcome = null;
 	let interrupted = false;
+	let steered = false;
 	try {
 		if (beat.decision === "interrupt") {
 			interrupted = true;
@@ -356,33 +390,30 @@ export async function jsTicket(
 			const raced = await Promise.race([
 				script,
 				beat.closing.then(() => ({ interrupted: true })),
+				// A steer releases the call only after every surviving work op
+				// settled and the script had one macrotask to finish. A script
+				// that wins the race keeps its value; one still parked on a bare
+				// Promise is released as JS_STEERED instead of hanging.
+				beat.steerClosing.then(() => ({ steered: true })),
 			]);
 			if (raced?.interrupted) interrupted = true;
+			else if (raced?.steered) steered = true;
 			else outcome = raced;
 		}
 		// A script that finished in the same microtask as an explicit abort
 		// still honors the abort: the host asked for the turn back.
-		if (!interrupted && beat.decision === "interrupt") interrupted = true;
-		if (interrupted) {
+		if (!interrupted && !steered && beat.decision === "interrupt") interrupted = true;
+		if (interrupted || steered) {
 			beat.sealOps();
 		} else if (beat.decision === "steer") {
-			// Work keeps its own signal and its own life. The tool call waits for
-			// it so the result and the accounting describe the work that ran.
+			// The script finished first; work keeps its own signal and its own
+			// life. The tool call waits for it so the result and the accounting
+			// describe the work that ran.
 			await beat.waitForWork();
 		}
 	} finally {
 		beat.dispose();
-		if (rootBeat) {
-			try {
-				registerRuntime(registry, "/", { state: "idle", interrupt: null });
-			} catch (error) {
-				host?.report?.record?.("tickets", error, {
-					kind: "js",
-					phase: "root-runtime",
-					toolCallId,
-				});
-			}
-		}
+		finishRootBeat(station, rootBeat, toolCallId, host);
 		// Reconcile exactly once, whatever happened above. The station owns the
 		// accounting; an accounting failure is a bug in the station, not in the
 		// model's script, so it is reported sideways instead of masking the
@@ -421,7 +452,21 @@ export async function jsTicket(
 					text: `${REPL_ECHO}\nbeat interrupted (${reason}) before the script finished.`,
 				},
 			],
-			details: { code: JS_INTERRUPTED, ...details },
+			details: { ...details, code: JS_INTERRUPTED },
+		};
+	}
+
+	if (steered) {
+		const reason = beat.details.reason ?? "soft";
+		return {
+			isError: true,
+			content: [
+				{
+					type: "text",
+					text: `${REPL_ECHO}\nbeat steered (${reason}); its work settled, but the script did not finish.`,
+				},
+			],
+			details: { ...details, code: JS_STEERED },
 		};
 	}
 
@@ -436,7 +481,7 @@ export async function jsTicket(
 					text: `${REPL_ECHO}\nUncaught ${error?.name ?? "Error"}: ${error?.message ?? String(error)}`,
 				},
 			],
-			details: { code: JS_STEERED, ...details },
+			details: { ...details, code: JS_STEERED },
 		};
 	}
 
@@ -449,7 +494,7 @@ export async function jsTicket(
 		return {
 			isError: true,
 			content: [{ type: "text", text }],
-			details: { code: "JS_UNCAUGHT", ...details },
+			details: { ...details, code: "JS_UNCAUGHT" },
 		};
 	}
 	return textResult(text, details);

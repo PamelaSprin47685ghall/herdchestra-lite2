@@ -21,6 +21,7 @@ export const TOOL_INTERRUPT_ABORT_REASON = Symbol.for("pi-agent-core.tool-interr
 
 export const BEAT_CLOSED = "BEAT_CLOSED";
 export const BEAT_NO_MORE_WAITS = "BEAT_NO_MORE_WAITS";
+export const BEAT_STEERED = "BEAT_STEERED";
 export const JS_INTERRUPTED = "JS_INTERRUPTED";
 export const JS_STEERED = "JS_STEERED";
 
@@ -71,6 +72,14 @@ export function createBeat({ signal = null } = {}) {
 	const closing = new Promise((resolve) => {
 		resolveClosing = resolve;
 	});
+	// A steer lets the script finish naturally, but the script itself may park
+	// forever on a bare Promise after its work has settled. This second release
+	// is armed only after every surviving work op has settled and one macrotask
+	// has been yielded, so a script that was about to finish still wins.
+	let resolveSteerClosing = null;
+	const steerClosing = new Promise((resolve) => {
+		resolveSteerClosing = resolve;
+	});
 	let detach = null;
 
 	function inFlight() {
@@ -103,6 +112,12 @@ export function createBeat({ signal = null } = {}) {
 			for (const op of ops.values()) {
 				if (!op.done && op.cls === "park") op.controller.abort(reason);
 			}
+			// The script may outlive its work on a bare Promise. Wait for every
+			// surviving work op, give the script one macrotask to finish, then
+			// release the tool call with JS_STEERED instead of hanging forever.
+			void waitForLiveWork().then(() => {
+				setTimeout(() => resolveSteerClosing({ steered: true }), 0);
+			});
 		}
 		return decision;
 	}
@@ -117,9 +132,27 @@ export function createBeat({ signal = null } = {}) {
 		}
 	}
 
+	/**
+	 * Steer only: wait until every surviving work op has settled. Extracted so
+	 * the decision can arm the steer release without a reference to the object
+	 * literal below.
+	 */
+	async function waitForLiveWork() {
+		for (;;) {
+			const live = [...ops.values()].filter((op) => !op.done && op.cls === "work");
+			details.orphanWork = live.length;
+			if (live.length === 0) {
+				details.orphanWork = 0;
+				return;
+			}
+			await Promise.allSettled(live.map((op) => op.promise).filter(Boolean));
+		}
+	}
+
 	return {
 		details,
 		closing,
+		steerClosing,
 
 		get decision() {
 			return details.decision;
@@ -129,6 +162,29 @@ export function createBeat({ signal = null } = {}) {
 			return closed;
 		},
 
+		/**
+		 * Refuse a call before any other check (halted, mixed return, missing
+		 * dispatch). After an interrupt the stable answer is BEAT_CLOSED even
+		 * when the same script already called scope_return, and the refusal is
+		 * counted once.
+		 */
+		rejectIfClosed(name) {
+			if (closed) {
+				details.lateCalls += 1;
+				throw beatError(BEAT_CLOSED, `api.${name} was called after the beat closed.`);
+			}
+			if (!parksAllowed) {
+				const cls = opClassOf(name);
+				if (cls === "park") {
+					throw beatError(BEAT_NO_MORE_WAITS, `api.${name} would park after a steer.`);
+				}
+				throw beatError(
+					BEAT_STEERED,
+					`api.${name} was called after a steer; only work already in flight may finish.`,
+				);
+			}
+		},
+
 		/** Register one op before dispatch; throws when the beat refuses it. */
 		beginOp(name) {
 			if (closed) {
@@ -136,8 +192,14 @@ export function createBeat({ signal = null } = {}) {
 				throw beatError(BEAT_CLOSED, `api.${name} was called after the beat closed.`);
 			}
 			const cls = opClassOf(name);
-			if (!parksAllowed && cls === "park") {
-				throw beatError(BEAT_NO_MORE_WAITS, `api.${name} would park after a steer.`);
+			if (!parksAllowed) {
+				if (cls === "park") {
+					throw beatError(BEAT_NO_MORE_WAITS, `api.${name} would park after a steer.`);
+				}
+				throw beatError(
+					BEAT_STEERED,
+					`api.${name} was called after a steer; only work already in flight may finish.`,
+				);
 			}
 			const op = {
 				id: `${name}#${seq++}`,
@@ -166,29 +228,20 @@ export function createBeat({ signal = null } = {}) {
 		},
 
 		/** Give every op abandoned by an interrupt a terminal inner-call entry. */
-		sealOps(reason = "the beat closed before this call returned") {
+		sealOps(reason = null) {
 			for (const op of ops.values()) {
 				if (op.entry && op.entry.resultText === undefined) {
 					op.entry.isError = true;
-					op.entry.resultText = reason;
+					op.entry.resultText =
+						reason ??
+						`${op.name} interrupted (${details.abortReason ?? "aborted"}) before it returned`;
 				}
 				op.done = true;
 			}
 			ops.clear();
 		},
 
-		/** Steer only: wait until every surviving work op has settled. */
-		async waitForWork() {
-			for (;;) {
-				const live = [...ops.values()].filter((op) => !op.done && op.cls === "work");
-				details.orphanWork = live.length;
-				if (live.length === 0) {
-					details.orphanWork = 0;
-					return;
-				}
-				await Promise.allSettled(live.map((op) => op.promise).filter(Boolean));
-			}
-		},
+		waitForWork: waitForLiveWork,
 
 		dispose() {
 			detach?.();

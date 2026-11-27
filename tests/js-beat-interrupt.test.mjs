@@ -18,9 +18,12 @@ import { describe, expect, test } from "bun:test";
 import { jsTicket } from "../src/tools/js-ticket.mjs";
 import { TOOL_INTERRUPT_ABORT_REASON } from "../src/tools/tickets.mjs";
 import {
+	currentRequest,
 	hasPendingRequests,
 	markRequestDelivered,
+	pendingRequestCount,
 	registerRuntime,
+	rejectPendingRequests,
 	resolveRequest,
 	runtimeOf,
 	clearRuntime,
@@ -493,5 +496,97 @@ describe("the runtime parked marker counts every waiter", () => {
 
 		clearRuntime(registry, "/worker");
 		expect(runtimeOf(registry, "/worker")).toBeNull();
+	});
+});
+
+describe("a steer releases a script parked on a bare Promise", () => {
+	test("work settles, the script does not: JS_STEERED instead of a hang", async () => {
+		const bash = [];
+		const { ticket, controller, fakeStation } = await start(
+			"const b = api.bash({ command: 'b' });\nawait new Promise(() => {});\nreturn b;",
+			{
+				bash: ({ signal }) => {
+					const answer = deferred();
+					bash.push({ signal, answer });
+					return answer.promise;
+				},
+			},
+		);
+
+		controller.abort(TOOL_INTERRUPT_ABORT_REASON);
+		await flush();
+		expect(bash[0].signal.aborted).toBe(false);
+
+		bash[0].answer.resolve(text("done"));
+		const result = await ticket;
+
+		expect(result.isError).toBe(true);
+		expect(result.details.code).toBe("JS_STEERED");
+		expect(result.details.beat).toMatchObject({
+			decision: "steer",
+			reason: "soft",
+			orphanWork: 0,
+		});
+		expect(fakeStation.settled).toHaveLength(1);
+	});
+
+	test("a new work call after the steer throws BEAT_STEERED and dispatches nothing", async () => {
+		const bash = [];
+		const { ticket, host, controller } = await start(
+			"const first = api.bash({ command: 'first' });\n" +
+				"await first;\n" +
+				"try { await api.bash({ command: 'late' }); } catch (error) { return error.code ?? error.message; }",
+			{
+				bash: ({ signal }) => {
+					const answer = deferred();
+					bash.push({ signal, answer });
+					return answer.promise;
+				},
+			},
+		);
+
+		controller.abort(TOOL_INTERRUPT_ABORT_REASON);
+		await flush();
+		bash[0].answer.resolve(text("done"));
+		const result = await ticket;
+
+		expect(host.seen.map((call) => call.name)).toEqual(["bash"]);
+		expect(body(result)).toContain("BEAT_STEERED");
+		expect(result.details.beat).toMatchObject({ decision: "steer", reason: "soft" });
+	});
+});
+
+describe("a delivered request is withdrawn when its caller aborts", () => {
+	test("the next request becomes the head instead of starving behind it", async () => {
+		const ledger = ledgerWith("/api", "/worker");
+		const registry = createForkRegistry();
+		const requester = requestStation(ledger, { forkId: "f-0", path: "/api" }, registry);
+
+		const firstController = new AbortController();
+		const first = handleRequestToolCall(
+			requester,
+			{ id: "call-req-first", arguments: { target: "/worker", message: "first" } },
+			null,
+			firstController.signal,
+		);
+		await Promise.resolve();
+		expect(currentRequest(registry, "/worker")?.message).toBe("first");
+		// The target read the request, then the caller is interrupted.
+		markRequestDelivered(registry, "/worker");
+		firstController.abort();
+		const firstResult = await first;
+		expect(firstResult.details.code).toBe("REQUEST_INTERRUPTED");
+		expect(pendingRequestCount(registry, "/worker")).toBe(0);
+
+		const second = handleRequestToolCall(requester, {
+			id: "call-req-second",
+			arguments: { target: "/worker", message: "second" },
+		});
+		expect(currentRequest(registry, "/worker")?.message).toBe("second");
+		expect(hasPendingRequests(registry, "/worker")).toBe(true);
+		expect(waitEdgesOf(registry, "/api")).toContain("/worker");
+
+		rejectPendingRequests(registry, "/worker", "test cleanup");
+		await second.catch(() => {});
 	});
 });

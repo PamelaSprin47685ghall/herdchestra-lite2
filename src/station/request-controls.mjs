@@ -22,7 +22,14 @@ import {
   normalizeScopePath,
   scopePathOf,
 } from "../scope/path.mjs";
-import { cancelRequest, enqueueRequest, resolveRequest, runtimeTable } from "../scope/request-queue.mjs";
+import {
+  cancelRequest,
+  enqueueRequest,
+  removeWaitEdge,
+  resolveRequest,
+  runtimeTable,
+  withdrawRequest,
+} from "../scope/request-queue.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs } from "./messages.mjs";
@@ -130,10 +137,29 @@ function deliverRequest(station, target, entry) {
       ? "wake"
       : "none";
   }
-  if (runtime.parked === "join") {
-    return callHook(station, runtime, "yieldJoin", { target, phase: "request-yield" })
-      ? "yield"
-      : "none";
+  const parked = runtime.parked;
+  const parkedNow =
+    parked === "join" || (parked instanceof Set && parked.size > 0);
+  if (parkedNow) {
+    // Every current join must yield, not only the last one registered: a
+    // beat parked on two joins cannot be freed by cancelling one.
+    const hooks =
+      runtime.yieldJoins instanceof Map
+        ? [...runtime.yieldJoins.values()]
+        : typeof runtime.yieldJoin === "function"
+          ? [runtime.yieldJoin]
+          : [];
+    let yielded = false;
+    for (const hook of hooks) {
+      if (typeof hook !== "function") continue;
+      try {
+        hook();
+        yielded = true;
+      } catch (error) {
+        station.noteError?.("fork", error, { target, phase: "request-yield" });
+      }
+    }
+    return yielded ? "yield" : "none";
   }
   if (entry.interrupt === true) {
     callHook(station, runtime, "interrupt", { target, phase: "request-interrupt" });
@@ -154,7 +180,7 @@ function requestArgs(call) {
  * object travels in `details.result` so a script receives `{ ok, from, reply }`
  * as data rather than prose.
  */
-export function handleRequestToolCall(station, call, _ctx = null) {
+export function handleRequestToolCall(station, call, _ctx = null, signal = null) {
   const ledger = ledgerOf(station);
   if (!ledger) {
     return errorResult("FORK_LEDGER_UNAVAILABLE", "No fork ledger is bound to this scope.");
@@ -239,11 +265,58 @@ export function handleRequestToolCall(station, call, _ctx = null) {
       { target, sender },
     );
   }
-  return queued.entry.promise.then(
+  if (!signal || typeof signal.addEventListener !== "function") {
+    return queued.entry.promise.then(
+      (reply) => textResult(reply, { result: { ok: true, from: target, reply } }),
+      (error) =>
+        errorResult("REQUEST_FAILED", String(error?.message ?? error), { target, sender }),
+    );
+  }
+  // The caller can be interrupted while it parks. Withdraw an undelivered
+  // request; keep a delivered one in the FIFO (its reply would otherwise be
+  // orphaned) but drop this caller's wait edge. Either way the caller gets a
+  // settled tool result instead of a Promise nobody owns.
+  let interrupted = false;
+  let resolveInterruption = null;
+  const interruption = new Promise((resolve) => {
+    resolveInterruption = resolve;
+  });
+  const onAbort = () => {
+    if (interrupted) return;
+    interrupted = true;
+    if (queued.entry.delivered !== true) {
+      cancelRequest(registry, target, queued.id);
+    } else {
+      // The target already printed the request. Keeping it at the FIFO head
+      // would starve every later request behind a reply nobody is waiting
+      // for; withdraw it so the next request becomes the head.
+      withdrawRequest(
+        registry,
+        target,
+        queued.id,
+        "The requesting scope interrupted before the answer arrived.",
+      );
+    }
+    resolveInterruption(
+      errorResult(
+        "REQUEST_INTERRUPTED",
+        "The request was interrupted before the answer arrived.",
+        { target, sender },
+      ),
+    );
+  };
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
+  const answer = queued.entry.promise.then(
     (reply) => textResult(reply, { result: { ok: true, from: target, reply } }),
     (error) =>
-      errorResult("REQUEST_FAILED", String(error?.message ?? error), { target, sender }),
+      interrupted
+        ? new Promise(() => {})
+        : errorResult("REQUEST_FAILED", String(error?.message ?? error), { target, sender }),
   );
+  return Promise.race([answer, interruption]).finally(() => {
+    signal.removeEventListener?.("abort", onAbort);
+  });
 }
 
 /**

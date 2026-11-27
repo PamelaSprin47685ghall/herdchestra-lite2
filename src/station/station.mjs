@@ -68,6 +68,7 @@ import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 import {
 	currentRequest,
 	markRequestDelivered,
+	registerRuntime,
 	runtimeTable,
 } from "../scope/request-queue.mjs";
 import {
@@ -167,7 +168,14 @@ export function shapeHost(host) {
 			setMessages: pick(session.setMessages, source.setAgentMessages),
 			appendHistory: pick(session.appendHistory, source.appendHistoryMessage),
 			settingsOf: pick(session.settingsOf, source.settingsOf),
-			abort: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
+			// A grouped host owns the abort verb. The legacy flat bag kept a
+			// `sessionFor` lookup instead; keep that as the fallback so both
+			// shapes reach the same agent. Dropping the grouped form turned
+			// every root interrupt into a silent no-op.
+			abort:
+				typeof session.abort === "function"
+					? (ctx, error) => session.abort(ctx, error)
+					: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
 			canRewindRoot: pick(session.canRewindRoot, source.canRewindRoot),
 		},
 		model: {
@@ -748,12 +756,34 @@ export class SessionStation {
 
 	// -- scope_request / scope_reply (sync translation) ------------------------
 
+	/**
+	 * Register the root's idle delivery hook. The host wiring owns the wake
+	 * verb (one prompt turn); the station owns the table merge and refuses to
+	 * stomp a live beat. A child gets its runtime entry from the spawn ticket.
+	 */
+	noteRootRuntime(wake) {
+		const registry = this.registry;
+		if (!registry || typeof wake !== "function") return false;
+		// An unbound child station also reports "/"; the identity is the proof
+		// that this is the conversation root and not a child before its fork
+		// record is attached.
+		if (typeof this.forkOwnerId === "function" && this.forkOwnerId() !== null) {
+			return false;
+		}
+		if (this.selfScopePath() !== "/") return false;
+		const current = runtimeTable(registry).get("/");
+		if (current?.state === "running") return false;
+		registerRuntime(registry, "/", { state: "idle", wake });
+		return true;
+	}
+
 	/** One `scope_request` call: resolve, queue, deliver, then park. */
-	handleScopeRequest({ toolCallId, params, ctx }) {
+	handleScopeRequest({ toolCallId, params, ctx, signal = null }) {
 		return handleRequestToolCall(
 			this,
 			{ id: toolCallId, name: "scope_request", arguments: params },
 			ctx,
+			signal,
 		);
 	}
 

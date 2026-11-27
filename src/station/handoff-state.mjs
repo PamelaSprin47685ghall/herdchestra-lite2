@@ -122,10 +122,12 @@ export function clearPendingRootRewind(station, plan = null) {
  *
  * Writes:
  * 1. Merge real user prompts/steers into `state.relay.userPrompts`.
- * 2. Append one handoff compaction entry carrying the formatted generation
- *    report + continuation/review directive.
- * 3. Append verbatim user prompts & steers as real `role: "user"` entries right
- *    after the compaction boundary so the reborn Root inherits them verbatim.
+ * 2. Append verbatim user prompts & steers as real `role: "user"` entries.
+ * 3. Append one handoff compaction entry carrying the formatted generation
+ *    report + continuation/review directive, with `firstKeptEntryId` pointing at
+ *    the first restored user entry so the host retains that block. The user
+ *    messages therefore precede the record in the branch, and the transcript
+ *    projection shows them ahead of it.
  * 4. Clear `pendingRewind`, reset the usage watermark, persist, and replace
  *    live `agent.state.messages` with the fresh
  *    projection from `manager.buildSessionContext()`.
@@ -154,10 +156,25 @@ export function commitRootRewind(station, ctx, plan = null) {
 		big: pending.big === true,
 	});
 	const manager = station.manager ?? null;
+	let firstRestoredId = "";
+	if (manager && typeof manager.appendMessage === "function") {
+		const restoredUsers = rebornUserMessages(userPrompts, Date.now());
+		for (const userMessage of restoredUsers) {
+			try {
+				const entryId = manager.appendMessage(userMessage);
+				if (firstRestoredId === "" && typeof entryId === "string" && entryId !== "") {
+					firstRestoredId = entryId;
+				}
+			} catch (error) {
+				station.noteError?.("handoff", error, { stage: "restore-user-prompts" });
+			}
+		}
+	}
 	const compacted = appendHandoffCompaction(
 		manager,
 		summary,
 		station.usage?.lastTotalInput ?? 0,
+		firstRestoredId,
 	);
 	if (!compacted && manager) {
 		station.host?.session?.appendHistory?.(
@@ -170,16 +187,6 @@ export function commitRootRewind(station, ctx, plan = null) {
 			},
 			ctx,
 		);
-	}
-	if (manager && typeof manager.appendMessage === "function") {
-		const restoredUsers = rebornUserMessages(userPrompts, Date.now());
-		for (const userMessage of restoredUsers) {
-			try {
-				manager.appendMessage(userMessage);
-			} catch (error) {
-				station.noteError?.("handoff", error, { stage: "restore-user-prompts" });
-			}
-		}
 	}
 	station.state.relay = {
 		...relay,

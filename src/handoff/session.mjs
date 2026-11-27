@@ -23,12 +23,21 @@ export function countHandoffCompactions(manager) {
 	}
 }
 
-export function appendHandoffCompaction(manager, summary, tokensBefore = 0) {
+/**
+ * Append the handoff compaction at the current leaf.
+ *
+ * `firstKeptEntryId` names the first entry the host must retain before the
+ * compaction boundary; an empty string retains nothing. Root rewind passes the
+ * first restored user entry so the user's own words survive the cut, in order,
+ * ahead of the record.
+ */
+export function appendHandoffCompaction(manager, summary, tokensBefore = 0, firstKeptEntryId = "") {
 	if (!manager || typeof manager.appendCompaction !== "function") return false;
 	const tokens = Number.isFinite(tokensBefore) ? tokensBefore : 0;
+	const firstKept = typeof firstKeptEntryId === "string" ? firstKeptEntryId : "";
 	try {
 		if (manager.appendCompaction.length >= 3) {
-			manager.appendCompaction(summary, undefined, "", tokens, {
+			manager.appendCompaction(summary, undefined, firstKept, tokens, {
 				method: "handoff",
 				fromExtension: true,
 			});

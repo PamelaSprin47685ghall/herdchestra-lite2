@@ -89,24 +89,43 @@ describe("commitRootRewind", () => {
 		const setMessagesCalls = [];
 		const manager = {
 			entries,
-			appendCompaction(summary, _short, _firstKept, tokensBefore, details) {
+			appendCompaction(summary, _short, firstKeptEntryId, tokensBefore, details) {
+				const id = `c${entries.length + 1}`;
 				entries.push({
 					type: "compaction",
-					id: `c${entries.length + 1}`,
+					id,
 					summary,
+					firstKeptEntryId,
 					tokensBefore,
 					details,
 				});
+				return id;
 			},
 			appendMessage(message) {
-				entries.push({ type: "message", id: `m${entries.length + 1}`, message });
+				const id = `m${entries.length + 1}`;
+				entries.push({ type: "message", id, message });
+				return id;
 			},
 			buildSessionContext() {
 				const lastCompaction = entries.findLastIndex((entry) => entry.type === "compaction");
 				if (lastCompaction < 0) {
 					return { messages: entries.filter((e) => e.type === "message").map((e) => e.message) };
 				}
-				const out = [{ role: "compactionSummary", summary: entries[lastCompaction].summary }];
+				const compaction = entries[lastCompaction];
+				const keepId = compaction.firstKeptEntryId ?? "";
+				const retainedStart = keepId
+					? entries.findIndex((entry, index) => index < lastCompaction && entry.id === keepId)
+					: -1;
+				// The host model context always shows the summary first, then the
+				// retained block [firstKeptEntryId, compaction), then later entries.
+				// Its transcript projection shows the retained block before the
+				// summary, which is where the restored users precede the record.
+				const out = [{ role: "compactionSummary", summary: compaction.summary }];
+				if (retainedStart >= 0) {
+					for (let i = retainedStart; i < lastCompaction; i += 1) {
+						if (entries[i].type === "message") out.push(entries[i].message);
+					}
+				}
 				for (let i = lastCompaction + 1; i < entries.length; i += 1) {
 					if (entries[i].type === "message") out.push(entries[i].message);
 				}
@@ -136,7 +155,7 @@ describe("commitRootRewind", () => {
 	}
 
 	test("compacts history and restores verbatim user prompts/steers as real user messages", () => {
-		const { station, manager, setMessagesCalls } = rewindHarness([
+		const { station, manager, entries, setMessagesCalls } = rewindHarness([
 			{ role: "user", content: FIRST },
 			{ role: "assistant", content: [{ type: "text", text: "Working" }] },
 			{ role: "user", content: SECOND, steering: true, attribution: "user" },
@@ -151,6 +170,7 @@ describe("commitRootRewind", () => {
 			id: "r1",
 		};
 
+		const before = entries.length;
 		const ok = commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind });
 		expect(ok).toBe(true);
 		expect(station.state.relay.pendingRewind).toBeNull();
@@ -168,10 +188,18 @@ describe("commitRootRewind", () => {
 		expect(users.map((m) => m.role)).toEqual(["user", "user"]);
 		expect(users.map((m) => m.content[0].text)).toEqual([FIRST, SECOND]);
 		expect(users.every((m) => m.attribution === "user")).toBe(true);
+
+		// The restored users land before the compaction entry, and the compaction
+		// names the first one so the host retains the block across the cut.
+		const appended = entries.slice(before);
+		expect(appended.map((entry) => entry.type)).toEqual(["message", "message", "compaction"]);
+		expect(appended[0].message.content[0].text).toBe(FIRST);
+		expect(appended[1].message.content[0].text).toBe(SECOND);
+		expect(appended[2].firstKeptEntryId).toBe(appended[0].id);
 	});
 
 	test("a second rewind keeps every prior user prompt once and appends newly arrived prompts", () => {
-		const { station, manager } = rewindHarness([
+		const { station, manager, entries } = rewindHarness([
 			{ role: "user", content: FIRST },
 			{ role: "user", content: SECOND },
 		]);
@@ -184,7 +212,16 @@ describe("commitRootRewind", () => {
 		station.state.relay.generation = 2;
 		station.state.relay.bigStreak = 1;
 		station.state.relay.pendingRewind = { report: "Gen 2 report", big: true, generation: 2, id: "r2" };
+		const before = entries.length;
 		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
+		const appended = entries.slice(before);
+		expect(appended.map((entry) => entry.type)).toEqual(["message", "message", "message", "compaction"]);
+		expect(appended.slice(0, 3).map((entry) => entry.message.content[0].text)).toEqual([
+			FIRST,
+			SECOND,
+			"Third requirement.",
+		]);
+		expect(appended[3].firstKeptEntryId).toBe(appended[0].id);
 
 		const rebuilt = manager.buildSessionContext().messages;
 		expect(rebuilt[0].summary).toContain("Gen 2 report");
@@ -192,6 +229,22 @@ describe("commitRootRewind", () => {
 		const userTexts = rebuilt.slice(1).map((m) => m.content[0].text);
 		expect(userTexts).toEqual([FIRST, SECOND, "Third requirement."]);
 		expect(rebornUserMessages([FIRST]).length).toBe(1);
+	});
+
+	test("a rewind with no user prompts appends only the compaction and retains nothing", () => {
+		const { station, manager, entries } = rewindHarness([
+			{ role: "assistant", content: [{ type: "text", text: "Working" }] },
+		]);
+		station.state.relay.pendingRewind = { report: "Gen 1 report", big: false, generation: 1, id: "r1" };
+		const before = entries.length;
+		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
+
+		const appended = entries.slice(before);
+		expect(appended.map((entry) => entry.type)).toEqual(["compaction"]);
+		expect(appended[0].firstKeptEntryId).toBe("");
+		const rebuilt = manager.buildSessionContext().messages;
+		expect(rebuilt).toHaveLength(1);
+		expect(rebuilt[0].role).toBe("compactionSummary");
 	});
 
 	test("syncRootUserPrompts resets bigStreak and canStop when a new real user prompt arrives", () => {

@@ -42,9 +42,9 @@ function memoryManager(idPrefix = "smoke-session") {
 			leafId = id;
 			return id;
 		},
-		appendCompaction(summary, _short, _firstKept, tokensBefore, details) {
+		appendCompaction(summary, _short, firstKeptEntryId, tokensBefore, details) {
 			const id = `c${nextId++}`;
-			entries.push({ type: "compaction", id, parentId: leafId, summary, tokensBefore, details });
+			entries.push({ type: "compaction", id, parentId: leafId, summary, firstKeptEntryId, tokensBefore, details });
 			leafId = id;
 			return id;
 		},
@@ -58,7 +58,17 @@ function memoryManager(idPrefix = "smoke-session") {
 					messages: entries.filter((entry) => entry.type === "message").map((entry) => entry.message),
 				};
 			}
-			const messages = [{ role: "compactionSummary", summary: entries[lastCompaction].summary }];
+			const compaction = entries[lastCompaction];
+			const keepId = compaction.firstKeptEntryId ?? "";
+			const retainedStart = keepId
+				? entries.findIndex((entry, index) => index < lastCompaction && entry.id === keepId)
+				: -1;
+			const messages = [{ role: "compactionSummary", summary: compaction.summary }];
+			if (retainedStart >= 0) {
+				for (let i = retainedStart; i < lastCompaction; i += 1) {
+					if (entries[i].type === "message") messages.push(entries[i].message);
+				}
+			}
 			for (let i = lastCompaction + 1; i < entries.length; i += 1) {
 				if (entries[i].type === "message") messages.push(entries[i].message);
 			}
@@ -226,6 +236,16 @@ await check("root small handoff rewinds via agent_end ticket preserving verbatim
 		handler({ messages: manager.buildSessionContext().messages }, ctx);
 	}
 	await new Promise((resolve) => setTimeout(resolve, 10));
+	const branch = manager.getBranch();
+	const compactAt = branch.findLastIndex((entry) => entry.type === "compaction");
+	const compaction = branch[compactAt];
+	const restored = branch[compactAt - 1];
+	expect(
+		restored?.type === "message" && restored.message?.attribution === "user",
+		"restored user must precede the compaction record",
+	);
+	expect(restored.message.content?.[0]?.text === "Ship the refactor cleanly.", "restored user text lost");
+	expect(compaction.firstKeptEntryId === restored.id, "firstKeptEntryId must point at the first restored user");
 	const rebuilt = manager.buildSessionContext().messages;
 	expect(rebuilt[0]?.role === "compactionSummary", "compaction summary missing");
 	expect(rebuilt[0].summary.includes("gen 0 progress"), "report missing from summary");

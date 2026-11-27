@@ -112,7 +112,17 @@ function sharedManager() {
 			const path = this.getBranch();
 			const lastCompact = path.findLastIndex((entry) => entry.type === "compaction");
 			if (lastCompact >= 0) {
-				const out = [{ role: "compactionSummary", summary: path[lastCompact].summary }];
+				const compaction = path[lastCompact];
+				const keepId = compaction.firstKeptEntryId ?? "";
+				const retainedStart = keepId
+					? path.findIndex((entry, index) => index < lastCompact && entry.id === keepId)
+					: -1;
+				const out = [{ role: "compactionSummary", summary: compaction.summary }];
+				if (retainedStart >= 0) {
+					for (let i = retainedStart; i < lastCompact; i += 1) {
+						if (path[i].type === "message") out.push(path[i].message);
+					}
+				}
 				for (let i = lastCompact + 1; i < path.length; i += 1) {
 					if (path[i].type === "message") out.push(path[i].message);
 				}
@@ -450,6 +460,19 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 		expect(root.state.relay.generation).toBe(1);
 		expect(root.state.relay.bigStreak).toBe(0);
 		expect(root.commitRootRewind({})).toBe(true);
+
+		// The restored user entry precedes the compaction record, and the
+		// compaction retains it via firstKeptEntryId.
+		const branch = shared.getBranch();
+		const compactAt = branch.findLastIndex((entry) => entry.type === "compaction");
+		const compaction = branch[compactAt];
+		const restored = branch[compactAt - 1];
+		expect(restored?.message?.content?.[0]?.text).toBe("initial request");
+		expect(restored?.message?.attribution).toBe("user");
+		expect(compaction.firstKeptEntryId).toBe(restored?.id);
+		const projected = shared.buildSessionContext().messages;
+		expect(projected[0].role).toBe("compactionSummary");
+		expect(projected[1]?.content?.[0]?.text).toBe("initial request");
 
 		// Child returns with oath and Root joins it.
 		const child = createTestStation(SessionStation, shared, {}, {}, null, null);

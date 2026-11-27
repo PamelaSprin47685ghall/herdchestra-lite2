@@ -8,7 +8,6 @@ import {
   FileDiffIcon,
   FilePlus2Icon,
   FileTextIcon,
-  FolderOpenIcon,
   Globe2Icon,
   ListTodoIcon,
   Loader2Icon,
@@ -18,39 +17,36 @@ import {
   XCircleIcon,
 } from "lucide-react";
 import { CodeBlock, CodeBlockCopyButton } from "@herd/deer-flow-ui/ai-elements/code-block";
-import { Task, TaskContent, TaskTrigger } from "@herd/deer-flow-ui/ai-elements/task";
-import { Badge } from "@herd/deer-flow-ui/ui/badge";
+import { DiffView } from "./tool/DiffView";
+import { JsStudioCard } from "./tool/JsStudioCard";
+import { TerminalView } from "./tool/TerminalView";
 import { externalLinkAttributes } from "../lib/safe-links";
-import { Button } from "@herd/deer-flow-ui/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@herd/deer-flow-ui/ui/collapsible";
 import type { ToolExecution } from "../protocol/types";
-import {
-  describeTool,
-  type ToolView,
-} from "../protocol/tool-view";
-
-const MAX_DIFF_ROWS = 400;
+import { describeTool, type ToolView } from "../protocol/tool-view";
 
 function language(value: string): BundledLanguage {
   return value as BundledLanguage;
 }
 
 function StatusIcon({ view }: { view: ToolView }) {
+  // Colours come from the tool tokens so a card matches the terminal palette
+  // in both themes instead of pinning Tailwind's raw hues.
   if (view.status === "running") {
-    return <Loader2Icon className="size-4 animate-spin text-sky-400" />;
+    return <Loader2Icon className="size-4 animate-spin" style={{ color: "var(--tool-run)" }} />;
   }
   if (view.isError) {
-    return <XCircleIcon className="text-destructive size-4" />;
+    return <XCircleIcon className="size-4" style={{ color: "var(--tool-err)" }} />;
   }
-  return <CheckCircle2Icon className="size-4 text-emerald-500" />;
+  return <CheckCircle2Icon className="size-4" style={{ color: "var(--tool-ok)" }} />;
 }
 
 function KindIcon({ view }: { view: ToolView }) {
-  const className = "text-muted-foreground size-4 shrink-0";
+  const className = "size-4 shrink-0";
   switch (view.kind) {
     case "read":
       return <FileTextIcon className={className} />;
@@ -70,8 +66,6 @@ function KindIcon({ view }: { view: ToolView }) {
       return <ListTodoIcon className={className} />;
     case "task":
       return <CircleDotIcon className={className} />;
-    case "ask":
-      return <WrenchIcon className={className} />;
     default:
       return <WrenchIcon className={className} />;
   }
@@ -79,53 +73,28 @@ function KindIcon({ view }: { view: ToolView }) {
 
 function Code({ code, lang }: { code: string; lang: string }) {
   if (!code) {
-    return (
-      <p className="text-muted-foreground px-3 pb-3 text-xs">暂无内容</p>
-    );
+    return <p className="text-muted-foreground px-3 pb-3 text-xs">暂无内容</p>;
   }
   return (
-    <CodeBlock
-      code={code}
-      language={language(lang)}
-      className="max-h-96 overflow-auto"
-    >
+    <CodeBlock code={code} language={language(lang)} className="max-h-96 overflow-auto">
       <CodeBlockCopyButton className="size-7" />
     </CodeBlock>
   );
 }
 
-function Diff({ view }: { view: Extract<ToolView, { kind: "edit" }> }) {
-  const rows = view.diff.lines.slice(0, MAX_DIFF_ROWS);
+/** `path:line:text` is what grep prints; split it so the line number can be dimmed. */
+function MatchLine({ match }: { match: string }) {
+  const parts = /^(.*?):(\d+):(.*)$/.exec(match);
+  if (!parts) {
+    return <span className="break-all">{match}</span>;
+  }
   return (
-    <div className="bg-muted/30 overflow-auto rounded-md border font-mono text-xs">
-      {rows.map((line, index) => (
-        <div
-          key={`${index}-${line.kind}`}
-          className={
-            line.kind === "add"
-              ? "bg-emerald-500/10 text-[#007753] dark:text-[#00885f]"
-              : line.kind === "remove"
-                ? "bg-rose-500/10 text-[#130005] dark:text-[#ec0040]"
-                : "text-muted-foreground"
-          }
-        >
-          <span className="text-muted-foreground/60 inline-block w-10 select-none border-r px-1 text-right">
-            {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""}
-          </span>
-          <span className="inline-block whitespace-pre-wrap px-2">
-            {line.text || " "}
-          </span>
-        </div>
-      ))}
-      {view.diff.lines.length > MAX_DIFF_ROWS && (
-        <div className="text-muted-foreground px-3 py-2">
-          仅显示前 {MAX_DIFF_ROWS} 行；完整内容见工件抽屉。
-        </div>
-      )}
-      {view.diff.lines.length === 0 && (
-        <div className="text-muted-foreground px-3 py-2">没有可显示的差异。</div>
-      )}
-    </div>
+    <span className="break-all">
+      <span className="text-muted-foreground">
+        {parts[1]}:{parts[2]}
+      </span>{" "}
+      {parts[3]}
+    </span>
   );
 }
 
@@ -134,14 +103,10 @@ function ToolBody({ view }: { view: ToolView }) {
     case "read":
       return (
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="font-mono text-[11px]">
-              {view.path ?? "read"}
-            </Badge>
-            <Badge variant="secondary" className="text-[11px]">
-              {view.language}
-            </Badge>
-
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="tool-chip">{view.path ?? "read"}</span>
+            {view.range && <span className="tool-chip">行 {view.range}</span>}
+            <span className="tool-chip">{view.language}</span>
           </div>
           <Code code={view.preview} lang={view.language} />
         </div>
@@ -149,122 +114,45 @@ function ToolBody({ view }: { view: ToolView }) {
     case "write":
       return (
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="font-mono text-[11px]">
-              {view.path ?? "write"}
-            </Badge>
-
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="tool-chip">{view.path ?? "write"}</span>
+            <span className="tool-chip">{view.language}</span>
+            {view.lines !== undefined && <span className="tool-chip">{view.lines} 行</span>}
+            {view.bytes !== undefined && <span className="tool-chip">{view.bytes} B</span>}
           </div>
           <Code code={view.content} lang={view.language} />
         </div>
       );
     case "edit":
-      return (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="font-mono text-[11px]">
-              {view.path ?? "edit"}
-            </Badge>
-            <Badge className="bg-emerald-500/15 text-[11px] text-[#007753] dark:text-[#00885f]">
-              +{view.diff.added}
-            </Badge>
-            <Badge className="bg-rose-500/15 text-[11px] text-[#130005] dark:text-[#ec0040]">
-              −{view.diff.removed}
-            </Badge>
-
-          </div>
-          <Diff view={view} />
-        </div>
-      );
+      return <DiffView view={view} />;
     case "bash":
       return (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            {view.exitCode !== undefined && (
-              <Badge
-                variant={view.exitCode === 0 ? "secondary" : "destructive"}
-                className="text-[11px]"
-              >
-                exit {view.exitCode}
-              </Badge>
-            )}
-            {view.truncated && (
-              <Badge variant="outline" className="text-[11px]">
-                输出已截断
-              </Badge>
-            )}
-          </div>
-          {view.output && (
-            <pre className="max-h-80 overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">
-              {view.output}
-            </pre>
-          )}
-        </div>
+        <TerminalView
+          output={view.rawOutput ?? view.output}
+          truncated={view.truncated}
+        />
       );
     case "eval":
-      return (
-        <div className="space-y-2">
-          <Badge variant="outline" className="text-[11px]">
-            {view.language}
-          </Badge>
-          <Code code={view.code} lang={view.language} />
-          {view.output && (
-            <pre className="bg-background max-h-80 overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap">
-              {view.output}
-            </pre>
-          )}
-          {view.children && view.children.length > 0 && (
-            <ul className="space-y-2">
-              {view.children.map((child, index) => (
-                <li
-                  key={`${index}-${child.id}`}
-                  className="bg-muted/20 rounded-md border px-2 py-1.5"
-                >
-                  <div className="flex items-center gap-2">
-                    <KindIcon view={child} />
-                    <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                      {child.title}
-                    </span>
-                    {child.path && child.path !== child.title && (
-                      <span className="text-muted-foreground hidden max-w-48 truncate font-mono text-[11px] sm:inline">
-                        {child.path}
-                      </span>
-                    )}
-                    <StatusIcon view={child} />
-                  </div>
-                  <div className="mt-1">
-                    <ToolBody view={child} />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      );
+      return <JsStudioCard view={view} renderInnerBody={(child) => <ToolBody view={child} />} />;
     case "search":
       return (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            {view.pattern && (
-              <Badge variant="secondary" className="font-mono text-[11px]">
-                {view.pattern}
-              </Badge>
-            )}
-            {view.path && (
-              <Badge variant="outline" className="font-mono text-[11px]">
-                {view.path}
-              </Badge>
-            )}
+            {view.pattern && <span className="tool-chip">{view.pattern}</span>}
+            {view.path && <span className="tool-chip">{view.path}</span>}
+            <span className="tool-chip" data-tone={view.matches.length ? "ok" : undefined}>
+              {view.matches.length} 条
+            </span>
           </div>
           {view.matches.length ? (
-            <ul className="divide-border divide-y rounded-md border">
+            <ul className="divide-border divide-y overflow-hidden rounded-md border">
               {view.matches.map((match, index) => (
                 <li
                   key={`${index}-${match}`}
                   className="truncate px-3 py-1 font-mono text-xs"
                   title={match}
                 >
-                  {match}
+                  <MatchLine match={match} />
                 </li>
               ))}
             </ul>
@@ -276,27 +164,23 @@ function ToolBody({ view }: { view: ToolView }) {
     case "web":
       return (
         <div className="space-y-2">
-          {view.query && (
-            <Badge variant="secondary" className="text-[11px]">
-              {view.query}
-            </Badge>
-          )}
+          {view.query && <span className="tool-chip">{view.query}</span>}
           {view.links.length ? (
             <ul className="space-y-1">
               {view.links.map((link) => {
                 const attributes = externalLinkAttributes(link);
                 return (
-                  <li key={link}>
+                  <li key={link} className="max-w-full truncate text-xs">
                     {attributes ? (
                       <a
                         {...attributes}
-                        className="text-primary inline-flex max-w-full items-center gap-1 text-xs hover:underline"
+                        className="text-primary inline-flex max-w-full items-center gap-1 hover:underline"
                       >
                         <ExternalLinkIcon className="size-3 shrink-0" />
                         <span className="truncate">{link}</span>
                       </a>
                     ) : (
-                      <span className="text-muted-foreground inline-flex max-w-full items-center gap-1 text-xs">
+                      <span className="text-muted-foreground inline-flex max-w-full items-center gap-1">
                         <ExternalLinkIcon className="size-3 shrink-0" />
                         <span className="truncate">{link}</span>
                       </span>
@@ -315,41 +199,38 @@ function ToolBody({ view }: { view: ToolView }) {
       return <p className="text-muted-foreground text-xs">{view.summary}</p>;
     case "task":
       return (
-        <Task defaultOpen className="px-3 pb-3">
-          <TaskTrigger title={view.title} />
-          <TaskContent>
-            <div className="space-y-2">
-              <p className="text-muted-foreground text-xs">agent: {view.agent}</p>
-              {view.prompt && (
-                <pre className="bg-muted/40 max-h-48 overflow-auto rounded-md border p-2 font-mono text-xs whitespace-pre-wrap">
-                  {view.prompt}
-                </pre>
-              )}
-              {view.result && (
-                <pre className="bg-background max-h-80 overflow-auto rounded-md border p-2 font-mono text-xs whitespace-pre-wrap">
-                  {view.result}
-                </pre>
-              )}
-            </div>
-          </TaskContent>
-        </Task>
+        <div className="space-y-2">
+          <span className="tool-chip">{view.agent}</span>
+          {view.prompt && (
+            <>
+              <p className="tool-label">Prompt</p>
+              <pre className="tool-terminal max-h-48 overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">
+                {view.prompt}
+              </pre>
+            </>
+          )}
+          {view.result && (
+            <>
+              <p className="tool-label">Result</p>
+              <pre className="tool-terminal max-h-80 overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">
+                {view.result}
+              </pre>
+            </>
+          )}
+        </div>
       );
     default:
       return (
         <div className="grid gap-2 md:grid-cols-2">
           <div>
-            <p className="text-muted-foreground mb-1 text-[11px] font-medium uppercase">
-              Input
-            </p>
-            <pre className="bg-muted/40 max-h-64 overflow-auto rounded-md border p-2 font-mono text-xs whitespace-pre-wrap">
+            <p className="tool-label mb-1">Input</p>
+            <pre className="tool-terminal max-h-64 overflow-auto p-3 font-mono text-xs whitespace-pre-wrap break-words">
               {view.argsText || "(none)"}
             </pre>
           </div>
           <div>
-            <p className="text-muted-foreground mb-1 text-[11px] font-medium uppercase">
-              {view.isError ? "Error" : "Result"}
-            </p>
-            <pre className="bg-background max-h-64 overflow-auto rounded-md border p-2 font-mono text-xs whitespace-pre-wrap">
+            <p className="tool-label mb-1">{view.isError ? "Error" : "Result"}</p>
+            <pre className="tool-terminal max-h-64 overflow-auto p-3 font-mono text-xs whitespace-pre-wrap break-words">
               {view.resultText || "(no output yet)"}
             </pre>
           </div>
@@ -358,74 +239,108 @@ function ToolBody({ view }: { view: ToolView }) {
   }
 }
 
-export const ToolStepCard = memo(function ToolStepCard({
-  tool,
-}: {
-  tool: ToolExecution;
-}) {
-  const view = describeTool(tool);
-  const [open, setOpen] = useState(
-    view.status === "running" || view.isError || view.kind === "edit",
-  );
-  const wasRunning = useRef(view.status === "running");
-  useEffect(() => {
-    const running = view.status === "running";
-    if (wasRunning.current && !running) {
-      setOpen(view.isError || view.kind === "edit");
-    }
-    wasRunning.current = running;
-  }, [view.status, view.isError, view.kind]);
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className={
-        view.isError
-          ? "border-destructive/40 bg-destructive/5 rounded-lg border"
-          : "bg-card/60 rounded-lg border"
+export const ToolStepCard = memo(
+  function ToolStepCard({ tool }: { tool: ToolExecution }) {
+    const view = describeTool(tool);
+    const [open, setOpen] = useState(
+      view.status === "running" || view.isError || view.kind === "edit",
+    );
+    const wasRunning = useRef(view.status === "running");
+    useEffect(() => {
+      const running = view.status === "running";
+      if (wasRunning.current && !running) {
+        setOpen(view.isError || view.kind === "edit");
       }
-    >
-      <CollapsibleTrigger asChild>
-        <button
-          type="button"
-          className="hover:bg-muted/40 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors"
-        >
-          <KindIcon view={view} />
-          {view.kind === "bash" ? (
-            <span className="min-w-0 flex-1 font-medium whitespace-pre-wrap break-words">
-              {view.command || view.title}
+      wasRunning.current = running;
+    }, [view.status, view.isError, view.kind]);
+    return (
+      <Collapsible
+        open={open}
+        onOpenChange={setOpen}
+        className="tool-card"
+        data-kind={view.kind}
+        data-state={view.isError ? "error" : view.status === "running" ? "running" : "ok"}
+      >
+        {view.status === "running" && (
+          <div className="h-0.5 w-full overflow-hidden">
+            <div
+              className="h-full w-1/2 animate-[loading-bar_1.4s_ease-in-out_infinite]"
+              style={{ background: "var(--tool-accent)" }}
+            />
+          </div>
+        )}
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="hover:bg-muted/40 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors"
+          >
+            <span
+              className="flex size-7 shrink-0 items-center justify-center rounded-md"
+              style={{
+                background: "color-mix(in oklab, var(--tool-accent) 14%, transparent)",
+                color: "var(--tool-accent)",
+              }}
+            >
+              <KindIcon view={view} />
             </span>
-          ) : (
-            <span className="min-w-0 flex-1 truncate font-medium">{view.title}</span>
-          )}
-          {view.kind === "bash" && view.title !== view.command.split("\n")[0] && (
-            <span className="text-muted-foreground hidden max-w-56 truncate text-[11px] sm:inline">
-              {view.title}
-            </span>
-          )}
-          {view.path && (
-            <span className="text-muted-foreground hidden max-w-56 truncate font-mono text-[11px] sm:inline">
-              {view.path}
-            </span>
-          )}
-          <StatusIcon view={view} />
-        </button>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="border-t px-3 py-3">
-          <ToolBody view={view}  />
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-},
-(previous, next) =>
-  previous.tool.id === next.tool.id &&
-  previous.tool.name === next.tool.name &&
-  previous.tool.status === next.tool.status &&
-  previous.tool.isError === next.tool.isError &&
-  previous.tool.args === next.tool.args &&
-  previous.tool.argsText === next.tool.argsText &&
-  previous.tool.result === next.tool.result &&
-  previous.tool.partialResult === next.tool.partialResult,
+            {view.kind === "bash" ? (
+              <span className="min-w-0 flex-1 font-medium whitespace-pre-wrap break-words">
+                {view.command || view.title}
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate font-medium">{view.title}</span>
+            )}
+            {view.kind === "bash" && view.title !== view.command.split("\n")[0] && (
+              <span className="text-muted-foreground hidden max-w-56 truncate text-[11px] sm:inline">
+                {view.title}
+              </span>
+            )}
+            {view.kind !== "bash" && view.path && (
+              <span className="text-muted-foreground hidden max-w-56 truncate font-mono text-[11px] sm:inline">
+                {view.path}
+              </span>
+            )}
+            {view.kind === "read" && view.range && (
+              <span className="tool-chip">行 {view.range}</span>
+            )}
+            {view.kind === "edit" && (
+              <span className="tool-chip">
+                +{view.diff.added} / −{view.diff.removed}
+              </span>
+            )}
+            {view.kind === "search" && view.matches.length > 0 && (
+              <span className="tool-chip">{view.matches.length} 条</span>
+            )}
+            {view.kind === "eval" && (view.innerCallCount ?? 0) > 0 && (
+              <span className="tool-chip">{view.innerCallCount} 次调用</span>
+            )}
+            {view.kind === "bash" && view.exitCode !== undefined && (
+              <span className="tool-chip" data-tone={view.exitCode === 0 ? "ok" : "err"}>
+                exit {view.exitCode}
+              </span>
+            )}
+            {view.durationMs !== undefined && <span className="tool-chip">{view.durationMs} ms</span>}
+            <StatusIcon view={view} />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="border-t px-3 py-3" style={{ borderColor: "var(--tool-rule)" }}>
+            <ToolBody view={view} />
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    );
+  },
+  (previous, next) =>
+    previous.tool.id === next.tool.id &&
+    previous.tool.name === next.tool.name &&
+    previous.tool.status === next.tool.status &&
+    previous.tool.isError === next.tool.isError &&
+    previous.tool.args === next.tool.args &&
+    previous.tool.argsText === next.tool.argsText &&
+    previous.tool.result === next.tool.result &&
+    previous.tool.partialResult === next.tool.partialResult &&
+    // `details` carries `innerCalls`; without it a live js frame that grows new
+    // inner calls keeps the old card, because every other field is unchanged.
+    previous.tool.details === next.tool.details,
 );

@@ -84,6 +84,30 @@ export function languageFor(path, extended = false) {
   return table[extension ?? ""] ?? "text";
 }
 
+// Line numbers reach the mapper as JSON straight from the model, so a string like
+// "x" is possible even though the tool itself rejects it. An unusable number means
+// the range is unknown, and an unknown range renders as nothing rather than "NaN-".
+export function lineNumber(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : Number.NaN;
+  return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+/** `"10-29"` for a bounded read, `"10-"` when the caller took the rest. */
+export function readRange(args) {
+  const offset = lineNumber(args?.offset, 1);
+  const limit = lineNumber(args?.limit, 0);
+  if (offset === null || limit === null) return "";
+  // `limit` counts lines, so the range ends at offset + limit - 1.
+  return limit > 0 ? `${offset}-${offset + limit - 1}` : `${offset}-`;
+}
+
+
 /**
  * One view for the scope control plane, or null for every other tool.
  *

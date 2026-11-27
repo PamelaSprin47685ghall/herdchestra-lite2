@@ -703,3 +703,218 @@ html.dark .shiki span {
   font-variant-numeric: tabular-nums;
 }
 .incremark .incremark-list-item > p { margin-block: 0; }
+
+/* ── Tool rendering: colour, surfaces, and card chrome ───────────────────────
+ One vocabulary for every tool card. The extension and the web bundle both
+ read the same tool view, so the card only has to choose a data-kind and a
+ data-state; everything below is derived from those two facts.
+
+ The terminal palette is theme-aware rather than always-dark: a black block
+ in the parchment theme reads as a hole punched in the page. In light mode
+ the terminal surface is paper with dense, saturated ink; in dark mode it is
+ near-black with luminous ink. Both keep >= 4.5:1 on their own surface. */
+
+/* ANSI 16 — light surface (paper). */
+:root {
+--ansi-black: #141413;
+--ansi-red: #a12a1f;
+--ansi-green: #2f6f3e;
+--ansi-yellow: #7a5a00;
+--ansi-blue: #1b365d;
+--ansi-magenta: #6a2f7a;
+--ansi-cyan: #0f6060;
+--ansi-white: #6a6960;
+--ansi-bright-black: #686761;
+--ansi-bright-red: #c0392b;
+--ansi-bright-green: #3f8c52;
+--ansi-bright-yellow: #94700a;
+--ansi-bright-blue: #2b5d95;
+--ansi-bright-magenta: #8a44a0;
+--ansi-bright-cyan: #16787a;
+--ansi-bright-white: #141413;
+
+/* Tool identity. Each kind owns one hue so a column of cards can be read by
+   colour alone; the hues stay inside the parchment/ink family. */
+--tool-read: #1b365d;
+--tool-write: #2f6f3e;
+--tool-edit: #a35a12;
+--tool-bash: #4a4a45;
+--tool-search: #0f6060;
+--tool-web: #6a2f7a;
+--tool-task: #8a3b2a;
+--tool-todo: #4b4b8a;
+--tool-ask: #7a5a00;
+--tool-js: #5b3fa8;
+--tool-generic: #686761;
+
+/* Diff and status read from the same accents, never from raw Tailwind hues. */
+--diff-add-fg: #1f5c34;
+--diff-add-bg: color-mix(in oklab, var(--ansi-green) 12%, transparent);
+--diff-del-fg: #8f2318;
+--diff-del-bg: color-mix(in oklab, var(--ansi-red) 12%, transparent);
+--tool-ok: #2f6f3e;
+--tool-run: #1b365d;
+--tool-err: #a12a1f;
+
+/* Terminal surface and hairlines. */
+--tool-surface: #f2f1ea;
+--tool-surface-ink: #24231f;
+--tool-rule: color-mix(in oklab, var(--line) 45%, transparent);
+--tool-chip-bg: color-mix(in oklab, var(--stone) 10%, transparent);
+}
+
+/* ANSI 16 — dark surface (near-black). */
+.dark {
+--ansi-black: #2a2a28;
+--ansi-red: #ff7b6e;
+--ansi-green: #7ddca0;
+--ansi-yellow: #f0c674;
+--ansi-blue: #7cb2ff;
+--ansi-magenta: #d69cf5;
+--ansi-cyan: #6fd7d7;
+--ansi-white: #d8d6cc;
+--ansi-bright-black: #7a7870;
+--ansi-bright-red: #ff9c90;
+--ansi-bright-green: #a2f0bd;
+--ansi-bright-yellow: #ffe08a;
+--ansi-bright-blue: #a5ccff;
+--ansi-bright-magenta: #e8c0ff;
+--ansi-bright-cyan: #96ecec;
+--ansi-bright-white: #faf9f5;
+
+--tool-read: #8fb8f0;
+--tool-write: #7ddca0;
+--tool-edit: #e0a860;
+--tool-bash: #a8a69c;
+--tool-search: #6fd7d7;
+--tool-web: #d69cf5;
+--tool-task: #ff9c80;
+--tool-todo: #9c9cff;
+--tool-ask: #f0c674;
+--tool-js: #b39cff;
+--tool-generic: #97968d;
+
+--diff-add-fg: #a2f0bd;
+--diff-add-bg: color-mix(in oklab, var(--ansi-green) 16%, transparent);
+--diff-del-fg: #ff9c90;
+--diff-del-bg: color-mix(in oklab, var(--ansi-red) 16%, transparent);
+--tool-ok: #7ddca0;
+--tool-run: #7cb2ff;
+--tool-err: #ff7b6e;
+
+--tool-surface: #0d0d0c;
+--tool-surface-ink: #e6e4da;
+--tool-rule: color-mix(in oklab, var(--line) 40%, transparent);
+--tool-chip-bg: color-mix(in oklab, var(--stone) 16%, transparent);
+}
+
+@layer components {
+/* The single card frame. Kind supplies the accent; state supplies the pulse. */
+.tool-card {
+  --tool-accent: var(--tool-generic);
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-xl, 0.75rem);
+  border: 1px solid var(--tool-rule);
+  background: color-mix(in oklab, var(--card) 74%, transparent);
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+/* A 3px identity rail, inset so it never collides with the rounded corners. */
+.tool-card::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  background: var(--tool-accent);
+  opacity: 0.92;
+  pointer-events: none;
+}
+
+.tool-card:hover { border-color: color-mix(in oklab, var(--tool-accent) 34%, var(--tool-rule)); }
+.tool-card[data-state="error"] {
+  border-color: color-mix(in oklab, var(--tool-err) 46%, transparent);
+  background: color-mix(in oklab, var(--tool-err) 5%, var(--card));
+}
+.tool-card[data-state="running"] {
+  border-color: color-mix(in oklab, var(--tool-accent) 40%, transparent);
+}
+
+.tool-card[data-kind="read"] { --tool-accent: var(--tool-read); }
+.tool-card[data-kind="write"] { --tool-accent: var(--tool-write); }
+.tool-card[data-kind="edit"] { --tool-accent: var(--tool-edit); }
+.tool-card[data-kind="bash"] { --tool-accent: var(--tool-bash); }
+.tool-card[data-kind="search"] { --tool-accent: var(--tool-search); }
+.tool-card[data-kind="web"] { --tool-accent: var(--tool-web); }
+.tool-card[data-kind="task"] { --tool-accent: var(--tool-task); }
+.tool-card[data-kind="todo"] { --tool-accent: var(--tool-todo); }
+.tool-card[data-kind="ask"] { --tool-accent: var(--tool-ask); }
+.tool-card[data-kind="eval"] { --tool-accent: var(--tool-js); }
+
+/* js is the card the author wrote, so it is allowed one flourish: a soft
+   violet wash behind the header plus a hairline that catches the light. */
+.tool-js-glow {
+  background-image: linear-gradient(110deg, color-mix(in oklab, var(--tool-js) 16%, transparent), transparent 70%);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--tool-js) 26%, transparent);
+}
+
+.tool-call {
+  border: 1px solid var(--tool-rule);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--card) 82%, var(--tool-js) 3%);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.tool-call:hover, .tool-call[open] {
+  border-color: color-mix(in oklab, var(--tool-js) 35%, var(--tool-rule));
+}
+.tool-call summary:focus-visible { outline: 2px solid var(--tool-js); outline-offset: 2px; }
+
+/* Terminal body: one surface for bash output and js output alike. */
+.tool-terminal {
+  background: var(--tool-surface);
+  color: var(--tool-surface-ink);
+  /* Tailwind's preflight leaves `pre` on the sans stack, so a terminal body
+     inherited proportional text. Name the mono stack here, once. */
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  border-radius: var(--radius-md, 0.375rem);
+  border: 1px solid var(--tool-rule);
+  font-variant-ligatures: none;
+  tab-size: 2;
+}
+
+/* Micro-label above a section inside a card. */
+.tool-label {
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* Hairline between sections of one card. */
+.tool-rule {
+  border-top: 1px solid var(--tool-rule);
+}
+
+/* Small metric pill (bytes, lines, exit code, match count). */
+.tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline: 0.375rem;
+  padding-block: 0.0625rem;
+  border-radius: 9999px;
+  background: var(--tool-chip-bg);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.tool-chip[data-tone="ok"] { color: var(--tool-ok); }
+.tool-chip[data-tone="err"] { color: var(--tool-err); }
+.tool-chip[data-tone="accent"] { color: var(--tool-accent); }
+}
+

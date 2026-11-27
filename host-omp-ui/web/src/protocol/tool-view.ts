@@ -10,6 +10,7 @@ import {
   MAX_OUTPUT,
   describeScopeCall,
   languageFor as sharedLanguageFor,
+  readRange,
   stripAnsi,
   stripReplEcho,
 } from "../../../shared/tool-view.mjs";
@@ -28,7 +29,12 @@ export type AnsiSegment = { text: string; color?: string; backgroundColor?: stri
 export function ansiSegments(text: string): AnsiSegment[] {
   const palette = ["#333333", "#cc5555", "#55aa55", "#c5a64a", "#628bd1", "#ad6ac2", "#4caaaa", "#cccccc", "#777777", "#ff7777", "#77dd77", "#ffdd77", "#88aaff", "#dd88ee", "#77dddd", "#ffffff"];
   const names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
-  const color = (n: number) => n < 8 ? `var(--ansi-${names[n]}, ${palette[n]})` : palette[n];
+  // Both banks name a theme variable: the terminal palette belongs to the host
+  // theme, so a card follows light and dark instead of pinning 16 literals.
+  const color = (n: number) =>
+    n < 8
+      ? `var(--ansi-${names[n]}, ${palette[n]})`
+      : `var(--ansi-bright-${names[n - 8]}, ${palette[n]})`;
   const indexedColor = (n: number): string | undefined => {
     if (!Number.isInteger(n) || n < 0 || n > 255) return undefined;
     if (n < 16) return color(n);
@@ -134,27 +140,34 @@ export function ansiSegments(text: string): AnsiSegment[] {
   return result;
 }
 
-export function resultText(value: unknown): string {
+// One walk, two inks: the text a card shows, and the text a terminal needs.
+// Every branch below reaches a leaf string, and only the ink decides whether
+// an SGR escape survives. Keeping one walk is what stops `resultText` and
+// `rawResultText` from drifting apart on a shape that only one of them knows.
+function walkResultText(value: unknown, ink: (text: string) => string): string {
   if (value === undefined || value === null) return "";
-  if (typeof value === "string") return stripAnsi(value);
+  if (typeof value === "string") return ink(value);
   if (Array.isArray(value)) {
-    return value.map((item) => resultText(item)).filter(Boolean).join("\n");
+    return value
+      .map((item) => walkResultText(item, ink))
+      .filter(Boolean)
+      .join("\n");
   }
   const entry = asRecord(value);
-  if (!entry) return stripAnsi(String(value));
-  if (entry.content !== undefined) return resultText(entry.content);
-  if (typeof entry.text === "string") return stripAnsi(entry.text);
-  if (typeof entry.output === "string") return stripAnsi(entry.output);
+  if (!entry) return ink(String(value));
+  if (entry.content !== undefined) return walkResultText(entry.content, ink);
+  if (typeof entry.text === "string") return ink(entry.text);
+  if (typeof entry.output === "string") return ink(entry.output);
   if (typeof entry.stdout === "string" || typeof entry.stderr === "string") {
     return [entry.stdout, entry.stderr]
       .filter((item): item is string => typeof item === "string" && item.length > 0)
-      .map(stripAnsi)
+      .map(ink)
       .join("\n");
   }
   if (entry.details !== undefined) {
     const details = asRecord(entry.details);
     if (details?.output && typeof details.output === "string") {
-      return stripAnsi(details.output);
+      return ink(details.output);
     }
   }
   try {
@@ -162,6 +175,19 @@ export function resultText(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+export function resultText(value: unknown): string {
+  return walkResultText(value, stripAnsi);
+}
+
+/**
+ * The same result, with its SGR escapes intact. `output` is stripped because a
+ * plain `<pre>` cannot colour itself; a terminal body can, so it reads this.
+ * Both fields come from one walk, so they can never disagree on the text.
+ */
+export function rawResultText(value: unknown): string {
+  return walkResultText(value, (text) => text);
 }
 
 export function argsOf(tool: { args?: unknown; argsText?: string }): Record<string, unknown> {
@@ -276,17 +302,23 @@ export type ToolViewBase = {
   title: string;
   path?: string;
   description?: string;
+  /** Wall time the host reported for the call, when it reported one. */
+  durationMs?: number;
 };
 
 export type ReadView = ToolViewBase & {
   kind: "read";
   language: string;
   preview: string;
+  /** `"10-29"` for a bounded read, `"10-"` when it took the rest of the file. */
+  range?: string;
 };
 export type WriteView = ToolViewBase & {
   kind: "write";
   language: string;
   content: string;
+  lines?: number;
+  bytes?: number;
 };
 export type EditView = ToolViewBase & {
   kind: "edit";
@@ -299,6 +331,8 @@ export type BashView = ToolViewBase & {
   kind: "bash";
   command: string;
   output: string;
+  /** `output` with its SGR escapes kept, for a terminal body. */
+  rawOutput?: string;
   exitCode?: number;
   truncated: boolean;
 };
@@ -307,17 +341,24 @@ export type EvalView = ToolViewBase & {
   language: string;
   code: string;
   output: string;
+  /** Same text with SGR codes intact, for the ANSI terminal view. */
+  rawOutput?: string;
   /**
    * The inner tool calls a `js` script dispatched, already described. One
    * level only: a js call cannot nest another js call.
    */
   children?: ToolView[];
+  innerCallCount?: number;
+  innerErrorCount?: number;
+  inputs?: unknown;
 };
 export type SearchView = ToolViewBase & {
   kind: "search";
   pattern: string;
   path: string;
   matches: string[];
+  /** The kept match lines, so a header can count without re-walking `matches`. */
+  matchCount?: number;
 };
 export type WebView = ToolViewBase & {
   kind: "web";
@@ -430,6 +471,7 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
   const name = tool.name || "tool";
   const args = argsOf(tool);
   const output = truncate(resultText(tool.result ?? tool.partialResult));
+  const raw = truncate(rawResultText(tool.result ?? tool.partialResult));
   const path = typeof args.path === "string" ? args.path : undefined;
   const isError = Boolean(tool.isError) || tool.status === "error";
   const status = isError ? "failed" : tool.status;
@@ -441,6 +483,7 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
     title: titleOf(name, args, name),
     path,
     description: typeof args.description === "string" ? args.description : undefined,
+    durationMs: pickDuration(tool),
   };
 
   if (name === "read") {
@@ -450,6 +493,7 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
       title: titleOf(name, args, "read"),
       language: languageFor(path),
       preview: output.text,
+      range: readRange(args),
     };
   }
 
@@ -464,6 +508,8 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
       title: titleOf(name, args, name),
       language: languageFor(path),
       content: content || output.text,
+      lines: countLines(content || output.text),
+      bytes: new TextEncoder().encode(content || output.text).length,
     };
   }
 
@@ -489,6 +535,7 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
       title: titleOf(name, args, "bash"),
       command: String(args.command ?? ""),
       output: output.text,
+      rawOutput: raw.text,
       exitCode,
       truncated: output.truncated,
     };
@@ -497,14 +544,19 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
   // The single `js` tool: the script is the code, the REPL text is the output,
   // and the real work is in `details.innerCalls` — one card per inner call.
   if (name === "js") {
+    const children = innerCallViews(tool.result, tool.details, depth);
     return {
       ...base,
       kind: "eval",
       title: titleOf(name, args, "js"),
       language: "javascript",
       code: String(args.code ?? ""),
+      inputs: args.inputs,
       output: stripReplEcho(output.text),
-      children: innerCallViews(tool.result, tool.details, depth),
+      rawOutput: stripReplEcho(raw.text),
+      children,
+      innerCallCount: children?.length ?? 0,
+      innerErrorCount: children?.filter((child) => child.isError).length ?? 0,
     };
   }
 
@@ -516,17 +568,20 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
       language: String(args.language ?? "javascript"),
       code: String(args.code ?? args.source ?? ""),
       output: output.text,
+      rawOutput: raw.text,
     };
   }
 
   if (["grep", "glob", "find", "ast_grep", "search"].includes(name)) {
+    const matches = searchMatches(output.text);
     return {
       ...base,
       kind: "search",
       title: titleOf(name, args, name),
       pattern: String(args.pattern ?? args.query ?? ""),
       path: String(args.path ?? ""),
-      matches: searchMatches(output.text),
+      matches,
+      matchCount: matches.length,
     };
   }
 
@@ -601,6 +656,23 @@ export function describeTool(tool: ToolExecution, depth = 0): ToolView {
     argsText: Object.keys(args).length ? JSON.stringify(args, null, 2) : String(tool.argsText ?? ""),
     resultText: output.text,
   };
+}
+
+/** `"a\nb"` is two lines; an empty string has none. */
+function countLines(text: string): number {
+  return text.length ? text.split("\n").length : 0;
+}
+
+/** The host reports elapsed time only sometimes; a card shows it only then. */
+function pickDuration(tool: ToolExecution): number | undefined {
+  const details = asRecord(tool.details);
+  const beat = asRecord(details?.beat);
+  const candidates = [details?.durationMs, asRecord(tool.result)?.details, beat?.durationMs];
+  for (const candidate of candidates) {
+    const value = typeof candidate === "number" ? candidate : asRecord(candidate)?.durationMs;
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  }
+  return undefined;
 }
 
 function pickExitCode(result: unknown): number | undefined {

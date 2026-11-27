@@ -6,6 +6,33 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [9.1.0] — 2026-11-28
+
+### Added — a tool card shows what the call actually did
+
+- **A terminal body keeps its colour.** `rawResultText` walks a result the same way
+  `resultText` does but keeps the SGR escapes, so the `bash` and `eval` cards feed a real
+  terminal (`TerminalView`) instead of a plain `<pre>`. The stripped `output` stays for every
+  other reader, and both fields come from one walk, so they cannot disagree on the text.
+- **`js` opens as a studio.** `JsStudioCard` shows the script's `inputs` and one row per
+  inner call with its failure count (`innerCallCount`, `innerErrorCount`).
+- Tool bodies are split into `TerminalView`, `DiffView`, and `JsStudioCard` under
+  `host-omp-ui/web/src/components/tool/`, covered by `tests/host-omp-ui/tool-view-rich.test.ts`.
+
+### Changed
+
+- **Card metrics reach the view.** `durationMs` is carried when the host reported one; a
+  `read` carries its `range`, a `write` counts `lines` and `bytes`, and a `search` counts
+  what it kept.
+- **Bright ANSI colours name a theme variable** (`--ansi-bright-*`) instead of pinning
+  literals, so a card follows light and dark the way the terminal does.
+- `lineNumber` and `readRange` moved to `host-omp-ui/shared/tool-view.mjs`, so the station
+  mapper and the web protocol share one range rule.
+
+### Fixed
+
+- An unusable `offset` or `limit` renders no range instead of a fabricated `NaN-`.
+
 ## [9.0.1] — 2026-11-27
 
 ### Changed — every layer is one station, one ticket, one owner of each fact

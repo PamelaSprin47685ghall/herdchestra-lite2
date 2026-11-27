@@ -1,22 +1,13 @@
 import { memo } from "react";
-import {
-  ChevronDownIcon,
-  CircleSlashIcon,
-  FileIcon,
-  TerminalIcon,
-} from "lucide-react";
-import {
-  CodeBlock,
-  CodeBlockCopyButton,
-} from "@herd/deer-flow-ui/ai-elements/code-block";
+import { ChevronDownIcon, CircleSlashIcon, FileIcon } from "lucide-react";
 import { Badge } from "@herd/deer-flow-ui/ui/badge";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@herd/deer-flow-ui/ui/collapsible";
-import type { BundledLanguage } from "shiki";
 import { ToolStepCard } from "../ToolStepCard";
+import { TerminalView } from "../tool/TerminalView";
 import type {
   MessageBlock,
   ToolExecution,
@@ -38,10 +29,6 @@ function imageBlocks(
     (block): block is Extract<MessageBlock, { type: "image" }> =>
       block.type === "image",
   );
-}
-
-function language(value: string | undefined): BundledLanguage {
-  return (value || "text") as BundledLanguage;
 }
 
 export function UserBlocks({ message }: { message: UiMessage }) {
@@ -76,41 +63,20 @@ export const TerminalRun = memo(function TerminalRun({
   const command = message.command ?? message.code ?? "";
   const output = message.output ?? textBlocks(message, "text");
   const isPython = message.role === "pythonExecution";
+  // One shell card for both the tool path and the bare execution path: the same
+  // .tool-card frame, the same ANSI terminal, so a run never looks like a
+  // second, poorer cousin of a `bash` tool call.
   return (
-    <div className="bg-card/60 rounded-lg border">
-      <div className="text-muted-foreground flex items-center gap-2 border-b px-3 py-2 text-xs">
-        <TerminalIcon className="size-3.5" />
-        <span className="font-medium">{isPython ? "Python" : "Shell"}</span>
-        {message.exitCode !== undefined && (
-          <Badge
-            variant={message.exitCode === 0 ? "secondary" : "destructive"}
-            className="text-[11px]"
-          >
-            exit {message.exitCode}
-          </Badge>
-        )}
-        {message.excludeFromContext && (
-          <Badge variant="outline" className="text-[11px]">
-            不进入上下文
-          </Badge>
-        )}
-        <span className="ml-auto font-mono">{isPython ? "python" : "bash"}</span>
-      </div>
-      <div className="space-y-2 p-3">
-        {command && (
-          <CodeBlock
-            code={command}
-            language={language(isPython ? "python" : "bash")}
-            className="max-h-40 overflow-auto"
-          >
-            <CodeBlockCopyButton className="size-7" />
-          </CodeBlock>
-        )}
-        {output && (
-          <pre className="bg-background max-h-72 overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-words">
-            {output}
-          </pre>
-        )}
+    <div className="tool-card" data-kind="bash" data-state={message.isError ? "error" : "ok"}>
+      <div className="p-2 pl-3">
+        <TerminalView
+          output={output}
+          command={command}
+          language={isPython ? "python" : "bash"}
+          exitCode={message.exitCode}
+          excludeFromContext={message.excludeFromContext}
+          showHeader
+        />
       </div>
     </div>
   );

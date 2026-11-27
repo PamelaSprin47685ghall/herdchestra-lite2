@@ -7,7 +7,7 @@ import {
 import { IncremarkMessage } from "../IncremarkMessage";
 import { useWindowedScroll } from "../../hooks/use-windowed-scroll";
 import { ToolStepCard } from "../ToolStepCard";
-import { mergeToolBlock } from "../../protocol/tool-view";
+import { mergeToolBlock, stripAnsi } from "../../protocol/tool-view";
 import type { ToolExecution } from "../../protocol/types";
 import type { StepEntry, StepSegment } from "../../lib/build-steps";
 
@@ -147,7 +147,7 @@ export function ProcessingSteps({
                     key={step.key}
                     className="bg-muted/40 max-h-72 overflow-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap"
                   >
-                    {step.text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")}
+                    {stripAnsi(step.text)}
                   </pre>
                 ) : (
                   <div key={step.key} className="text-sm">

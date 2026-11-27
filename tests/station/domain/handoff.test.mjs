@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { createRelay } from "../../../src/relay/index.mjs";
 import {
 	RETURN_OATH_KEY,
+	RETURN_OATH_UNFINISHED,
 	RETURN_OATH_VALUE,
 	decideScopeReturn,
 	formatGenerationReport,
@@ -16,11 +17,16 @@ import {
 } from "../../../src/station/domain/handoff.mjs";
 
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
+const UNFINISHED = { [RETURN_OATH_KEY]: RETURN_OATH_UNFINISHED };
 
 describe("parseReturnOath", () => {
-	test("omitted or undefined oath is a small handoff", () => {
-		expect(parseReturnOath({})).toEqual({ ok: true, big: false });
-		expect(parseReturnOath({ [RETURN_OATH_KEY]: undefined })).toEqual({ ok: true, big: false });
+	test("unfinished is the small handoff; an omitted oath is refused", () => {
+		expect(parseReturnOath(UNFINISHED)).toEqual({ ok: true, big: false });
+		expect(parseReturnOath({})).toEqual({ ok: false, code: "INVALID_RETURN_OATH" });
+		expect(parseReturnOath({ [RETURN_OATH_KEY]: undefined })).toEqual({
+			ok: false,
+			code: "INVALID_RETURN_OATH",
+		});
 	});
 
 	test("exact singleton oath value is a big handoff", () => {
@@ -45,22 +51,22 @@ describe("decideScopeReturn", () => {
 			decideScopeReturn({ isRoot: true, args: { dafny: "ok", [RETURN_OATH_KEY]: false } }),
 		).toEqual({ ok: false, code: "INVALID_RETURN_OATH" });
 		expect(
-			decideScopeReturn({ isRoot: true, args: { dafny: "   " } }),
+			decideScopeReturn({ isRoot: true, args: { dafny: "   ", ...UNFINISHED } }),
 		).toEqual({ ok: false, code: "MISSING_DAFNY" });
 		expect(
-			decideScopeReturn({ isRoot: true, mixedToolCalls: true, args: { dafny: "ok" } }),
+			decideScopeReturn({ isRoot: true, mixedToolCalls: true, args: { dafny: "ok", ...UNFINISHED } }),
 		).toEqual({ ok: false, code: "MIXED_RETURN_TOOL_CALLS" });
 		expect(
 			decideScopeReturn({ isRoot: false, identityForkId: "f1", record: childRecord, mixedToolCalls: true, args: { dafny: "ok", ...OATH } }),
 		).toEqual({ ok: false, code: "MIXED_RETURN_TOOL_CALLS" });
 	});
 
-	test("child small handoff (oath omitted) rewinds and stops the loop", () => {
+	test("child small handoff (unfinished oath) rewinds and stops the loop", () => {
 		const decision = decideScopeReturn({
 			isRoot: false,
 			identityForkId: "f1",
 			record: childRecord,
-			args: { dafny: "discovered cache mismatch; next try patching" },
+			args: { dafny: "discovered cache mismatch; next try patching", ...UNFINISHED },
 		});
 		expect(decision).toEqual({
 			ok: true,
@@ -72,7 +78,7 @@ describe("decideScopeReturn", () => {
 		});
 	});
 
-	test("child big handoff (oath present) delivers to receiver", () => {
+	test("child big handoff (seal oath) delivers to receiver", () => {
 		const decision = decideScopeReturn({
 			isRoot: false,
 			identityForkId: "f1",
@@ -100,7 +106,7 @@ describe("decideScopeReturn", () => {
 			relay: before,
 			canRewindRoot: true,
 			unreceived: 2, // allowed for small handoff
-			args: { dafny: "still need to inspect tests" },
+			args: { dafny: "still need to inspect tests", ...UNFINISHED },
 			callId: "c-small",
 		});
 		expect(decision.ok).toBe(true);
@@ -178,7 +184,7 @@ describe("decideScopeReturn", () => {
 			isRoot: true,
 			relay: { ...firstBig.relay, pendingRewind: null },
 			canRewindRoot: true,
-			args: { dafny: "found edge case during review" },
+			args: { dafny: "found edge case during review", ...UNFINISHED },
 		});
 		expect(small.relay.bigStreak).toBe(0);
 
@@ -198,7 +204,7 @@ describe("decideScopeReturn", () => {
 			isRoot: true,
 			relay: createRelay(),
 			canRewindRoot: false,
-			args: { dafny: "report" },
+			args: { dafny: "report", ...UNFINISHED },
 		});
 		expect(decision).toEqual({ ok: false, code: "ROOT_REWIND_UNAVAILABLE" });
 	});

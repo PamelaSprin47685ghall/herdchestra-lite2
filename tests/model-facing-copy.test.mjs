@@ -50,7 +50,7 @@ test("one scope-and-relay section serves root and child, manual and autopilot", 
 	expect(baseText).toContain("Forked scope duty");
 	expect(baseText).toContain("Only the user toggles autopilot");
 	expect(baseText).toContain("exactly one tool: `js`");
-	expect(baseText).toContain("At root, join every scope you forked before taking the oath");
+	expect(baseText).toContain("At root, join every scope you forked before sealing");
 	expect(baseText).toContain("Split into about `sqrt(n)` scopes");
 	expect(baseText).not.toContain("sqrt(2n)");
 

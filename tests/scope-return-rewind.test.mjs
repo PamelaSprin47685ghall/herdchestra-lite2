@@ -32,9 +32,14 @@ import {
 import { notePanhandled } from "../src/scope/panhandle.mjs";
 import { handleForkCall, handleJoinCall, handleReturnCall } from "../src/station/fork-controls.mjs";
 import { executeReturn } from "../src/station/execute.mjs";
-import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+import {
+	RETURN_OATH_KEY,
+	RETURN_OATH_UNFINISHED,
+	RETURN_OATH_VALUE,
+} from "../src/station/domain/handoff.mjs";
 
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
+const UNFINISHED = { [RETURN_OATH_KEY]: RETURN_OATH_UNFINISHED };
 const AGENT_REGISTRY = { kind: "agentRegistry" };
 
 function sharedManager() {
@@ -232,13 +237,13 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 
 									const retCall = {
 										role: "assistant",
-										content: [{ type: "toolCall", id: "ret-1", name: "scope_return", arguments: { dafny: "gen1 distilled summary" } }],
+										content: [{ type: "toolCall", id: "ret-1", name: "scope_return", arguments: { dafny: "gen1 distilled summary", ...UNFINISHED } }],
 										timestamp: 13,
 									};
 									config.sessionManager.appendMessage(retCall);
 									session.agent.state.messages.push(retCall);
 
-									const res = executeReturn(childStation, "ret-1", { dafny: "gen1 distilled summary" }, {});
+									const res = executeReturn(childStation, "ret-1", { dafny: "gen1 distilled summary", ...UNFINISHED }, {});
 									expect(res.isError).toBeUndefined();
 									expect(res.details.rewind).toBe(true);
 									expect(res.details.stopLoop).toBe(true);
@@ -262,7 +267,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 									};
 									config.sessionManager.appendMessage(work2);
 									session.agent.state.messages.push(work2);
-									const res2 = executeReturn(childStation, "ret-2", { dafny: "gen2 distilled summary" }, {});
+									const res2 = executeReturn(childStation, "ret-2", { dafny: "gen2 distilled summary", ...UNFINISHED }, {});
 									expect(res2.details.rewind).toBe(true);
 									expect(record.handoffCount).toBe(2);
 									return;
@@ -437,7 +442,7 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 		// Small handoff is allowed even with unreceived children!
 		const small = handleReturnCall(root, {
 			id: "r-small-1",
-			arguments: { dafny: "compacting root while child runs" },
+			arguments: { dafny: "compacting root while child runs", ...UNFINISHED },
 		});
 		expect(small.isError).toBeUndefined();
 		expect(small.details.rewind).toBe(true);

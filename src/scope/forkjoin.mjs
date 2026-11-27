@@ -205,7 +205,7 @@ export function registerFork(ledger, spec, options = {}) {
     // Return nudges already given. One field, because the station's in-turn
     // steer and the spawn ticket's out-of-turn prompt both spend it.
     returnNudges: 0,
-    // Small self-handoff count on this scope (omitted-oath `scope_return`).
+    // Small self-handoff count on this scope (oath `unfinished`).
     handoffCount: 0,
     // The child branch's leaf at the last completed turn. A stopped scope can
     // be resumed from it: the branch persists, the session does not. `null` on

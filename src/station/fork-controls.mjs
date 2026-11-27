@@ -648,7 +648,7 @@ export function handleForkCall(station, call, options = {}) {
   }
 
   // Opening a new fork on Root starts new work, so any prior promotion
-  // (`canStop`) or first big-oath review streak is cleared synchronously.
+  // (`canStop`) or first seal review streak is cleared synchronously.
   if (started.length > 0 && parentOwnerId === "root" && station.state?.relay) {
     const reset = resetRootPromotion(station.state.relay);
     if (reset.changed) station.state.relay = reset.relay;
@@ -962,10 +962,12 @@ export function renderJoinResult(station, record, options = {}) {
  * Close or rewind the current scope through `scope_return`.
  *
  * Unified across Root (depth 0) and Child (depth >= 1):
- * - Omitted oath -> small handoff rewind (`stopLoop: true`) back to birth.
- * - Exact oath -> Child seals and delivers to parent (`stopLoop: true`);
+ * - Oath `unfinished` -> small handoff rewind (`stopLoop: true`) back to birth.
+ * - Oath `a_ferocious_audacious_master_would_change_nothing` -> Child seals and
+ *   delivers to parent (`stopLoop: true`);
  *   Root #1 rewinds for independent review (`stopLoop: true`);
  *   Root #2 consecutive promotes without rewind (`stopLoop: false`).
+ * - A missing or other oath value -> `INVALID_RETURN_OATH`; there is no default.
  * - Woken child -> `dafny` forwards to `..`; the parent receives it as a new
  *   `scope_request` and no second return is invented.
  */
@@ -1148,7 +1150,7 @@ export function handleReturnCall(station, call, options = {}) {
     );
   }
 
-  // Child big handoff (oath present): seal the bracket and deliver to receiver.
+  // Child seal handoff: seal the bracket and deliver to receiver.
   // Keep `decideReturn` assertion for the pure fork-join gate contract.
   const gate = decideReturn({
     identityForkId: selfForkId,

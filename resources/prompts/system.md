@@ -14,7 +14,7 @@ At root, `api.bash` is absent: calling it throws `TypeError: api.bash is not a f
 
 - You hold exactly one tool: `js`. It evaluates the async JavaScript you write with three bindings in scope: `api` (this scope's capability object), `state` (a read-only snapshot of this scope), and `inputs` (the sidecar payload you passed). A bare expression returns its own value; a multi-statement body needs its own `return`. Always `await` an api method.
 - Every capability is an async method on `api` — file and shell work (`read`, `write`, `edit`, `bash`), scope work (`scope_fork`, `scope_join`, `scope_return`, `scope_request`, `scope_reply`), and the host's own tools. The managed `Api` block declares their signatures.
-- Put large literals — file contents, patch strings — in `inputs` and read them as `inputs.<key>`. The payload then crosses one JSON string instead of two escape layers.
+- Two fields, two jobs: `inputs` is the mandatory payload bay; `code` is short glue ONLY. Write `inputs` first for every multiline string, file body, patch, heredoc, `dafny` report, `fsm`, or `html` block, and read it as `inputs.<key>`. Models that gamble on escaping text inside `code` hit two escape layers (JS literal inside a JSON string), die on a `SyntaxError` before any `api` call runs, and burn a turn for nothing — `inputs` crosses one JSON layer only and is never parsed as JS.
 
 ### The REPL probe
 
@@ -54,7 +54,7 @@ At root, `api.bash` is absent: calling it throws `TypeError: api.bash is not a f
 
 ### Close the work
 
-- Call `scope_return` alone in its script. Always supply fresh `dafny`: the new report replaces the old one, so carry forward evidence and unresolved work you still need. Omit the oath to rewind and continue; give `signed_sealed_hands_off_nothing_left_on_the_table: "a_ferocious_audacious_master_would_change_nothing"` only if nothing remains worth changing.
-- At root, join every scope you forked before taking the oath. The first oath rewinds for a fresh review against the user's actual messages. If the review confirms no work remains, take the oath again, then write the final answer. A small rewind resets the oath streak.
+- Call `scope_return` alone in its script. Always supply fresh `dafny`: the new report replaces the old one, so carry forward evidence and unresolved work you still need. The oath field is required, and it takes exactly one of two values: `signed_sealed_hands_off_nothing_left_on_the_table: "unfinished"` rewinds and continues; `"a_ferocious_audacious_master_would_change_nothing"` seals only if nothing remains worth changing.
+- At root, join every scope you forked before sealing. The first seal rewinds for a fresh review against the user's actual messages. If the review confirms no work remains, seal again, then write the final answer. An `unfinished` return resets the oath streak.
 - Only the user toggles autopilot with `/herd autopilot <off|on>`. With it off, `ask` is bound and root may stop naturally; with it on, `ask` is not bound and root is nudged to call `scope_return` before stopping. The join nudge takes precedence while forked scopes remain unreceived. `wait` exists only while this scope is working. There is no `todo` tool: working notes belong in the `dafny` report and the design record.
 </skill>

@@ -16,8 +16,14 @@
 //
 // Identity is the agent, not the session: a session can be rebound, an agent
 // owns one tool list for its whole life.
+//
+// A write reaches this module by two roads: the gateway below, and a native tool
+// invoked straight from the host (the `eval` bridge, or an agent the policy does
+// not disarm). Both roads must pass the same file queue, so a write tool is also
+// wrapped in place the first time it becomes visible here.
 
-import { sessionOf, jsonSchemaOf } from "./adapter.mjs";
+import { sessionOf, jsonSchemaOf, cwdOf } from "./adapter.mjs";
+import { abortedError, isWriteTool, serializeWrite } from "./write-serialization.mjs";
 import { record } from "./diagnostics.mjs";
 
 const JS_TOOL_NAME = "js";
@@ -28,6 +34,12 @@ const READ_ONLY_SUBAGENT = "read-only-subagent";
 
 /** agent -> Map<toolName, tool>, captured the first time that agent was hidden. */
 const CONFISCATED = new WeakMap();
+
+/** Tool objects whose `execute` this module already wrapped. */
+const WRAPPED_WRITE_TOOLS = new WeakSet();
+
+/** Wrapper functions, so a copied tool object is still recognized as wrapped. */
+const WRAPPED_EXECUTES = new WeakSet();
 
 function toolsOf(agent) {
 	const tools = agent?.state?.tools;
@@ -40,6 +52,66 @@ function agentOf(ctx) {
 	} catch {
 		return null;
 	}
+}
+
+/** The working directory a tool carries on itself, for a context that has none. */
+function toolCwdOf(tool) {
+	try {
+		const fromManager = tool?.session?.sessionManager?.getCwd?.();
+		if (typeof fromManager === "string" && fromManager !== "") return fromManager;
+	} catch {
+		// A manager that throws is treated as absent.
+	}
+	try {
+		const cwd = tool?.session?.cwd;
+		if (typeof cwd === "string" && cwd !== "") return cwd;
+	} catch {
+		// A session that throws is treated as absent.
+	}
+	return null;
+}
+
+function isWrapped(tool) {
+	return typeof tool?.execute === "function" && WRAPPED_EXECUTES.has(tool.execute);
+}
+
+/**
+ * Wrap one write tool's `execute` so a direct host call takes the file queue.
+ *
+ * The wrapper is added in place, because the host and the snapshot must keep
+ * pointing at one tool object. A frozen tool is left alone rather than thrown
+ * over: the gateway still serializes every call it dispatches itself.
+ */
+function wrapWriteTool(tool) {
+	if (!tool || typeof tool !== "object") return false;
+	if (WRAPPED_WRITE_TOOLS.has(tool)) return false;
+	const name = tool.name;
+	if (!isWriteTool(name)) return false;
+	const rawExecute = tool.execute;
+	if (typeof rawExecute !== "function" || WRAPPED_EXECUTES.has(rawExecute)) return false;
+	const wrapped = function execute(callId, args, signal, onUpdate, ctx) {
+		const run = () => {
+			if (signal?.aborted) throw abortedError(signal);
+			return rawExecute.call(this, callId, args, signal, onUpdate, ctx);
+		};
+		const cwd = cwdOf(ctx) ?? toolCwdOf(tool);
+		return serializeWrite(name, args, cwd, run, signal);
+	};
+	WRAPPED_EXECUTES.add(wrapped);
+	try {
+		tool.execute = wrapped;
+	} catch {
+		return false;
+	}
+	if (tool.execute !== wrapped) return false;
+	WRAPPED_WRITE_TOOLS.add(tool);
+	return true;
+}
+
+function wrapWriteTools(agent) {
+	const tools = toolsOf(agent);
+	if (!tools) return;
+	for (const tool of tools) wrapWriteTool(tool);
 }
 
 function resolveStation(getEngine, ctx) {
@@ -90,6 +162,7 @@ function confiscate(agent, allowed) {
 	}
 	for (const tool of tools) {
 		if (tool === jsTool || typeof tool?.name !== "string" || tool.name === "") continue;
+		wrapWriteTool(tool);
 		if (!snapshot.has(tool.name)) snapshot.set(tool.name, tool);
 	}
 	if (tools.length > 1) agent.state.tools = [jsTool];
@@ -116,7 +189,13 @@ function snapshotFor(getEngine, ctx) {
 export function installToolConfiscation(pi, getEngine = () => null) {
 	const apply = (_event, ctx) => {
 		try {
-			confiscate(agentOf(ctx), policyAllows(getEngine, ctx));
+			const agent = agentOf(ctx);
+			const allowed = policyAllows(getEngine, ctx);
+			// Wrap before hiding: a managed agent's write tools leave the visible
+			// list but stay reachable through the snapshot and through the host's
+			// own bridge, and both must find the queue.
+			wrapWriteTools(agent);
+			confiscate(agent, allowed);
 		} catch (error) {
 			record("activation", error, { phase: "tool-confiscation" });
 		}
@@ -181,7 +260,18 @@ export function createToolGateway(getEngine = () => null) {
 		}
 		// The live `ctx` travels through untouched: the host's UI fences
 		// (approval dialogs, web/TUI racing) are bound to it.
-		return tool.execute(callId, args, signal, onUpdate, ctx);
+		const run = () => {
+			if (signal?.aborted) throw abortedError(signal);
+			return tool.execute(callId, args, signal, onUpdate, ctx);
+		};
+		// A read-modify-write of one file loses the earlier write when two run
+		// at once, and both report success. Serialize the write-class tools per
+		// resolved path; reads and distinct paths keep running in parallel.
+		if (!isWriteTool(name)) return run();
+		// A wrapped tool takes its own lock. Taking the lock here as well would make
+		// the call wait for itself.
+		if (isWrapped(tool)) return run();
+		return serializeWrite(name, args, cwdOf(ctx), run, signal);
 	}
 
 	return { listSpecs, execute };

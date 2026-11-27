@@ -64,7 +64,7 @@ Call once with a string while in `AWAITING_REPLY`: the requester's `scope_reques
 
 ## return.tool
 
-Call `scope_return` alone in its script. Omit the oath to rewind and continue. A scope taking the oath seals its record for the scope that started it to receive with `scope_join`, and unreceived scopes below it move to that scope or the nearest live receiver above it. The call ends the turn: any later `api.*` call throws.
+Call `scope_return` alone in its script. The oath field is required: `unfinished` rewinds and continues; the seal value seals the record for the scope that started it to receive with `scope_join`, and unreceived scopes below it move to that scope or the nearest live receiver above it. The call ends the turn: any later `api.*` call throws.
 
 ## return.dafny
 
@@ -72,7 +72,7 @@ Required. A fresh, dense report: reliable deductions, verification evidence, unr
 
 ## return.oath
 
-Optional, and only when nothing remains worth changing. At root, receive every scope you forked first.
+Required, and exactly one of two values. `unfinished`: rewind and continue, with `dafny` replacing the record. `a_ferocious_audacious_master_would_change_nothing`: seal the record; take it only when nothing remains worth changing. At root, receive every scope you forked first. A missing, empty, or other value is refused with `INVALID_RETURN_OATH`.
 
 ## join.interrupted
 
@@ -89,11 +89,11 @@ Rewinding to continue with your latest report. This resets the root oath streak.
 
 ## return.review
 
-Rewinding for an independent review. Check the work against the user's requirements; take the oath again only if nothing remains worth changing.
+Rewinding for an independent review. Check the work against the user's requirements; seal again only if nothing remains worth changing.
 
 ## return.finish
 
-The second consecutive oath permits the final reply. Answer the user now.
+The second consecutive seal permits the final reply. Answer the user now.
 
 ## return.pending
 

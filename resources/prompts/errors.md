@@ -66,7 +66,7 @@ The record stays ready; use a model with a larger window or shorten the record, 
 
 ## invalid-return-oath
 
-Omit `signed_sealed_hands_off_nothing_left_on_the_table` to rewind, or give it the exact value `a_ferocious_audacious_master_would_change_nothing` to take the oath.
+Pass `signed_sealed_hands_off_nothing_left_on_the_table` as exactly one of two values: `unfinished` to rewind, or `a_ferocious_audacious_master_would_change_nothing` to seal. A missing or other value is refused.
 
 ## mixed-return
 
@@ -74,7 +74,7 @@ Omit `signed_sealed_hands_off_nothing_left_on_the_table` to rewind, or give it t
 
 ## return-unreceived
 
-Root still owns unreceived work. Receive it with `scope_join` before taking the oath.
+Root still owns unreceived work. Receive it with `scope_join` before sealing.
 
 ## return-rewind-unavailable
 

@@ -24,7 +24,17 @@ const ESSENTIAL = "essential";
 export const JS_TOOL_NAME = "js";
 
 const JS_DESCRIPTION =
-	"Run one async JavaScript program against the live `api` object. `code` is an expression or a statement body with `api`, `state`, and `inputs` in scope; await every api call. I used to inline a whole patch into `code`, and it blew up: the text crossed a JSON string and then a JS literal, one backtick or `${` inside the patch ended the literal, and every retry meant escaping the entire thing again. So now every large literal — file body, patch, heredoc — goes in `inputs`: it crosses one JSON layer and arrives verbatim at `inputs.<key>`. The set of methods actually bound this turn is printed in the trailing REPL probe; a method absent there does not exist at runtime.";
+	"Run one async JavaScript program against the live `api` object (`api`, `state`, `inputs` in scope; bare expression returns implicitly, statement body needs `return`; always `await` api calls).\n" +
+	"\n" +
+	"HARD RULE — TWO FIELDS, TWO JOBS: `inputs` is the payload bay; `code` is SHORT glue ONLY. Write `inputs` FIRST, then reference `inputs.<key>` in `code`:\n" +
+	"  BAD:  { code: \"await api.write({ path: 'a.txt', content: 'line1\\\\nline2...' })\" }\n" +
+	"  GOOD: { inputs: { body: \"line1\\nline2...\" }, code: \"await api.write({ path: 'a.txt', content: inputs.body })\" }\n" +
+	"\n" +
+	"WHY MODELS STILL BLOW THIS UP: Every model tells itself \"I will escape this one carefully — it's faster than adding `inputs`.\" Then it fails. Text inlined into `code` must survive TWO escape layers (your JS string literal, then the JSON `code` string) and JS parsing. One unescaped backtick, `${`, quote, newline, or lone backslash detonates a `SyntaxError` before a single api call executes. Nothing runs, the wasted turn stays on the ledger forever, and you pay a second turn to re-emit the whole payload anyway. I used to inline patches and reports into `code` and paid that exact tax repeatedly. Doing it after reading this is not bad luck — it is classic amateur self-sabotage.\n" +
+	"\n" +
+	"STOP-TRIGGER (CHECK BEFORE SENDING): The instant you type a multiline string, `\\n`, a backtick, `${`, an escaped quote, or any payload for `write` (`content`), `edit` (`old_string`/`new_string`), `scope_return` (`dafny`), `scope_fork` (`fsm`), `ask` (`html`), patch, or heredoc inside `code` — STOP. Move it to `inputs.<key>`. `inputs` crosses one JSON layer only: never JS-parsed, never double-escaped, arrives verbatim as a runtime object.\n" +
+	"\n" +
+	"The set of methods actually bound this turn is printed in the trailing REPL probe; a method absent there does not exist at runtime.";
 
 /**
  * The scope control plane as plain async functions.

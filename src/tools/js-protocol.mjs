@@ -16,17 +16,17 @@ export const jsParameters = Object.freeze({
 	additionalProperties: false,
 	required: ["code"],
 	properties: {
-		code: {
-			type: "string",
-			minLength: 1,
-			description:
-				"Async JS expression or function body evaluated with `api`, `state`, and `inputs` in scope. A bare expression is returned implicitly; a multi-statement body needs its own `return`. Always `await` api methods.",
-		},
 		inputs: {
 			type: "object",
 			additionalProperties: true,
 			description:
-				"Optional raw payloads (file content, patch strings, large literals). Reference them as `inputs.<key>` inside `code` instead of escaping big text into a JS string.",
+				"MANDATORY payload bay for every non-trivial text value: file bodies (`write` `content`), diffs/patches (`edit` `old_string`/`new_string`), `scope_return` `dafny`, `scope_fork` `fsm`, `ask` `html`, heredocs, or ANY string with two lines, quotes, backticks, or `${`. Write `inputs` BEFORE `code` every time (`inputs: { body: \"...\" }` -> `inputs.body`). Values here cross ONE JSON layer only — never parsed as JS source, never double-escaped, arriving verbatim as a runtime object. Skipping `inputs` because you think \"I will escape this string carefully inside `code`\" is the #1 self-inflicted `SyntaxError` failure mode: nothing executes, the burned turn stays on the ledger forever, and you re-emit the whole payload anyway. Omit `inputs` ONLY when `code` contains nothing longer than short paths or identifiers.",
+		},
+		code: {
+			type: "string",
+			minLength: 1,
+			description:
+				"SHORT async JS glue ONLY (`api`, `state`, `inputs` in scope; bare expression returns implicitly, statement body needs `return`; always `await` api calls). NEVER embed multiline text, file bodies, patches, `dafny`, `fsm`, `html`, or heredocs here. STOP-TRIGGER: if you catch yourself typing `\\n`, a backtick, `${`, or escaped quotes inside `code`, STOP IMMEDIATELY — you are walking straight into a two-layer escaping `SyntaxError` that kills the call before any api method runs and burns the turn for nothing. Put the payload in `inputs.<key>` and pass `inputs.<key>` here instead.",
 		},
 	},
 });
@@ -219,10 +219,13 @@ interface ScopeAbandonResult {
 	abandoned: string[];
 }
 
-interface ScopeReturnArgs {
-	dafny: string;
-	signed_sealed_hands_off_nothing_left_on_the_table?: "a_ferocious_audacious_master_would_change_nothing";
-}
+  interface ScopeReturnArgs {
+  	dafny: string;
+  	/** Required, exactly one of two values: "unfinished" rewinds; the seal value publishes. */
+  	signed_sealed_hands_off_nothing_left_on_the_table:
+  		| "a_ferocious_audacious_master_would_change_nothing"
+  		| "unfinished";
+  }
 
 interface ScopeState {
 	mode: "CHILD" | "ROOT_MANUAL" | "ROOT_AUTOPILOT" | "FINAL_ANSWER" | "CONTEXT_LIMIT" | "AWAITING_REPLY";

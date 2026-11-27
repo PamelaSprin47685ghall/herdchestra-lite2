@@ -20,11 +20,11 @@ Ready to answer the user.
 
 ## receipt.return-required
 
-Call `scope_return` before stopping: rewind to continue, or take the oath if nothing is left to change.
+Call `scope_return` before stopping. The oath field is required: pass `unfinished` to rewind and continue, or the seal value if nothing is left to change.
 
 ## root.return-nudge
 
-Call `scope_return` alone with fresh `dafny`. Omit the oath to rewind and continue; take the oath only if nothing is left to change.
+Call `scope_return` alone with fresh `dafny` and the required oath: `unfinished` to rewind and continue, the seal value only if nothing is left to change.
 
 ## mode.awaiting-reply
 
@@ -32,7 +32,7 @@ Call `scope_return` alone with fresh `dafny`. Omit the oath to rewind and contin
 
 ## mode.context-limit
 
-Context is past its midpoint; only `scope_return` is bound. Hand the record back now; fork the rest after the rewind, which re-baselines the context.
+Context is past its midpoint; only `scope_return` is bound. Hand the record back now with the oath `unfinished`; fork the rest after the rewind, which re-baselines the context.
 
 ## mode.final-answer
 
@@ -46,11 +46,11 @@ Turns left: {{remaining}}. Targets: {{targets}}.
 
 ## fork.child-return
 
-Use the `scope_return` oath to submit your record. Without the oath, the call rewinds without submitting it.
+Use the `scope_return` oath to submit your record. The oath field is required: `unfinished` rewinds without submitting it; the seal value publishes it.
 
 ## fork.child-return-nudge
 
-Your record is still unpublished. Call `scope_return` with the oath to hand it to the scope that forked this one, or omit the oath to rewind and continue.
+Your record is still unpublished. Call `scope_return` with the seal value to hand it to the scope that forked this one, or with `unfinished` to rewind and continue.
 
 ## language
 

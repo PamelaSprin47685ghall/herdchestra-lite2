@@ -287,11 +287,14 @@ export function describeToolCall(toolCall, toolResult) {
 
   if (name === "scope_join" || name === "scope_return") {
     const scope = String(args.scope ?? "");
+    const oath = args.signed_sealed_hands_off_nothing_left_on_the_table;
     const plan =
       name === "scope_return"
-        ? args.signed_sealed_hands_off_nothing_left_on_the_table
+        ? oath === "a_ferocious_audacious_master_would_change_nothing"
           ? "seal"
-          : "rewind"
+          : oath === "unfinished"
+            ? "continue"
+            : "rewind"
         : "";
     return {
       kind: "task",

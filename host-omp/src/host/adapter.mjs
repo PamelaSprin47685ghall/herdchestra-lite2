@@ -75,6 +75,25 @@ export function messagesOf(ctx) {
 	const messages = read(agentState(sessionOf(ctx)), "messages");
 	return Array.isArray(messages) ? messages : null;
 }
+/**
+ * The session's working directory, or null when the host exposes none.
+ *
+ * The session manager is the host's own authority (`getCwd()`); a session
+ * field is the fallback for hosts that expose no manager. A missing cwd is
+ * reported as null and never guessed: a wrong base keys two writes of one
+ * file under two locks, and the lost update is silent.
+ */
+export function cwdOf(ctx) {
+	try {
+		const fromManager = managerOf(ctx)?.getCwd?.();
+		if (typeof fromManager === "string" && fromManager !== "") return fromManager;
+	} catch {
+		// A manager that throws is treated as absent; the session may still answer.
+	}
+	const session = sessionOf(ctx);
+	const cwd = read(session, "cwd") ?? read(agentState(session), "cwd") ?? read(ctx, "cwd");
+	return typeof cwd === "string" && cwd !== "" ? cwd : null;
+}
 
 /**
  * One tool's JSON Schema, as the host declares it.

@@ -1,6 +1,7 @@
 // Pure handoff and scope_return decisions for the Station.
 //
-// Owns the oath contract (`RETURN_OATH_KEY` / `RETURN_OATH_VALUE`), the unified
+// Owns the oath contract (`RETURN_OATH_KEY` / `RETURN_OATH_VALUE` /
+// `RETURN_OATH_UNFINISHED`), the unified
 // Root + Child `scope_return` state transition table, and the reborn prompt /
 // generation-report formatting. Pure functions only: no Station import, no host
 // import, no mutation of inputs, no I/O.
@@ -11,6 +12,7 @@ import { loadDoc, render } from "../../prompts/index.mjs";
 
 export const RETURN_OATH_KEY = "signed_sealed_hands_off_nothing_left_on_the_table";
 export const RETURN_OATH_VALUE = "a_ferocious_audacious_master_would_change_nothing";
+export const RETURN_OATH_UNFINISHED = "unfinished";
 
 function relayDoc() {
 	return loadDoc("receipts/relay");
@@ -21,18 +23,17 @@ function trimString(value) {
 }
 
 /**
- * Validate the optional oath field strictly (never truthy coercion).
- * - Omitted (`undefined`): small handoff (`big: false`).
- * - Exact singleton string: big handoff (`big: true`).
- * - Any other value (`false`, `null`, `""`, typo): refused with `INVALID_RETURN_OATH`.
+ * Read the required oath field strictly (never truthy coercion). Exactly one
+ * of two values is accepted:
+ * - `RETURN_OATH_UNFINISHED`: small handoff (`big: false`), a rewind.
+ * - `RETURN_OATH_VALUE`: big handoff (`big: true`), a seal.
+ * A missing field, `undefined`, `null`, `""`, `false`, or a typo is refused
+ * with `INVALID_RETURN_OATH`: there is no default path.
  */
 export function parseReturnOath(args) {
-	if (!args || typeof args !== "object" || !Object.hasOwn(args, RETURN_OATH_KEY) || args[RETURN_OATH_KEY] === undefined) {
-		return { ok: true, big: false };
-	}
-	if (args[RETURN_OATH_KEY] === RETURN_OATH_VALUE) {
-		return { ok: true, big: true };
-	}
+	const oath = args && typeof args === "object" ? args[RETURN_OATH_KEY] : undefined;
+	if (oath === RETURN_OATH_VALUE) return { ok: true, big: true };
+	if (oath === RETURN_OATH_UNFINISHED) return { ok: true, big: false };
 	return { ok: false, code: "INVALID_RETURN_OATH" };
 }
 
@@ -135,7 +136,7 @@ export function decideScopeReturn({
 			stopLoop: false,
 		};
 	}
-	// Review off: the first big oath is the review. Promote instead of
+	// Review off: the first seal is the review. Promote instead of
 	// spending a compaction rewind on a second look.
 	if (oath.big && review === "off") {
 		return {

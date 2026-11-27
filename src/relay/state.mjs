@@ -1,11 +1,11 @@
 // Relay state: creation, copying, and validation. Pure data. No I/O.
 //
 // Root handoff is unified with `scope_return`:
-// - A small handoff (oath omitted) rewinds Root to its user prompts + pins + report,
-//   increments `generation`, and resets `bigStreak` to 0.
-// - A first big handoff (oath present, `bigStreak === 0`) rewinds Root for an
+// - A small handoff (oath `unfinished`) rewinds Root to its user prompts + pins +
+//   report, increments `generation`, and resets `bigStreak` to 0.
+// - A first seal handoff (`bigStreak === 0`) rewinds Root for an
 //   independent review pass (`generation += 1`, `bigStreak = 1`, `canStop = false`).
-// - A second consecutive big handoff (oath present, `bigStreak >= 1`) promotes
+// - A second consecutive seal handoff (`bigStreak >= 1`) promotes
 //   without rewinding (`bigStreak = 2`, `canStop = true`) so Root may write the
 //   final user-facing answer.
 

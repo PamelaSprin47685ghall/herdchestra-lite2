@@ -4,7 +4,7 @@ Continue the work from the report and the documents it names. Carry forward the 
 
 ## reborn.review
 
-Independently review the result against the user's requirements. If nothing remains worth changing, take the oath again and write the final answer. If work remains, continue and rewind without the oath before asking for another review.
+Independently review the result against the user's requirements. If nothing remains worth changing, seal again and write the final answer. If work remains, continue and return again with the oath `unfinished` before asking for another review.
 
 ## reborn.report
 

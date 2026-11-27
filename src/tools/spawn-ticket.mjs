@@ -383,8 +383,8 @@ export async function spawnChildTicket(spec, ports) {
 			return true;
 		};
 		await prompt(spec.receipt);
-		// A natural stop submits nothing. Only scope_return with the oath closes
-		// the bracket; a small scope_return rewinds to originEntryId and keeps
+  		// A natural stop submits nothing. Only scope_return with the seal oath closes
+  		// the bracket; an `unfinished` scope_return rewinds to originEntryId and keeps
 		// running in the same session, forkId, path, ownerId, inbox, and budget.
 		let bracket = forkOf(ledger, spec.forkId);
 		while (bracket && bracket.status === "running") {

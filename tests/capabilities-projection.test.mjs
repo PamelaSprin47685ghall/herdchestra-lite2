@@ -214,7 +214,7 @@ describe("forkRemaining", () => {
 			0,
 			clock,
 		);
-		expect(bounded.time).toBe("1:00/3:00");
+		expect(bounded.time).toBe("1:00 left of 3:00");
 
 		const unbounded = forkRemaining(
 			{ remaining: {}, budget: {} },

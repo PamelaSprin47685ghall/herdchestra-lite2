@@ -21,7 +21,7 @@ At root, `api.bash` is absent: calling it throws `TypeError: api.bash is not a f
 - `api` is a host-managed live binding: keys appear and disappear between turns without your action. The probe's `Object.keys(api)` is the whole truth — a key you cannot see is not callable, and calling it throws.
 - Every turn ends with a `user` message that reads like a REPL session: a `> ({ api: Object.keys(api), ...state })` command, the one-line object it evaluates to, and a comment line carrying the system requirement. It is this turn's binding, reprinted every turn; never act on an earlier turn's copy.
 - A `> delete api.<name>` line followed by `true` appears on the single turn a capability is withdrawn: that name was just removed.
-- `state.mode` names this turn's mode. `state.remaining` is what is left of this scope's budget as `remaining/budget` per tool; `state.unreceived` counts forked scopes you have not joined; `state.scopes` lists live paths; `state.scope` is your own.
+- `state.mode` names this turn's mode. `state.remaining` is what is left of this scope's budget, never what is used: each tool reads `remaining/budget` in turns (trimmed to at most two decimals — `2`, `2.5`, `8.25` — since one request splits its turn across the calls it made), the clock reads `<left> left of <budget>` in `m:ss` (`time: 6:46 left of 6:58`, or `OVERTIME` once the deadline has passed), and `panhandled` counts calls that ran past their budget. `state.unreceived` counts forked scopes you have not joined; `state.scopes` lists live paths; `state.scope` is your own.
 
 ### Run scopes
 

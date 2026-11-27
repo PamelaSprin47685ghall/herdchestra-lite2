@@ -20,11 +20,11 @@ Required: the identity of the LLM in the new scope. Start with "You are " and na
 
 ## fork.budget
 
-One unit is one turn, meaning one LLM request; the calls in that request split the turn between them. Use tool names as keys, with non-negative integer turn budgets. An unlisted tool has zero budget; a call whose budget falls short still runs, and the record marks it panhandled. Free tools need no entry, so an empty budget is valid when the scope uses only free tools; a `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free too and needs no entry either. Size the budget for the work, not for individual calls; `state.remaining` reports it as `remaining/budget` per tool.
+One unit is one turn, meaning one LLM request; the calls in that request split the turn between them. Use tool names as keys, with non-negative integer turn budgets. An unlisted tool has zero budget; a call whose budget falls short still runs, and the record marks it panhandled. Free tools need no entry, so an empty budget is valid when the scope uses only free tools; a `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free too and needs no entry either. Size the budget for the work, not for individual calls; `state.remaining` reports it as `remaining/budget` per tool, and its clock entry as `<left> left of <budget>`.
 
 ## fork.time
 
-Do not pass `time`: the system derives the wall clock from the session's mean request duration and this item's turns. It covers tool execution, so an I/O-heavy scope can reach its deadline first; waiting in `scope_join`, `scope_request`, or `scope_return` pauses it. A call past the deadline still returns its result, and the overrun is recorded as a panhandle and shown as `remaining.time: OVERTIME`.
+Do not pass `time`: the system derives the wall clock from the session's mean request duration and this item's turns. It covers tool execution, so an I/O-heavy scope can reach its deadline first; waiting in `scope_join`, `scope_request`, or `scope_return` pauses it. A call past the deadline still returns its result, and the overrun is recorded as a panhandle and shown as `remaining.time: OVERTIME`; a bounded clock that did not overrun reads `time: <left> left of <budget>`.
 
 ## fork.targets
 

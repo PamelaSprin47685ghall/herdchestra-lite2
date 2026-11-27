@@ -232,7 +232,7 @@ interface ScopeState {
 	scope: string;
 	autopilot?: boolean;
 	canStop?: boolean;
-	/** Child only: per-tool balance as "remaining/budget", plus time and panhandles. */
+	/** Child only, and always what is left, never what is used. Each tool as "remaining/budget" in turns; time as "<left> left of <budget>" in m:ss, or "OVERTIME"; panhandled, only when nonzero, as the cumulative count of calls that ran past their budget. */
 	remaining?: Record<string, string | number>;
 	unreceived: number;
 	scopes: string[];

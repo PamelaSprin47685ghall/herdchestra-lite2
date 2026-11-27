@@ -145,11 +145,14 @@ function formatClock(ms) {
 /**
  * The structured balance object the REPL probe prints as `state.remaining`.
  *
- * Every entry reads `remaining/budget` for one tool, so the field name and
- * the value agree: it is what is left, never what is used. `budget` stays a
- * fork-input word; at runtime the balance is always `remaining`. Overtime
- * collapses the clock entry to `time: 'OVERTIME'`; panhandles appear only
- * when nonzero.
+ * Every tool entry reads `remaining/budget`; the clock entry reads
+ * `<left> left of <budget>`. Both put what is left first, never what is
+ * used. The clock span is bare `m:ss`, so the direction is spelled out:
+ * `time: 6:46` alone reads as a timestamp, while `time: 6:46 left of 6:58`
+ * cannot. `budget` stays a fork-input word; at runtime the balance is
+ * always `remaining`. Overtime collapses the clock entry to
+ * `time: 'OVERTIME'`; panhandles are a cumulative count of calls that ran
+ * past their budget, and appear only when nonzero.
  */
 export function forkRemaining(record, now = Date.now(), clock = null) {
 	const out = {};
@@ -169,7 +172,7 @@ export function forkRemaining(record, now = Date.now(), clock = null) {
 	if (info.bounded) {
 		out.time = info.overtime
 			? "OVERTIME"
-			: `${formatClock(info.leftMs)}/${formatClock(record.timeBudgetMs)}`;
+			: `${formatClock(info.leftMs)} left of ${formatClock(record.timeBudgetMs)}`;
 	}
 	const panhandled = Number.isInteger(record.panhandleTotal)
 		? record.panhandleTotal

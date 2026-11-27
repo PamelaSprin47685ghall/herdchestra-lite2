@@ -105,7 +105,7 @@ test("routine scope status keeps local turns and pending work without repeating 
 		autopilot: true,
 		unreceived: 3,
 		selfPath: "/api",
-		remaining: { read: "2/8", edit: "1/3", time: "0:20/0:24" },
+		remaining: { read: "2/8", edit: "1/3", time: "0:20 left of 0:24" },
 		activePaths: ["/", "/api", "/ui"],
 		hostToolNames: ["read", "edit", "write"],
 	});
@@ -113,7 +113,7 @@ test("routine scope status keeps local turns and pending work without repeating 
 	const view = probeOf(text);
 	// The child reads its own turns and the fanout address book; it never sees
 	// the root's autopilot switch or its return obligation.
-	expect(view.remaining).toEqual({ read: "2/8", edit: "1/3", time: "0:20/0:24" });
+	expect(view.remaining).toEqual({ read: "2/8", edit: "1/3", time: "0:20 left of 0:24" });
 	expect(view.unreceived).toBe(3);
 	expect(view.scopes).toEqual(["/", "/api", "/ui"]);
 	expect(view).not.toHaveProperty("autopilot");

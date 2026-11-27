@@ -6,6 +6,15 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+### Changed — the probe's clock entry states its direction
+
+`state.remaining.time` printed `6:46/6:58`, which reads as an elapsed span as
+easily as a balance. It now prints `6:46 left of 6:58`; `OVERTIME` is unchanged.
+`resources/prompts/system.md`, `resources/prompts/tools/fork-join.md`, and the
+`ScopeState.remaining` comment now spell out the whole field: every tool entry is
+`remaining/budget` in turns, the clock is `<left> left of <budget>` in `m:ss`, and
+`panhandled` is the cumulative count of calls that ran past their budget.
+
 ## [6.2.0] — 2026-11-27
 
 ### Changed — `scope_return` requires an explicit oath (breaking)

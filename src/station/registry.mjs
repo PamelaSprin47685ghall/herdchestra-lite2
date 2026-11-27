@@ -2,7 +2,8 @@
 
 import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { identityForAgent } from "../scope/fork-registry.mjs";
-import { SessionStation, shapeHost } from "./station.mjs";
+import { SessionStation } from "./station.mjs";
+import { shapeHost } from "../core/host-shape.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 
 /**

@@ -1,13 +1,14 @@
 // Scope turns: normalization, rounding, per-beat shares, and display.
 // Pure arithmetic. No I/O.
 
+import { CONTROL_TOOLS } from "./state.mjs";
 import {
-  CONTROL_TOOLS,
-  isNonEmptyString,
+  formatCents as formatAmount,
+  normalizeBudget,
   put,
-} from "./state.mjs";
-import { isPlainObject } from "./plain.mjs";
-import { formatAmount } from "./amount.mjs";
+  roundAmount,
+  validBudget,
+} from "../core/primitives.mjs";
 
 // Charge amounts are real numbers with at most two decimal places. One turn is
 // split into 100 hundredths so an assistant message spends exactly one turn
@@ -84,38 +85,10 @@ export function isFreeCall(toolName, input) {
   return isFreeTool(toolName) || isInternalUriCall(toolName, input);
 }
 
-function validBudget(turns) {
-  if (!isPlainObject(turns)) return false;
-  for (const tool of Reflect.ownKeys(turns)) {
-    if (typeof tool !== "string" || !isNonEmptyString(tool)) return false;
-    const amount = turns[tool];
-    if (!Number.isInteger(amount) || amount < 0) return false;
+  /** Normalize a single tool name: apply_patch → edit. */
+  export function normalizeToolName(toolName) {
+    return toolName === "apply_patch" ? "edit" : toolName;
   }
-  return true;
-}
-
-/** Normalize tool names: apply_patch → edit. */
-function normalizeBudget(turns) {
-  if (!isPlainObject(turns)) return turns;
-  const normalized = {};
-  for (const key of Reflect.ownKeys(turns)) {
-    if (typeof key !== "string") continue;
-    const normalizedKey = key === "apply_patch" ? "edit" : key;
-    const currentValue = Object.hasOwn(normalized, normalizedKey) ? normalized[normalizedKey] : 0;
-    put(normalized, normalizedKey, currentValue + turns[key]);
-  }
-  return normalized;
-}
-
-/** Normalize a single tool name: apply_patch → edit. */
-export function normalizeToolName(toolName) {
-  return toolName === "apply_patch" ? "edit" : toolName;
-}
-
-/** Round a charge amount to the two-decimal precision. */
-export function roundAmount(value) {
-  return Math.round(value * CHARGE_SCALE) / CHARGE_SCALE;
-}
 
 /**
  * Split one turn across the tools called in a single assistant
@@ -161,4 +134,4 @@ export function beatShares(items) {
   return shares;
 }
 
-export { CHARGE_SCALE, validBudget, normalizeBudget, formatAmount };
+export { CHARGE_SCALE, validBudget, normalizeBudget, roundAmount, formatAmount };

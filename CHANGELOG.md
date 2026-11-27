@@ -6,6 +6,97 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [9.0.1] — 2026-11-27
+
+### Changed — every layer is one station, one ticket, one owner of each fact
+
+Whole-repository clean break that brings `src/`, `host-omp/`, and `host-omp-ui/` back
+under the Ticket Station Method without changing observable behaviour.
+
+- **Capabilities are injected once.** `SessionStation` no longer seeds a dozen
+  `forkXxxPort` lambdas and lets two wiring stages overwrite them one at a time.
+  One immutable `ForkContext` (`src/station/domain/fork-context.mjs`) is attached at
+  construction; the read-only facades delegate to it, and a station without one
+  answers from an unbound bundle instead of throwing mid-turn.
+- **Process-wide state has an explicit owner.** The `Symbol.for` carrier on the
+  ledger, the module-level `RUNNING_BY_LEDGER` table, and the lazily defined
+  `WeakMap` on the wiring are gone: one `ForkProcess` value object holds the
+  registry, the ledger index per conversation, the running set per ledger, and the
+  per-station attach record. In the host, one `host/process-registry.mjs` owns
+  `forkWiring`, `statusState`, `transcriptListeners`, and `captureState`, with each
+  slot's arbitration policy written next to it.
+- **`src/scope/**` is statically synchronous.** The parking half of the fork
+  registry (`park`, `waitForReady`) moved to the ticket layer
+  (`src/tools/join-wait.mjs`), so the eslint exemption for
+  `src/scope/fork-registry.mjs` is removed and the whole directory is covered.
+- **Tickets never write station fields.** Root and child rewinds, the host-boundary
+  cache, the printed-tree baseline, the receipt bookkeeping, and the model-switch
+  queue are five pure kernels under `src/station/domain/` (`rewind`,
+  `host-boundary`, `directory-baseline`, `projection`, `usage-sample`); `gates.mjs`,
+  `handoff-state.mjs`, `models.mjs`, `return-controls.mjs`, and
+  `spawn-ticket.mjs` call station methods (`noteHostBoundary`, `armRootRewind`,
+  `consumeChildRewind`, `commitChildRewind`, `displayContext`) instead of assigning
+  internal fields. The child rewind rewrites the branch through the station, so
+  root and child rewind share one reset implementation.
+- **Host shape and engine entry are single.** `shapeHost`/`mergeHost` moved to
+  `src/core/host-shape.mjs` and accept the grouped shape only; `src/engine.mjs`
+  exposes `station`, `peekStation` (never mints a station), and
+  `isReadOnlySubagent`, so `host-omp` no longer probes two spellings or mirrors the
+  `"read-only-subagent"` string.
+- **Two claim-one-receipt defects are fixed.** `childReceiptText` renders the
+  identity line itself, so the priced length and the sent text are the same
+  string even when `profession` carries surrounding whitespace; join admission and
+  join delivery read one `joinEnvelope`, and `finalizeJoinRecord` is the single
+  commit path.
+- **Refusals are one table.** `src/station/errors.mjs` holds every decision code
+  with its documentation entry, placeholders, and structured details; the fork,
+  join, return, and abandon handlers carry no second copy of the wording.
+- **`host-omp-ui` station does not reach into the host.** `delta-merger` moved to
+  `station/domain/`, `SERVER_FRAMES` and `DRAFT_FRAME` to `protocol-codec.mjs`,
+  `commitTicketResult` to `station/domain/ticket-result.mjs`, and the interaction
+  route is decided by the station. `manager/server.mjs` is transport only:
+  `ManagerStation` owns the clients, agents, waiters, and operation tokens, and
+  three tickets own the async flows.
+- **Message and frame vocabularies have one home.** `host-omp/src/host/usage-ledger.mjs`
+  owns the Σ and the new-ledger rule; `branch/refusals.mjs` owns the branch
+  refusal and limitation codes; `child-display/tool-tray.mjs` owns the active-tool
+  tray; `host/tickets/attachments.mjs` owns the attachment envelope.
+
+### Added — ratchets that fail on the next regression
+
+- `tests/architecture/skill-records.test.mjs` checks that every design record under
+  `.agent/skills/` names its own directory and quotes only paths that exist.
+- `tests/host-omp-ui/frame-vocabulary.test.mjs` checks that every frame the bridge
+  sends has a browser case.
+- `tests/host/user-abort-routing.test.mjs` checks that an interrupt answers from one
+  engine, never calls a second match, and never builds a station for a context
+  nobody owns.
+- `station-ratchet.test.mjs` gained rewind and cache ownership sections;
+  `host-omp-ui-boundary.test.mjs` now forbids `src/station/**` importing
+  `../host/**`; `fork-fsm-pricing.test.mjs` pins priced-equals-sent with padded
+  input; `manager-session-contract.test.mjs` pins the release of a timed-out
+  new-session slot.
+
+### Fixed — an interrupt could abort twice or build a stray station
+
+- `host/user-abort.mjs` stopped at the first engine that owns the context and
+  recorded a diagnostic on a miss, instead of calling every match and then calling
+  the last engine anyway (which entered `stationFor` and minted a station for a
+  foreign context).
+- `manager/session-service.mjs` bounds `newFlights` with the same deadline as
+  `inFlight`, so a launch that never registers can no longer hold a cwd's slot for
+  the life of the process.
+
+### Removed — dead weight and the last transitional facades
+
+- `src/scope/forkjoin.mjs`, `src/scope/persistence.mjs`, `src/scope/plain.mjs`, and
+  `src/scope/amount.mjs`: every caller imports the leaf module; the shared helpers
+  live in `src/core/primitives.mjs`.
+- The duplicated `JSDoc` blocks in `ledger-serialize.mjs`, `ledger-entry.mjs`, and
+  `ledger-charge.mjs`, the dead `ledgerOf` read model, and the `gates.onAgentEnd`
+  synchronous rewind fallback (a second implementation of a rewind the host ticket
+  owns).
+
 ## [9.0.0] — 2026-11-27
 
 ### Changed — root `scope_return` matches every other manager (breaking)

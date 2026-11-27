@@ -12,16 +12,11 @@ import {
   estimateJoinTokens,
   joinAdmission,
 } from "../src/scope/admission.mjs";
-import {
-  createBracketLedger,
-  forkOf,
-  markReady,
-  readyChildren,
-  registerFork,
-  takeReady,
-} from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, markReady, readyChildren, registerFork, takeReady } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import { handleJoinCall } from "../src/station/fork-controls.mjs";
-import { createForkRegistry, waitForReady } from "../src/scope/fork-registry.mjs";
+import { createForkRegistry } from "../src/scope/fork-registry.mjs";
+import { waitForReady } from "../src/tools/join-wait.mjs";
 
 function ledgerWith(ids) {
   const ledger = createBracketLedger();

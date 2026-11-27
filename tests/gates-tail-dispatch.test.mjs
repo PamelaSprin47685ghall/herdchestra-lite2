@@ -24,6 +24,8 @@ function fakeStation({ policy = READ_WRITE_SUBAGENT, recovery = false } = {}) {
 			charges: {},
 		},
 		hostBoundaryKey: null,
+		// The gate calls the station's boundary entry; this fake has no transcript.
+		noteHostBoundary() {},
 		registry: undefined,
 		forkOwnerId: () => null,
 		policy: () => policy,

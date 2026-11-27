@@ -11,6 +11,57 @@ const source = readFileSync(
 	"utf8",
 );
 
+// The rewind and model-switch facts are one value with total transitions, and
+// the child branch rewrite is a station method. A gate that writes a field, or a
+// ticket that drives the manager itself, is the violation this locks out.
+describe("rewind ownership ratchet", () => {
+	const read = (path) =>
+		readFileSync(new URL(`../../src/station/${path}`, import.meta.url), "utf8");
+
+	test("no gate or transition module writes a rewind field", () => {
+		const field =
+			/station[.](rewindDispatching|rewoundThisTurn|pendingModelSwitch|modelSwitchInFlight|pendingChildRewind|childRewindAvailable)[ \t]*=/;
+		for (const file of ["gates.mjs", "handoff-state.mjs", "models.mjs"]) {
+			expect(read(file)).not.toMatch(field);
+		}
+	});
+
+	test("the spawn ticket asks the station to rewrite the branch", () => {
+		const spawn = readFileSync(
+			new URL("../../src/tools/spawn-ticket.mjs", import.meta.url),
+			"utf8",
+		);
+		expect(spawn).not.toMatch(
+			/childStation[.](pendingChildRewind|childRewindAvailable)[ \t]*=/,
+		);
+		expect(spawn).not.toMatch(/manager[.](resetLeaf|branch)[(]/);
+		expect(spawn).toContain("commitChildRewind(");
+	});
+});
+
+// The host-boundary cache and the printed-tree baseline are station state with
+// one owner: the kernels transition them, the station reads and drops them. A
+// gate that assigns one of those fields is re-deriving a transition the station
+// already owns, and the two copies drift the first time one of them changes.
+describe("cache ownership ratchet", () => {
+	const readSource = (path) =>
+		readFileSync(new URL(`../../src/station/${path}`, import.meta.url), "utf8");
+	const field =
+		/station[.](hostBoundaryKey|hostBoundaryScan|contextCache|lastSeenDir|pendingDirSeen|lastDirSeq|lastPendingDirSeq|lastCapKeys)[ \t]*=/;
+
+	test("no gate or handoff module writes a boundary or baseline field", () => {
+		for (const file of ["gates.mjs", "handoff-state.mjs"]) {
+			expect(readSource(file)).not.toMatch(field);
+		}
+	});
+
+	test("the boundary entry points live on the station", () => {
+		const gates = readSource("gates.mjs");
+		expect(gates).not.toContain("cachedHostBoundaryKey");
+		expect(gates).not.toContain("observeHostBoundary");
+	});
+});
+
 function methodBody(name) {
 	const marker = `\n\t${name}(`;
 	const start = source.indexOf(marker);
@@ -67,19 +118,26 @@ describe("capability projection ratchet", () => {
 	const projection = methodBody("projectionFor");
 	const receipt = methodBody("skillReceipt");
 	const precheck = methodBody("beginJsCall");
+	const kernel = readFileSync(
+		new URL("../../src/station/domain/projection.mjs", import.meta.url),
+		"utf8",
+	);
 
 	test("the probe, the vm binding, and the cache signature share one projection", () => {
-		expect(projection).toContain("projectCapabilities(");
+		expect(projection).toContain("project(");
+		expect(projection).toContain("stageDirMeta(");
 		for (const body of [receipt, precheck]) {
 			expect(body.length).toBeGreaterThan(0);
 			expect(body).toContain("projectionFor(");
 		}
-		// No second projection: `projectCapabilities` is called once, inside
-		// `projectionFor`, and every consumer goes through it.
-		expect(count(source, /projectCapabilities\(/g)).toBe(1);
-		// The receipt is the only renderer of the REPL probe.
-		expect(count(source, /renderConsoleReceipt\(/g)).toBe(1);
-		expect(receipt).toContain("renderConsoleReceipt(");
+		// One home: the domain kernel projects and renders. A second call site in
+		// the station would be a second definition of what the model was shown,
+		// and the provider's cached prefix would drift for no reason.
+		expect(count(source, /projectCapabilities\(/g)).toBe(0);
+		expect(count(source, /renderConsoleReceipt\(/g)).toBe(0);
+		expect(count(kernel, /projectCapabilities\(/g)).toBe(1);
+		expect(count(kernel, /renderConsoleReceipt\(/g)).toBe(1);
+		expect(receipt).toContain("renderReceipt(");
 	});
 });
 

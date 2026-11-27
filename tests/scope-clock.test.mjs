@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
 import { forkRemaining } from "../src/station/domain/capabilities.mjs";
 import { createClockOn } from "../src/scope/clock.mjs";
 

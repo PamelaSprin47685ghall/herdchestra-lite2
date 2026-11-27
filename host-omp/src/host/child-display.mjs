@@ -33,12 +33,12 @@ const scopes = () => scopeView ?? { of: () => null, status: () => null, label: (
 
 export const CHILD_ACTIVITY_TYPE = "herd.fork-activity";
 export const ACTIVE_TOOLS_WIDGET_KEY = "herd-tools";
-import {
-	TRANSCRIPT_LISTENERS as STATE,
-	TRANSCRIPT_SUBSCRIBE as CAPTURE,
-} from "./process-symbols.mjs";
-const transcript = globalThis[STATE] ??= new WeakMap();
-const noopRepaint = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
+import { TRANSCRIPT_SUBSCRIBE as CAPTURE } from "./process-symbols.mjs";
+import { getProcessRegistry } from "./process-registry.mjs";
+// One listener table per session, shared by every extension instance. The registry
+// owns the slot, so a child instance registers into the parent's table instead of
+// writing a second one the display never repaints from.
+const transcript = getProcessRegistry().transcriptListeners(() => new WeakMap());
 // One stable identity: the host detach only clears the slot it installed.
 const SUPPRESS_APPROVAL_PREVIEW = () => Promise.resolve();
 let toolCardCtor = null;
@@ -80,37 +80,14 @@ export function captureTranscriptSubscriptions(prototype) {
 	};
 }
 
-function resolveTool(session, toolName) {
-	try {
-		return session?.getToolByName?.(toolName);
-	} catch {
-		return undefined;
-	}
-}
-
-function resolveCwd(session) {
-	try {
-		return session?.sessionManager?.getCwd?.();
-	} catch {
-		return undefined;
-	}
-}
-
-function isBuiltInTool(session, toolName) {
-	try {
-		return typeof session?.hasBuiltInTool === "function" ? session.hasBuiltInTool(toolName) : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function buildToolCard(Card, tool, tui) {
-	const options = tool.builtIn === undefined ? {} : { useBuiltInRenderer: tool.builtIn };
-	const card = new Card(tool.toolName, tool.args, options, tool.definition, tui ?? noopRepaint, tool.cwd, tool.toolCallId);
-	card.setArgsComplete?.(tool.toolCallId);
-	card.setExecutionStarted?.(tool.toolCallId);
-	return card;
-}
+// The tray owns the tool-row helpers it renders with; the arbiter asks the same
+// module who a tool is instead of keeping a second copy of the answer.
+import {
+	createActiveToolTray,
+	isBuiltInTool,
+	resolveCwd,
+	resolveTool,
+} from "./child-display/tool-tray.mjs";
 
 function normalizeParts(parts) {
 	return Array.isArray(parts)
@@ -165,194 +142,6 @@ function publish(state, event) {
 			record("fork", error, { phase: "child-display" });
 		}
 	}
-}
-
-function createActiveToolTray(getUi, current) {
-	const entries = new Map();
-	let mounted = false;
-	let hostTui = null;
-	let hostTheme = null;
-	let activeWidget = null;
-	let tick = 0;
-
-	function entryKey(source, toolCallId, toolName) {
-		return typeof toolCallId === "string" && toolCallId !== "" ? toolCallId : `name:${toolName ?? "tool"}`;
-	}
-
-	function mapFor(source, create = false) {
-		let map = entries.get(source);
-		if (!map && create) {
-			map = new Map();
-			entries.set(source, map);
-		}
-		return map;
-	}
-
-	function totalCount() {
-		let count = 0;
-		for (const map of entries.values()) count += map.size;
-		return count;
-	}
-
-	function disposeCard(entry) {
-		try {
-			entry.card?.seal?.();
-			entry.card?.dispose?.();
-		} catch {
-			// Disposing a visual card must never break tool delivery.
-		}
-		entry.card = null;
-	}
-
-	function ensureCard(entry) {
-		if (entry.card || !toolCardCtor || !hostTui) return entry.card;
-		const card = buildToolCard(toolCardCtor, entry, hostTui);
-		if (entry.partialResult) card.updateResult(entry.partialResult, true, entry.toolCallId);
-		entry.card = card;
-		return card;
-	}
-
-	function renderRow(entry, width, frame) {
-		const safeWidth = Math.max(1, width);
-		const tag = entry.label ? ` ${entry.label} ` : " ";
-		const styledTag = entry.label && hostTheme?.fg ? ` ${hostTheme.fg("muted", entry.label)} ` : tag;
-		const card = ensureCard(entry);
-		if (card) {
-			const innerWidth = Math.max(8, safeWidth - tag.length);
-			card.setTranscriptAllocation?.(1, frame);
-			const lines = card.render(innerWidth);
-			const first = Array.isArray(lines) && lines.length > 0 ? lines[0] : "";
-			if (first) return `${styledTag}${first}`;
-		}
-		const line = ` ${formatFallbackLine(entry, frame.now)}`;
-		return line.length > safeWidth ? `${line.slice(0, Math.max(1, safeWidth - 1))}…` : line;
-	}
-
-	function buildWidget(tui, theme) {
-		const previous = activeWidget;
-		activeWidget = null;
-		previous?.dispose?.();
-		hostTui = tui;
-		hostTheme = theme;
-		const clock = setInterval(() => hostTui?.requestRender?.(), 250);
-		clock.unref?.();
-		const widget = {
-			render(width) {
-				tick += 1;
-				const frame = { tick, now: performance.now() };
-				const rows = [];
-				for (const map of entries.values()) {
-					for (const entry of map.values()) rows.push(renderRow(entry, width, frame));
-				}
-				return rows;
-			},
-			invalidate() {
-				for (const map of entries.values()) {
-					for (const entry of map.values()) entry.card?.invalidate?.();
-				}
-			},
-			dispose() {
-				clearInterval(clock);
-				for (const map of entries.values()) {
-					for (const entry of map.values()) disposeCard(entry);
-				}
-				if (activeWidget === widget) activeWidget = null;
-				hostTui = null;
-				hostTheme = null;
-			},
-		};
-		activeWidget = widget;
-		return widget;
-	}
-
-	function syncWidget() {
-		const ui = getUi();
-		if (!current() || typeof ui?.setWidget !== "function") return;
-		const count = totalCount();
-		if (count === 0) {
-			if (!mounted) return;
-			mounted = false;
-			const widget = activeWidget;
-			activeWidget = null;
-			widget?.dispose?.();
-			try {
-				ui.setWidget(ACTIVE_TOOLS_WIDGET_KEY, undefined);
-			} catch (error) {
-				record("fork", error, { phase: "child-display" });
-			}
-			return;
-		}
-		if (!mounted) {
-			mounted = true;
-			try {
-				ui.setWidget(ACTIVE_TOOLS_WIDGET_KEY, buildWidget, { placement: "aboveEditor" });
-			} catch (error) {
-				mounted = false;
-				record("fork", error, { phase: "child-display" });
-			}
-			return;
-		}
-		hostTui?.requestRender?.();
-	}
-
-	return {
-		start(source, label, session, event) {
-			const map = mapFor(source, true);
-			const key = entryKey(source, event.toolCallId, event.toolName);
-			const previous = map.get(key);
-			if (previous) disposeCard(previous);
-			const entry = {
-				label,
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				args: event.args,
-				definition: resolveTool(session, event.toolName),
-				builtIn: isBuiltInTool(session, event.toolName),
-				cwd: resolveCwd(session),
-				startedAt: performance.now(),
-				partialResult: null,
-				partialText: "",
-				card: null,
-			};
-			map.set(key, entry);
-			syncWidget();
-		},
-		update(source, event) {
-			const map = mapFor(source);
-			if (!map) return;
-			const entry = map.get(entryKey(source, event.toolCallId, event.toolName));
-			if (!entry) return;
-			entry.partialResult = event.partialResult ?? null;
-			const text = textBlocks(event.partialResult?.content, "text", "text").split("\n", 1)[0]?.trim() ?? "";
-			entry.partialText = text;
-			if (entry.card && entry.partialResult) {
-				entry.card.updateResult(entry.partialResult, true, entry.toolCallId);
-			}
-			syncWidget();
-		},
-		end(source, event) {
-			const map = mapFor(source);
-			const key = entryKey(source, event.toolCallId, event.toolName);
-			const entry = map?.get(key) ?? null;
-			if (entry) {
-				disposeCard(entry);
-				map.delete(key);
-				if (map.size === 0) entries.delete(source);
-				syncWidget();
-			}
-			return entry;
-		},
-		clearSource(source) {
-			const map = mapFor(source);
-			if (!map) return;
-			for (const entry of map.values()) disposeCard(entry);
-			entries.delete(source);
-			syncWidget();
-		},
-		get activeCount() {
-			return totalCount();
-		},
-	};
 }
 
 const ROOT = Symbol("root");
@@ -664,7 +453,10 @@ export function childDisplayFor(root, ui, options = {}) {
 	const current = () => state.display === binding && !root.isSessionTransitioning && root.sessionManager === manager && manager?.getSessionId?.() === sessionId;
 	let lastOwnerId = "root";
 	let rootWaits = 0;
-	const tray = createActiveToolTray(() => binding.ui, current);
+	const tray = createActiveToolTray(() => binding.ui, current, {
+		widgetKey: ACTIVE_TOOLS_WIDGET_KEY,
+		cardComponent: () => toolCardCtor,
+	});
 	const suppressApprovalPreview = () => installApprovalPreviewSuppression(root, binding);
 	const arbiter = displayArbiter(state, tray, suppressApprovalPreview);
 	suppressApprovalPreview();

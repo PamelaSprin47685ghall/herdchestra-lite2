@@ -1,3 +1,8 @@
+---
+name: js-beat-interrupt
+description: One js tool call is one beat. Load before editing the park/work classification or the soft/explicit interrupt decision matrix in src/tools/beat.mjs and src/tools/js-ticket.mjs.
+---
+
 # js beat interrupt
 
 ## Job

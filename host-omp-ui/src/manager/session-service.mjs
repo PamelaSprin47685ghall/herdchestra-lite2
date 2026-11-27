@@ -35,6 +35,23 @@ function reused(live) {
 	return { ok: true, kind: "reused", instanceId: live.instanceId };
 }
 
+// A single flight with no deadline would hold inFlight and flightDirs until
+// the process exits. Race the work against a deadline so the slot always
+// frees, even when the launcher never answers.
+function withDeadline(task, sessionId, limit) {
+	if (!(limit > 0)) return task;
+	let timer = null;
+	const deadline = new Promise((settle) => {
+		timer = setTimeout(
+			() => settle(failure("launch_timeout", new Error(`session ${sessionId} did not settle within ${limit}ms`))),
+			limit,
+		);
+	});
+	return Promise.race([task, deadline]).finally(() => {
+		if (timer !== null) clearTimeout(timer);
+	});
+}
+
 /**
  * @param {{
  *   loadSessions: () => unknown[] | Promise<unknown[]>,
@@ -43,9 +60,14 @@ function reused(live) {
  *   buildPlan?: (session: unknown) => unknown,
  *   buildNewPlan?: (input: { cwd?: unknown }) => unknown,
  *   awaitRegistration?: (plan: unknown) => unknown | Promise<unknown>,
+ *   timeoutMs?: number,
  * }} deps
+ *
+ * timeoutMs bounds one single flight. A launch that never settles must not
+ * hold the conversation's slot for the life of the process; when the deadline
+ * passes the slot is released and the caller gets "launch_timeout".
  */
-export function createSessionService({ loadSessions, findLiveInstance, launch, buildPlan, buildNewPlan, awaitRegistration }) {
+export function createSessionService({ loadSessions, findLiveInstance, launch, buildPlan, buildNewPlan, awaitRegistration, timeoutMs = 120000 }) {
 	if (typeof loadSessions !== "function") throw new TypeError("loadSessions is required");
 	if (typeof launch !== "function") throw new TypeError("launch is required");
 
@@ -145,7 +167,7 @@ export function createSessionService({ loadSessions, findLiveInstance, launch, b
 		const existing = inFlight.get(id);
 		if (existing) return existing;
 
-		const task = runEnsure(id, dirs);
+		const task = withDeadline(runEnsure(id, dirs), id, timeoutMs);
 		inFlight.set(id, task);
 		// runEnsure never rejects; finally only releases the single-flight slot.
 		task.finally(() => {
@@ -161,7 +183,7 @@ export function createSessionService({ loadSessions, findLiveInstance, launch, b
 	function newSession({ cwd } = {}, waitForLaunch) {
 		const existing = newFlights.get(cwd);
 		if (existing) return existing;
-		const task = (async () => {
+		const work = (async () => {
 			let plan;
 			try { plan = buildNewPlan ? buildNewPlan({ cwd }) : buildNewLaunch({ cwd }); }
 			catch (error) { return failure(error?.code || "launch_failed", error); }
@@ -176,6 +198,11 @@ export function createSessionService({ loadSessions, findLiveInstance, launch, b
 				return { ok: true, kind: "launched", tmuxSession: plan.tmuxSession, cwd, instanceId: registered.instanceId, launchId: plan.launchId };
 			} catch (error) { return failure("registration_failed", error); }
 		})();
+		// A hung launch must free its per-cwd slot too. The duty is the same one
+		// `ensureSession` carries: the flight is bounded, the slot is released when
+		// the race settles, and a later caller launches again instead of waiting on
+		// a process that never registers.
+		const task = withDeadline(work, `cwd ${cwd}`, timeoutMs);
 		newFlights.set(cwd, task);
 		task.finally(() => { if (newFlights.get(cwd) === task) newFlights.delete(cwd); });
 		return task;

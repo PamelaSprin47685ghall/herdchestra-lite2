@@ -10,16 +10,9 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  applyCharge,
-  createBracketLedger,
-  forkOf,
-  markReady,
-  registerFork,
-  serializeLedger,
-  serializeLedgerShared,
-  takeReady,
-} from "../src/scope/forkjoin.mjs";
+import { applyCharge, forkOf } from "../src/scope/ledger-charge.mjs";
+import { createBracketLedger, markReady, registerFork, takeReady } from "../src/scope/ledger-brackets.mjs";
+import { serializeLedger, serializeLedgerShared } from "../src/scope/ledger-serialize.mjs";
 import { createClockOn, pauseClock } from "../src/scope/clock.mjs";
 import { notePanhandled } from "../src/scope/panhandle.mjs";
 

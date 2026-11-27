@@ -8,12 +8,8 @@ import { describe, expect, test } from "bun:test";
 
 import { isFreeTool } from "../src/scope/turns.mjs";
 import { CONTROL_TOOLS, createState } from "../src/scope/state.mjs";
-import {
-  createBracketLedger,
-  forkOf,
-  markReady,
-  registerFork,
-} from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, markReady, registerFork } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import { projectCapabilities } from "../src/station/domain/capabilities.mjs";
 import { handleAbandonCall, handleReturnCall } from "../src/station/fork-controls.mjs";
 

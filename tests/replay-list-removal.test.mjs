@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { foldStateChain } from "../src/scope/persistence.mjs";
+import { foldStateChain } from "../src/scope/ledger-entry.mjs";
 
 test("replay preserves order across duplicate removals and re-appends", () => {
   const entries = [

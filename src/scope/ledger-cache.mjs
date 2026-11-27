@@ -5,11 +5,13 @@
 // reuse the record copies that did not move. A ledger nobody registered is not
 // cached at all: a hand-built object in a test still serializes by value.
 //
-// The maps are weak, so a discarded ledger and its records leave no trace. No
-// property is added to a ledger or a record: the schema, JSON output, and
-// `validLedger` stay exactly as they were.
-const ledgers = new WeakMap();
-const owners = new WeakMap();
+// The runtime record hangs off the ledger itself under a symbol key, and each
+// record points back to its ledger the same way. A symbol never appears in
+// `Object.keys`, `JSON.stringify`, or a serializer pass, so the schema, the
+// stored tree, and `validLedger` stay exactly as they were; a discarded ledger
+// and its records leave no trace beyond their own reachability.
+const LEDGER_RUNTIME = Symbol("ledger.runtime");
+const RECORD_OWNER = Symbol("record.owner");
 
 // How many snapshots the change chain may retain. Writes since the last durable
 // one are one or two; a handful covers retries. The bound is what keeps the
@@ -18,7 +20,8 @@ const MAX_STEPS = 8;
 
 function metaOf(ledger) {
   if (!ledger || typeof ledger !== "object") return null;
-  return ledgers.get(ledger) ?? null;
+  const runtime = ledger[LEDGER_RUNTIME];
+  return runtime && typeof runtime === "object" ? runtime : null;
 }
 
 /**
@@ -37,7 +40,7 @@ export function replaceTotals(ledger, totals) {
 /** Start tracking one ledger. Called where a ledger is born, never by a reader. */
 export function registerLedger(ledger) {
   if (!ledger || typeof ledger !== "object") return null;
-  let meta = ledgers.get(ledger);
+  let meta = metaOf(ledger);
   if (!meta) {
     meta = {
       snapshot: null,
@@ -81,7 +84,11 @@ export function registerLedger(ledger) {
       weakConsumers: new WeakMap(),
       weakConsumerRefs: new Set(),
     };
-    ledgers.set(ledger, meta);
+    Object.defineProperty(ledger, LEDGER_RUNTIME, {
+      value: meta,
+      enumerable: false,
+      configurable: true,
+    });
   }
   return meta;
 }
@@ -97,7 +104,12 @@ export function registerRecord(ledger, record) {
   if (!metaOf(ledger)) return;
   // Keep the address assigned at registration. Reading record.forkId later
   // lets a partially failed mutation redirect the dirty mark to another record.
-  owners.set(record, { ledger, forkId: record.forkId });
+  Object.defineProperty(record, RECORD_OWNER, {
+    value: { ledger, forkId: record.forkId },
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
 }
 
 // The writer the legacy single-journal API speaks for. Named writers are added
@@ -352,7 +364,7 @@ export function commitPersisted(ledger) {
  */
 export function touchRecord(record) {
   if (!record || typeof record !== "object") return;
-  const owner = owners.get(record);
+  const owner = record[RECORD_OWNER];
   if (!owner) return;
   markRecordDirty(owner.ledger, owner.forkId);
 }

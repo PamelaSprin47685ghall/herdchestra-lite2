@@ -5,12 +5,8 @@
 // module is the holder the wiring injects as the four ports. It holds no host
 // objects: a ledger is plain data, and every wait is a plain Promise.
 
-import { createBracketLedger, forkOf, markReady, takeReady, subscribeLedger, unreceivedChildren, openChildren } from "./forkjoin.mjs";
+import { createBracketLedger, markReady } from "./ledger-brackets.mjs";
 import { normalizeTargets, validTargets } from "./targets.mjs";
-
-function failure(code, reason) {
-  return { ok: false, code, reason };
-}
 
 function createWaiter() {
   let resolve = null;
@@ -233,72 +229,30 @@ export function notifyWaiters(registry) {
   }
 }
 
-function attachSignal(registry, signal, waiter) {
-  if (!signal || typeof signal.addEventListener !== "function") {
-    return () => {};
-  }
-  const onAbort = () => {
-    registry.waiters.delete(waiter);
-    waiter.resolve({ ok: false, code: "INTERRUPTED", reason: "The wait was interrupted." });
-  };
-  if (signal.aborted) {
-    onAbort();
-    return () => {};
-  }
-  signal.addEventListener("abort", onAbort, { once: true });
-  return () => signal.removeEventListener?.("abort", onAbort);
-}
-
-async function park(registry, signal) {
-  const waiter = createWaiter();
-  registry.waiters.add(waiter);
-  const detach = attachSignal(registry, signal, waiter);
-  try {
-    return await waiter.promise;
-  } finally {
-    detach();
-    registry.waiters.delete(waiter);
-  }
-}
-
 /**
- * Caller side: take the first returned subscope, parking until one arrives or
- * the signal aborts. Always checks `signal?.aborted` BEFORE `takeReady` so a
- * beat interrupted by abandon/user steer never consumes a ready result into
- * JOINED and drops it.
- */
-export async function waitForReady(registry, ledger, options = {}) {
-  subscribeLedger(ledger, registry.wake ??= () => notifyWaiters(registry));
-  const ownerId = options.ownerId;
-  const levelKey = options.levelKey;
-  const signal = options.signal ?? null;
-  const canTake = typeof options.canTake === "function" ? options.canTake : null;
-  const admit = typeof options.admit === "function" ? options.admit : null;
-  for (;;) {
-    if (signal?.aborted) {
-      return failure("JOIN_INTERRUPTED", "The join was interrupted; the forked scopes keep running.");
+   * Register one waiter: build its Promise, queue it, and wire the abort signal.
+   * Synchronous, so the queue stays the registry's own state; the awaiting half
+   * lives in the join-wait ticket.
+   */
+  export function openWaiter(registry, signal) {
+    const waiter = createWaiter();
+    registry.waiters.add(waiter);
+    const onAbort = () => {
+      registry.waiters.delete(waiter);
+      waiter.resolve({ ok: false, code: "INTERRUPTED", reason: "The wait was interrupted." });
+    };
+    if (signal && typeof signal.addEventListener === "function") {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
     }
-    const guard = canTake ? canTake() : null;
-    if (guard && guard.ok === false) return failure(guard.code, guard.reason);
-    const taken = takeReady(ledger, { ownerId, levelKey, admit });
-    if (taken.ok) return taken;
-    if (taken.code === "NO_ADMISSIBLE_CHILD") {
-      return failure("JOIN_CONTEXT_EXCEEDED", taken.reason, {
-        blocked: taken.blocked,
-      });
-    }
-    if (unreceivedChildren(ledger, ownerId).length === 0) {
-      return failure("NO_UNRECEIVED_WORK", "No unreceived result remains.");
-    }
-    if (openChildren(ledger, ownerId).length === 0) {
-      return failure("LEDGER_PAIRING_BROKEN", "Ready scope is missing from its queue.");
-    }
-    const woke = await park(registry, signal);
-    if (woke?.ok === false) {
-      return failure("JOIN_INTERRUPTED", "The join was interrupted; the forked scopes keep running.");
-    }
+    const release = () => {
+      if (signal && typeof signal.removeEventListener === "function") {
+        signal.removeEventListener("abort", onAbort);
+      }
+      registry.waiters.delete(waiter);
+    };
+    return { promise: waiter.promise, release };
   }
-}
 
 /** Signal that a fork is ready, for callers that mark without waiting. */
 export function pulse(registry, ledger, forkId, outcome = null) {

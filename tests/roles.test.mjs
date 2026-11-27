@@ -213,7 +213,7 @@ describe("abandon privilege", () => {
 	});
 });
 
-import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 import { BASE_TOOLS, projectCapabilities } from "../src/station/domain/capabilities.mjs";
 

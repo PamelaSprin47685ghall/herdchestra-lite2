@@ -132,6 +132,18 @@ export async function hydrateStation(station, adapter, ctx) {
 	station.onSessionsUpdate?.(await adapter.listProjectSessions(ctx.cwd));
 }
 
+// What a session switch hands the browser: the adapter's reading, with the live
+// context filling any gap the adapter cannot see. Declared once so the
+// composition root only binds it.
+export function sessionEnvelope(adapter, ctx) {
+	const session = adapter.sessionInfo();
+	return {
+		...session,
+		cwd: session?.cwd ?? ctx?.cwd,
+		sessionDir: ctx?.sessionManager?.getSessionDir?.(),
+	};
+}
+
 export function createBootstrapSnapshot({ station, adapter, ctx }) {
 	return async () => {
 		const snap = station.snapshot();

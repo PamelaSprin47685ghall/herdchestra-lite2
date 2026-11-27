@@ -1,30 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-	FAILED,
-	JOINED,
-	READY,
-	abandon,
-	adoptFork,
-	assertPairing,
-	createBracketLedger,
-	forkOf,
-	markReady,
-	registerFork,
-	reparentOrphans,
-	restoreLedgerChecked,
-	serializeLedger,
-	takeReady,
-	unreceivedChildren,
-	validLedger,
-} from "../src/scope/forkjoin.mjs";
+import { FAILED, JOINED, READY, abandon, adoptFork, assertPairing, createBracketLedger, markReady, registerFork, reparentOrphans, takeReady, unreceivedChildren } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
+import { restoreLedgerChecked, serializeLedger, validLedger } from "../src/scope/ledger-serialize.mjs";
 import {
 	adoptLedger,
 	createForkRegistry,
 	identityOf,
 	pulse,
-	waitForReady,
 } from "../src/scope/fork-registry.mjs";
+import { waitForReady } from "../src/tools/join-wait.mjs";
 import { scopeActivity } from "../src/scope/activity.mjs";
 import {
 	attachBaseForkPorts,

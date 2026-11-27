@@ -22,7 +22,8 @@ import {
   registerFork,
   createBracketLedger,
 } from "../src/scope/index.mjs";
-import { forkOf, markReady } from "../src/scope/forkjoin.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
+import { markReady } from "../src/scope/ledger-brackets.mjs";
 import {
   commitConsumer,
   consumerPending,

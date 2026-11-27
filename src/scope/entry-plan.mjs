@@ -1,7 +1,7 @@
 // Scope persistence entry format: versions, size limits, and entry validation.
 // Pure data: constants and structural checks only. No I/O.
 
-import { isPlainObject } from "./plain.mjs";
+import { isPlainObject } from "../core/primitives.mjs";
 
 
 // -- Append-only state entries ---------------------------------------------
@@ -44,28 +44,7 @@ export const MAX_DELTA_BYTES = 16 * 1024;
  * checkpoint the writer is sure to write land too late to be folded from, which
  * is the failure this constant exists to prevent.
  */
-
-
-/**
- * The longest stretch of journal entries one checkpoint may leave behind it.
- *
- * `CHECKPOINT_EVERY` bounds state *writes*, and that is not the same quantity:
- * a turn that moves only a fork record appends an entry the reader must fold
- * through, without advancing that counter at all. A session that moves records
- * far more often than it moves the core therefore reached the reader's replay
- * window with its last checkpoint hundreds of entries behind it.
- *
- * The reader's window is a fixed number of entries (`station/restore.mjs`), so
- * the writer's bound has to be measured in entries too. 256 leaves the window
- * half its length in hand: the writer appends the checkpoint by then, and an
- * entry the writer never saw — a host-side entry, a legacy straggler — can
- * consume the rest. Raising this above the reader's window would make the
- * checkpoint the writer is sure to write land too late to be folded from, which
- * is the failure this constant exists to prevent.
- */
 export const CHECKPOINT_ENTRY_LIMIT = 256;
-
-
 
 function isStateEnvelope(value) {
   return (
@@ -79,26 +58,15 @@ function isStateEnvelope(value) {
 }
 
 /** True when the entry carries fork ledger records instead of scope state. */
-
-
-/** True when the entry carries fork ledger records instead of scope state. */
 export function isLedgerEntry(value) {
   return isStateEnvelope(value) && value.kind === "ledger";
 }
-
-
-/** True when an entry can anchor a replay: a checkpoint or a legacy snapshot. */
-
-
 
 /** True when an entry can anchor a replay: a checkpoint or a legacy snapshot. */
 export function isStateCheckpoint(value) {
   if (!isStateEnvelope(value)) return true;
   return value.kind === "checkpoint";
 }
-
-/** Wrap any stored payload as an envelope a chain reader understands. */
-
 
 /** Wrap any stored payload as an envelope a chain reader understands. */
 export function normalizeStateEntry(value) {

@@ -14,12 +14,12 @@
 import { createHeadlessTuiContext } from "./headless-tui.mjs";
 import { captureTranscriptSubscriptions } from "./child-display.mjs";
 
-import {
-	ABORT_PATCH,
-	RUNNER_GETTER_PATCH,
-	SESSION_CAPTURE_STATE as STATE_KEY,
-	VIBE_PATCH,
-} from "./process-symbols.mjs";
+  import {
+  	ABORT_PATCH,
+  	RUNNER_GETTER_PATCH,
+  	VIBE_PATCH,
+  } from "./process-symbols.mjs";
+  import { getProcessRegistry } from "./process-registry.mjs";
 // Upstream interrupt labels from pi-coding-agent/src/session/transcript/messages.ts.
 // Native TUI Esc, Web UI ctx.abort(), ACP cancel, and parent kill all enter
 // AgentSession.prototype.abort with one of these labels. Internal lifecycle
@@ -60,34 +60,32 @@ function patchGetter(prototype, name, marker, createGetter) {
 	return true;
 }
 
-function state() {
-	const existing = globalThis[STATE_KEY];
-	if (existing) {
-		if (!existing.seams) existing.seams = freshSeams();
-		if (!existing.managerSessions) existing.managerSessions = new WeakMap();
-		if (!existing.sessionRefs) existing.sessionRefs = new WeakMap();
-		if (!existing.abortListeners) existing.abortListeners = new Set();
-		return existing;
-	}
-	const created = {
-		installed: false,
-		error: null,
-		prototype: null,
-		descriptor: null,
-		sessions: new WeakMap(),
-		managerSessions: new WeakMap(),
-		sessionRefs: new WeakMap(),
-		abortListeners: new Set(),
-		builtinSlashExecutor: null,
-		seams: freshSeams(),
-	};
-	Object.defineProperty(globalThis, STATE_KEY, {
-		value: created,
-		enumerable: false,
-		configurable: true,
-	});
-	return created;
-}
+  /** What a fresh capture record holds. The registry owns the slot, this owns the shape. */
+  function freshCaptureState() {
+  	return {
+  		installed: false,
+  		error: null,
+  		prototype: null,
+  		descriptor: null,
+  		sessions: new WeakMap(),
+  		managerSessions: new WeakMap(),
+  		sessionRefs: new WeakMap(),
+  		abortListeners: new Set(),
+  		builtinSlashExecutor: null,
+  		seams: freshSeams(),
+  	};
+  }
+
+  function state() {
+  	const existing = getProcessRegistry().captureState(freshCaptureState);
+  	// A record that outlived an older copy of this package may lack a container;
+  	// each one is created on first use rather than assumed present.
+  	if (!existing.seams) existing.seams = freshSeams();
+  	if (!existing.managerSessions) existing.managerSessions = new WeakMap();
+  	if (!existing.sessionRefs) existing.sessionRefs = new WeakMap();
+  	if (!existing.abortListeners) existing.abortListeners = new Set();
+  	return existing;
+  }
 
 /**
  * Whether `AgentSession.prototype.abort(options)` represents an explicit user

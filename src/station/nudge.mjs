@@ -1,7 +1,8 @@
 // Nudge decision: which steer, if any, this assistant message earns.
 // Pure; the station performs the delivery and spends the allowance.
 
-import { forkOf, RUNNING, unreceivedChildren } from "../scope/index.mjs";
+import { forkOf } from "../scope/ledger-charge.mjs";
+import { RUNNING, unreceivedChildren } from "../scope/ledger-brackets.mjs";
 import {
 	childReturnNudge,
 	MAX_RETURN_NUDGES,

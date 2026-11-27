@@ -20,6 +20,7 @@ import {
 	zeroUsage,
 } from "./usage.mjs";
 import { record } from "./diagnostics.mjs";
+import { startsNewLedger, totalUsage } from "./usage-ledger.mjs";
 import { findBranchManager, isBranchManager } from "./branch-manager.mjs";
 
 function freshSession() {
@@ -90,38 +91,33 @@ function hostLabelFromProcess() {
 	}
 }
 
+import { getProcessRegistry } from "./process-registry.mjs";
+
 /**
  * One ledger per process, not one per extension instance.
  *
  * Every fork branch builds its own extension instance, and therefore its own
  * status runtime. A runtime-local ledger would split the session's totals once
- * per flow and leave the owner's widget blind to every request a flow made:
- * the line would sit at 0.0k while the flows spent real tokens. The key is
- * still the shared manager, so one session keeps one record.
+ * per flow and leave the owner's widget blind to every request a flow made: the
+ * line would sit at 0.0k while the flows spent real tokens. The key is still the
+ * shared manager, so one session keeps one record.
  *
  * `displayHost` lives here too. Flow contexts run with `hasUI: false`, so only
  * the owner can write the widget; a flow that records usage hands the line to
  * the last host that could draw it.
+ *
+ * The registry owns the slot and its lifetime; this module only decides what a
+ * fresh ledger holds, so a second extension instance adopts the same records
+ * instead of splitting the session's totals.
  */
-import { STATUS_STATE as STATE_KEY } from "./process-symbols.mjs";
-
 function sharedState() {
-	let state = globalThis[STATE_KEY];
-	if (!state) {
-		state = {
-			sessions: new WeakMap(),
-			totals: new Map(),
-			orphanKey: {},
-			activeUsageKey: null,
-			displayHost: null,
-		};
-		Object.defineProperty(globalThis, STATE_KEY, {
-			value: state,
-			enumerable: false,
-			configurable: true,
-		});
-	}
-	return state;
+	return getProcessRegistry().statusState(() => ({
+		sessions: new WeakMap(),
+		totals: new Map(),
+		orphanKey: {},
+		activeUsageKey: null,
+		displayHost: null,
+	}));
 }
 
 /** Build one isolated status runtime. Production installs one per extension. */
@@ -206,9 +202,7 @@ export function createStatusRuntime(options = {}) {
 	 * fresh ledger and clears this map, so nothing older leaks in.
 	 */
 	function totalOfAllSessions() {
-		const total = zeroUsage();
-		for (const snapshot of shared.totals.values()) accumulateUsage(total, snapshot);
-		return total;
+		return totalUsage(shared.totals);
 	}
 
 	function usageCurrentText(session, key) {
@@ -336,7 +330,7 @@ export function createStatusRuntime(options = {}) {
 				// A genuinely new session starts a new ledger: the old
 				// manager's totals and its last writer must not leak into
 				// this line.
-				if (created && !ctx?.agent?.parentId) {
+				if (startsNewLedger(created, ctx)) {
 					shared.totals.clear();
 					shared.totals.set(key, session.totals);
 					shared.activeUsageKey = null;

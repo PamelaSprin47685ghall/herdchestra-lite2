@@ -59,9 +59,39 @@ export function modelRegistryOf(ctx) {
 	return read(ctx, "modelRegistry") ?? read(sessionOf(ctx), "modelRegistry") ?? null;
 }
 
-export function settingsOf(ctx) {
-	return read(ctx, "settings") ?? read(sessionOf(ctx), "settings") ?? null;
-}
+  export function settingsOf(ctx) {
+  	return read(ctx, "settings") ?? read(sessionOf(ctx), "settings") ?? null;
+  }
+
+  /**
+   * The manager's branch list, or an empty list.
+   *
+   * A manager that throws or exposes no `getBranch` is treated as having no
+   * branch: the station's projection prints the same empty row either way, and
+   * an exception here would abort a whole turn.
+   */
+  export function branchOf(ctx) {
+  	try {
+  		const branch = managerOf(ctx)?.getBranch?.();
+  		return Array.isArray(branch) ? branch : [];
+  	} catch {
+  		return [];
+  	}
+  }
+
+  /**
+   * The settings an extension context carries.
+   *
+   * The host's extension wrapper resolves an approval mode from
+   * `context.settings`; an extension context carries none, so the mode falls back
+   * to always-ask. A child has no interactive UI, so its bash/write would throw
+   * instead of running. The session's own settings are the only owner of that
+   * decision.
+   */
+  export function settingsFor(ctx) {
+  	const session = sessionFor(ctx);
+  	return session?.extensionRunner?.sessionSettings ?? session?.settings ?? null;
+  }
 
 /** The session's live message list, or null when the host has none. */
 export function messagesOf(ctx) {

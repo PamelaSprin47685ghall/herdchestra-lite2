@@ -122,7 +122,7 @@ describe("hook wiring", () => {
 			},
 		};
 		const diagnosis = wireHooks(pi, {
-			stationFor: () => STATION,
+			station: () => STATION,
 			stationForStop: () => STATION,
 		});
 
@@ -152,7 +152,7 @@ describe("herd-diag rendering", () => {
 					commands.set(name, spec);
 				},
 			},
-			{ stationFor: () => STATION },
+			{ station: () => STATION },
 		);
 
 		const text = await commands.get("herd-diag").handler(null, {

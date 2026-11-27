@@ -64,3 +64,55 @@ export function selectForkLedger({
 					: "created";
 	return { ledger, source, filled, adopt };
 }
+
+/**
+ * Resolve a station's ledger and record the binding on the process container.
+ *
+ * `process.ledgerByConversation` is the explicit replacement for the
+ * `Symbol.for` slot a ledger used to carry: the index is a real field on the
+ * object the composition root owns, so a parent and its child reach the same
+ * ledger by reading the same map instead of by agreeing on a global symbol. A
+ * cached index is offered to `selectForkLedger` as the live index, which is
+ * exactly what that slot means.
+ *
+ * Returns the selection plus `adopted`: true when the chosen ledger was also
+ * published back through `adoptLedger`.
+ */
+export function bindProcessLedger(
+	process,
+	{
+		key = null,
+		identity = null,
+		indexed = null,
+		restored = null,
+		create = null,
+		ledgerFor = null,
+		adoptLedger = null,
+	} = {},
+) {
+	const cache = process?.ledgerByConversation ?? null;
+	// The root conversation is a conversation: `null` is a real key, not the
+	// absence of one. Only an identity asks for a different ledger than the
+	// conversation's index.
+	const cached = cache ? (cache.get(key) ?? null) : null;
+	const live =
+		cached ??
+		(typeof ledgerFor === "function" ? ledgerFor(process?.registry ?? null, key) ?? indexed : indexed);
+	const selected = selectForkLedger({
+		identity,
+		indexed: identity ? null : live,
+		restored,
+		create,
+	});
+	const { ledger } = selected;
+	if (cache && ledger) cache.set(key, ledger);
+	// A child inherits its parent's ledger; publishing it back would overwrite
+	// the conversation's own index.
+	const adopted =
+		!identity &&
+		selected.adopt !== false &&
+		typeof adoptLedger === "function" &&
+		ledger !== null;
+	if (adopted) adoptLedger(process?.registry ?? null, key, ledger);
+	return { ...selected, adopted };
+}

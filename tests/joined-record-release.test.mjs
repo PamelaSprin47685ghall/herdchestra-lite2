@@ -8,15 +8,9 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  createBracketLedger,
-  forkOf,
-  markReady,
-  registerFork,
-  releaseRecordText,
-  serializeLedgerShared,
-  takeReady,
-} from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, markReady, registerFork, releaseRecordText, takeReady } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
+import { serializeLedgerShared } from "../src/scope/ledger-serialize.mjs";
 
 function ledgerWithChild(recordText = "the child's whole transcript") {
   const ledger = createBracketLedger();

@@ -17,10 +17,7 @@ import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
-import {
-  registerFork,
-  takeReady,
-} from "../src/scope/forkjoin.mjs";
+import { registerFork, takeReady } from "../src/scope/ledger-brackets.mjs";
 import { pulse } from "../src/scope/fork-registry.mjs";
 
 function stateOf() {

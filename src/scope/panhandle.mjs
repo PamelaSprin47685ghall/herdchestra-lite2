@@ -17,7 +17,7 @@ import {
   isNonEmptyString,
   put,
 } from "./state.mjs";
-import { isPlainObject } from "./plain.mjs";
+import { isPlainObject } from "../core/primitives.mjs";
 import { isFreeTool, normalizeToolName } from "./turns.mjs";
 import { editRecord } from "./record-mutation.mjs";
 

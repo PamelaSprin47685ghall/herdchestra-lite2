@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { ledgerFor, outcomeOf } from "../src/scope/fork-registry.mjs";
 import { spawnChildTicket } from "../src/tools/spawn-ticket.mjs";
-import { markReady, registerFork } from "../src/scope/forkjoin.mjs";
+import { markReady, registerFork } from "../src/scope/ledger-brackets.mjs";
 
 // A child that stops without scope_return must still hand the parent a record
 // in the digest format: the assistant's own words and the names of the tools

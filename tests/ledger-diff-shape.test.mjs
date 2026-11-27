@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { applyDelta, diffState } from "../src/scope/persistence.mjs";
+import { applyDelta, diffState } from "../src/scope/state-delta.mjs";
 
 // The diff walk keeps its path on a stack and copies it only when it emits an
 // operation. That is an allocation change, so the contract has to be pinned on

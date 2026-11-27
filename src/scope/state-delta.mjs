@@ -3,8 +3,8 @@
 
 import { createHash } from "node:crypto";
 
-import { put } from "./state.mjs";
-import { isPlainObject } from "./plain.mjs";
+import { put } from "../core/primitives.mjs";
+import { isPlainObject } from "../core/primitives.mjs";
 
 import { CHECKPOINT_EVERY, MAX_DELTA_BYTES, MAX_DELTA_OPS, STATE_ENTRY_VERSION } from "./entry-plan.mjs";
 

@@ -2,6 +2,7 @@
 // discriminated result. Failures are diagnosed and never thrown to the host.
 import { routeSurfaceEvent } from "../tui-fence.mjs";
 import { textOf } from "./dialog-protocol.mjs";
+import { decodeAttachments, decodeText } from "./attachments.mjs";
 
 const THINKING_LEVELS = new Set(["inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const PLAN_REVIEW_CHOICES = new Set(["execute", "compact", "keep", "refine", "save"]);
@@ -61,32 +62,6 @@ function availableEffortLevels(ctx) {
 	} catch {
 		return undefined;
 	}
-}
-
-const decodeText = (bytes) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-
-// Validate and decode the browser attachment envelope before any host call.
-// Same discriminated codes, same order, as the inline loop it replaces.
-function decodeAttachments(attachments) {
-	if (!Array.isArray(attachments) || attachments.length > 10) return { ok: false, code: "invalid_attachments" };
-	let total = 0;
-	const decoded = [];
-	for (let item of attachments) {
-		if (!item || typeof item.name !== "string" || typeof item.mimeType !== "string" || typeof item.data !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.data)) return { ok: false, code: "invalid_attachment" };
-		const bytes = Buffer.from(item.data, "base64");
-		total += bytes.length;
-		if (bytes.length > 5 * 1024 * 1024 || total > 10 * 1024 * 1024) return { ok: false, code: "attachment_too_large" };
-		if (["application/json", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript"].includes(item.mimeType)) item = { ...item, mimeType: "text/plain" };
-		if (!/^image\/(?:png|jpeg|gif|webp)$/.test(item.mimeType) && !item.mimeType.startsWith("text/")) return { ok: false, code: "unsupported_attachment" };
-		if (item.mimeType.startsWith("image/")) {
-			const matches = item.mimeType === "image/png" ? bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : item.mimeType === "image/jpeg" ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 : item.mimeType === "image/gif" ? /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString("ascii")) : bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
-			if (!matches) return { ok: false, code: "invalid_attachment_type" };
-		} else {
-			decodeText(bytes);
-		}
-		decoded.push({ ...item, bytes });
-	}
-	return { ok: true, decoded };
 }
 
 // `extra` carries the host's current model/thinking reading; the effort
@@ -179,7 +154,6 @@ export function createHostTickets({
 					editor.setText(content);
 					for (const item of decoded) {
 						if (item.mimeType.startsWith("image/")) {
-							if (typeof editor.insertText !== "function" || !Array.isArray(editor.pendingImageLinks)) return { ok: false, code: "editor_unavailable" };
 							editor.pendingImages.push({ type: "image", mimeType: item.mimeType, data: item.data });
 							editor.pendingImageLinks.push(undefined);
 							editor.insertText(`[Image #${editor.pendingImages.length}]`);

@@ -8,13 +8,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  FAILED,
-  READY,
-  RUNNING,
-  createBracketLedger,
-  forkOf,
-} from "../src/scope/forkjoin.mjs";
+import { FAILED, READY, RUNNING, createBracketLedger } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 
 function stationFor(ledger, options = {}) {

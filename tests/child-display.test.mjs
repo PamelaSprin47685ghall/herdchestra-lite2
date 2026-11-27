@@ -8,7 +8,7 @@ import {
 	registerToolCardComponent,
 	renderChildActivity,
 } from "../host-omp/src/host/child-display.mjs";
-import { createBracketLedger, markReady, registerFork } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, markReady, registerFork } from "../src/scope/ledger-brackets.mjs";
 import { createScopes } from "../src/scope/scopes.mjs";
 
 class Session {

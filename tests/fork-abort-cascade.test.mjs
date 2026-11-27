@@ -4,14 +4,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-	abandonDescendants,
-	createBracketLedger,
-	forkOf,
-	markReady,
-	registerFork,
-	unreceivedChildren,
-} from "../src/scope/forkjoin.mjs";
+import { abandonDescendants, createBracketLedger, markReady, registerFork, unreceivedChildren } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import { createForkRegistry, notifyWaiters } from "../src/scope/fork-registry.mjs";
 import {
 	attachBaseForkPorts,

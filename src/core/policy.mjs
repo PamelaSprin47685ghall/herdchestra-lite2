@@ -39,6 +39,15 @@ export const READ_ONLY_SUBAGENT = "read-only-subagent";
 export const READ_WRITE_SUBAGENT = "read-write-subagent";
 
 /**
+ * The one predicate over the classification vocabulary. A host layer that must
+ * exempt a read-only agent asks this instead of comparing the string itself, so
+ * the vocabulary has one home.
+ */
+export function isReadOnlySubagentPolicy(policy) {
+	return policy === READ_ONLY_SUBAGENT;
+}
+
+/**
  * The only host-shaped value a station reads: `{ branch(), agent }`.
  *
  * `ctx` is an opaque token here; every field comes from the injected host bag,

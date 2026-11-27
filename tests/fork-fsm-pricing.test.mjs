@@ -11,13 +11,9 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  createBracketLedger,
-  forkOf,
-  markReady,
-  restoreLedgerChecked,
-  serializeLedger,
-} from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, markReady } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
+import { restoreLedgerChecked, serializeLedger } from "../src/scope/ledger-serialize.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 
 function stationFor(ledger, options = {}) {
@@ -111,6 +107,39 @@ describe("a fork is priced by the receipt it sends", () => {
     expect(room.isError).toBeUndefined();
     expect(roomSpawned).toHaveLength(1);
     expect(roomLedger.order).toEqual(["room"]);
+  });
+});
+
+describe("the priced receipt is the sent receipt", () => {
+  test("a padded profession is rendered once, trimmed, and priced exactly", () => {
+    const padded = "   You are a careful auditor like Ada Lovelace.   ";
+    const measured = [];
+    const probe = handleForkCall(
+      measuringStation(createBracketLedger(), measured),
+      call("pad", item({ profession: padded })),
+    );
+    expect(probe.isError).toBeUndefined();
+    expect(measured).toHaveLength(1);
+    const sent = measured[0].receipt;
+    // The identity line is part of the text the child reads, and it is trimmed
+    // before it is written, so neither a leading nor a trailing space is priced.
+    expect(sent).toContain(padded.trim());
+    expect(sent).not.toContain(padded);
+
+    // The window boundary is the exact sent length. A price taken from a
+    // differently rendered record would refuse one character early or late.
+    const tight = handleForkCall(
+      stationFor(createBracketLedger(), {
+        forkWindowPort: () => sent.length,
+        forkReservePort: () => 0,
+        forkMarginPort: () => 0,
+        childSpawnPort: () => () => {},
+      }),
+      call("pad-tight", item({ profession: padded })),
+    );
+    expect(tight.isError).toBe(true);
+    expect(tight.details.code).toBe("FORK_CONTEXT_EXCEEDED");
+    expect(tight.details.projected).toBe(sent.length);
   });
 });
 

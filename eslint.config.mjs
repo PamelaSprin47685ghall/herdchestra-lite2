@@ -48,10 +48,6 @@ export default [
 		ignores: ["deer-flow/**"],
 	},
 	{
-		// `src/scope/fork-registry.mjs` is the session-wide waiter: its Promises
-		// are what a ticket parks on, not a station method. Every other file in
-		// these three domains stays synchronous.
-		ignores: ["src/scope/fork-registry.mjs"],
 		files: [
 			"src/station/**/*.mjs",
 			"src/scope/**/*.mjs",

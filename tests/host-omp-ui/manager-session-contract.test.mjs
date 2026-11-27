@@ -236,6 +236,32 @@ describe("session service: reuse, single-flight, visible failure", () => {
 		expect(attempts).toBe(2);
 	});
 
+	it("releases the per-cwd new-session slot when a launch never registers", async () => {
+		let launches = 0;
+		const service = createSessionService({
+			loadSessions: async () => [],
+			launch: async () => {
+				launches += 1;
+				return { instanceId: `pending-${launches}` };
+			},
+			awaitRegistration: () => new Promise(() => {}),
+			timeoutMs: 25,
+		});
+
+		const timedOut = await service.newSession({ cwd: "/proj/a" });
+		expect(timedOut).toMatchObject({ ok: false, code: "launch_timeout" });
+		expect(timedOut.message).toContain("did not settle");
+
+		// The slot is free, so the retry launches and registers instead of
+		// waiting forever on the flight that never answered.
+		const retried = await service.newSession(
+			{ cwd: "/proj/a" },
+			() => Promise.resolve({ instanceId: "inst-2" }),
+		);
+		expect(retried).toMatchObject({ ok: true, kind: "launched", instanceId: "inst-2" });
+		expect(launches).toBe(2);
+	});
+
 	it("refuses an unknown session id without touching the launcher", async () => {
 		let launches = 0;
 		const service = createSessionService({

@@ -34,24 +34,29 @@ No `intent` alias, no dual-read, no compatibility shim. An old snapshot is rejec
 
 ## Ledger
 
-Snapshot version goes to `2`. `validRecord` requires a non-empty `record.fsm`, with **no** `?? record.intent` fallback. A version-1 snapshot takes the existing reset path (`{ ok: false, ledger: createBracketLedger() }`) and must not throw. `fork-registry`'s identity map is memory-only; it needs no compatibility work.
+Three version numbers exist and must never be conflated:
+
+| Constant | Value | Where |
+|---|---|---|
+| `BRACKET_LEDGER_VERSION` (returned as `createBracketLedger().version`) | `3` | `src/scope/ledger-brackets.mjs`; `ledgerShapeOk` accepts `3` only |
+| `STATE_VERSION` (exported once as `VERSION`) | `2` | `src/scope/state.mjs` — the scope state shape's own number |
+| `STATE_ENTRY_VERSION` | `3` | `src/scope/entry-plan.mjs` — the journal envelope, readable `[2, 3]` |
+
+An older ledger snapshot takes the reset path (`{ ok: false, ledger: createBracketLedger() }`) and must not throw: it is refused, never migrated. `validRecord` requires a non-empty `record.fsm`, with **no** `?? record.intent` fallback. `fork-registry`'s identity map is memory-only; it needs no compatibility work.
 
 ## Pricing
 
-`receiptChars: number[]` becomes `pricedChars[i]`, one record per fork item:
+One receipt render, one number. `childReceiptText(spec)` emits the whole text — identity line included — and both the price and the send path use that same return value:
 
-| Key | Value | Sends |
-|---|---|---|
-| `fresh` | `childReceiptText(...)` for this fork's own data | first receipt to a newly started scope |
-| `revive` | `childReceiptText(...)` for the blocked **target's** fsm, `budget`, and targets | receipt to a woken checkpoint |
-| `generation` | `generationReceiptText(...)` including `priorRecordText(target)` | receipt to the next generation; the largest text in the system and unbounded in length |
-| any path that sends nothing (running amendment, queued item, blocked item) | `0` for all three keys | — |
+- `priceFor(item)` returns `{ fresh: childReceiptText(specOf(item)).length }`.
+- `spec.receipt` is `childReceiptText(specOf(item))`, the same string.
+- The identity line is rendered inside `childReceiptText` from `(item.profession ?? fork.profession ?? "").trim()`, then `length + 1` when non-empty, else `0`. There is no `withProfession` splice and no separate `identityCharsOf`.
 
-Each non-zero value is the character count of that rendered text plus the identity line. Identity is resolved exactly as the send path resolves it: `(item.profession ?? fork.profession ?? "").trim()`, then `length + 1` when non-empty, else `0`. A value priced from a different record than the one that gets sent is a defect, not an approximation.
+A value priced from a different record than the one that gets sent is a defect, not an approximation. The checkpoint-era three-tier table (`fresh` / `revive` / `generation`) and its `pricedChars[i]` record are retired: `forkReceiptPath` returns `fresh` only, and the send path has no second render.
 
 ## Admission coverage
 
-`decideRegister` resolves each item's action first, then picks the number with **the same predicate** that picks the send path; it skips an item only when that number is `0`. The pricing side must not keep a second action judgement. If the domain's existing action vocabulary differs from `fresh` / `revive` / `generation`, keep the domain's words as the object keys — the invariant is one number per receipt-sending path, chosen by the send-side predicate.
+`decideRegister` takes the single `priceFor(item)` and skips an item only when that number is `0`; the send-side predicate is the same one. The pricing side keeps no second action judgement, and one number covers the one receipt that ships.
 
 ## Constants removed
 
@@ -61,8 +66,8 @@ Each non-zero value is the character count of that rendered text plus the identi
 
 | Slice | Files |
 |---|---|
-| S1 | `src/scope/forkjoin.mjs` (re-export facade) over `src/scope/ledger-brackets.mjs`, `src/scope/ledger-serialize.mjs`, `src/scope/ledger-charge.mjs`; `src/scope/fork-registry.mjs`, `src/station/domain/identity.mjs`, `src/station/domain/fork-join.mjs` |
-| S2 | `src/station/fork-controls.mjs` (facade) and `src/station/fork-reads.mjs` (both constant removals, `pricedChars` production side, send path) |
+| S1 | `src/scope/ledger-brackets.mjs`, `src/scope/ledger-serialize.mjs`, `src/scope/ledger-charge.mjs`, `src/scope/ledger-cache.mjs` (the facade that re-exported them is deleted; callers import the leaves); `src/scope/fork-registry.mjs`, `src/station/domain/identity.mjs`, `src/station/domain/fork-join.mjs` |
+| S2 | `src/station/fork-controls.mjs` (facade) and `src/station/fork-reads.mjs` (both constant removals, one `priceFor`, one `childReceiptText` render shared by price and send) |
 | S3 | `resources/prompts/**` placeholders and copy (`{{intent}}` → `{{fsm}}`) |
 | T1, T2 | `tests/**` mechanical rename and the new cases |
 

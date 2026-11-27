@@ -8,14 +8,13 @@ import {
 	truncateForHostBoundary,
 } from "../scope/index.mjs";
 import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
-import { abandonDescendants } from "../scope/forkjoin.mjs";
+import { abandonDescendants } from "../scope/ledger-brackets.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
 import { mergeFeatures, parseGoalCommand, parseHerdCommand } from "../features/herd/features.mjs";
 import { createRelay } from "../relay/state.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
 import { continueFeedback } from "../tools/results.mjs";
-import { hostBoundaryKey } from "./messages.mjs";
 import { forkRegistryOf } from "./ports-contract.mjs";
 import {
 	clearPendingRootRewind,
@@ -71,35 +70,6 @@ function onMessageEnd(station, event, ctx) {
 	return undefined;
 }
 
-/**
- * The boundary key for this exact message array.
- *
- * `hostBoundaryKey` walks backwards until it finds a handoff marker, so a
- * transcript with none costs Θ(entries). The projection is cached per leaf,
- * which means the same array object arrives on every event of a turn; its
- * length is the only thing an append changes, so identity plus length proves
- * the scan would return the same answer.
- */
-function cachedHostBoundaryKey(station, messages) {
-	const scan = station.hostBoundaryScan;
-	if (scan && scan.messages === messages && scan.length === messages.length) {
-		return scan.key;
-	}
-	const key = hostBoundaryKey(messages);
-	station.hostBoundaryScan = { messages, length: messages.length, key };
-	return key;
-}
-
-function observeHostBoundary(station, messages) {
-	const boundaryKey = cachedHostBoundaryKey(station, messages);
-	if (!boundaryKey || boundaryKey === station.hostBoundaryKey) return;
-	station.hostBoundaryKey = boundaryKey;
-	truncateForHostBoundary(station.state);
-	station.resetDirectoryBaseline?.();
-	station.resetUsageWatermark();
-	station.persist();
-}
-
 function managesRequest(station, ctx) {
 	return station.policy(ctx) !== READ_ONLY_SUBAGENT;
 }
@@ -122,7 +92,7 @@ function prepareRequest(station, ctx, previous, history) {
 	// a ticket, and its synchronous prefix must observe a fully prepared
 	// request, not a half-updated state.
 	const contextMessages = station.contextMessages();
-	observeHostBoundary(station, contextMessages);
+	station.noteHostBoundary(contextMessages);
 	if (ownerIdOf(station) === null) {
 		const live = history
 			? [...(history.prefix ?? []), ...(history.pending ?? [])]
@@ -233,20 +203,18 @@ function onAgentEnd(station, ctx, event = null) {
 	if (!plan) return undefined;
 	// Prevent double-dispatch if two agent_end notifications arrive before the
 	// ticket commits and clears `pendingRewind`.
-	if (station.rewindDispatching === plan.pending) return undefined;
+	if (station.isRootRewindBusy(plan)) return undefined;
+	// The host ticket is a required capability: a station without it was not built
+	// by the composition root, so there is no synchronous second path to keep in
+	// step. A miss is a wiring bug and is recorded, not papered over.
 	const rewindRoot = station.tickets?.rewindRoot;
 	if (typeof rewindRoot !== "function") {
-		// Fallback for minimal/test stations that do not inject the async host
-		// ticket: commit synchronously and deliver the start prompt at the tail.
-		const committed = station.commitRootRewind?.(ctx, plan);
-		if (committed) {
-			station.rewoundThisTurn = true;
-			station.deliverUserMessage?.(plan.startPrompt);
-		}
+		station.noteFailure?.("handoff", new Error("rewindRoot ticket unavailable"), {
+			phase: "rewind-dispatch",
+		});
 		return undefined;
 	}
-	station.rewindDispatching = plan.pending;
-	station.rewoundThisTurn = true;
+	station.armRootRewind(plan);
 	// Tail position: detach the async rewind ticket with catch-all diagnostics.
 	station.dispatchFireAndForget("handoff", () => rewindRoot(station, ctx, plan));
 	return undefined;
@@ -260,10 +228,7 @@ function onSessionStop(station, ctx, evidence = null) {
 	}
 	// A Root rewind just finished or is in flight on this turn: do not nudge
 	// against the turn that is being replaced.
-	if (station.rewoundThisTurn === true) {
-		station.rewoundThisTurn = false;
-		return undefined;
-	}
+	if (station.consumeRewoundTurn()) return undefined;
 	if (ownerIdOf(station) === null && station.state?.relay?.pendingRewind) {
 		return undefined;
 	}
@@ -333,7 +298,7 @@ function onSessionCompact(station, ctx) {
 	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return;
 	clearPendingRootRewind(station);
 	truncateForHostBoundary(station.state);
-	station.hostBoundaryKey = cachedHostBoundaryKey(station, station.contextMessages()) ?? station.hostBoundaryKey;
+	station.markHostBoundaryCurrent(station.contextMessages());
 	station.resetDirectoryBaseline?.();
 	station.resetUsageWatermark();
 	station.persist();
@@ -362,10 +327,10 @@ function onBeforeAgentStart(station, event, ctx) {
 	const promptChanged = prompt !== event?.systemPrompt;
 	const result = promptChanged ? { systemPrompt: prompt } : undefined;
 	if (policy === READ_ONLY_SUBAGENT) return result;
-	station.rewoundThisTurn = false;
+	station.consumeRewoundTurn?.();
 	const contextMessages = station.contextMessages();
 	// The host selects the provider model before it calls the context hook.
-	observeHostBoundary(station, contextMessages);
+	station.noteHostBoundary(contextMessages);
 	if (ownerIdOf(station) === null) {
 		syncRootUserPrompts(station, contextMessages);
 	}

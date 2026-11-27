@@ -15,12 +15,9 @@ import {
 	ledgerFor,
 } from "../src/scope/fork-registry.mjs";
 import { selectForkLedger } from "../src/station/domain/fork-ledger.mjs";
-import {
-	createBracketLedger,
-	restoreLedger,
-	serializeLedger,
-} from "../src/scope/forkjoin.mjs";
-import { serializeState } from "../src/scope/persistence.mjs";
+import { createBracketLedger } from "../src/scope/ledger-brackets.mjs";
+import { restoreLedger, serializeLedger } from "../src/scope/ledger-serialize.mjs";
+import { serializeState } from "../src/scope/state-codec.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 
@@ -73,10 +70,12 @@ describe("a reload with no open forks keeps the turn totals", () => {
 			{
 				forkWiring: () => ({ registry }),
 				host: () => ({
-					conversationKeyOf: () => "reload-key",
-					ledgerFor: (forkRegistry, key) => ledgerFor(forkRegistry, key),
-					adoptLedger: (forkRegistry, key, ledger) =>
-						adoptLedger(forkRegistry, key, ledger),
+					session: { conversationKey: () => "reload-key" },
+					fork: {
+						ledgerFor: (forkRegistry, key) => ledgerFor(forkRegistry, key),
+						adoptLedger: (forkRegistry, key, ledger) =>
+							adoptLedger(forkRegistry, key, ledger),
+					},
 				}),
 				implementations: () => ({}),
 			},

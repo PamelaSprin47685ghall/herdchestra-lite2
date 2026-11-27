@@ -5,12 +5,13 @@
 //   report and increments `generation`; `canStop` stays false.
 // - A seal handoff sets `canStop = true`, so Root writes the final user-facing
 //   answer without another rewind.
+//
+// `isPlainObject` here is the strict predicate: a relay value this process built
+// must carry this realm's `Object.prototype`, so a value that crossed a realm is
+// refused before a rewind can depend on it. `core/primitives.mjs` holds both
+// spellings; the scope layer takes the tolerant one.
 
-function isPlainObject(value) {
-	if (typeof value !== "object" || value === null) return false;
-	const proto = Object.getPrototypeOf(value);
-	return proto === Object.prototype || proto === null;
-}
+import { isLocalPlainObject as isPlainObject } from "../core/primitives.mjs";
 
 function nonNegativeInteger(value) {
 	return Number.isInteger(value) && value >= 0;

@@ -48,9 +48,12 @@ function fakePi() {
 }
 
 function engineFor(station = { policy: () => "interactive" }) {
+	const readOnly = () => station.policy({}) === "read-only-subagent";
 	return {
 		hasStation: () => true,
 		station: () => station,
+		peekStation: () => station,
+		isReadOnlySubagent: readOnly,
 		coreTools: {},
 	};
 }

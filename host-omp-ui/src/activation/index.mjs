@@ -8,6 +8,7 @@ import {
 	createStartRuntimeTicket,
 	ensureSurfaceWatcher,
 	hydrateStation,
+	sessionEnvelope,
 } from "../host/session-launch.mjs";
 import { mountTuiFence } from "../host/tickets/fence-ticket.mjs";
 import { initialFence, isTuiSurface } from "../station/domain/fence-lifecycle.mjs";
@@ -179,10 +180,10 @@ export function wireUiExtension(pi, env = {}) {
 		onSessionChange: (ctx) => {
 			const current = runtime;
 			if (!current?.adapter) return;
-			void hydrateStation(current.station, current.adapter, ctx ?? current.ctx).then(() => {
+			const next = ctx ?? current.ctx;
+			void hydrateStation(current.station, current.adapter, next).then(() => {
 				if (runtime === current && !current.disposed) {
-					const session = current.adapter.sessionInfo();
-					current.server?.update?.({ ...session, cwd: session?.cwd ?? (ctx ?? current.ctx).cwd, sessionDir: (ctx ?? current.ctx).sessionManager?.getSessionDir?.() }, current.station.snapshot());
+					current.server?.update?.(sessionEnvelope(current.adapter, next), current.station.snapshot());
 				}
 			}).catch((error) => record("refresh-sessions", error));
 		},

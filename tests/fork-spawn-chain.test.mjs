@@ -15,17 +15,14 @@ import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { bindStationPorts } from "./helpers/station-ports.mjs";
-import {
-  forkOf,
-  markReady,
-  RUNNING,
-} from "../src/scope/forkjoin.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
+import { markReady, RUNNING } from "../src/scope/ledger-brackets.mjs";
 import {
   identityForAgent,
   outcomeOf,
   setOutcome,
-  waitForReady,
 } from "../src/scope/fork-registry.mjs";
+import { waitForReady } from "../src/tools/join-wait.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 
 const AGENT_REGISTRY = { kind: "agentRegistry" };

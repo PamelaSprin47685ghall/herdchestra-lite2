@@ -16,6 +16,20 @@ import {
 } from "./model-identifiers.mjs";
 import { modelSwitchWarning, textResult } from "./prompt.mjs";
 
+/**
+ * Yield one microtask so the host can commit the model it just selected.
+ *
+ * The slash route resolves before the session's model field is observably
+ * updated, and the reconciliation below reads that field to verify the switch.
+ * This hop is the fence between the two: remove it and the verification can read
+ * the previous model and report a mismatch the user never caused. It is one
+ * microtask and not a timer, so nothing else in the loop runs between the
+ * host's release and the read.
+ */
+function yieldForHostModelCommit() {
+	return Promise.resolve();
+}
+
 function safeSession(ctx) {
 	try {
 		return sessionFor(ctx);
@@ -119,7 +133,7 @@ export async function switchModelTicket(pi, ctx, req) {
 		const reason = String(error?.message ?? error ?? "model switch failed");
 		return { ...base, reason, error: reason };
 	}
-	await Promise.resolve();
+	await yieldForHostModelCommit();
 
 	const outputs = Array.isArray(outcome?.outputs) ? outcome.outputs : [];
 	const live = liveModelFor(ctx, session, target);

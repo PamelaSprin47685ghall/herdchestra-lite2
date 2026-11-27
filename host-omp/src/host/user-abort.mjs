@@ -88,21 +88,26 @@ export function registerProcessUserAbortEngine(engine) {
 	}
 	engines.add(engine);
 	if (typeof globalThis[USER_ABORT_KEY] !== "function") {
-		Object.defineProperty(globalThis, USER_ABORT_KEY, {
-			value: (ctx, evidence = null) => {
-				let matched = false;
-				let lastResult;
-				for (const candidate of [...engines]) {
-					if (typeof candidate.hasStation === "function" && candidate.hasStation(ctx)) {
-						matched = true;
-						lastResult = candidate.userAbort?.(ctx, evidence);
-					}
-				}
-				if (matched) return lastResult;
-				// Fallback when a host invokes abort before any station hook saw `ctx`.
-				const fallback = [...engines].at(-1);
-				return fallback?.userAbort?.(ctx, evidence);
-			},
+  		Object.defineProperty(globalThis, USER_ABORT_KEY, {
+  			value: (ctx, evidence = null) => {
+  				// The first owner that already has a station answers, and nothing
+  				// else does. Iterating every match fired one user abort twice when a
+  				// parent and its child both held the context, and the old fallback
+  				// called `userAbort` on an engine with no station, which built a
+  				// station for a context nobody owns. A miss is reported, not guessed.
+  				for (const candidate of [...engines]) {
+  					const station =
+  						typeof candidate.peekStation === "function"
+  							? candidate.peekStation(ctx)
+  							: null;
+  					if (!station) continue;
+  					return candidate.userAbort?.(ctx, evidence);
+  				}
+  				record("activation", new Error("no engine owns this abort context"), {
+  					phase: "user-abort-unmatched",
+  				});
+  				return null;
+  			},
 			enumerable: false,
 			configurable: true,
 			writable: true,

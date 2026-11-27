@@ -15,7 +15,7 @@ import {
 	serializeLedger,
 	takeReady,
 } from "../src/scope/index.mjs";
-import { restoreLedgerChecked } from "../src/scope/forkjoin.mjs";
+import { restoreLedgerChecked } from "../src/scope/ledger-serialize.mjs";
 import { createForkRegistry } from "../src/scope/fork-registry.mjs";
 import { handleReturnCall } from "../src/station/fork-controls.mjs";
 import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";

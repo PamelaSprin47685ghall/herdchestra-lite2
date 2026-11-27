@@ -32,13 +32,12 @@
 	beginRequest,
 	createTurnClock,
 	createUsageLedger,
-	diffDirectory,
 	finishRequest,
 	isFreeCall,
 	markLedgerStructDirty,
 	planLedgerEntry,
 	planStateEntry,
-	projectDirectory,
+	truncateForHostBoundary,
 	serializeState,
 	serializeStateCore,
 	splitState,
@@ -68,11 +67,27 @@ import {
 import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { mergeFeatures } from "../features/herd/features.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
+import { forkRemaining } from "./domain/capabilities.mjs";
 import {
-	forkRemaining,
-	projectCapabilities,
-	renderConsoleReceipt,
-} from "./domain/capabilities.mjs";
+	clearContextCache as forgetContextCache,
+	clearScan,
+	contextForLeaf,
+	createHostBoundary,
+	observeHostBoundary,
+} from "./domain/host-boundary.mjs";
+import {
+	createDirectoryBaseline,
+	directoryDelta as computeDirectoryDelta,
+	resetBaseline,
+	settleBaseline,
+	stageScan,
+} from "./domain/directory-baseline.mjs";
+import {
+	createProjectionState,
+	project,
+	renderReceipt,
+	stageDirMeta,
+} from "./domain/projection.mjs";
 import { closedLeafId } from "./domain/snapshot-leaf.mjs";
 import {
 	executeAbandon,
@@ -80,10 +95,24 @@ import {
 	executeJoin,
 	executeReturn,
 } from "./execute.mjs";
+import { finalizeJoinRecord } from "./join-controls.mjs";
+import { measuredOccupancy as occupancyOf } from "./domain/usage-sample.mjs";
 import {
-	confirmJoinPersistence,
-	renderJoinResult,
-} from "./fork-controls.mjs";
+	childRewindPermitted,
+	clearRootRewind,
+	consumeChildRewind,
+	createRewindState,
+	disableChildRewind,
+	hasPendingChildRewind,
+	markRootDispatch,
+	modelSwitchBusy,
+	queueModelSwitch,
+	rootDispatchBusy,
+	settleModelSwitch,
+	settleRootRewind,
+	stageChildRewind,
+	takeModelSwitch,
+} from "./domain/rewind.mjs";
 import {
 	clearPendingRootRewind,
 	commitRootRewind,
@@ -112,6 +141,15 @@ import {
 } from "./domain/context.mjs";
 import { selectForkLedger } from "./domain/fork-ledger.mjs";
 import {
+	createForkContext,
+	createUnboundForkContext,
+} from "./domain/fork-context.mjs";
+
+// The bundle a station answers with before any wiring attached one, and the one
+// a double that never ran the constructor answers with. Every capability is the
+// value a missing capability must answer; it is never a second convention.
+const UNBOUND = createUnboundForkContext();
+import {
 	createToolCallLedger,
 	processedOf,
 } from "./domain/tool-call-ledger.mjs";
@@ -131,85 +169,7 @@ import {
 } from "./restore.mjs";
 import { createPersistenceAnchor } from "./persistence-anchor.mjs";
 import { nudgeDecision } from "./nudge.mjs";
-
-/**
- * A station can receive capabilities from two places: the composition root's
- * bag (through the registry) and the constructor argument. They are the same
- * object in production; a test double may supply only one side, so the two are
- * merged with the registry winning on a shared key.
- */
-function mergeHost(fromRegistry, fromConstructor) {
-	if (!fromRegistry) return fromConstructor ?? null;
-	if (!fromConstructor) return fromRegistry;
-	return { ...fromConstructor, ...fromRegistry };
-}
-
-/**
- * Read one host shape. The interface is grouped by role (`session`, `model`,
- * `accounting`, `fork`, `report`); a double written against the older flat bag
- * is widened here so no station carries a second convention.
- */
-export function shapeHost(host) {
-	const source = host && typeof host === "object" ? host : {};
-	const session = source.session ?? {};
-	const model = source.model ?? {};
-	const accounting = source.accounting ?? {};
-	const fork = source.fork ?? {};
-	const report = source.report ?? {};
-	const pick = (grouped, flat) => grouped ?? flat;
-	const pricing = pick(accounting.pricing, source.pricing);
-	return {
-		session: {
-			managerOf: pick(session.managerOf, source.managerOf),
-			conversationKey: pick(session.conversationKey, source.conversationKeyOf),
-			branch: pick(session.branch, source.branchOf),
-			agent: pick(session.agent, source.agentOf),
-			header: pick(session.header, source.contextHeaderOf),
-			setMessages: pick(session.setMessages, source.setAgentMessages),
-			appendHistory: pick(session.appendHistory, source.appendHistoryMessage),
-			settingsOf: pick(session.settingsOf, source.settingsOf),
-			// A grouped host owns the abort verb. The legacy flat bag kept a
-			// `sessionFor` lookup instead; keep that as the fallback so both
-			// shapes reach the same agent. Dropping the grouped form turned
-			// every root interrupt into a silent no-op.
-			abort:
-				typeof session.abort === "function"
-					? (ctx, error) => session.abort(ctx, error)
-					: (ctx, error) => source.sessionFor?.(ctx)?.agent?.abort?.(error),
-			canRewindRoot: pick(session.canRewindRoot, source.canRewindRoot),
-		},
-		model: {
-			of: pick(model.of, source.modelOf),
-			thinkingOf: pick(model.thinkingOf, source.thinkingOf),
-			parseSpec: pick(model.parseSpec, source.preparseModelSpec),
-			capabilities: pick(model.capabilities, source.capabilities),
-			query: pick(model.query, source.models),
-		},
-		// The confiscated tools. A host that predates this seam leaves both
-		// undefined, and the js runtime then binds only the control plane.
-		tools: {
-			listSpecs: pick(source.tools?.listSpecs, source.listToolSpecs),
-			execute: pick(source.tools?.execute, source.executeTool),
-		},
-		accounting: {
-			usage: pick(accounting.usage, source.usage),
-			pricing: pricing && {
-				...pricing,
-				emptyCatalog: pricing?.emptyCatalog ?? source.createEmptyCatalog,
-			},
-		},
-		fork: {
-			wiring: pick(fork.wiring, source.forkWiring),
-			attachBaseForkPorts: pick(fork.attachBaseForkPorts, source.attachBaseForkPorts),
-			identityForAgent: pick(fork.identityForAgent, source.identityForAgent),
-			agentIdOf: pick(fork.agentIdOf, source.agentIdOf),
-			sameManager: pick(fork.sameManager, source.sameManager),
-			ledgerFor: pick(fork.ledgerFor, source.ledgerFor),
-			adoptLedger: pick(fork.adoptLedger, source.adoptLedger),
-		},
-		report: { record: pick(report.record, source.record) },
-	};
-}
+import { mergeHost, shapeHost } from "../core/host-shape.mjs";
 
 export class SessionStation {
 	constructor(manager, host, tickets, stationRegistry, pricingCatalog) {
@@ -256,18 +216,15 @@ export class SessionStation {
 		this.toolCallLedger = createToolCallLedger();
 		this.nudged = new WeakSet();
 		this.lastError = null;
-		this.hostBoundaryKey = null;
-		// One boundary scan per projected array: see `cachedHostBoundaryKey`.
-		this.hostBoundaryScan = null;
-		// One projection per branch leaf: see `contextMessages`.
-		this.contextCache = null;
+		// One boundary cache: the keyed scan and the per-leaf projection. The
+		// kernel owns the fields; the station owns when they are read and dropped.
+		this.boundary = createHostBoundary();
 		this.agentPolicy = null;
-		this.pendingChildRewind = null;
-		this.childRewindAvailable = true;
-		this.rewoundThisTurn = false;
-		this.rewindDispatching = null;
-		this.pendingModelSwitch = null;
-		this.modelSwitchInFlight = null;
+		// Rewind and model-switch facts: one value with total transitions, so the
+		// double-dispatch guard, the child-rewind permission and the queued switch
+		// are properties of functions instead of conventions re-derived at every
+		// call site. `domain/rewind.mjs` owns the transitions.
+		this.rewind = createRewindState();
 		// The bracket ledger is session-wide: parent and child live in
 		// different agents and must see the same pairing. The scope state owns
 		// the tree so a reload restores it, while the registry indexes the live
@@ -302,24 +259,18 @@ export class SessionStation {
 		// child identity supplies its own. `setChildOutcome` is the exception,
 		// kept null: root has no parent to hand a record to, and a return there
 		// must not render one.
-		this.forkLedgerPort = () => null;
-		this.forkOwnerId = () => null;
-		this.forkIdentityPort = () => null;
-		this.forkDepthPort = () => 0;
-		this.forkWindowPort = () => null;
-		this.forkReservePort = () => undefined;
-		this.forkMarginPort = () => undefined;
-		this.childOutcomePort = () => null;
+		// Every fork capability is one immutable bundle, built from what a missing
+		// capability must answer. A reader calls `this.fork.ledger` without a
+		// `typeof` probe, and wiring replaces the whole bundle through
+		// `bindForkPorts`, never one slot: a capability set that is a function of
+		// time cannot be stated as an invariant.
+		this.fork = createForkContext({ persistLedger: () => this.persist?.() });
 		this.setChildOutcome = null;
-		this.abortChildrenPort = () => 0;
-		this.interruptScopePort = () => false;
-		this.persistLedger = () => this.persist?.();
 		this.forkReports = new Map();
 		this.selfForkId = null;
-		this.lastSeenDir = new Map();
-		this.pendingDirSeen = null;
-		this.lastDirSeq = -1;
-		this.lastPendingDirSeq = -1;
+		// The printed-tree baseline and the receipt bookkeeping: one value each.
+		this.baseline = createDirectoryBaseline();
+		this.projection = createProjectionState();
 		// Request windows are process-local. A reload keeps the two totals on the
 		// ledger and starts the next request from an empty clock.
 		this.turnClock = createTurnClock();
@@ -364,48 +315,159 @@ export class SessionStation {
 		});
 	}
 
+	// -- Fork capability ----------------------------------------------------
+
+	// Read-only facades over the immutable bundle. A caller keeps calling
+	// `station.forkLedgerPort()`; the answer is `this.fork.*`. A double that
+	// assigns the instance field shadows the facade exactly as it shadowed the
+	// old default slot, so no test needs a new convention.
+	//
+	// A double that never ran the constructor has no bundle; `UNBOUND` answers
+	// every capability a missing one must answer, so reading through the same
+	// expression on a real station and on a double is always safe.
+	forkLedgerPort() {
+		return (this.fork ?? UNBOUND).ledger;
+	}
+
+	forkOwnerId() {
+		return (this.fork ?? UNBOUND).ownerId;
+	}
+
+	forkIdentityPort() {
+		return (this.fork ?? UNBOUND).identity;
+	}
+
+	forkDepthPort() {
+		return (this.fork ?? UNBOUND).depth;
+	}
+
+	forkWindowPort() {
+		return (this.fork ?? UNBOUND).contextWindow;
+	}
+
+	forkReservePort() {
+		return (this.fork ?? UNBOUND).reserve;
+	}
+
+	forkMarginPort() {
+		return (this.fork ?? UNBOUND).margin;
+	}
+
+	childOutcomePort(forkId) {
+		return (this.fork ?? UNBOUND).childOutcome(forkId);
+	}
+
+	abortChildrenPort(forkIds, abandonedIds = [], liveIds = forkIds) {
+		return (this.fork ?? UNBOUND).abortChildren(forkIds, abandonedIds, liveIds);
+	}
+
+	interruptScopePort(forkId) {
+		return (this.fork ?? UNBOUND).interruptScope(forkId);
+	}
+
+	persistLedger() {
+		return (this.fork ?? UNBOUND).persistLedger();
+	}
+
+	// The bundle holds the spawner factory, exactly the shape the wiring builds:
+	// calling the facade yields the spawner the fork handler invokes per item.
+	childSpawnPort() {
+		const spawn = (this.fork ?? UNBOUND).spawnChild;
+		return typeof spawn === "function" ? spawn() : null;
+	}
+
+	noteRootWait(delta) {
+		return (this.fork ?? UNBOUND).noteRootWait?.(delta);
+	}
+
+	noteScopeRequest() {
+		return (this.fork ?? UNBOUND).noteScopeRequest?.();
+	}
+
+	/** Replace the whole capability bundle; one injection point, no slot patching. */
+	bindFork(fork) {
+		if (!fork) return this.fork;
+		this.fork = fork;
+		if (fork.ledger) {
+			this.brackets = fork.ledger;
+			if (this.state) this.state.brackets = fork.ledger;
+		}
+		this.forkWaitPort = () => ({ registry: fork.registry, ledger: fork.ledger });
+		this.setChildOutcome = fork.setChildOutcome;
+		return { registry: fork.registry, ledger: fork.ledger, identity: fork.identity };
+	}
+
 	/**
-	 * Bind the fork ports once. Wiring supplies the registry, ledger and
-	 * identity; the station derives ownership, depth and persistence from those
-	 * plain inputs. A second attach cannot leave a duplicate owner field.
+	 * Build one bundle from plain inputs and install it.
+	 *
+	 * Wiring supplies the registry, ledger and identity; ownership, depth and
+	 * persistence are derived here from those inputs, so no caller repeats the
+	 * rules. A later stage patches the bundle by calling this again with the
+	 * fields it owns, never by assigning a slot on the station.
 	 */
 	bindForkPorts({
-		registry = null,
+		registry = undefined,
 		ledger = null,
-		identity = null,
+		identity = undefined,
+		contextWindow = null,
+		reserve = undefined,
+		margin = undefined,
 		childOutcomePort = null,
 		setChildOutcome = null,
+		abortChildrenPort = null,
+		interruptScopePort = null,
+		childSpawnPort = null,
+		noteRootWait = null,
+		noteScopeRequest = null,
 	} = {}) {
-		if (ledger) {
-			this.brackets = ledger;
-			if (this.state) this.state.brackets = ledger;
+		// A test double may borrow this method without running the constructor;
+		// the unbound bundle answers every capability a missing one must answer.
+		const current = this.fork ?? createUnboundForkContext();
+		this.fork = current;
+		// An absent argument means "keep what this bundle already says". Only an
+		// explicit value replaces a stage fact, so the host stage may re-enter
+		// with one capability and leave the base stage's identity intact.
+		const nextRegistry = registry === undefined ? current.registry : registry;
+		const nextIdentity = identity === undefined ? current.identity : identity;
+		// A child persists through its identity; a root keeps the station's own
+		// persistence seam. The identity is the only source of that choice.
+		const persistLedger =
+			typeof nextIdentity?.persistRoot === "function"
+				? nextIdentity.persistRoot
+				: nextIdentity
+					? current.persistLedger
+					: () => this.persist?.();
+		const nextFork = createForkContext({
+				registry: nextRegistry,
+				ledger: ledger ?? current.ledger,
+				identity: nextIdentity,
+				contextWindow: contextWindow ?? current.contextWindow,
+				reserve: reserve !== undefined ? reserve : current.reserve,
+				margin: margin !== undefined ? margin : current.margin,
+				persistLedger,
+				interruptScope: interruptScopePort ?? current.interruptScope,
+				childOutcome: childOutcomePort ?? current.childOutcome,
+				setChildOutcome:
+					typeof setChildOutcome === "function"
+						? setChildOutcome
+						: current.setChildOutcome,
+				spawnChild: childSpawnPort ?? current.spawnChild,
+				abortChildren: abortChildrenPort ?? current.abortChildren,
+				noteRootWait: noteRootWait ?? current.noteRootWait,
+				noteScopeRequest: noteScopeRequest ?? current.noteScopeRequest,
+		});
+		this.fork = nextFork;
+		if (nextFork.ledger) {
+			this.brackets = nextFork.ledger;
+			if (this.state) this.state.brackets = nextFork.ledger;
 		}
-		this.forkLedgerPort = () => ledger;
-		this.forkWaitPort = () => ({ registry, ledger });
-		this.forkIdentityPort = () => identity;
-		this.forkOwnerId = () =>
-			typeof identity?.forkId === "string" && identity.forkId !== ""
-				? identity.forkId
-				: null;
-		this.forkDepthPort = () =>
-			Number.isInteger(identity?.childDepth)
-				? identity.childDepth
-				: this.forkOwnerId()
-					? 1
-					: 0;
-		// A null port is an absent capability, not a missing default. The
-		// outcome reader answers null; the sink stays null because a station
-		// without one has nobody to hand a rendered record to.
-		this.childOutcomePort =
-			typeof childOutcomePort === "function" ? childOutcomePort : () => null;
-		this.setChildOutcome =
-			typeof setChildOutcome === "function" ? setChildOutcome : null;
-		if (typeof identity?.persistRoot === "function") {
-			this.persistLedger = identity.persistRoot;
-		} else if (!identity) {
-			this.persistLedger = () => this.persist?.();
-		}
-		return { registry, ledger, identity };
+		this.forkWaitPort = () => ({ registry: nextFork.registry, ledger: nextFork.ledger });
+		this.setChildOutcome = nextFork.setChildOutcome;
+		return {
+			registry: this.fork.registry,
+			ledger: this.fork.ledger,
+			identity: this.fork.identity,
+		};
 	}
 
 	// -- Usage ledger ---------------------------------------------------------
@@ -418,23 +480,16 @@ export class SessionStation {
 		this.finishRequestSample(Date.now(), message);
 		this.usage.onMessage(message, ctx);
 		this.noteDirectoryUsage(message);
-		if (
-			message?.role === "assistant" &&
-			message.stopReason !== "aborted" &&
-			message.stopReason !== "error" &&
-			this.pendingDirSeen instanceof Map
-		) {
-			this.lastSeenDir = this.pendingDirSeen;
-			this.pendingDirSeen = null;
-			this.lastDirSeq = this.lastPendingDirSeq;
-		}
+		// The baseline advances only on an assistant reply that was neither
+		// aborted nor failed; the kernel owns that rule.
+		settleBaseline(this.baselineState(), message);
 	}
 
 	measuredOccupancy() {
-		const input = this.usage?.lastTotalInput;
-		const output = this.usage?.lastOutputTokens;
-		if (!Number.isFinite(input)) return null;
-		return input + (Number.isFinite(output) ? output : 0);
+		// The reduction lives in the usage kernel: input plus output, null when no
+		// request was measured. Output is optional, so a provider that reports only
+		// input does not lose the cost of the request.
+		return occupancyOf(this.usage);
 	}
 
 	noteDirectoryModel(ctx, live) {
@@ -511,10 +566,7 @@ export class SessionStation {
 	}
 
 	resetDirectoryBaseline() {
-		this.lastSeenDir = new Map();
-		this.pendingDirSeen = null;
-		this.lastDirSeq = -1;
-		this.lastPendingDirSeq = -1;
+		resetBaseline(this.baselineState());
 		if (this.forkOwnerId() === null) {
 			const ledger = this.forkLedgerPort();
 			if (ledger) updateRootMeta(ledger, { dirContextTokens: null });
@@ -672,17 +724,12 @@ export class SessionStation {
 			const manager = this.manager;
 			const leafId =
 				typeof manager?.getLeafId === "function" ? manager.getLeafId() : null;
-			const cache = this.contextCache;
-			if (leafId !== null && leafId !== undefined && cache && cache.leafId === leafId) {
-				return cache.messages;
-			}
-			const context = manager?.buildSessionContext?.();
-			const messages = Array.isArray(context?.messages) ? context.messages : [];
-			this.contextCache =
-				leafId !== null && leafId !== undefined ? { leafId, messages } : null;
-			return messages;
+			return contextForLeaf(this.boundaryState(), leafId, () => {
+				const context = manager?.buildSessionContext?.();
+				return Array.isArray(context?.messages) ? context.messages : [];
+			});
 		} catch {
-			this.contextCache = null;
+			forgetContextCache(this.boundaryState());
 			return [];
 		}
 	}
@@ -767,22 +814,9 @@ export class SessionStation {
 	// -- js capability projection (sync) ---------------------------------------
 
 	directoryDelta(ledger) {
-		if (!ledger || typeof ledger !== "object") {
-			const rootOnly = projectDirectory(null);
-			const scopesDelta = diffDirectory(this.lastSeenDir, rootOnly);
-			return { scopesDelta, currentDir: rootOnly, dirSeq: 0 };
-		}
-		const dirSeq = Number.isInteger(ledger.dirSeq) ? ledger.dirSeq : 0;
-		if (
-			this.lastDirSeq === dirSeq &&
-			this.lastSeenDir.size > 0 &&
-			this.pendingDirSeen === null
-		) {
-			return { scopesDelta: null, currentDir: this.lastSeenDir, dirSeq };
-		}
-		const currentDir = projectDirectory(ledger);
-		const scopesDelta = diffDirectory(this.lastSeenDir, currentDir);
-		return { scopesDelta, currentDir, dirSeq };
+		// The kernel owns the "sequence unchanged and nothing staged" shortcut, so
+		// a retry prints the identical delta instead of re-projecting the tree.
+		return computeDirectoryDelta(this.baselineState(), ledger);
 	}
 
 	/**
@@ -863,8 +897,10 @@ export class SessionStation {
 	/** The frozen projection for this beat. */
 	projectionFor(ctx) {
 		const snapshot = this.capabilitySnapshot(ctx);
-		const projection = projectCapabilities(snapshot);
-		this._lastDirMeta = { currentDir: snapshot._currentDir, dirSeq: snapshot._dirSeq };
+		// One projection, one call site (`domain/projection.mjs`); the printed
+		// directory snapshot is staged there so the receipt cannot re-derive it.
+		const projection = project(snapshot);
+		stageDirMeta(this.projectionState(), snapshot);
 		return projection;
 	}
 
@@ -943,22 +979,8 @@ export class SessionStation {
 	 * the same answer instead of looking for a child that is already closed.
 	 */
 	finalizeJoin(toolCallId, record, ctx, frameId) {
-		const persisted = confirmJoinPersistence(this);
-		if (persisted === false) {
-			this.noteError?.("fork", new Error("join receipt was not persisted"), {
-				forkId: record.forkId,
-				phase: "join",
-			});
-		}
-		const result = renderJoinResult(this, record, {
-			closeToolCallId: frameId ?? toolCallId,
-			persisted,
-		});
-		const processed = processedOf(this);
-		processed?.setHandled?.(toolCallId, result);
-		processed?.markCall?.(toolCallId);
-		this.persist();
-		return result;
+		// One commit path for a join, shared with the waiting ticket.
+		return finalizeJoinRecord(this, toolCallId, record, frameId);
 	}
 
 	executeReturn(toolCallId, params, ctx, frameId) {
@@ -1069,9 +1091,9 @@ export class SessionStation {
 
 	commitRootRewind(ctx, plan = null) {
 		const committed = commitRootRewind(this, ctx, plan);
-		if (this.rewindDispatching === plan?.pending || committed) {
-			this.rewindDispatching = null;
-		}
+		// Releasing only the dispatch marker keeps `rewoundThisTurn` for the stop
+		// nudge that follows the turn being replaced.
+		settleRootRewind(this.rewindState(), plan, committed);
 		return committed;
 	}
 
@@ -1081,6 +1103,227 @@ export class SessionStation {
 
 	finishRewind(options = {}) {
 		return finishRewind(this, options);
+	}
+
+	// -- Rewind and model switch (one state, total transitions) ----------------
+
+	/**
+	 * The one rewind value, created on first use.
+	 *
+	 * A test double built with `Object.create(SessionStation.prototype)` never ran
+	 * the constructor; creating the value lazily here keeps every transition
+	 * total on a real station and on such a double alike.
+	 */
+	rewindState() {
+		if (!this.rewind) this.rewind = createRewindState();
+		return this.rewind;
+	}
+
+	/** True while this exact plan is already dispatching. */
+	isRootRewindBusy(plan) {
+		return rootDispatchBusy(this.rewindState(), plan);
+	}
+
+	/** Claim this turn: mark the dispatch and consume the stop nudge. */
+	armRootRewind(plan) {
+		markRootDispatch(this.rewindState(), plan?.pending ?? null);
+		this.noteRewoundTurn();
+		return plan?.pending ?? null;
+	}
+
+	/** A synchronous commit already replaced the turn. */
+	noteRewoundTurn() {
+		this.rewindState().rewoundThisTurn = true;
+		return true;
+	}
+
+	/** True once for the turn a rewind committed; the stop nudge skips it. */
+	consumeRewoundTurn() {
+		const state = this.rewindState();
+		if (state.rewoundThisTurn !== true) return false;
+		state.rewoundThisTurn = false;
+		return true;
+	}
+
+	clearRootRewind() {
+		clearRootRewind(this.rewindState());
+	}
+
+	/** True while a switch is queued or in flight; a new observation must not queue. */
+	hasQueuedModelSwitch() {
+		return modelSwitchBusy(this.rewindState());
+	}
+
+	hasModelSwitchInFlight() {
+		return this.rewindState().modelSwitchInFlight !== null;
+	}
+
+	hasPendingModelSwitch() {
+		return this.rewindState().modelSwitch !== null;
+	}
+
+	queueModelSwitchRequest(request) {
+		return queueModelSwitch(this.rewindState(), request);
+	}
+
+	takeModelSwitchRequest() {
+		return takeModelSwitch(this.rewindState());
+	}
+
+	settleModelSwitchRequest(request) {
+		settleModelSwitch(this.rewindState(), request);
+	}
+
+	// -- Child rewind (sync state; the spawn ticket stages and consumes) --------
+
+	/**
+	 * Can this child rewind at all? The host proved whether it can branch, and
+	 * the manager must be able to reset its leaf and rebuild a context.
+	 */
+	isChildRewindPermitted() {
+		return childRewindPermitted(this.rewindState(), this.manager);
+	}
+
+	/** The host proved it cannot branch: refuse every future child rewind. */
+	disableChildRewind() {
+		disableChildRewind(this.rewindState());
+		return this;
+	}
+
+	/** Decide once, from the branch the child was created on, whether it may rewind. */
+	adoptChildBranch(manager, rewindable) {
+		const state = this.rewindState();
+		state.childAvailable =
+			rewindable === true &&
+			typeof manager?.branch === "function" &&
+			typeof manager?.resetLeaf === "function";
+		return state.childAvailable;
+	}
+
+	/** Stage the one plan the spawn ticket consumes after the loop stops. */
+	stageChildRewind(plan) {
+		return stageChildRewind(this.rewindState(), plan ?? {});
+	}
+
+	hasPendingChildRewind() {
+		return hasPendingChildRewind(this.rewindState());
+	}
+
+	/**
+	 * Take the staged plan and clear the slot in one synchronous step, so a
+	 * second consumer of the same return cannot rewind twice.
+	 */
+	consumeChildRewind() {
+		return consumeChildRewind(this.rewindState());
+	}
+
+	/**
+	 * Rewrite the live branch for a child rewind.
+	 *
+	 * The spawn ticket waits for in-flight persistence, then asks for this; it
+	 * never resets a leaf, branches a manager or writes a host message list
+	 * itself. `originEntryId === null` means "the branch had no origin": the
+	 * leaf is reset instead of moved.
+	 */
+	commitChildRewind(ctx, plan = {}) {
+		const manager = this.manager ?? null;
+		if (!manager) return false;
+		if (plan.originEntryId === null || plan.originEntryId === undefined) {
+			manager.resetLeaf();
+		} else {
+			manager.branch(plan.originEntryId);
+		}
+		const rebuilt =
+			typeof manager.buildSessionContext === "function"
+				? manager.buildSessionContext()?.messages
+				: null;
+		// The host list is written through the one declared capability; a host
+		// that answers false leaves the in-process fallback to the caller, which
+		// owns that session object.
+		const setOnHost = this.host?.session?.setMessages;
+		const applied =
+			Array.isArray(rebuilt) && typeof setOnHost === "function"
+				? setOnHost(ctx, rebuilt) === true
+				: false;
+		this.finishRewind({ rebaseAnchor: true });
+		return { rebuilt, applied };
+	}
+
+	// -- Host-facing reads and cache ownership ---------------------------------
+
+	/**
+	 * What a host row prints, in one read-only bundle.
+	 *
+	 * The host used to poke `state.relay.goal`, `manager` and the fork identity
+	 * port from three call sites. One getter keeps the station's shape out of the
+	 * host layer: when a field moves, only this body changes.
+	 */
+	displayContext() {
+		return {
+			goal: this.state?.relay?.goal === true,
+			manager: this.manager ?? null,
+			identity: (this.fork ?? UNBOUND).identity,
+		};
+	}
+
+	/** The one failure entry point; the diagnostics ring is the real history. */
+	noteFailure(domain, error, detail = undefined) {
+		return this.noteError(domain, error, detail);
+	}
+
+	/** Drop the leaf projection, forcing the next `contextMessages` to rebuild. */
+	clearContextCache() {
+		forgetContextCache(this.boundaryState());
+	}
+
+	/** Drop the boundary scan; the last committed key still answers. */
+	clearHostBoundaryScan() {
+		clearScan(this.boundaryState());
+	}
+
+	/**
+	 * The host-boundary cache, created on first use.
+	 *
+	 * A test double built with `Object.create(SessionStation.prototype)` never ran
+	 * the constructor, so reading the value through an accessor keeps every
+	 * transition total on a real station and on such a double alike.
+	 */
+	boundaryState() {
+		if (!this.boundary) this.boundary = createHostBoundary();
+		return this.boundary;
+	}
+
+	/** The printed-tree baseline, created on first use. */
+	baselineState() {
+		if (!this.baseline) this.baseline = createDirectoryBaseline();
+		return this.baseline;
+	}
+
+	/** The receipt bookkeeping, created on first use. */
+	projectionState() {
+		if (!this.projection) this.projection = createProjectionState();
+		return this.projection;
+	}
+
+	/**
+	 * A moved boundary means the host dropped inner scopes: truncate the state,
+	 * reset the directory and usage caches, and persist. The station owns the
+	 * fields; a gate only translates the event.
+	 */
+	noteHostBoundary(messages) {
+		const moved = observeHostBoundary(this.boundaryState(), messages);
+		if (moved.changed !== true) return false;
+		truncateForHostBoundary(this.state);
+		this.resetDirectoryBaseline();
+		this.resetUsageWatermark();
+		this.persist();
+		return true;
+	}
+
+	/** Accept the live transcript as the boundary after a host compact. */
+	markHostBoundaryCurrent(messages) {
+		const moved = observeHostBoundary(this.boundaryState(), messages);
+		return moved.key ?? null;
 	}
 
 	syncRootUserPrompts(messages = null) {
@@ -1123,17 +1366,13 @@ export class SessionStation {
 	 */
 	skillReceipt(ctx) {
 		const projection = this.projectionFor(ctx);
-		const previous = Array.isArray(this.lastCapKeys) ? this.lastCapKeys : [];
-		const removedKeys = previous.filter((key) => !projection.tools.includes(key));
-		this.lastCapKeys = projection.tools.slice();
-		// Record the in-flight directory snapshot; `lastSeenDir` only advances
-		// once an assistant reply arrives, so retries keep identical deltas.
-		this.pendingDirSeen = this._lastDirMeta?.currentDir ?? null;
-		this.lastPendingDirSeq = this._lastDirMeta?.dirSeq ?? -1;
-		const text = renderConsoleReceipt(projection, {
-			removedKeys,
+		// The kernel advances the printed tool set and renders the receipt; the
+		// directory snapshot it printed is staged as the next baseline candidate,
+		// which only becomes the baseline once a real reply lands.
+		const text = renderReceipt(this.projectionState(), projection, {
 			chinese: this.state?.features?.chinese ?? "on",
 		});
+		stageScan(this.baselineState(), this.projectionState().lastDirMeta);
 		const ownerId =
 			this.forkOwnerId();
 		return {

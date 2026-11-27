@@ -12,7 +12,27 @@ import { childDisplayFor } from "./child-display.mjs";
 import { rememberSession, sessionFor } from "./capture.mjs";
 import { planStationBinding } from "./domain/binding.mjs";
 
-function agentIdOfSession(session) {
+  /**
+   * The station fields this host reads, in one place.
+   *
+   * A station owns its state; the host should not poke `state.relay`, `manager`,
+   * or a port accessor from three different call sites. Until the core exposes a
+   * single read-only bundle, this function is the seam: when it lands, only this
+   * body changes and every call site keeps working.
+   */
+  // What this host reads from a station, in one call. The station owns the
+  // shape; a field that moves changes only `displayContext` on the core side.
+  function stationView(station) {
+  	const context =
+  		typeof station?.displayContext === "function" ? station.displayContext() : null;
+  	return {
+  		goal: () => context?.goal === true,
+  		identity: () => context?.identity ?? null,
+  		manager: () => context?.manager ?? null,
+  	};
+  }
+
+  function agentIdOfSession(session) {
 	const id =
 		(typeof session?.getAgentId === "function" ? session.getAgentId() : null) ??
 		session?.agent?.id;
@@ -32,8 +52,7 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 	const refresh = options.refresh;
 	const owner = sessionFor(ctx);
 	stopAfterScopeReturn(owner?.agent, owner);
-	const baseIdentity =
-		typeof station?.forkIdentityPort === "function" ? station.forkIdentityPort() : null;
+  	const baseIdentity = stationView(station).identity();
 	const childIdentity =
 		baseIdentity ?? forkWiring.identityForAgent(agentIdOf(ctx));
 	// The root interface is the only user-facing surface. Register it on the
@@ -47,20 +66,22 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 		ui: ctx?.ui,
 	});
 	if (plan.registerOwnerUI) registerOwnerUI(owner, ctx.ui);
-	// The goal flag is station state, read lazily: the row renders it live and
-	// the same station may flip it mid-session (seal, auto-exit).
-	const goalOf = () => station?.state?.relay?.goal === true;
-	// Descendants use the same root display sink, regardless of adoption.
-	const display =
-		plan.displayKind === "holder"
-			? childIdentity.displayHolder
-			: plan.displayKind === "child"
-				? childIdentity.display
-				: plan.displayKind === "owner"
-					? childDisplayFor(owner, ctx?.ui, { goalOf })
-					: ctx?.ui
-						? childDisplayFor(owner ?? ctx?.session ?? ctx, ctx.ui, { goalOf })
-						: null;
+  	// The goal flag is station state, read lazily: the row renders it live and
+  	// the same station may flip it mid-session (seal, auto-exit).
+  	const goalOf = stationView(station).goal;
+  	// Descendants use the same root display sink, regardless of adoption. One row
+  		// per plan kind, so the fallthrough cannot be read three ways.
+  		const DISPLAY_BY_KIND = {
+  			holder: () => childIdentity.displayHolder,
+  			child: () => childIdentity.display,
+  			owner: () => childDisplayFor(owner, ctx?.ui, { goalOf }),
+  		};
+  		const displayFor = DISPLAY_BY_KIND[plan.displayKind];
+  		const display = displayFor
+  			? displayFor()
+  			: ctx?.ui
+  				? childDisplayFor(owner ?? ctx?.session ?? ctx, ctx.ui, { goalOf })
+  				: null;
 	// The session id is the conversation key, not the manager object: a fork
 	// branch holds a per-branch manager proxy, and an object key would give
 	// parent and child two different ledgers.
@@ -75,7 +96,8 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 			? (spec) =>
 					createBranchSession({
 						session: spec.ownerSession ?? owner,
-						sessionManager: spec.sessionManager ?? spec.manager ?? station.manager ?? null,
+  						sessionManager:
+  							spec.sessionManager ?? spec.manager ?? stationView(station).manager() ?? null,
 						flowId: spec.agentId,
 						sourceToolCallId: spec.sourceToolCallId,
 						upscopeSnapshotLeafId: spec.upscopeSnapshotLeafId,
@@ -113,5 +135,5 @@ export function refreshStationDisplay(station, ctx, forkWiring) {
 	// the same owner.
 	if (ctx?.session === owner) rememberSession(owner);
 	registerOwnerUI(owner, ctx.ui);
-	station.setDisplayPort(childDisplayFor(owner, ctx.ui, { goalOf: () => station.state?.relay?.goal === true }));
+  	station.setDisplayPort(childDisplayFor(owner, ctx.ui, { goalOf: stationView(station).goal }));
 }

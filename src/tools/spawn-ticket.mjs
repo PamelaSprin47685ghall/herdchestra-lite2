@@ -15,12 +15,12 @@ import {
 } from "../scope/fork-registry.mjs";
 import { renderChildRecord } from "../transcript/replay.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
+import { forkOf } from "../scope/ledger-charge.mjs";
 import {
-	forkOf,
 	liveReceiverOf,
 	reparentOrphans,
 	updateRecordSnapshot,
-} from "../scope/forkjoin.mjs";
+} from "../scope/ledger-brackets.mjs";
 import {
 	abandonedReturnNudge,
 	childReturnNudge,
@@ -29,7 +29,6 @@ import {
 } from "../scope/return-nudge.mjs";
 import { formatRebornPrompt } from "../station/domain/handoff.mjs";
 import { closedLeafId } from "../station/domain/snapshot-leaf.mjs";
-import { finishRewind } from "../station/handoff-state.mjs";
 import { setRecordFields } from "../scope/record-mutation.mjs";
 
 function isCancelled(ledger, forkId) {
@@ -60,6 +59,26 @@ export function writeFrozenOutcome(registry, forkId, outcome) {
 }
 
 /**
+ * One frozen record shape.
+ *
+ * Every terminal path of a branch writes the same six facts; spelling them out
+ * at each site let one of them drift from the others. `abandoned` defaults to
+ * the bracket's own flag, because that is the fact being reported; a path that
+ * knows the answer better (for example, the branch that never started because
+ * the request arrived first) passes it.
+ */
+function frozenRecord(record, failed, reason, bracket = null, abandoned = undefined) {
+	return {
+		record,
+		failed,
+		abandoned: abandoned ?? bracket?.abandonRequested === true,
+		abandonedBy: bracket?.abandonedBy ?? null,
+		abandonReason: bracket?.abandonReason ?? null,
+		reason,
+	};
+}
+
+/**
  * One subscope branch, from assembly to a finished record.
  */
 export async function spawnChildTicket(spec, ports) {
@@ -87,6 +106,7 @@ export async function spawnChildTicket(spec, ports) {
 		if (isCancelled(ledger, spec.forkId)) return;
 		writeFrozenOutcome(registry, spec.forkId, outcome);
 	};
+
 	try {
 		let liveSession = null;
 		let abortedInFlight = false;
@@ -115,14 +135,7 @@ export async function spawnChildTicket(spec, ports) {
 					: base;
 			if (cause) report?.("fork", cause, { forkId: spec.forkId, phase: "create" });
 			const rec = forkOf(ledger, spec.forkId);
-			writeOutcome({
-				record: "",
-				failed: true,
-				abandoned: rec?.abandonRequested === true,
-				abandonedBy: rec?.abandonedBy ?? null,
-				abandonReason: rec?.abandonReason ?? null,
-				reason,
-			});
+			writeOutcome(frozenRecord("", true, reason, rec));
 			return finish();
 		}
 		session = created.session;
@@ -135,14 +148,9 @@ export async function spawnChildTicket(spec, ports) {
 		if (initialRecord?.abandonRequested === true) {
 			failed = true;
 			reason = "abandoned before starting";
-			writeOutcome({
-				record: "",
-				failed: true,
-				abandoned: true,
-				abandonedBy: initialRecord.abandonedBy ?? null,
-				abandonReason: initialRecord.abandonReason ?? null,
-				reason,
-			});
+			// The request stopped the branch before it started, so the fact is
+			// known here rather than read back from the bracket.
+			writeOutcome(frozenRecord("", true, reason, initialRecord, true));
 			return finish();
 		}
 
@@ -175,10 +183,9 @@ export async function spawnChildTicket(spec, ports) {
 			} else if (prepared?.station) {
 				childStation = prepared.station;
 				childCtx = prepared.ctx ?? null;
-				childStation.childRewindAvailable =
-					hasOrigin &&
-					typeof childStation.manager?.branch === "function" &&
-					typeof childStation.manager?.resetLeaf === "function";
+				// The station decides whether this child may rewind, from the branch
+				// it was created on. The ticket never writes that field.
+				childStation.adoptChildBranch(childStation.manager, hasOrigin);
 				if (typeof originEntryId === "string" && originEntryId !== "") {
 					updateRecordSnapshot(ledger, spec.forkId, {
 						safeSnapshotLeafId: originEntryId,
@@ -198,6 +205,21 @@ export async function spawnChildTicket(spec, ports) {
 					? (text, options) => session.agent.prompt(text, { ...syntheticOptions, ...options })
 					: null;
 		const prompt = typeof send === "function" ? (text, options) => send(text, options) : null;
+
+		/**
+		 * Spend the shared return-nudge allowance and deliver one prompt.
+		 *
+		 * The abandoned and the normal stop paths differ only in what they say and
+		 * in who owns a prompt failure: the abandoned path records its own reason,
+		 * the normal path lets the error reach the outer catch, which is the record
+		 * it would otherwise write. This helper owns the shared half; each caller
+		 * keeps its own half. `false` means the allowance was already spent.
+		 */
+		const nudgeOnce = async (bracket, text) => {
+			if (!takeReturnNudge(bracket)) return false;
+			await prompt(text);
+			return true;
+		};
 		if (typeof prompt !== "function") {
 			failed = true;
 			reason = "the forked scope's session exposes no prompt()";
@@ -209,34 +231,29 @@ export async function spawnChildTicket(spec, ports) {
 		}
 
 		const applyChildRewind = async (bracket) => {
-			const pending = childStation?.pendingChildRewind ?? null;
+			// One synchronous take: the plan leaves the slot before any await, so a
+			// second pass cannot rewind twice.
+			const pending = childStation?.consumeChildRewind?.() ?? null;
 			if (!pending) return false;
-			childStation.pendingChildRewind = null;
 			if (bracket?.abandonRequested === true) return false;
 			const manager = childStation.manager ?? null;
 			if (!hasOrigin || !manager) {
 				throw new Error("child rewind requested without a rewindable branch manager");
 			}
 			await session.settleInFlightMessagePersistence?.();
-			if (originEntryId === null) manager.resetLeaf();
-			else manager.branch(originEntryId);
-			const rebuilt =
-				typeof manager.buildSessionContext === "function"
-					? manager.buildSessionContext()?.messages
-					: null;
-			if (Array.isArray(rebuilt)) {
-				const setOnHost = childStation.host?.session?.setMessages;
-				const applied =
-					typeof setOnHost === "function"
-						? setOnHost(childCtx ?? session, rebuilt)
-						: false;
-				if (!applied && session?.agent?.state && Array.isArray(session.agent.state.messages)) {
-					session.agent.state.messages = rebuilt.slice();
-				} else if (!applied && Array.isArray(session?.messages)) {
-					session.messages.splice(0, session.messages.length, ...rebuilt);
+			// The station rewrites its own branch: reset (or move) the leaf, rebuild
+			// the projection, hand it through the declared capability, and settle its
+			// caches. A host that refused the write leaves this session object to us.
+			const rewound = childStation.commitChildRewind(childCtx ?? session, {
+				originEntryId,
+			});
+			if (Array.isArray(rewound?.rebuilt) && rewound.applied !== true) {
+				if (session?.agent?.state && Array.isArray(session.agent.state.messages)) {
+					session.agent.state.messages = rewound.rebuilt.slice();
+				} else if (Array.isArray(session?.messages)) {
+					session.messages.splice(0, session.messages.length, ...rewound.rebuilt);
 				}
 			}
-			finishRewind(childStation, { rebaseAnchor: true });
 			resetReturnNudges(bracket);
 			before = messagesOf(session).length;
 			const reborn = formatRebornPrompt({
@@ -262,18 +279,19 @@ export async function spawnChildTicket(spec, ports) {
 					reason = `the worker in the abandoned scope stopped with reason "${stop}"`;
 					break;
 				}
-				if (!takeReturnNudge(bracket)) {
-					failed = true;
-					reason = "the worker in the abandoned scope stopped without calling scope_return";
-					break;
-				}
 				try {
-					await prompt(
+					const delivered = await nudgeOnce(
+						bracket,
 						abandonedReturnNudge({
 							by: bracket.abandonedBy,
 							reason: bracket.abandonReason,
 						}),
 					);
+					if (delivered === false) {
+						failed = true;
+						reason = "the worker in the abandoned scope stopped without calling scope_return";
+						break;
+					}
 				} catch (err) {
 					failed = true;
 					reason = `abandoned final prompt failed: ${String(err?.message ?? err)}`;
@@ -291,14 +309,13 @@ export async function spawnChildTicket(spec, ports) {
 				reason = `the worker in the forked scope stopped with reason "${stop}"`;
 				break;
 			}
-			if (!takeReturnNudge(bracket)) {
+			if ((await nudgeOnce(bracket, childReturnNudge())) === false) {
 				failed = true;
 				reason =
 					"the worker in the forked scope stopped without calling scope_return; its record stays unpublished";
 				unpublished = true;
 				break;
 			}
-			await prompt(childReturnNudge());
 			bracket = forkOf(ledger, spec.forkId);
 		}
 
@@ -338,27 +355,13 @@ export async function spawnChildTicket(spec, ports) {
 				reparentOrphans(ledger, spec.forkId, receiver);
 			}
 		}
-		writeOutcome({
-			record: text,
-			failed,
-			abandoned: wasAbandoned,
-			abandonedBy: finalBracket?.abandonedBy ?? null,
-			abandonReason: finalBracket?.abandonReason ?? null,
-			reason,
-		});
+		writeOutcome(frozenRecord(text, failed, reason, finalBracket, wasAbandoned));
 		return finish();
 	} catch (error) {
 		failed = true;
 		reason = String(error?.message ?? error);
 		const errBracket = forkOf(ledger, spec.forkId);
-		writeOutcome({
-			record: "",
-			failed: true,
-			abandoned: errBracket?.abandonRequested === true,
-			abandonedBy: errBracket?.abandonedBy ?? null,
-			abandonReason: errBracket?.abandonReason ?? null,
-			reason,
-		});
+		writeOutcome(frozenRecord("", true, reason, errBracket));
 		report?.("fork", error, { forkId: spec.forkId });
 		return finish();
 	} finally {

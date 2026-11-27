@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 
 import { chargeBranch } from "../src/scope/accounting.mjs";
 import { beatShares, internalScheme, isFreeCall } from "../src/scope/turns.mjs";
-import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
 import { createState } from "../src/scope/state.mjs";
 
 const INTERNAL_SCHEMES = [

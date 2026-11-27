@@ -67,7 +67,9 @@ function nudgeStation(ledger, ownerId) {
 }
 
 function stopStation(ownerId, ledger) {
-	return {
+	// The rewind facts and the methods that own them come from the station, so
+	// the double exercises the real stop gate instead of a second copy of it.
+	const station = Object.assign(Object.create(SessionStation.prototype), {
 		state: { features: {}, relay: { canStop: false, pendingRewind: null } },
 		forkOwnerId: () => ownerId,
 		forkLedgerPort: () => ledger,
@@ -79,7 +81,16 @@ function stopStation(ownerId, ledger) {
 			mode: ownerId === null ? "ROOT_AUTOPILOT" : "CHILD",
 			state: { unreceived: unreceivedChildren(ledger, ownerId ?? "root").length },
 		}),
+	});
+	station.rewind = {
+		pendingChild: null,
+		childAvailable: true,
+		rewoundThisTurn: false,
+		dispatching: null,
+		modelSwitch: null,
+		modelSwitchInFlight: null,
 	};
+	return station;
 }
 
 describe("nudgeDecision", () => {

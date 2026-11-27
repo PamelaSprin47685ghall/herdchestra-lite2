@@ -11,7 +11,8 @@ import { describe, expect, test } from "bun:test";
 import { createEngine } from "../src/engine.mjs";
 import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { setIdentity, setOutcome, outcomeOf, identityOf } from "../src/scope/fork-registry.mjs";
-import { forkOf, markReady } from "../src/scope/forkjoin.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
+import { markReady } from "../src/scope/ledger-brackets.mjs";
 import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
 import { spawnChildTicket } from "../src/tools/spawn-ticket.mjs";
 

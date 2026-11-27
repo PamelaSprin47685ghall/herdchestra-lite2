@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { createBracketLedger } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger } from "../src/scope/ledger-brackets.mjs";
 import { decideRegister, validateFork } from "../src/station/domain/fork-join.mjs";
 import { loadDoc } from "../src/prompts/index.mjs";
 

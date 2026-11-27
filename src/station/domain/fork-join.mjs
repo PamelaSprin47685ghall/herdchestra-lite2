@@ -117,8 +117,9 @@ export function validateFork(args) {
 	if (rawPath === "") {
 		return { ok: false, code: "INVALID_PATH" };
 	}
-	// Quick syntax check against `/` for standalone callers; `decideRegister`
-	// resolves relative to `callerPath` again for full accuracy.
+  	// Syntax only: an empty path is refused here. Whether the path resolves, and
+  	// against which upscope, is `decideRegister`'s question, because only it
+  	// knows `callerPath`.
 	const profession = trimText(args?.profession);
 	if (profession === "" || !profession.startsWith("You are ")) {
 		return { ok: false, code: "INVALID_PROFESSION" };
@@ -330,9 +331,8 @@ export function decideRegister({
 			upscopeWindow = upscopeRecord.contextWindow ?? null;
 		}
 
-		const { blocked: _blocked, ...rest } = item;
-		next.push({
-			...rest,
+  		next.push({
+  			...item,
 			action: "register",
 			role,
 			scopeId: resolved.name,

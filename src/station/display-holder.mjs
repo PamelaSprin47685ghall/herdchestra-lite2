@@ -8,17 +8,17 @@
 // carries no host diagnostics dependency.
 function noReport() {}
 
-function isDisplayHolder(value) {
+export function isDisplayHolder(value) {
 	return value !== null && typeof value === "object" && "current" in value;
 }
 
-function resolveDisplay(value) {
+export function resolveDisplay(value) {
 	if (typeof value === "function") return value();
 	if (isDisplayHolder(value)) return value.current;
 	return value;
 }
 
-function createDisplayHolder(initial = null, report = noReport) {
+export function createDisplayHolder(initial = null, report = noReport) {
 	const listeners = new Set();
 	return {
 		current: initial ?? null,
@@ -44,9 +44,14 @@ function createDisplayHolder(initial = null, report = noReport) {
  * the caller; otherwise this binder owns a fresh holder. Pending child
  * sessions live here, not in the wiring.
  */
-export function createDisplayBinder({ display = null, report = noReport } = {}) {
-	let sharedHolder = isDisplayHolder(display) ? display : null;
-	let holder = sharedHolder ?? createDisplayHolder(resolveDisplay(display), report);
+export function createDisplayBinder({ display = null, holder: explicitHolder = null, report = noReport } = {}) {
+	// An explicit holder is the injected form: the process owns one holder and
+	// every station in the tree binds to it. The `display` argument keeps its
+	// older meaning (a value, or a holder to share) so existing callers do not
+	// need a second convention.
+	const injected = isDisplayHolder(explicitHolder) ? explicitHolder : null;
+	let sharedHolder = injected ?? (isDisplayHolder(display) ? display : null);
+	let holder = sharedHolder ?? createDisplayHolder(resolveDisplay(injected ? null : display), report);
 	const pendingDisplay = new Map();
 	const waitingDisplay = new Set();
 	let unsubscribeDisplay = null;

@@ -32,7 +32,9 @@ function fakePi(throwFor = []) {
 }
 
 function fakeRegistry() {
-	return { stationFor: () => STATION };
+	// One engine entry: `station(ctx)`. A double that answered another name
+	// tested a second convention the core does not have.
+	return { station: () => STATION, peekStation: () => STATION };
 }
 
 function hooksRecords() {
@@ -86,7 +88,7 @@ describe("hook wiring", () => {
 			},
 		};
 		const pi = fakePi();
-		wireHooks(pi, { stationFor: () => station });
+		wireHooks(pi, { station: () => station });
 		const handler = pi.handlers.get("session_stop");
 		const signal = { aborted: false };
 
@@ -105,7 +107,7 @@ describe("hook wiring", () => {
 		const seen = [];
 		const station = { ...STATION, onAgentEnd: (_ctx, evidence) => seen.push(evidence) };
 		const pi = fakePi();
-		wireHooks(pi, { stationFor: () => station });
+		wireHooks(pi, { station: () => station });
 
 		const messages = [{ role: "assistant", stopReason: "stop" }, { role: "assistant", stopReason: "aborted" }];
 		const pausedMessages = [{ role: "assistant", stopReason: "aborted" }];

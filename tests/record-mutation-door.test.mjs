@@ -10,7 +10,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { editRecord, setRecordFields } from "../src/scope/record-mutation.mjs";
-import { createBracketLedger, registerFork, forkOf } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import { ledgerMeta } from "../src/scope/ledger-cache.mjs";
 import {
 	createClockOn,

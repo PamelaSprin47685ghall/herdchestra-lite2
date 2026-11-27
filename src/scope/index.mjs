@@ -19,7 +19,6 @@ export {
   createBracketLedger,
   RUNNING,
   registerFork,
-  forkOf,
   markReady,
   releaseRecordText,
   takeReady,
@@ -36,18 +35,22 @@ export {
   levelOrder,
   assertPairing,
   statsOf,
-  restoreLedger,
-  serializeLedger,
-  serializeLedgerShared,
-  markLedgerStructDirty,
-  markRecordDirty,
-  touchRecord,
-  validLedger,
-  applyCharge,
   requestAbandon,
   updateRecordSnapshot,
   updateRootMeta,
-} from "./forkjoin.mjs";
+} from "./ledger-brackets.mjs";
+export { applyCharge, forkOf } from "./ledger-charge.mjs";
+export {
+  restoreLedger,
+  serializeLedger,
+  serializeLedgerShared,
+  validLedger,
+} from "./ledger-serialize.mjs";
+export {
+  markLedgerStructDirty,
+  markRecordDirty,
+  touchRecord,
+} from "./ledger-cache.mjs";
 export {
   subscopePath,
   splitScopePath,
@@ -88,20 +91,23 @@ export {
   serializeStateShared,
   serializeStateCore,
   deserializeState,
+} from "./state-codec.mjs";
+export {
   diffState,
   applyDelta,
   planStateEntry,
-  planLedgerEntry,
   splitState,
+} from "./state-delta.mjs";
+export { foldStateChain, planLedgerEntry } from "./ledger-entry.mjs";
+export {
   isLedgerEntry,
-  foldStateChain,
   isStateCheckpoint,
   normalizeStateEntry,
   STATE_ENTRY_VERSION,
   CHECKPOINT_EVERY,
   MAX_DELTA_OPS,
   MAX_DELTA_BYTES,
-} from "./persistence.mjs";
+} from "./entry-plan.mjs";
 export { createUsageLedger } from "./usage-ledger.mjs";
 export {
   beginRequest,

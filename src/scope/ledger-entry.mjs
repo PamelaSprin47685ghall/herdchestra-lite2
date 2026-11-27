@@ -1,13 +1,10 @@
 // Ledger entries: decide when a ledger write is owed, and fold a state chain.
 // Pure data: plans are computed, never written. No clock, no I/O.
 
-import { VERSION, put } from "./state.mjs";
-import { isPlainObject } from "./plain.mjs";
-import {
-  createBracketLedger,
-  serializeLedgerShared,
-  ledgerShapeOk,
-} from "./forkjoin.mjs";
+import { VERSION } from "./state.mjs";
+import { isPlainObject, put } from "../core/primitives.mjs";
+import { createBracketLedger } from "./ledger-brackets.mjs";
+import { ledgerShapeOk, serializeLedgerShared } from "./ledger-serialize.mjs";
 import { ledgerMeta, markLedgerStructDirty, netChangeSince } from "./ledger-cache.mjs";
 
 import { STATE_ENTRY_VERSION, normalizeStateEntry } from "./entry-plan.mjs";

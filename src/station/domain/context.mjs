@@ -59,9 +59,10 @@ export function projectContext(_snapshot = {}, input = {}) {
  * so a test double answers through the same path.
  */
 export function resolveContextWindow(station) {
-	const port = station?.forkWindowPort;
-	if (typeof port === "function") {
-		const window = port();
+	// Called through the station, never detached: a facade reads `this`, so a
+	// bare function reference would resolve its bundle against nothing.
+	if (typeof station?.forkWindowPort === "function") {
+		const window = station.forkWindowPort();
 		if (Number.isFinite(window) && window > 0) return window;
 	}
 	const live = station?.usage?.lastCtxModel;

@@ -113,7 +113,7 @@ test("observer off binds no provider hook", () => {
 	const pi = { on: (name) => events.push(name) };
 	const wired = wireProviderObservation(pi, {
 		ports: () => ({ observer: "off" }),
-		stationFor: () => ({}),
+		station: () => ({}),
 	});
 	expect(wired).toEqual({ installed: false });
 	expect(events).toEqual([]);
@@ -127,7 +127,7 @@ test("modelSwitch off never queues a switch", () => {
 		{ spec: "base", key: "base" },
 		null,
 	);
-	expect(station.pendingModelSwitch).toBeNull();
+	expect(station.rewindState().modelSwitch).toBeNull();
 	expect(takePendingModelSwitch(station, {})).toBe(null);
 });
 
@@ -139,7 +139,7 @@ test("modelSwitch on queues the pending switch as before", () => {
 		{ spec: "base", key: "base" },
 		null,
 	);
-	expect(station.pendingModelSwitch.targetSpec).toBe("gpt-x");
+	expect(station.rewindState().modelSwitch.targetSpec).toBe("gpt-x");
 });
 
 test("observer on binds both provider hooks", () => {
@@ -147,7 +147,7 @@ test("observer on binds both provider hooks", () => {
 	const pi = { on: (name) => events.push(name) };
 	const wired = wireProviderObservation(pi, {
 		ports: () => ({ observer: "on" }),
-		stationFor: () => ({}),
+		station: () => ({}),
 	});
 	expect(wired).toEqual({ installed: true });
 	expect(events).toEqual(["before_provider_request", "after_provider_response"]);
@@ -184,7 +184,7 @@ test("the command table registers one bare herd command", async () => {
 		},
 	};
 	wireCommands(pi, {
-		stationFor: () => ({
+		station: () => ({
 			onHerdCommand(args) {
 				calls.push(args);
 				return { ok: true };

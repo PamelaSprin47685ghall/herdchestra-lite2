@@ -6,6 +6,7 @@
 // and never reaches into a module.
 
 import { buildPorts } from "./core/ports/build.mjs";
+import { isReadOnlySubagentPolicy } from "./core/policy.mjs";
 import { createStationRegistry } from "./station/registry.mjs";
 import { createForkWiring } from "./wiring/fork-wiring.mjs";
 import { createScopes } from "./scope/scopes.mjs";
@@ -61,11 +62,26 @@ export function createEngine({ host = {}, tickets = {}, env = process.env, prici
 		onStationRefresh: host.fork?.refreshStation ?? null,
 	});
 	const scopes = createScopes({ forkWiring });
-	const userAbort = (ctx, evidence = null) => {
-		return registry.stationFor(ctx).onUserAbort?.(ctx, evidence);
+	// One accessor creates, one only looks. A probe must never mint a station for
+	// a context nobody owns: the host routes an interrupt by asking who already
+	// holds the context, and a lookup that created on a miss would answer itself.
+	const stationFor = (ctx) => registry.stationFor(ctx);
+	const peekStation = (ctx) =>
+		registry.hasStation(ctx) ? registry.stationFor(ctx) : null;
+	const userAbort = (ctx, evidence = null) =>
+		peekStation(ctx)?.onUserAbort?.(ctx, evidence) ?? null;
+	// The classification vocabulary has one home, core/policy.mjs; a host that
+	// must exempt a read-only agent asks this instead of comparing the string. The
+	// context is passed through untouched: the station reads it.
+	const isReadOnlySubagent = (ctx) => {
+		const station = peekStation(ctx);
+		if (!station || typeof station.policy !== "function") return false;
+		return isReadOnlySubagentPolicy(station.policy(ctx));
 	};
 	return {
-		station: (ctx) => registry.stationFor(ctx),
+		station: stationFor,
+		peekStation,
+		isReadOnlySubagent,
 		hasStation: (ctx) => registry.hasStation(ctx),
 		userAbort,
 		tools: createTools({ stationFor: (ctx) => registry.stationFor(ctx), tickets }),

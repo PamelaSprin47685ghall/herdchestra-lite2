@@ -1,11 +1,15 @@
-import { toServerFrame } from "../station/domain/protocol-codec.mjs";
-import { ticketResultOutcomes } from "../station/ui-bridge-station.mjs";
+import { DRAFT_FRAME, SERVER_FRAMES, toServerFrame } from "../station/domain/protocol-codec.mjs";
+import { ticketResultOutcomes } from "../station/domain/ticket-result.mjs";
+
+// A web draft has two effects and therefore one row: the editor write, and the
+// mirror frame every other client sees (named in the codec).
+const DRAFT_EVENT = "syncEditorDraft";
 
 // Fire-and-forget safety shell and the single-hop capability bag. Every ticket
 // invocation leaves through detach, so a rejected promise can never surface as
 // an unhandled rejection inside omp's extension host.
 const TICKET_BY_EVENT = {
-	syncEditorDraft: "syncEditorDraftTicket",
+	[DRAFT_EVENT]: "syncEditorDraftTicket",
 	submitComposer: "submitComposerTicket",
 	abort: "abortSessionTicket",
 	setModel: "setModelTicket",
@@ -36,31 +40,14 @@ export function detach(promise, onError) {
 	}
 }
 
-const SERVER_FRAMES = new Set([
-	"snapshot",
-	"transcript.delta",
-	"todo.update",
-	"usage.update",
-	"meta.update",
-	"draft.sync",
-	"completion.state",
-	"interaction.open",
-	"interaction.close",
-	"interaction.error",
-	"toast",
-	"widget.update",
-	"surface.frame",
-	"session.switched",
-]);
-
 export function buildBridgeCapabilities({ tickets, diagnostics, onResult } = {}) {
 	const broadcast = (label, frame) =>
 		detach(tickets?.broadcastFrameTicket?.(frame), (error) => diagnostics?.record?.(label, error));
 	const decide = onResult ?? ticketResultOutcomes;
 	const dispatch = (event) => {
 		if (!event || typeof event.type !== "string") return;
-		if (event.type === "syncEditorDraft") {
-			broadcast("broadcast:draft.sync", { type: "draft.sync", ...event.payload });
+		if (event.type === DRAFT_EVENT) {
+			broadcast("broadcast:draft.sync", { type: DRAFT_FRAME, ...event.payload });
 		}
 		if (SERVER_FRAMES.has(event.type)) {
 			broadcast(`broadcast:${event.type}`, toServerFrame(event));

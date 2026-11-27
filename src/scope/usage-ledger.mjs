@@ -52,7 +52,7 @@ function digestText(text) {
 
 const MESSAGE_MEMO = new WeakMap();
 
-function isPlainValue(value) {
+function isMemoizableValue(value) {
 	if (value === null || typeof value !== "object") return true;
 	const proto = Object.getPrototypeOf(value);
 	return proto === Object.prototype || proto === null || proto === Array.prototype;
@@ -106,7 +106,7 @@ function toJSONHazard(descriptor) {
 /**
  * Would `JSON.stringify` find a `toJSON` above this value?
  *
- * `isPlainValue` admits exactly three prototypes — `Object.prototype`, `null`
+ * `isMemoizableValue` admits exactly three prototypes — `Object.prototype`, `null`
  * and `Array.prototype` — so the chain is at most two links: an array reaches
  * `Array.prototype` and then `Object.prototype`, an ordinary object reaches
  * `Object.prototype`, and a null-prototype object reaches nothing. Every link
@@ -121,7 +121,7 @@ function inheritedToJSONHazard(value) {
 	let proto = Object.getPrototypeOf(value);
 	while (proto !== null) {
 		if (toJSONHazard(Object.getOwnPropertyDescriptor(proto, "toJSON"))) return true;
-		// `Object.prototype` is the last link `isPlainValue` admits; stopping
+		// `Object.prototype` is the last link `isMemoizableValue` admits; stopping
 		// here keeps the walk from leaving the plain-object world.
 		if (proto === Object.prototype) return false;
 		proto = Object.getPrototypeOf(proto);
@@ -135,7 +135,7 @@ function buildShape(value, out, depth = 0) {
 		return true;
 	}
 	if (depth > MAX_SHAPE_DEPTH) return false;
-	if (!isPlainValue(value)) return false;
+	if (!isMemoizableValue(value)) return false;
 	const keys = Object.keys(value);
 	const isArray = Array.isArray(value);
 	// An accessor is refused, because reading it is user code that the walk
@@ -180,7 +180,7 @@ function matchShape(value, shape, cursor) {
 	if (shape[cursor] !== value) return -1;
 	cursor += 1;
 	if (value === null || typeof value !== "object") return cursor;
-	if (!isPlainValue(value)) return -1;
+	if (!isMemoizableValue(value)) return -1;
 	// A `toJSON` inherited from a prototype rewrites this node's text without
 	// changing one key, and it can be installed after the shape was built — a
 	// patched `Object.prototype` then makes every cached digest stale at once,
@@ -246,7 +246,7 @@ function fingerprintMessage(message) {
 		return memo;
 	}
 	const shape = [];
-	const memoizable = isPlainValue(message) && buildShape(message, shape);
+	const memoizable = isMemoizableValue(message) && buildShape(message, shape);
 	const entry = {
 		hash: digestText(JSON.stringify(message) ?? "null"),
 		shape: memoizable ? shape : null,

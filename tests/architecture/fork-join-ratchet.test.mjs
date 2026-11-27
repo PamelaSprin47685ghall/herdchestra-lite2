@@ -79,10 +79,19 @@ describe("the retired request queue stays out of persistence", () => {
 		.sort();
 	const persistence = PERSISTENCE_FILES.map((name) => read(SCOPE_DIR, name)).join("\n");
 
-	test("the persistence surface is discovered, not hand-listed", () => {
-		expect(PERSISTENCE_FILES).toContain("persistence.mjs");
-		expect(PERSISTENCE_FILES.length).toBeGreaterThanOrEqual(5);
-	});
+  	test("the persistence surface is discovered, not hand-listed", () => {
+  		// The old facade is gone; the surface is the four modules that carry the
+  		// markers, each asserted by name so a split cannot shrink the scan.
+  		for (const name of [
+  			"entry-plan.mjs",
+  			"ledger-entry.mjs",
+  			"state-codec.mjs",
+  			"state-delta.mjs",
+  		]) {
+  			expect(PERSISTENCE_FILES).toContain(name);
+  		}
+  		expect(PERSISTENCE_FILES.length).toBeGreaterThanOrEqual(4);
+  	});
 
 	test("no serialized state carries a request queue", () => {
 		expect(persistence).not.toMatch(/registry\.requests/);

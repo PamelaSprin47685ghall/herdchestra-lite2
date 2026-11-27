@@ -9,9 +9,10 @@
  */
 
 import { errorResult } from "./results.mjs";
-import { levelKeyOf, ownerIdOf, admitJoin } from "../station/fork-controls.mjs";
+import { admitJoin, levelKeyOf, ownerIdOf } from "../station/fork-reads.mjs";
 import { loadDoc } from "../prompts/index.mjs";
-import { notifyWaiters, waitForReady } from "../scope/fork-registry.mjs";
+import { notifyWaiters } from "../scope/fork-registry.mjs";
+import { waitForReady } from "./join-wait.mjs";
 import { forkRegistryOf } from "../station/ports-contract.mjs";
 
 const errors = loadDoc("errors");

@@ -109,6 +109,19 @@ test("the Station is synchronous: no async and no await", () => {
 	expect(code).not.toMatch(/\bawait\b/);
 });
 
+test("the Station never reaches into its host layer", () => {
+	// The Station may only depend on ./domain and its own files. One import of
+	// `../host/tickets/delta-merger.mjs` was the whole violation; the merger now
+	// lives in the domain layer, and this keeps the next one from appearing.
+	const offenders = [];
+	for (const file of sourceFiles(join(UI, "src", "station"))) {
+		for (const specifier of importSpecifiers(readFileSync(file, "utf8"))) {
+			if (/(^|\/)\.\.\/(?:\.\.\/)*host\//.test(specifier)) offenders.push(`${file} -> ${specifier}`);
+		}
+	}
+	expect(offenders).toEqual([]);
+});
+
 test("the domain layer is pure: no host imports and no server", () => {
 	const domainDir = join(UI, "src", "station", "domain");
 	expect(existsSync(domainDir)).toBe(true);

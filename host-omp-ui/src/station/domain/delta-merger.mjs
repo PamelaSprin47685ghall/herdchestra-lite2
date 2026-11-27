@@ -2,8 +2,11 @@
 //
 // The Station is a synchronous aggregate root: it commits state and hands a
 // frame to the injected dispatcher. Waiting — even a 16ms timer — belongs to a
-// ticket, so the schedule that turns many text deltas into one frame lives here
-// and the Station only receives the resulting capability.
+// ticket, so the schedule that turns many text deltas into one frame is here and
+// the Station only receives the resulting capability.
+//
+// This module lives in the domain layer because it imports nothing: the
+// Station's own directory may not reach into `../host/`.
 
 export function createDeltaMerger(dispatch, schedule = (run) => setTimeout(run, 16)) {
 	let pending = null;

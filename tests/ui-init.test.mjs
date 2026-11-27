@@ -9,7 +9,7 @@ import { activate } from "../host-omp/src/main.mjs";
 import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { SessionStation } from "../src/station/station.mjs";
-import { registerFork } from "../src/scope/forkjoin.mjs";
+import { registerFork } from "../src/scope/ledger-brackets.mjs";
 import { rememberSession } from "../host-omp/src/host/capture.mjs";
 import { identityOf } from "../src/scope/fork-registry.mjs";
 import { appendRequestMessages, attachRequestPreparation } from "./helpers/request-preparation.mjs";

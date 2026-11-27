@@ -7,7 +7,7 @@
 
 import { decideAbandon } from "./abandon.mjs";
 import { roleOfSegment } from "./roles.mjs";
-import { isPlainObject } from "./plain.mjs";
+import { isPlainObject } from "../core/primitives.mjs";
 import { emptyTotals } from "./turn-stats.mjs";
 import { subscopePath } from "./path.mjs";
 import {
@@ -338,13 +338,6 @@ function queueFor(ledger, ownerId) {
  * A failed child still queues: the parent must see the failure, and a silent
  * loss would deadlock the join.
  */
-
-
-/**
- * Child side closed its bracket. The result joins the owner's ready queue.
- * A failed child still queues: the parent must see the failure, and a silent
- * loss would deadlock the join.
- */
 export function markReady(ledger, forkId, outcome = {}) {
   const record = forkOf(ledger, forkId);
   if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
@@ -418,12 +411,6 @@ export function releaseRecordText(ledger, forkId) {
   }
   return true;
 }
-
-/**
- * Parent side takes the earliest ready child. Stale queue entries (already
- * joined, superseded, or moved away by reparenting) are dropped on the way.
- */
-
 
 /**
  * Parent side takes the earliest ready child. Stale queue entries (already

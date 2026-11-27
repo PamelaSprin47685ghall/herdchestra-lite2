@@ -77,8 +77,9 @@ function dispatchSession(ctx) {
  * looks healthy. That silence is the bug this return value closes.
  */
 export function wireHooks(pi, engine) {
-	// A wiring may hand a full engine or a station-shaped double.
-	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
+  	// `engine.station` is the one entry the core exposes. A second spelling for a
+  	// station-shaped double only made every call site guess which one answered.
+  	const stationOf = (ctx) => engine.station(ctx);
 	// Native Esc is consumed by the host before any terminal event is emitted.
 	// Capture the user's own ctx.abort at the entry point and turn it into the
 	// same typed USER_ABORT gate the web stop button uses. USER_ABORT must never
@@ -96,29 +97,42 @@ export function wireHooks(pi, engine) {
 		}
 	};
 	installUserAbortCapture(pi, userAbortOf);
-  const bindDispatch = (ctx) => {
-    const station = stationOf(ctx);
-    const session = dispatchSession(ctx);
-    if (session) {
-      stopAfterScopeReturn(session.agent, session);
-      installContextPreparation(session, { station, ctx });
-    }
-    return station;
-  };
+  	// A session is prepared once, when it starts or switches. Every other event
+  	// reads the station it already has: re-running the install on each assistant
+  	// message re-entered the host's preparation seam every turn and hid a failed
+  	// first binding behind a silent retry. A session seen before `session_start`
+  	// is still prepared on first sight, so a host that fires out of order is
+  	// served rather than refused.
+  	const boundSessions = new WeakSet();
+  	const bindSession = (ctx) => {
+  		const station = stationOf(ctx);
+  		const session = dispatchSession(ctx);
+  		if (session) {
+  			stopAfterScopeReturn(session.agent, session);
+  			installContextPreparation(session, { station, ctx });
+  			boundSessions.add(session);
+  		}
+  		return station;
+  	};
+  	const ensureBound = (ctx) => {
+  		const session = dispatchSession(ctx);
+  		if (session && !boundSessions.has(session)) return bindSession(ctx);
+  		return stationOf(ctx);
+  	};
 	wireProviderObservation(pi, engine);
 	pi.on("before_provider_request", (_event, ctx) => {
 		const station = stationOf(ctx);
 		station.noteScopeRequest?.();
 		station.beginRequestSample?.(Date.now());
 	});
-	pi.on("session_start", (_event, ctx) => {
-		bindDispatch(ctx);
-	});
+  	pi.on("session_start", (_event, ctx) => {
+  		bindSession(ctx);
+  	});
 	let transitionsBound = false;
 	try {
-		pi.on("assistant_message", (event, ctx) =>
-			bindDispatch(ctx).onAssistantMessage(event?.message, ctx),
-		);
+  		pi.on("assistant_message", (event, ctx) =>
+  			ensureBound(ctx).onAssistantMessage(event?.message, ctx),
+  		);
 		transitionsBound = true;
 	} catch {
 		transitionsBound = false;
@@ -161,15 +175,15 @@ export function wireHooks(pi, engine) {
 			{ missing: ["assistant_message", "message_end"] },
 		);
 	}
-	pi.on(
-		"context",
-		(event, ctx) => bindDispatch(ctx).onContext(event?.messages, ctx),
-	);
+  	pi.on(
+  		"context",
+  		(event, ctx) => ensureBound(ctx).onContext(event?.messages, ctx),
+  	);
 	pi.on("before_agent_start", (event, ctx) => {
 		const session = dispatchSession(ctx);
 		releaseScopeReturnDrain(session);
 		releaseScopeReturnRunHold(session);
-		return bindDispatch(ctx).onBeforeAgentStart(event, ctx);
+  		return ensureBound(ctx).onBeforeAgentStart(event, ctx);
 	});
 	pi.on("agent_end", (event, ctx) => {
 		// Only the typed abort entry proves USER_ABORT. This frame says what
@@ -199,9 +213,11 @@ export function wireHooks(pi, engine) {
 		const session = dispatchSession(ctx);
 		releaseScopeReturnDrain(session);
 		releaseScopeReturnRunHold(session);
-		const result = stationOf(ctx).onSessionSwitch(event, ctx);
-		bindDispatch(ctx);
-		return result;
+  		const result = stationOf(ctx).onSessionSwitch(event, ctx);
+  		// A switch replaces the session's preparation binding.
+  		if (session) boundSessions.delete(session);
+  		bindSession(ctx);
+  		return result;
 	});
 	pi.on("session_compact", (_event, ctx) => {
 		const session = dispatchSession(ctx);

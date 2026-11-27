@@ -25,11 +25,17 @@ import { arbitrateDraft } from "./domain/draft-arbiter.mjs";
 import { normalizeMetaPatch } from "./domain/meta-normalize.mjs";
 import { applyTspOpsToDocument, createEmptyDocument } from "./domain/surface-fence.mjs";
 import { parseClientCommand } from "./domain/protocol-codec.mjs";
+import { commitTicketResult, ticketResultOutcomes } from "./domain/ticket-result.mjs";
 import { projectSnapshot } from "./domain/snapshot-doc.mjs";
 
+// The result rule is shared with the wiring; it is re-exported here so callers
+// that treat the Station as the bridge's public face keep working.
+export { ticketResultOutcomes };
+
 // The timer that coalesces deltas belongs to the ticket side, not the Station.
-// Imported and re-exported here because callers import it from this module.
-import { createDeltaMerger } from "../host/tickets/delta-merger.mjs";
+// It lives in the domain layer, which imports nothing: the Station's own
+// directory may not reach into ../host.
+import { createDeltaMerger } from "./domain/delta-merger.mjs";
 
 export { createDeltaMerger };
 
@@ -91,26 +97,6 @@ function wireDelta(event, next) {
     };
   }
   return null;
-}
-
-/**
- * Interpret a ticket result into broadcast decisions. The station owns this
- * rule set; wiring only carries the outcomes out. It stays a pure function so
- * the bridge can run without a station (tests) and the station can reuse it.
- */
-export function ticketResultOutcomes(event, result) {
-  const outcomes = [];
-  const { clientId, requestId } = event?.payload ?? {};
-  if (result?.ok !== false && result?.reported) {
-    outcomes.push({ kind: "meta", patch: result.reported });
-  }
-  if (clientId && requestId) {
-    outcomes.push({ kind: "receipt", clientId, requestId, ok: result?.ok !== false, code: result?.code });
-  }
-  if (result?.ok === false) {
-    outcomes.push({ kind: "toast", level: "error", message: `${event.type}: ${result.code ?? "failed"}` });
-  }
-  return { outcomes };
 }
 
 const STOP_AFTER_HANDLER = Symbol("stop-after-handler");
@@ -215,6 +201,10 @@ export function createUiBridgeStation(options) {
       kind: entry.kind,
       payload: entry.payload,
     }));
+  }
+
+  function interactionKind(id) {
+    return listOpenInteractions(ledger).find((entry) => entry.id === id)?.kind;
   }
 
   // The window itself lives in the domain kernel: the rebase rule, the stitch
@@ -415,7 +405,17 @@ export function createUiBridgeStation(options) {
     },
 
     pendingInteractionKind(id) {
-      return listOpenInteractions(ledger).find((entry) => entry.id === id)?.kind;
+      return interactionKind(id);
+    },
+
+    // One decision, made where the ledger lives: a plan review is resolved by
+    // the host ticket that owns it, every other interaction by the bridge. The
+    // wiring executes this route and never inspects the kind itself.
+    interactionRoute(id) {
+      if (interactionKind(id) === "plan_review") {
+        return { route: "ticket", ticket: "resolvePlanReviewTicket", reviewId: id };
+      }
+      return { route: "bridge" };
     },
 
     openInteraction(request) {
@@ -672,15 +672,7 @@ export function createUiBridgeStation(options) {
     },
 
     reconcileTicketResult(event, result) {
-      const { outcomes } = ticketResultOutcomes(event, result);
-      const rest = [];
-      for (const outcome of outcomes) {
-        // A meta patch is a state commit, and the commit broadcasts its own
-        // frame: the wiring must not send it a second time.
-        if (outcome.kind === "meta") commitMeta(outcome.patch);
-        else rest.push(outcome);
-      }
-      return { outcomes: rest };
+      return commitTicketResult(commitMeta, event, result);
     },
 
     onTuiDraftChanged(draft) {

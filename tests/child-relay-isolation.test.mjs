@@ -16,6 +16,7 @@ import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 import { injectSystemPrompt } from "../src/prompts/inject.mjs";
 import { defaultFeatures } from "../src/features/herd/features.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
+import { SessionStation } from "../src/station/station.mjs";
 
 function featureState(overrides = {}) {
 	return { ...defaultFeatures(), ...overrides };
@@ -26,11 +27,13 @@ function relayState(overrides = {}) {
 }
 
 function stopStation(ownerId, overrides = {}) {
-	const station = {
+	// The rewind facts and the methods that own them come from the station, so
+	// the double exercises the real stop gate instead of a second copy of it.
+	const station = Object.assign(Object.create(SessionStation.prototype), {
 		state: relayState(overrides.relay),
 		forkOwnerId: () => ownerId,
 		forkLedgerPort: () => overrides.ledger ?? null,
-	};
+	});
 	// The stop gate reads two facts from the projection — the mode and the
 	// pending count — so the stub answers both from the live state it is given.
 	// A stub that answered neither would make every test below look like a
@@ -48,6 +51,14 @@ function stopStation(ownerId, overrides = {}) {
 				unreceived: ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0,
 			},
 		};
+	};
+	station.rewind = {
+		pendingChild: null,
+		childAvailable: true,
+		rewoundThisTurn: false,
+		dispatching: null,
+		modelSwitch: null,
+		modelSwitchInFlight: null,
 	};
 	return station;
 }
@@ -218,6 +229,8 @@ function requestStation(ownerId) {
 		policy: () => READ_WRITE_SUBAGENT,
 		contextMessages: () => [],
 		observeActualModel() {},
+		// A boundary with no transcript: the gate's entry, inert for this fake.
+		noteHostBoundary() {},
 		tickets: {},
 		persist() {},
 		resetUsageWatermark() {},

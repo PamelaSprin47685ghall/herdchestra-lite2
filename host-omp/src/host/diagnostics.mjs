@@ -83,3 +83,30 @@ export const record = shared.record;
 export const snapshot = shared.snapshot;
 export const reset = shared.reset;
 export const total = shared.total;
+
+/**
+ * Render the retained records as one report, oldest first.
+ *
+ * The ring owns the records, so it also owns their shape on screen: a caller that
+ * only wants to show them must not re-derive the fields, the repeat count, or the
+ * timestamp format. `reports` is the provider observer's latest snapshot, shown
+ * under its own marker so the two sources stay distinguishable.
+ */
+export function formatDiagnostics(entries, reports = []) {
+	const detail = (value) => {
+		if (value === undefined) return "";
+		try {
+			return ` ${JSON.stringify(value)}`;
+		} catch {
+			return ` ${String(value)}`;
+		}
+	};
+	const lines = (Array.isArray(entries) ? entries : []).map((entry) => {
+		const repeat = entry.count > 1 ? ` ×${entry.count}` : "";
+		return `${new Date(entry.t).toISOString()} [${entry.domain}] ${entry.message}${repeat}${detail(entry.detail)}`;
+	});
+	for (const report of Array.isArray(reports) ? reports : []) {
+		lines.push(`[provider latest]${detail(report)}`);
+	}
+	return lines.join("\n");
+}

@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { deadlineInfo } from "../../scope/clock.mjs";
 import { roleTools } from "../../scope/roles.mjs";
 import { renderYamlView } from "../../format/yaml-view.mjs";
+import { formatUnits as formatAmount } from "../../core/primitives.mjs";
 
 // Free control-plane primitives every normal scope keeps.
 export const BASE_TOOLS = Object.freeze([
@@ -118,14 +119,7 @@ export function projectCapabilities({
 	});
 }
 
-/** Turn counts print trimmed: `2` for integers, `2.5` at cent precision. */
-function formatAmount(n) {
-	if (!Number.isFinite(n)) return "0";
-	const rounded = Math.round(n * 100) / 100;
-	return String(rounded);
-}
-
-/** Wall-clock spans print as `m:ss`, matching the retired scope line. */
+  /** Wall-clock spans print as `m:ss`, matching the retired scope line. */
 function formatClock(ms) {
 	if (!Number.isFinite(ms) || ms < 0) return "0:00";
 	const totalSeconds = Math.floor(ms / 1000);

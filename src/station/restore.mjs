@@ -1,14 +1,10 @@
 // Station restore: rebuild state from the newest persisted snapshot.
 
-import {
-	createState,
-	createBracketLedger,
-	deserializeState,
-	foldStateChain,
-	isLedgerEntry,
-	isStateCheckpoint,
-} from "../scope/index.mjs";
-import { toolCalls } from "../transcript/index.mjs";
+import { createState } from "../scope/state.mjs";
+import { createBracketLedger } from "../scope/ledger-brackets.mjs";
+import { deserializeState } from "../scope/state-codec.mjs";
+import { foldStateChain } from "../scope/ledger-entry.mjs";
+import { isLedgerEntry, isStateCheckpoint } from "../scope/entry-plan.mjs";
 
 const SESSION_STATE_TYPE = "scope.state";
 

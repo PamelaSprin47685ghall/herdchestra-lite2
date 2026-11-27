@@ -4,27 +4,23 @@
 // ledger. Every function here returns a plain value or a DTO, so changing the
 // ledger representation cannot reach across the package boundary.
 
-import { forkOf, RUNNING, READY } from "./forkjoin.mjs";
+import { forkOf } from "./ledger-charge.mjs";
+import { READY, RUNNING } from "./ledger-brackets.mjs";
 import { publicScopeId, scopeTitle } from "./scope-id.mjs";
 import { scopeActivity } from "./activity.mjs";
 import { renderChildRecord } from "../transcript/replay.mjs";
 import { childReturnNudge } from "./return-nudge.mjs";
 
-function ledgerOf(forkWiring) {
-	return forkWiring?.registry ? forkWiring.states?.ledger : null;
-}
-
 /** A plain record: id, status, label, and the fields a display reads. */
 function toDTO(record) {
 	if (!record || typeof record !== "object") return null;
 	return Object.freeze({
-		id: record.id ?? null,
-		kind: record.kind ?? null,
+		id: record.forkId ?? record.scopeId ?? null,
+		role: record.role ?? null,
+		path: record.path ?? null,
 		status: record.status ?? null,
 		ownerId: record.ownerId ?? null,
 		depth: record.depth ?? null,
-		children: Array.isArray(record.children) ? [...record.children] : [],
-		requirements: Array.isArray(record.requirements) ? [...record.requirements] : [],
 		label: scopeTitle(publicScopeId(record)),
 	});
 }
@@ -44,9 +40,14 @@ export function createScopes({ forkWiring }) {
 		},
 		isRunning: (id) => recordOf(id)?.status === RUNNING,
 		isReady: (id) => recordOf(id)?.status === READY,
+		// Direct children in registration order. The record names its upscope and
+		// the ledger holds the order, so no stored child list can go stale.
 		childrenOf: (id) => {
-			const record = recordOf(id);
-			return Array.isArray(record?.children) ? [...record.children] : [];
+			const current = ledger();
+			if (!current) return [];
+			return current.order.filter(
+				(forkId) => forkOf(current, forkId)?.upscopeId === id,
+			);
 		},
 		activity: (lastOwnerId, rootBusy, clock, goal) => {
 			const current = ledger();

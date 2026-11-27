@@ -286,7 +286,7 @@ describe("root rewind host lifecycle", () => {
 				events.push("stale");
 			},
 		};
-		wireHooks(host.pi, { stationFor: () => station });
+		wireHooks(host.pi, { station: () => station });
 		return {
 			host, ctx, session, plan, events, queue, capabilities, settle,
 			paused: () => paused,

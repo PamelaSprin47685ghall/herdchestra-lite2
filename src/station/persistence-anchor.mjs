@@ -9,7 +9,7 @@
  */
 
 import { commitConsumer, consumerRevision, dropConsumer, registerConsumer } from "../scope/ledger-cache.mjs";
-import { CHECKPOINT_ENTRY_LIMIT } from "../scope/persistence.mjs";
+import { CHECKPOINT_ENTRY_LIMIT } from "../scope/entry-plan.mjs";
 
 /** The ledger half of a plan, without its envelope fields. */
 /**

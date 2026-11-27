@@ -3,7 +3,8 @@
 // It holds no host objects, does no I/O, and never touches a session: the host
 // renders the line this returns.
 
-import { forkOf, RUNNING, READY } from "./forkjoin.mjs";
+import { forkOf } from "./ledger-charge.mjs";
+import { READY, RUNNING } from "./ledger-brackets.mjs";
 import { publicScopeId, scopeTitle } from "./scope-id.mjs";
 
 export function scopeActivity(ledger, lastOwnerId, rootBusy, clock = null, goal = false) {

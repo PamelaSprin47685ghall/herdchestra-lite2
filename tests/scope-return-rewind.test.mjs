@@ -17,18 +17,13 @@ import { createForkWiring } from "../src/wiring/fork-wiring.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { attachForkPorts } from "./helpers/fork-attach.mjs";
 import { createTestStation } from "./helpers/station-ports.mjs";
-import {
-	createBracketLedger,
-	forkOf,
-	registerFork,
-	RUNNING,
-	READY,
-} from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork, RUNNING, READY } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import {
 	identityForAgent,
 	outcomeOf,
-	waitForReady,
 } from "../src/scope/fork-registry.mjs";
+import { waitForReady } from "../src/tools/join-wait.mjs";
 import { notePanhandled } from "../src/scope/panhandle.mjs";
 import { handleForkCall, handleJoinCall, handleReturnCall } from "../src/station/fork-controls.mjs";
 import { executeReturn } from "../src/station/execute.mjs";

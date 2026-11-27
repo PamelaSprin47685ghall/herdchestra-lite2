@@ -12,14 +12,10 @@
 // (`brackets`, `modelCaches`) are what these tests pin.
 
 import { expect, test } from "bun:test";
-import {
-	serializeState,
-	serializeStateCore,
-	serializeStateShared,
-} from "../src/scope/persistence.mjs";
-import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
+import { serializeState, serializeStateCore, serializeStateShared } from "../src/scope/state-codec.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
 import { createState } from "../src/scope/state.mjs";
-import { diffState } from "../src/scope/persistence.mjs";
+import { diffState } from "../src/scope/state-delta.mjs";
 
 function ledgerWithFork() {
 	const ledger = createBracketLedger();

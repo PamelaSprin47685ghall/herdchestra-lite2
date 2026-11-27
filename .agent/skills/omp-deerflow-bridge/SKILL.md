@@ -84,11 +84,15 @@ host-omp-ui/
         interaction-bridge.mjs        # Web ↔ TUI 对话桥：待决交互账本、双路竞速与幂等中止
         dialog-protocol.mjs           # 纯对话协议映射：TUI 位置参数 → Web typed payload，Web 答案 → 原生 TUI 结果
         fence-ticket.mjs              # TUI 篱笆安装与退出序列的异步执行
-        delta-merger.mjs              # transcript 增量合并的定时调度（在 Station 之外）
+        attachments.mjs               # 附件信封的校验与解码（纯函数，错误码判别，不含 Station）
+        # delta-merger.mjs 已下沉到 station/domain/delta-merger.mjs（Station 目录不得 import ../host）
     manager/                          # 全机管理器
-      server.mjs                      # 固定端口 loopback、浏览器/实例 WS 路由、鉴权、静态托管与生命周期
+      station.mjs                    # ManagerStation：clients/agents/pending/opening/selection 的同步所有者，
+                                      # 提供 beginOperation/endOperation 令牌；严禁 async/await
+      server.mjs                     # 仅传输：固定端口 loopback、浏览器/实例 WS 路由、鉴权、静态托管、帧编解码
+      tickets/                        # 三条异步流程，只 await 并回 station 提交（opening/new-session/close-instance）
       machine-catalog.mjs             # 只读扫描全机 JSONL 会话头，跨项目、续写链与自定义 session-dir
-      session-service.mjs             # 按会话 id 单飞复用或启动真实 omp，等待注册而非 spawn 即成功
+      session-service.mjs             # 按会话 id 单飞复用或启动真实 omp，等待注册而非 spawn 即成功；inFlight 有超时界
       domain/session-catalog.mjs      # 会话规范化和 tmux new/resume 启动计划（默认 socket、保活、安全 argv）
     activation/
       index.mjs                       # 纯机械组合根：实例化 Station/Adapter/Fence/实例连接，绑定事件与命令，退出时清理
@@ -140,7 +144,9 @@ host-omp-ui/
 
 | 测试文件 | 覆盖契约 |
 |---|---|
-| `tests/architecture/host-omp-ui-boundary.test.mjs` | 双插件独立 manifest、`host-omp` ↔ `host-omp-ui` 与 core 双向导入禁止、Station 禁止 `async`/`await`、domain 纯净、`activation/tickets.mjs` 的 `detach` catch-all |
+| `tests/architecture/host-omp-ui-boundary.test.mjs` | 双插件独立 manifest、`host-omp` ↔ `host-omp-ui` 与 core 双向导入禁止、Station 禁止 `async`/`await`、**`host-omp-ui/src/station/**` 禁止 import `../host/**`**、domain 纯净、`activation/tickets.mjs` 的 `detach` catch-all |
+| `tests/host-omp-ui/frame-vocabulary.test.mjs` | `SERVER_FRAMES` 的 14 个广播名与 4 个直发名（`command.pending`/`command.result`/`history.page`/`client.error`）每个在 `host-omp-ui/web/src/protocol/{store.ts,reducers/frames.ts}` 都有 `case`，且集合无重复同名 |
+| `tests/host-omp-ui/manager-contract.test.mjs`（ManagerStation） | `station.mjs` 零 `async`/`await`；令牌 `beginOperation`/`endOperation` 让晚到的旧请求静默落败；`server.mjs` 只做传输与帧编解码 |
 | `tests/host-omp-ui/transcript-model.test.mjs` | `SessionEntry` 驼峰 role（`toolResult`/`bashExecution`/`compactionSummary`/`branchSummary`）归约、流式 delta 拼接、toolCall/toolResult 配对、`agent_end` 去重、显示分组 |
 | `tests/host-omp-ui/tool-artistry.test.mjs` | `read`/`write`/`edit` diff/`bash`/`eval`/`search`/`web`/`todo`/`task`/`ask`/`generic` 艺术映射、artifact 去重、ANSI strip、行级 diff |
 | `tests/host-omp-ui/html-form-parser.test.mjs` | HTML `<form>` 解析、fieldset/legend/radio/checkbox 自动 `Other` 规则、约束强校验、防 XSS、`FormAnswer` 映射 |

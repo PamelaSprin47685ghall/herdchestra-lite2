@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { chargeBranch } from "../src/scope/accounting.mjs";
-import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
 import { createState } from "../src/scope/state.mjs";
 
 function state() {

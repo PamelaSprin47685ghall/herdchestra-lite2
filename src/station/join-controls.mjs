@@ -3,7 +3,8 @@
 // Plain synchronous functions. A join takes one ready subscope through the port,
 // admits it against the next model window, and renders the subscope's own record.
 
-import { forkOf, releaseRecordText, takeReady, unreceivedChildren } from "../scope/forkjoin.mjs";
+import { forkOf } from "../scope/ledger-charge.mjs";
+import { releaseRecordText, takeReady, unreceivedChildren } from "../scope/ledger-brackets.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { joinReceipt } from "../transcript/replay.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
@@ -11,10 +12,12 @@ import { loadDoc, render } from "../prompts/index.mjs";
 import {
   admitJoin,
   frameOf,
+  joinEnvelope,
   ledgerOf,
   levelKeyOf,
   ownerIdOf,
 } from "./fork-reads.mjs";
+import { processedOf } from "./domain/tool-call-ledger.mjs";
 
 const E = loadDoc("errors");
 
@@ -77,25 +80,47 @@ export function confirmJoinPersistence(station) {
   return station.persist() !== false;
 }
 
+/**
+ * Finish a join whose record was already taken by the waiting ticket.
+ *
+ * This is the one place a join is committed: persistence is confirmed, the
+ * receipt is rendered, the call is marked answered so a replay is a no-op, and
+ * the state is written. Both the synchronous call path and the waiting ticket
+ * end here; a second copy of these five steps would let them drift.
+ */
+export function finalizeJoinRecord(station, toolCallId, record, frameId) {
+  const persisted = confirmJoinPersistence(station);
+  if (persisted === false) {
+    station.noteError?.("fork", new Error("join receipt was not persisted"), {
+      forkId: record.forkId,
+      phase: "join",
+    });
+  }
+  const result = renderJoinResult(station, record, {
+    closeToolCallId: frameId ?? toolCallId,
+    persisted,
+  });
+  const processed = processedOf(station);
+  processed?.setHandled?.(toolCallId, result);
+  processed?.markCall?.(toolCallId);
+  station.persist();
+  return result;
+}
+
 export function renderJoinResult(station, record, options = {}) {
-  const ledger = options.ledger ?? ledgerOf(station);
-  const ownerId = options.ownerId ?? ownerIdOf(station);
-  const remaining = unreceivedChildren(ledger, ownerId).map((id) => ({
-    forkId: id,
-    scopeId: publicScopeId(forkOf(ledger, id)),
-  }));
-  const outcome = station.childOutcomePort?.(record.forkId) ?? null;
-  const rendered =
-    typeof record.record === "string"
-      ? record.record
-      : typeof outcome?.record === "string"
-        ? outcome.record
-        : "";
-  const childFailed = record.outcome === "failed" || outcome?.failed === true;
-  const abandoned = record.abandonRequested === true || outcome?.abandoned === true;
-  const abandonedBy = record.abandonedBy ?? outcome?.abandonedBy ?? null;
-  const abandonReason = record.abandonReason ?? outcome?.abandonReason ?? null;
-  const childReason = record.reason ?? outcome?.reason ?? null;
+  // One envelope, read exactly the way admission priced it. A receipt rendered
+  // from a second reading could differ from the one the window admitted.
+  const envelope = joinEnvelope(station, record, {
+    ledger: options.ledger,
+    ownerId: options.ownerId,
+  });
+  const remaining = envelope.remaining;
+  const rendered = envelope.record;
+  const childFailed = envelope.failed;
+  const abandoned = envelope.abandoned;
+  const abandonedBy = envelope.abandonedBy;
+  const abandonReason = envelope.abandonReason;
+  const childReason = envelope.reason;
   const text = joinReceipt({
     forkId: publicScopeId(record),
     record: rendered,
@@ -106,12 +131,7 @@ export function renderJoinResult(station, record, options = {}) {
     reason: childReason,
     remaining: remaining.map((entry) => entry.scopeId),
   });
-  if (
-    typeof record.record === "string" &&
-    typeof outcome?.record === "string"
-  ) {
-    releaseRecordText(ledger, record.forkId);
-  }
+  if (envelope.releasesRecord) releaseRecordText(envelope.ledger, record.forkId);
   const persisted = options.persisted;
   const notes = [];
   if (persisted === false) {

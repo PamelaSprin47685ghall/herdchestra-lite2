@@ -2,7 +2,7 @@
 // Pure data; no clock, no I/O. The tree is a domain fact, so it is stored with
 // the scope state and restored with it.
 
-import { isPlainObject } from "./plain.mjs";
+import { isPlainObject } from "../core/primitives.mjs";
 import { normalizeTotals } from "./turn-stats.mjs";
 import { ledgerMeta, noteSnapshotStep, registerRecord } from "./ledger-cache.mjs";
 
@@ -196,40 +196,17 @@ export function validLedger(value) {
 }
 
 /**
- * Everything `validLedger` checks except the per-record field validation.
+ * The container half of `validLedger`, with the per-record walk left out.
  *
- * Container shape, counters, the mirror between `order` and `forks`, and the
- * absence of duplicate ids — all in one walk that reads no record field. The
- * per-record walk is the expensive half: a record carries task text, targets,
- * and a return body, and validating each one on every write made a write cost
- * the whole session's fork history.
- *
- * A caller may use this alone only when it also validates every record whose
- * content could have changed. `serializeLedgerShared` does that for exactly
- * the records the ledger names as unsettled, and a record changed without
- * being named cannot reach the journal at all: the snapshot keeps the copy
- * that was already accepted, so the live tree's corruption stays out of the
- * stored history while the shape check still refuses a broken mirror.
+ * `mirror` adds the `order`↔`forks` pairing: every ordered id names a record,
+ * no id repeats, and no record sits outside the order. A caller may skip it
+ * only when it already proved the id set — `serializeLedgerShared` does, and
+ * validates every record whose content could have moved. A record changed
+ * without being named cannot reach the journal at all: the snapshot keeps the
+ * copy that was already accepted, so live-tree corruption stays out of the
+ * stored history while a broken mirror is still refused.
  */
-
-
-/**
- * Everything `validLedger` checks except the per-record field validation.
- *
- * Container shape, counters, the mirror between `order` and `forks`, and the
- * absence of duplicate ids — all in one walk that reads no record field. The
- * per-record walk is the expensive half: a record carries task text, targets,
- * and a return body, and validating each one on every write made a write cost
- * the whole session's fork history.
- *
- * A caller may use this alone only when it also validates every record whose
- * content could have changed. `serializeLedgerShared` does that for exactly
- * the records the ledger names as unsettled, and a record changed without
- * being named cannot reach the journal at all: the snapshot keeps the copy
- * that was already accepted, so the live tree's corruption stays out of the
- * stored history while the shape check still refuses a broken mirror.
- */
-export function ledgerShapeOk(value) {
+function shapeOk(value, { mirror }) {
   if (!isPlainObject(value)) return false;
   if (value.version !== 3) return false;
   for (const key of ["seq", "closedSeq", "receiveSeq"]) {
@@ -243,19 +220,21 @@ export function ledgerShapeOk(value) {
   }
   if (!isPlainObject(value.forks)) return false;
   if (!Array.isArray(value.order)) return false;
-  const seen = new Set();
-  for (const forkId of value.order) {
-    if (!isNonEmptyString(forkId) || seen.has(forkId)) return false;
-    seen.add(forkId);
-    if (!Object.hasOwn(value.forks, forkId)) return false;
+  if (mirror) {
+    const seen = new Set();
+    for (const forkId of value.order) {
+      if (!isNonEmptyString(forkId) || seen.has(forkId)) return false;
+      seen.add(forkId);
+      if (!Object.hasOwn(value.forks, forkId)) return false;
+    }
+    // A record outside the order cannot be paired or joined; refuse the snapshot
+    // instead of restoring a half-addressable tree. The walk above proved every
+    // ordered id is a key of `forks`, and it refused a duplicate, so the ordered
+    // ids are a subset of the keys with the same cardinality as the ids. For
+    // finite sets, subset plus equal size is equality: the key count settles the
+    // reverse direction without a second walk and a hash lookup per fork.
+    if (Object.keys(value.forks).length !== seen.size) return false;
   }
-  // A record outside the order cannot be paired or joined; refuse the snapshot
-  // instead of restoring a half-addressable tree. The walk above proved every
-  // ordered id is a key of `forks`, and it refused a duplicate, so the ordered
-  // ids are a subset of the keys with the same cardinality as the ids. For
-  // finite sets, subset plus equal size is equality: the key count settles the
-  // reverse direction without a second walk and a hash lookup per fork.
-  if (Object.keys(value.forks).length !== seen.size) return false;
   if (value.levels !== undefined && !isPlainObject(value.levels)) return false;
   if (value.totals !== undefined && value.totals !== null) {
     if (!isPlainObject(value.totals)) return false;
@@ -267,16 +246,10 @@ export function ledgerShapeOk(value) {
   return true;
 }
 
-/**
- * The container half of `validLedger`, without the per-record walk.
- *
- * The fast path in `serializeLedgerShared` reaches here only while the ledger
- * says its structure is clean and its fork id set matches the previous
- * snapshot, so the records that are not listed as dirty were already validated
- * when their copy was made. The records that are dirty still get the full
- * check in the caller, which keeps the guard where the change is.
- */
-
+/** The container half of `validLedger`, with the `order`↔`forks` mirror. */
+export function ledgerShapeOk(value) {
+  return shapeOk(value, { mirror: true });
+}
 
 /**
  * The container half of `validLedger`, without the per-record walk.
@@ -288,41 +261,8 @@ export function ledgerShapeOk(value) {
  * check in the caller, which keeps the guard where the change is.
  */
 function validLedgerShallow(value) {
-  if (!isPlainObject(value)) return false;
-  if (value.version !== 3) return false;
-  for (const key of ["seq", "closedSeq", "receiveSeq"]) {
-    if (!Number.isInteger(value[key]) || value[key] < 0) return false;
-  }
-  if (value.dirSeq !== undefined && (!Number.isInteger(value.dirSeq) || value.dirSeq < 0)) {
-    return false;
-  }
-  if (value.root !== undefined && value.root !== null && !isPlainObject(value.root)) {
-    return false;
-  }
-  if (!isPlainObject(value.forks)) return false;
-  if (!Array.isArray(value.order)) return false;
-  if (value.levels !== undefined && !isPlainObject(value.levels)) return false;
-  if (value.totals !== undefined && value.totals !== null) {
-    if (!isPlainObject(value.totals)) return false;
-    const turnMs = value.totals.turnMs;
-    const turns = value.totals.turns;
-    if (turnMs !== undefined && (!Number.isFinite(turnMs) || turnMs < 0)) return false;
-    if (turns !== undefined && (!Number.isFinite(turns) || turns < 0)) return false;
-  }
-  return true;
+  return shapeOk(value, { mirror: false });
 }
-
-/**
- * Capture the explicitly changed fork records for a persistence consumer.
- *
- * `ids` must come from an authoritative change source for that consumer. This
- * function does not infer changes or validate the ledger's containers; callers
- * that cannot prove the id set complete must use the full serializer instead.
- * Each returned record is an independent JSON-safe copy, so later changes to a
- * live record cannot change an already planned write. An invalid record refuses
- * the entire batch rather than turning it into a deletion.
- */
-
 
 /**
  * Capture the explicitly changed fork records for a persistence consumer.
@@ -357,22 +297,10 @@ export function snapshotForkChanges(ledger, ids) {
 }
 
 /** A JSON-safe copy of the tree, safe to persist with the scope state. */
-
-
-/** A JSON-safe copy of the tree, safe to persist with the scope state. */
 export function serializeLedger(ledger) {
   if (!validLedger(ledger)) return copyData(createBracketLedger());
   return copyData(ledger);
 }
-
-/**
- * True when every scalar field of the last copy still holds the live value.
- *
- * Container fields are skipped: the copy holds its own containers, so their
- * identity never matches, and a container mutation is caught by the dirty mark
- * the charge, the panhandle, and the amend leave behind.
- */
-
 
 /**
  * True when every scalar field of the last copy still holds the live value.
@@ -398,17 +326,6 @@ function settledFields(copy, record) {
   }
   return true;
 }
-
-/**
- * A JSON-safe copy of the tree that reuses the previous copy of every record
- * that did not move.
- *
- * A caller that mutates the result must use `serializeLedger`: the returned
- * snapshot is shared with the previous one and with the cache, so a write
- * through it would rewrite history. A caller that only reads and persists may
- * use this one, and gets the same object back while nothing has changed.
- */
-
 
 /**
  * A JSON-safe copy of the tree that reuses the previous copy of every record
@@ -634,15 +551,6 @@ export function serializeLedgerShared(ledger) {
  * result: the parent can take it, read why it is empty, and decide whether to
  * re-declare the work. Ready results keep their frozen record and order.
  */
-
-
-/**
- * Rebuild a ledger from a stored snapshot.
- *
- * A running child cannot survive the process. It comes back as a failed ready
- * result: the parent can take it, read why it is empty, and decide whether to
- * re-declare the work. Ready results keep their frozen record and order.
- */
 export function restoreLedgerChecked(value) {
   const out = createBracketLedger();
   if (!validLedger(value)) return { ok: false, ledger: out };
@@ -708,12 +616,6 @@ export function restoreLedgerChecked(value) {
   for (const forkId of out.order) registerRecord(out, out.forks[forkId]);
   return { ok: true, ledger: out };
 }
-
-/**
- * Rebuild a ledger, discarding the tree when its queues and levels do not
- * pair.
- */
-
 
 /**
  * Rebuild a ledger, discarding the tree when its queues and levels do not

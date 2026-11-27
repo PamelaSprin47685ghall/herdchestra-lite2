@@ -11,6 +11,8 @@ import { onSessionStop } from "../src/station/gates.mjs";
 import { defaultFeatures } from "../src/features/herd/features.mjs";
 import { rootReturnNudge } from "../src/station/texts.mjs";
 
+import { SessionStation } from "../src/station/station.mjs";
+
 function station(overrides = {}) {
 	const stateOverrides = overrides.state ?? {};
 	const features = {
@@ -18,13 +20,14 @@ function station(overrides = {}) {
 		...(stateOverrides.features ?? {}),
 	};
 	const relay = { goal: stateOverrides.autopilot !== false, canStop: false, pendingRewind: null, ...(overrides.relay ?? {}) };
-	return {
+	// The rewind facts and the methods that own them come from the station
+	// itself: a double that re-implemented them would test its own copy.
+	const station = Object.assign(Object.create(SessionStation.prototype), {
 		state: {
 			...stateOverrides,
 			features,
 			relay,
 		},
-		rewoundThisTurn: overrides.rewoundThisTurn ?? false,
 		forkOwnerId: () => overrides.ownerId ?? null,
 		forkLedgerPort: () => overrides.ledger ?? null,
 		// The stop gate asks the station for its mode; a stub answers with the
@@ -34,7 +37,16 @@ function station(overrides = {}) {
 				overrides.mode ??
 				(relay.goal === true ? "ROOT_AUTOPILOT" : "ROOT_MANUAL"),
 		}),
+	});
+	station.rewind = {
+		pendingChild: null,
+		childAvailable: true,
+		rewoundThisTurn: overrides.rewoundThisTurn ?? false,
+		dispatching: null,
+		modelSwitch: null,
+		modelSwitchInFlight: null,
 	};
+	return station;
 }
 
 describe("session stop evidence", () => {
@@ -69,7 +81,7 @@ describe("session stop evidence", () => {
 	test("a root turn with rewoundThisTurn or pendingRewind is never double-nudged", () => {
 		const rewound = station({ rewoundThisTurn: true });
 		expect(onSessionStop(rewound, {}, null)).toBeUndefined();
-		expect(rewound.rewoundThisTurn).toBe(false);
+		expect(rewound.rewind.rewoundThisTurn).toBe(false);
 
 		const pending = station({ relay: { pendingRewind: { report: "r", big: false, generation: 1 } } });
 		expect(onSessionStop(pending, {}, null)).toBeUndefined();

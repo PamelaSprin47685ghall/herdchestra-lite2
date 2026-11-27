@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { createBracketLedger, registerFork, snapshotForkChanges } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
+import { snapshotForkChanges } from "../src/scope/ledger-serialize.mjs";
 
 function add(ledger, forkId) {
   const result = registerFork(ledger, { forkId, ownerId: "root", fsm: "work", depth: 0, budget: { read: 1 }, profession: "You are a tester." });

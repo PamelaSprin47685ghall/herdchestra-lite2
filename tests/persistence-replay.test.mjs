@@ -14,12 +14,8 @@ import {
   serializeStateCore,
   createState,
 } from "../src/scope/index.mjs";
-import {
-  applyDelta,
-  diffState,
-  foldStateChain,
-  planStateEntry,
-} from "../src/scope/persistence.mjs";
+import { applyDelta, diffState, planStateEntry } from "../src/scope/state-delta.mjs";
+import { foldStateChain } from "../src/scope/ledger-entry.mjs";
 
 test("core serialization does not traverse the ledger", () => {
   const state = createState();

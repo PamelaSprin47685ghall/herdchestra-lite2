@@ -4,21 +4,22 @@
 // bracket mutations go through the ledger, and the host receives a stop signal
 // through `stopLoop`.
 
+import { forkOf } from "../scope/ledger-charge.mjs";
 import {
   adoptFork,
-  forkOf,
   liveReceiverOf,
   markReady,
   openChildren,
   readyChildren,
   reparentOrphans,
   unreceivedChildren,
-} from "../scope/forkjoin.mjs";
+} from "../scope/ledger-brackets.mjs";
 import { setRecordFields } from "../scope/record-mutation.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { toolCalls } from "../transcript/messages.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
+import { refusal } from "./errors.mjs";
 import { decideReady, decideReturn } from "./domain/fork-join.mjs";
 import { decideScopeReturn, formatGenerationReport } from "./domain/handoff.mjs";
 import { parseArgs } from "./messages.mjs";
@@ -92,49 +93,15 @@ export function handleReturnCall(station, call, options = {}) {
   });
 
   if (!decision.ok) {
-    if (decision.code === "INVALID_RETURN_OATH") {
-      return errorResult("INVALID_RETURN_OATH", E["invalid-return-oath"]);
-    }
-    if (decision.code === "MISSING_DAFNY") {
-      return errorResult("MISSING_DAFNY", E["missing-dafny"]);
-    }
-    if (decision.code === "MIXED_RETURN_TOOL_CALLS") {
-      return errorResult("MIXED_RETURN_TOOL_CALLS", E["mixed-return"]);
-    }
-    if (decision.code === "UNRECEIVED_CHILDREN") {
-      return errorResult(
-        "UNRECEIVED_CHILDREN",
-        render(E["return-unreceived"], { count: decision.unreceived }),
-        { unreceived: decision.unreceived },
-      );
-    }
-    if (decision.code === "ROOT_REWIND_UNAVAILABLE") {
-      return errorResult("ROOT_REWIND_UNAVAILABLE", E["return-rewind-unavailable"]);
-    }
-    if (decision.code === "NOT_A_CHILD") {
-      return errorResult("NOT_A_CHILD", E["not-a-subscope"]);
-    }
-    if (decision.code === "UNKNOWN_FORK") {
-      return errorResult("UNKNOWN_FORK", E["unknown-fork"]);
-    }
-    if (decision.code === "FORK_NOT_RUNNING") {
-      return errorResult("FORK_NOT_RUNNING", render(E["fork-not-running"], {
-        path: publicScopeId(record),
-        status: decision.status,
-      }));
-    }
-    return errorResult("ORPHANS_WITHOUT_RECEIVER", E["orphans-without-receiver"]);
+    const denied = refusal(decision, { record });
+    return errorResult(denied.code, denied.message, denied.details);
   }
 
   // Child small handoff: keep bracket RUNNING, capture formatted generation
   // report, and let the spawn ticket rewind back to `originEntryId` after the
   // agent loop stops cleanly via `stopLoop: true`.
   if (decision.kind === "rewind" && decision.scope === "child") {
-    const canRewindChild =
-      station.childRewindAvailable !== false &&
-      typeof station.manager?.branch === "function" &&
-      typeof station.manager?.resetLeaf === "function";
-    if (!canRewindChild) {
+    if (!station.isChildRewindPermitted()) {
       return errorResult("ROOT_REWIND_UNAVAILABLE", E["return-rewind-unavailable"]);
     }
     const messages = messagesOf(station);
@@ -146,12 +113,12 @@ export function handleReturnCall(station, call, options = {}) {
     const generation =
       (Number.isInteger(record.handoffCount) && record.handoffCount >= 0 ? record.handoffCount : 0) + 1;
     setRecordFields(record, { handoffCount: generation });
-    station.pendingChildRewind = {
+    station.stageChildRewind({
       report,
       big: false,
       generation,
       id: typeof call?.id === "string" ? call.id : "",
-    };
+    });
     return textResult(
       render(F["return.rewind"], { generation }),
       {

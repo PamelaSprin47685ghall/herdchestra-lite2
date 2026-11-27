@@ -5,13 +5,15 @@
 
 import { createEngine } from "herdchestra-lite2";
 import { agentIdOf, conversationKeyOf, sameManager } from "../host/identity-adapters.mjs";
-import {
-	capabilities,
-	contextHeaderOf,
-	managerOf,
-	modelOf,
-	thinkingOf,
-} from "../host/adapter.mjs";
+  import {
+  	branchOf,
+  	capabilities,
+  	contextHeaderOf,
+  	managerOf,
+  	modelOf,
+  	settingsFor,
+  	thinkingOf,
+  } from "../host/adapter.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
 import { sessionFor, setAgentMessages } from "../host/capture.mjs";
 import { abortChildSession, interruptChildSession, registerProcessUserAbortEngine } from "../host/user-abort.mjs";
@@ -34,26 +36,10 @@ import { canRewindRoot } from "../host/host-tickets.mjs";
 
 export { installCapture };
 
-import { FORK_WIRING_KEY } from "../host/process-symbols.mjs";
-
-/**
- * One fork wiring per process. A fork tree spans agents, and the host binds
- * the extension again for every child session, so the wiring must outlive one
- * engine. The core creates the object; this slot keeps it. Using one registry
- * here is also what keeps every scope on the same ledger and the same shared
- * journal: a per-engine wiring would give each child its own tree.
- */
-
-function globalForkWiring(wiring = null) {
-	if (wiring && !globalThis[FORK_WIRING_KEY]) {
-		Object.defineProperty(globalThis, FORK_WIRING_KEY, {
-			value: wiring,
-			enumerable: false,
-			configurable: true,
-		});
-	}
-	return globalThis[FORK_WIRING_KEY] ?? null;
-}
+// The one fork wiring for this process is a registry slot, not a local
+// decision: `forkWiring` in process-registry.mjs states the first-writer-wins
+// policy that keeps a child engine on the parent's tree.
+import { getProcessRegistry } from "../host/process-registry.mjs";
 
 /**
  * The capability bag the core package sees. Every entry reads a host shape and
@@ -66,15 +52,7 @@ function globalForkWiring(wiring = null) {
  * core owns that lookup, and a host copy would be a second registry.
  */
 export function createHostBag(pi, getEngine = () => null) {
-	const tools = createToolGateway(getEngine);
-	const branchOf = (ctx) => {
-		try {
-			const branch = managerOf(ctx)?.getBranch?.();
-			return Array.isArray(branch) ? branch : [];
-		} catch {
-			return [];
-		}
-	};
+  	const tools = createToolGateway(getEngine);
 	return Object.freeze({
 		session: Object.freeze({
 			managerOf,
@@ -85,15 +63,9 @@ export function createHostBag(pi, getEngine = () => null) {
 			header: contextHeaderOf,
 			setMessages: setAgentMessages,
 			appendHistory: appendHistoryMessage,
-			// The host's extension wrapper resolves an approval mode from
-			// `context.settings`; an extension context carries none, so the mode
-			// falls back to always-ask. A child has no interactive UI, so its
-			// bash/write would throw instead of running. The session's own
-			// settings are the only owner of that decision.
-			settingsOf: (ctx) => {
-				const session = sessionFor(ctx);
-				return session?.extensionRunner?.sessionSettings ?? session?.settings ?? null;
-			},
+  			// The approval mode comes from the session's own settings; the reading
+  			// lives in the adapter, which owns every host shape.
+  			settingsOf: settingsFor,
 			abort: (ctx, error) => sessionFor(ctx)?.agent?.abort?.(error),
 		}),
 		model: Object.freeze({
@@ -113,7 +85,7 @@ export function createHostBag(pi, getEngine = () => null) {
 			// Getter with an optional setter: the core creates the one wiring
 			// and stores it here, so a child engine reuses the parent's registry,
 			// ledger, and waiters. The first wiring wins.
-			wiring: globalForkWiring,
+			wiring: getProcessRegistry().forkWiring,
 			agentIdOf,
 			sameManager,
 		}),

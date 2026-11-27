@@ -1,3 +1,10 @@
+import {
+	modelSwitchBusy,
+	queueModelSwitch as queueSwitch,
+	settleModelSwitch,
+	takeModelSwitch,
+} from "./domain/rewind.mjs";
+
 export function modelKey(model) {
 	const id = model?.id ?? model?.model;
 	if (typeof id !== "string" || id === "") return null;
@@ -84,7 +91,9 @@ export function observeActualModel(station, ctx) {
 	// its next measured response.
 	station.usage.refreshContextNudge?.();
 	station.noteDirectoryModel?.(ctx, live);
-	if (state.modelRecovery || station.modelSwitchInFlight || station.pendingModelSwitch) return;
+	// A queued or in-flight switch owns the next choice; observing the live model
+	// mid-switch would overwrite the target the ticket is about to apply.
+	if (state.modelRecovery || modelSwitchBusy(station.rewindState())) return;
 	const spec = liveSelector(ctx, key, host);
 	if (state.baseModelKey === key && (spec === key || state.baseModelSpec === spec)) return;
 	setChoice(state, null, spec, key);
@@ -94,7 +103,7 @@ export function observeActualModel(station, ctx) {
 export function queueModelSwitch(station, target, fallback, scopeId, recovery = false) {
 	if (station.portTable.modelSwitch === "off") return;
 	if (!target.spec || target.spec === fallback.spec) return;
-	station.pendingModelSwitch = {
+	queueSwitch(station.rewindState(), {
 		command: `/switch ${target.spec}`,
 		targetSpec: target.spec,
 		expectedKey: target.key,
@@ -104,14 +113,14 @@ export function queueModelSwitch(station, target, fallback, scopeId, recovery = 
 		scopeId,
 		epoch: station.state.epoch,
 		recovery,
-	};
+	});
 }
 
 export function takePendingModelSwitch(station, ctx) {
 	if (station.portTable.modelSwitch === "off") return null;
-	if (station.modelSwitchInFlight) return null;
+	if (station.rewindState().modelSwitchInFlight !== null) return null;
 	const recovery = station.state.modelRecovery;
-	if (!station.pendingModelSwitch && recovery) {
+	if (station.rewindState().modelSwitch === null && recovery) {
 		const key = modelKey(actualModel(ctx, station.host));
 		if (key) {
 			const spec = liveSelector(ctx, key, station.host);
@@ -125,16 +134,16 @@ export function takePendingModelSwitch(station, ctx) {
 			}
 		}
 	}
-	const req = station.pendingModelSwitch;
-	station.pendingModelSwitch = null;
-	station.modelSwitchInFlight = req;
-	return req;
+	// One synchronous take: the request leaves the queue and enters flight in the
+	// same step, so a second caller sees it busy instead of taking it twice.
+	return takeModelSwitch(station.rewindState());
 }
 
 export function reconcileActualModel(station, ctx, req, outcome) {
 	const live = outcome?.actualModel ?? outcome?.model ?? actualModel(ctx, station.host);
 	const key = modelKey(live) ?? req.fallbackKey;
-	if (station.modelSwitchInFlight === req) station.modelSwitchInFlight = null;
+	// Only the request that settled releases the in-flight slot.
+	settleModelSwitch(station.rewindState(), req);
 	if (station.state.epoch !== req.epoch) return key;
 	if (live) {
 		station.usage.lastCtxModel = live;

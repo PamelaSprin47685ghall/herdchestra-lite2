@@ -1,8 +1,10 @@
 // Machine-wide session catalog: normalization, id-addressed lookup and the
 // real `tmux` + `omp --resume` launch plan.
 //
-// This module is pure: no I/O, no host imports. The manager process owns the
-// machine-wide list; instances only supply raw records.
+// This module reads no host object and writes nothing: the manager process owns
+// the machine-wide list, instances only supply raw records. Two defaults are
+// ambient on purpose — the login shell comes from `process.env.SHELL` and a
+// launch id is minted per call — so a caller that needs them fixed passes them.
 
 import { isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";

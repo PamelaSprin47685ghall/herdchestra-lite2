@@ -35,8 +35,11 @@ function stationWith(live = { id: "m", provider: "p", contextWindow: 1000 }) {
 			baseModelKey: null,
 			baseModelSpec: null,
 		},
-		modelSwitchInFlight: null,
-		pendingModelSwitch: null,
+		// The rewind value and the one accessor the free functions read.
+		rewind: { modelSwitch: null, modelSwitchInFlight: null },
+		rewindState() {
+			return this.rewind;
+		},
 		persist() {
 			calls.persist += 1;
 		},
@@ -83,8 +86,10 @@ describe("observeActualModel regression", () => {
 				},
 			},
 			state: { modelRecovery: null, baseModelKey: null, baseModelSpec: null },
-			modelSwitchInFlight: null,
-			pendingModelSwitch: null,
+			rewind: { modelSwitch: null, modelSwitchInFlight: null },
+			rewindState() {
+				return this.rewind;
+			},
 			persist() {
 				calls.persist += 1;
 			},
@@ -104,7 +109,7 @@ describe("observeActualModel regression", () => {
 
 	test("a pending switch keeps the recorded model and skips the write", () => {
 		const { station, calls } = stationWith();
-		station.pendingModelSwitch = { command: "/switch x" };
+		station.rewind.modelSwitch = { command: "/switch x" };
 		observeActualModel(station, {});
 
 		// The live model is still recorded, but a switch in flight owns the

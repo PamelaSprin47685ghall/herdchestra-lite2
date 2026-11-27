@@ -10,7 +10,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { createBracketLedger, registerFork, forkOf } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import { commitPersisted, ledgerPending } from "../src/scope/ledger-cache.mjs";
 import { grantBudget, notePanhandled } from "../src/scope/panhandle.mjs";
 

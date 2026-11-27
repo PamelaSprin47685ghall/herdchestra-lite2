@@ -30,7 +30,6 @@ const JS_TOOL_NAME = "js";
 // `src/core/policy.mjs` classifies an omp builtin read-only subagent as this.
 // Such an agent never carries the core's `js` tool, and it keeps its own tools
 // untouched: the check is a second fence, not the only one.
-const READ_ONLY_SUBAGENT = "read-only-subagent";
 
 /** agent -> Map<toolName, tool>, captured the first time that agent was hidden. */
 const CONFISCATED = new WeakMap();
@@ -122,9 +121,16 @@ function resolveStation(getEngine, ctx) {
 		// and building a station for a foreign context would race the root
 		// station hook and leave a stray engine behind. Ask whether one already
 		// exists; the policy check simply has no opinion when it does not.
-		if (typeof engine.hasStation === "function" && !engine.hasStation(ctx)) return null;
-		if (typeof engine.station === "function") return engine.station(ctx) ?? null;
-		if (typeof engine.stationFor === "function") return engine.stationFor(ctx) ?? null;
+  		if (typeof engine.hasStation === "function" && !engine.hasStation(ctx)) return null;
+  		// One read-only entry: `peekStation` never mints a station, so a foreign
+  		// context leaves the policy check with no opinion instead of racing the
+  		// root hook.
+  		if (typeof engine.peekStation === "function") return engine.peekStation(ctx) ?? null;
+  		// A double may predate the read-only entry; `hasStation` is still a
+  		// lookup, never a creation.
+  		if (typeof engine.station === "function" && engine.hasStation?.(ctx) !== false) {
+  			return engine.station(ctx) ?? null;
+  		}
 	} catch {
 		// A host without a station yet is treated as unguided, not as foreign.
 	}
@@ -132,10 +138,15 @@ function resolveStation(getEngine, ctx) {
 }
 
 function policyAllows(getEngine, ctx) {
-	const station = resolveStation(getEngine, ctx);
-	if (!station || typeof station.policy !== "function") return true;
 	try {
-		return station.policy(ctx) !== READ_ONLY_SUBAGENT;
+		const engine = getEngine?.();
+		// The classification vocabulary belongs to the core; asking the engine
+		// keeps this file from carrying a second copy of the string.
+		if (typeof engine?.isReadOnlySubagent === "function") {
+			return !engine.isReadOnlySubagent(ctx);
+		}
+		const station = resolveStation(getEngine, ctx);
+		return !station || typeof station.policy !== "function";
 	} catch {
 		return true;
 	}

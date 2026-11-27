@@ -2,14 +2,16 @@
 //
 // Plain synchronous function. The bracket ledger arrives through a port and the
 // child spawner arrives through another, so a station that has neither refuses
-// instead of inventing one.
+// instead of inventing one. Every refusal comes from `./errors.mjs`: the code,
+// its documentation entry and its structured details are one table there, so a
+// handler never holds a second copy of the wording.
 
+import { forkOf } from "../scope/ledger-charge.mjs";
 import {
-  forkOf,
   markReady,
   registerFork,
   unreceivedChildren,
-} from "../scope/forkjoin.mjs";
+} from "../scope/ledger-brackets.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { createClockOn } from "../scope/clock.mjs";
 import { deriveTimeBudgetSeconds, modelSamples } from "../scope/turn-stats.mjs";
@@ -17,9 +19,9 @@ import { decideRegister, validateForkBatch } from "./domain/fork-join.mjs";
 import { resetRootPromotion } from "./domain/handoff.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
+import { batchRefusal, refusal } from "./errors.mjs";
 import { parseArgs } from "./messages.mjs";
 import {
-  REFUSAL_KEY,
   childReceiptText,
   depthOf,
   densityOf,
@@ -42,11 +44,8 @@ export function handleForkCall(station, call, options = {}) {
   const args = parseArgs(call);
   const batch = validateForkBatch(args);
   if (!batch.ok) {
-    const where = batch.index >= 0 ? ` (forks[${batch.index}])` : "";
-    return errorResult(
-      batch.code,
-      `${E[REFUSAL_KEY[batch.code]] ?? "Invalid fork arguments."}${where}`,
-    );
+    const denied = batchRefusal(batch);
+    return errorResult(denied.code, denied.message);
   }
   const ledger = ledgerOf(station);
   if (!ledger) {
@@ -59,24 +58,30 @@ export function handleForkCall(station, call, options = {}) {
   const callerRecord = callerForkId === null ? null : forkOf(ledger, callerForkId);
   const callerPath = callerRecord?.path ?? "/";
 
-  const identityCharsOf = (item) => {
-    const profession = typeof item.profession === "string" ? item.profession.trim() : "";
-    return profession === "" ? 0 : profession.length + 1;
-  };
-
-  const priceFor = (item) => {
-    const fresh =
-      childReceiptText({
+  // One receipt per item, rendered once and read twice. Pricing the receipt and
+  // then re-rendering it for the spawn made the two texts the same only by luck;
+  // the identity line is part of the text, so a renderer that grew a line would
+  // have changed the price without changing what the child reads.
+  const receipts = new Map();
+  const receiptFor = (item) => {
+    let text = receipts.get(item);
+    if (text === undefined) {
+      text = childReceiptText({
         path: item.path,
         upscopePath: item.upscopePath,
         callerPath: item.callerPath,
         childDepth: depth + 1,
         fsm: item.fsm,
+        profession: item.profession ?? "",
         budget: item.budget,
         targets: item.targets,
-      }).length + identityCharsOf(item);
-    return { fresh, revive: 0, generation: 0 };
+      });
+      receipts.set(item, text);
+    }
+    return text;
   };
+
+  const priceFor = (item) => ({ fresh: receiptFor(item).length, revive: 0, generation: 0 });
 
   const decision = decideRegister({
     items: batch.items,
@@ -95,128 +100,8 @@ export function handleForkCall(station, call, options = {}) {
   });
 
   if (!decision.ok) {
-    if (decision.code === "INVALID_PATH") {
-      const where = decision.index >= 0 ? ` (forks[${decision.index}])` : "";
-      return errorResult(
-        decision.code,
-        `${E["invalid-path"] ?? "Pass a valid scope `path`."}${where}`,
-        { index: decision.index, path: decision.path },
-      );
-    }
-    if (decision.code === "DUPLICATE_SCOPE_PATH") {
-      return errorResult(
-        decision.code,
-        render(E["duplicate-scope-path"], {
-          path: decision.path,
-          status: decision.status ?? "existing",
-        }),
-        { index: decision.index, path: decision.path, status: decision.status },
-      );
-    }
-    if (decision.code === "UNKNOWN_UPSCOPE") {
-      return errorResult(
-        decision.code,
-        render(E["unknown-upscope"], { upscopePath: decision.upscopePath }),
-        { index: decision.index, upscopePath: decision.upscopePath },
-      );
-    }
-    if (decision.code === "UPSCOPE_NOT_READY") {
-      return errorResult(
-        decision.code,
-        render(E["upscope-not-ready"], { upscopePath: decision.upscopePath }),
-        { index: decision.index, upscopePath: decision.upscopePath },
-      );
-    }
-    if (decision.code === "ROLE_ESCALATION") {
-      return errorResult(
-        decision.code,
-        render(
-          E["role-escalation"] ??
-            "Role {callerRole} cannot open role {targetRole} ({path}). Privilege narrows monotonically: manager > devops > editor > inspector.",
-          {
-            callerRole: decision.callerRole ?? "unknown",
-            targetRole: decision.targetRole ?? "unknown",
-            path: decision.path,
-          },
-        ),
-        {
-          index: decision.index,
-          path: decision.path,
-          callerRole: decision.callerRole,
-          targetRole: decision.targetRole,
-        },
-      );
-    }
-    if (decision.code === "DEVOPS_ALREADY_RUNNING") {
-      return errorResult(
-        decision.code,
-        render(
-          E["devops-already-running"] ??
-            "Only one devops scope may be running at a time ({activePath} is still running). Wait for it to turn done before forking another devops.",
-          { activePath: decision.activePath ?? "another scope" },
-        ),
-        { index: decision.index, path: decision.path, activePath: decision.activePath },
-      );
-    }
-    if (decision.code === "INVALID_EDITOR_TARGETS") {
-      return errorResult(
-        decision.code,
-        E["invalid-editor-targets"] ??
-          'An editor subscope must declare concrete target file paths in targets (for example ["src/foo.mjs"]). Vague prose, globs, and bare directories are rejected.',
-        { index: decision.index, path: decision.path },
-      );
-    }
-    if (decision.code === "FORBIDDEN_ROLE_BUDGET") {
-      return errorResult(
-        decision.code,
-        render(
-          E["forbidden-role-budget"] ??
-            "Tool {tool} is not available to role {role}. Remove it from budget or choose a higher-privilege role.",
-          { tool: decision.tool ?? "unknown", role: decision.role ?? "unknown" },
-        ),
-        {
-          index: decision.index,
-          path: decision.path,
-          role: decision.role,
-          tool: decision.tool,
-        },
-      );
-    }
-    if (decision.code === "CHILD_SPAWNER_UNAVAILABLE") {
-      return errorResult(decision.code, E["child-spawner-unavailable"]);
-    }
-    if (decision.code === "FORK_CONTEXT_EXCEEDED") {
-      return errorResult(decision.code, render(E["fork-context-exceeded"], {
-        index: decision.index,
-        reason: decision.reason,
-      }), {
-        index: decision.index,
-        admission: decision.admission,
-        source: "measured",
-        limit: decision.limit,
-        projected: decision.projected,
-        reserve: decision.reserve,
-        margin: decision.margin,
-        overBy: decision.overBy,
-      });
-    }
-    const named = Array.isArray(decision.available) ? decision.available : [];
-    const total = Number.isInteger(decision.availableTotal)
-      ? decision.availableTotal
-      : named.length;
-    const available = named.length === 0
-      ? "none"
-      : `${named.join(", ")}${total > named.length ? `, and ${total - named.length} more` : ""}`;
-    return errorResult(decision.code, render(E["model-unknown"], {
-      index: decision.index,
-      selector: decision.selector,
-      available,
-    }), {
-      index: decision.index,
-      selector: decision.selector,
-      available: decision.available,
-      availableTotal: decision.availableTotal,
-    });
+    const denied = refusal(decision, { callerPath });
+    return errorResult(denied.code, denied.message, denied.details);
   }
 
   const callerOwnerId = ownerIdOf(station);
@@ -238,13 +123,6 @@ export function handleForkCall(station, call, options = {}) {
     if (!Object.hasOwn(ledger.forks, base)) return base;
     return `${base}:${ledger.seq + index + 1}`;
   };
-
-  function withProfession(receipt, profession) {
-    if (typeof profession !== "string" || profession.trim() === "") return receipt;
-    const lines = receipt.split("\n");
-    lines.splice(1, 0, profession.trim());
-    return lines.join("\n");
-  }
 
   const specOf = (fork, item) => ({
     forkId: fork.forkId,
@@ -305,18 +183,7 @@ export function handleForkCall(station, call, options = {}) {
     }
     const fork = registered.fork;
     const spec = specOf(fork, item);
-    spec.receipt = withProfession(
-      childReceiptText({
-        path: fork.path,
-        upscopePath: fork.upscopePath,
-        callerPath: fork.callerPath,
-        childDepth: fork.childDepth,
-        fsm: item.fsm,
-        budget: fork.budget,
-        targets: fork.targets,
-      }),
-      spec.profession,
-    );
+    spec.receipt = receiptFor(item);
     pending.push({
       forkId: fork.forkId,
       path: fork.path,
@@ -412,6 +279,7 @@ export {
 } from "./fork-reads.mjs";
 export {
   confirmJoinPersistence,
+  finalizeJoinRecord,
   handleJoinCall,
   renderJoinResult,
 } from "./join-controls.mjs";

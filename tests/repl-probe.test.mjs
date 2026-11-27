@@ -135,7 +135,21 @@ describe("skillReceipt envelope", () => {
 		const snapshot = overrides.snapshot ?? defaultSnapshot();
 		return {
 			capabilitySnapshot: () => snapshot,
-			lastCapKeys: [],
+			// The receipt's kernels, seeded so the prototype methods read this
+			// double exactly the way they read a station.
+			projection: { lastCapKeys: [], lastDirMeta: null },
+			baseline: {
+				lastSeenDir: new Map(),
+				pendingDirSeen: null,
+				lastDirSeq: -1,
+				lastPendingDirSeq: -1,
+			},
+			projectionState() {
+				return this.projection;
+			},
+			baselineState() {
+				return this.baseline;
+			},
 			forkRegistry: () => null,
 			state: { features: { chinese: "on" }, relay: { canStop: false, goal: false } },
 			forkOwnerId: () => null,
@@ -183,7 +197,14 @@ describe("skillReceipt envelope", () => {
 	});
 
 	test("highlights a key withdrawn since the previous turn", () => {
-		const message = receipt(stubStation({ lastCapKeys: ["ask", "read", "scope_fork", "scope_join"] }));
+		const message = receipt(
+			stubStation({
+				projection: {
+					lastCapKeys: ["ask", "read", "scope_fork", "scope_join"],
+					lastDirMeta: null,
+				},
+			}),
+		);
 		expect(message.content[0].text).toContain("> delete api.ask\ntrue");
 	});
 });

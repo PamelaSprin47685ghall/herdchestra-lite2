@@ -8,7 +8,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { createBracketLedger, forkOf, markReady, registerFork, takeReady } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger, markReady, registerFork, takeReady } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import { findScopeByPath } from "../src/scope/path.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";

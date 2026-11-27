@@ -38,6 +38,30 @@ export function parseClientCommand(raw) {
   return { ok: true, type, payload };
 }
 
+// A web draft reaches the browser as this frame; the TUI editor write travels as
+// its own event, so the pair is named here once.
+export const DRAFT_FRAME = "draft.sync";
+
+// Every frame this plugin may broadcast to a browser client. One set, in the
+// domain layer, so the wiring and the frame-vocabulary test read the same
+// declaration; a name added here without a web case is now a test failure.
+export const SERVER_FRAMES = new Set([
+  "snapshot",
+  "transcript.delta",
+  "todo.update",
+  "usage.update",
+  "meta.update",
+  DRAFT_FRAME,
+  "completion.state",
+  "interaction.open",
+  "interaction.close",
+  "interaction.error",
+  "toast",
+  "widget.update",
+  "surface.frame",
+  "session.switched",
+]);
+
 // Station events share one outbound shape; interaction.open nests its request.
 export function toServerFrame(event) {
   if (event.type === "interaction.open") {

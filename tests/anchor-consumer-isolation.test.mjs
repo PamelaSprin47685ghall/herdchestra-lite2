@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createPersistenceAnchor } from "../src/station/persistence-anchor.mjs";
-import { createBracketLedger, markRecordDirty } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger } from "../src/scope/ledger-brackets.mjs";
+import { markRecordDirty } from "../src/scope/ledger-cache.mjs";
 import { consumerPending } from "../src/scope/ledger-cache.mjs";
 
 function anchor(state, fail = false) {

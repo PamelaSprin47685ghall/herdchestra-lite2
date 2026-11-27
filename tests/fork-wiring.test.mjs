@@ -15,9 +15,9 @@ import {
   ledgerFor,
   outcomeOf,
   setOutcome,
-  waitForReady,
 } from "../src/scope/fork-registry.mjs";
-import { markReady, registerFork, RUNNING } from "../src/scope/forkjoin.mjs";
+import { waitForReady } from "../src/tools/join-wait.mjs";
+import { markReady, registerFork, RUNNING } from "../src/scope/ledger-brackets.mjs";
 import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 
 function stationOf() {
@@ -87,7 +87,7 @@ describe("attachForkPorts", () => {
     expect(station.childOutcomePort("ghost")).toBeNull();
     // No createSession, so no spawner: the handler reports the gap instead of
     // inventing one.
-    expect(station.childSpawnPort).toBeUndefined();
+		expect(station.childSpawnPort()).toBeNull();
   });
 
   test("a child that finishes writes its record and wakes the join", async () => {
@@ -640,7 +640,10 @@ describe("ledger sharing across stations", () => {
     const registry = {
       forkWiring: () => wiring,
       ports: () => ({}),
-      host: () => ({ conversationKeyOf, ledgerFor, adoptLedger }),
+      host: () => ({
+        session: { conversationKey: conversationKeyOf },
+        fork: { ledgerFor, adoptLedger },
+      }),
     };
     const manager = { getSessionId: () => "conversation-1" };
     const first = createTestStation(SessionStation, manager, pi, tickets, registry, null);
@@ -680,7 +683,10 @@ describe("ledger sharing across stations", () => {
     const registry = {
       forkWiring: () => wiring,
       ports: () => ({}),
-      host: () => ({ conversationKeyOf, ledgerFor, adoptLedger }),
+      host: () => ({
+        session: { conversationKey: conversationKeyOf },
+        fork: { ledgerFor, adoptLedger },
+      }),
     };
     const manager = { getSessionId: () => "conversation-3" };
     const parent = createTestStation(SessionStation, manager, pi, tickets, registry, null);
@@ -1128,7 +1134,10 @@ describe("bracket ledger sharing", () => {
     return {
       forkWiring: () => wiring,
       ports: () => ({}),
-      host: () => ({ conversationKeyOf, ledgerFor, adoptLedger }),
+      host: () => ({
+        session: { conversationKey: conversationKeyOf },
+        fork: { ledgerFor, adoptLedger },
+      }),
     };
   }
 

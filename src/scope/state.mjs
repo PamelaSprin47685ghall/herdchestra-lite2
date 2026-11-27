@@ -2,11 +2,24 @@
 // Pure data. No I/O.
 
 import { defaultFeatures } from "../features/herd/features.mjs";
+import {
+  copyCounts,
+  failure,
+  isNonEmptyString,
+  isPlainObject,
+  put,
+} from "../core/primitives.mjs";
 import { createRelay } from "../relay/state.mjs";
-import { createBracketLedger } from "./forkjoin.mjs";
-import { isPlainObject } from "./plain.mjs";
+import { createBracketLedger } from "./ledger-brackets.mjs";
 
-const VERSION = 2;
+// The state shape's own version. It is not the ledger snapshot version (the
+// bracket ledger carries its own) and not the journal envelope version
+// (`STATE_ENTRY_VERSION` in entry-plan.mjs); the three evolve apart.
+const STATE_VERSION = 2;
+
+// Historical name for the same number, kept because callers and the barrel
+// export it.
+const VERSION = STATE_VERSION;
 
 const CONTROL_TOOLS = new Set([
   "scope_fork",
@@ -16,37 +29,9 @@ const CONTROL_TOOLS = new Set([
   "wait",
 ]);
 
-function isNonEmptyString(value) {
-  return typeof value === "string" && value.trim() !== "";
-}
-
-function failure(code, reason) {
-  return { ok: false, code, reason };
-}
-
-// Define an own data property. This is safe for keys such as "__proto__".
-function put(object, key, value) {
-  Object.defineProperty(object, key, {
-    value,
-    enumerable: true,
-    writable: true,
-    configurable: true,
-  });
-}
-
-function copyCounts(source) {
-  const out = {};
-  if (!isPlainObject(source)) return out;
-  for (const key of Reflect.ownKeys(source)) {
-    if (typeof key !== "string") continue;
-    put(out, key, source[key]);
-  }
-  return out;
-}
-
 export function createState() {
   return {
-    version: VERSION,
+    version: STATE_VERSION,
     startedAt: Date.now(),
     seq: 0,
     epoch: 0,
@@ -149,6 +134,7 @@ export function branchDeadline(record) {
 }
 
 export {
+  STATE_VERSION,
   VERSION,
   CONTROL_TOOLS,
   isNonEmptyString,

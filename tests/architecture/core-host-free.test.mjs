@@ -15,7 +15,7 @@ import {
 	HOST_CONTRACT,
 	TICKET_CONTRACT,
 } from "../../src/engine.mjs";
-import { shapeHost } from "../../src/station/station.mjs";
+import { shapeHost } from "../../src/core/host-shape.mjs";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const CORE = join(ROOT, "src");

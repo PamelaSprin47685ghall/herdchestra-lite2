@@ -4,7 +4,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { createBracketLedger, forkOf } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
 import {
   MAX_NAMED_MODELS,
   availableModelIds,

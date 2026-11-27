@@ -2,7 +2,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import { validateFork, validateForkBatch } from "../src/station/domain/fork-join.mjs";
-import { createBracketLedger } from "../src/scope/forkjoin.mjs";
+import { createBracketLedger } from "../src/scope/ledger-brackets.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
 import { loadDoc } from "../src/prompts/index.mjs";

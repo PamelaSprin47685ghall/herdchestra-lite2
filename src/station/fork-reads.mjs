@@ -6,7 +6,8 @@
 // surface and lets the fork, join, return, and abandon handlers share one
 // definition of "which ledger", "which depth", and "which window".
 
-import { forkOf, unreceivedChildren } from "../scope/forkjoin.mjs";
+import { forkOf } from "../scope/ledger-charge.mjs";
+import { unreceivedChildren } from "../scope/ledger-brackets.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { roleOfPath } from "../scope/roles.mjs";
 import { targetsText } from "../scope/targets.mjs";
@@ -65,20 +66,6 @@ export function levelKeyOf(station) {
   const epoch = Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0;
   return `${parentId}|${boundary}|${epoch}`;
 }
-
-const REFUSAL_KEY = {
-  INVALID_PATH: "invalid-path",
-  INVALID_SCOPE_ID: "invalid-path",
-  INVALID_FSM: "invalid-fsm",
-  INVALID_PROFESSION: "invalid-profession",
-  INVALID_BUDGET: "invalid-budget",
-  INVALID_ARGUMENT: "invalid-argument",
-  INVALID_TARGETS: "invalid-targets",
-  ROLE_ESCALATION: "role-escalation",
-  DEVOPS_ALREADY_RUNNING: "devops-already-running",
-  INVALID_EDITOR_TARGETS: "invalid-editor-targets",
-  FORBIDDEN_ROLE_BUDGET: "forbidden-role-budget",
-};
 
 function budgetText(turns) {
   const parts = [];
@@ -161,33 +148,53 @@ function densityOf(station) {
 }
 
 /**
- * The characters a join receipt adds to the parent's next request.
+ * One reading of a returning scope: its record text, its failure and abandon
+ * facts, and the scopes still unreceived.
  *
- * The model reads `content[0].text` of the tool result, so the price is the
- * rendered receipt itself: header, preamble, the record and the unreceived
- * note. `details` is host metadata and never enters the conversation. The
- * remaining list is measured after the take, because the candidate leaves the
- * unreceived set the moment it is accepted.
+ * Admission prices a receipt from this reading and delivery renders it from the
+ * same reading. Two readings of one record could disagree, and a price that does
+ * not match the text sent is a defect, not an approximation.
+ *
+ * `excludeSelf` drops the candidate itself, which admission needs: at price
+ * time the candidate is still inside the unreceived set.
  */
-function joinReceiptChars(station, record) {
-  const ledger = ledgerOf(station);
-  const ownerId = ownerIdOf(station);
+function joinEnvelope(station, record, options = {}) {
+  const ledger = options.ledger ?? ledgerOf(station);
+  const ownerId = options.ownerId ?? ownerIdOf(station);
   const remaining =
     ledger === null
       ? []
       : unreceivedChildren(ledger, ownerId)
-          .filter((id) => id !== record.forkId)
-          .map((id) => publicScopeId(forkOf(ledger, id)));
+          .filter((id) => (options.excludeSelf === true ? id !== record.forkId : true))
+          .map((id) => ({ forkId: id, scopeId: publicScopeId(forkOf(ledger, id)) }));
   const outcome = station.childOutcomePort?.(record.forkId) ?? null;
-  return joinReceipt({
-    forkId: publicScopeId(record),
+  return {
+    ledger,
+    ownerId,
+    remaining,
     record: recordTextOf(station, record),
     failed: record.outcome === "failed" || outcome?.failed === true,
     abandoned: record.abandonRequested === true || outcome?.abandoned === true,
     abandonedBy: record.abandonedBy ?? outcome?.abandonedBy ?? null,
     abandonReason: record.abandonReason ?? outcome?.abandonReason ?? null,
     reason: record.reason ?? outcome?.reason ?? null,
-    remaining,
+    // Both texts exist, so delivery can release one of them after rendering.
+    releasesRecord:
+      typeof record.record === "string" && typeof outcome?.record === "string",
+  };
+}
+
+function joinReceiptChars(station, record) {
+  const envelope = joinEnvelope(station, record, { excludeSelf: true });
+  return joinReceipt({
+    forkId: publicScopeId(record),
+    record: envelope.record,
+    failed: envelope.failed,
+    abandoned: envelope.abandoned,
+    abandonedBy: envelope.abandonedBy,
+    abandonReason: envelope.abandonReason,
+    reason: envelope.reason,
+    remaining: envelope.remaining.map((entry) => entry.scopeId),
   }).length;
 }
 
@@ -286,6 +293,7 @@ function childReceiptText(spec) {
   const path = spec.path ?? spec.scopeId ?? spec.forkId;
   const upscopePath = spec.upscopePath ?? "/";
   const callerPath = spec.callerPath ?? "/";
+  const profession = typeof spec.profession === "string" ? spec.profession.trim() : "";
   const lines = [
     render(S["fork.subscope-status"], {
       marker: scopeReceiptMarker(path),
@@ -310,6 +318,15 @@ function childReceiptText(spec) {
     render(S["fork.subscope-return"], { callerPath }),
     S["fork.subscope-routing"],
   );
+  // The identity line sits directly under the receipt's first physical line,
+  // which is the marker sentence: the status block renders three lines, so the
+  // insertion happens inside that block rather than between blocks. It is
+  // rendered here rather than spliced in by the caller, so the string that is
+  // priced and the string that is sent are the same string.
+  if (profession !== "") {
+    const [marker, ...status] = lines[0].split("\n");
+    lines.splice(0, 1, [marker, profession, ...status].join("\n"));
+  }
   return lines.join("\n");
 }
 
@@ -320,11 +337,11 @@ export {
   identityOf,
   ownerIdOf,
   depthOf,
-  REFUSAL_KEY,
   frameOf,
   windowOf,
   measuredBase,
   densityOf,
   childRecordStart,
   childReceiptText,
+  joinEnvelope,
 };

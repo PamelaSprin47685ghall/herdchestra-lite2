@@ -12,8 +12,9 @@
 import { expect, test } from "bun:test";
 
 import { chargeBranch } from "../src/scope/accounting.mjs";
-import { createBracketLedger, registerFork, forkOf } from "../src/scope/forkjoin.mjs";
-import { serializeState } from "../src/scope/persistence.mjs";
+import { createBracketLedger, registerFork } from "../src/scope/ledger-brackets.mjs";
+import { forkOf } from "../src/scope/ledger-charge.mjs";
+import { serializeState } from "../src/scope/state-codec.mjs";
 import { createState } from "../src/scope/state.mjs";
 
 function ledgerWith(budget = { bash: 3 }) {

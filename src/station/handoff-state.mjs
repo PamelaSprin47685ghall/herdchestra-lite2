@@ -28,8 +28,10 @@ function isChild(station) {
  */
 export function finishRewind(station, { rebaseAnchor = false } = {}) {
 	truncateForHostBoundary(station.state);
-	station.contextCache = null;
-	station.hostBoundaryScan = null;
+	// The caches belong to the station; a rewind invalidates them through its
+	// own methods rather than by writing its fields from here.
+	station.clearContextCache?.();
+	station.clearHostBoundaryScan?.();
 	station.resetDirectoryBaseline?.();
 	station.resetUsageWatermark?.();
 	if (rebaseAnchor && typeof station.anchor?.rebase === "function") {
@@ -98,12 +100,12 @@ export function clearPendingRootRewind(station, plan = null) {
 			pending !== null &&
 			plan.generation === pending.generation &&
 			(plan.id ?? null) === (pending.id ?? null);
-		if (station.rewindDispatching === plan.pending) station.rewindDispatching = null;
+		// Release only the marker this plan owns; a different plan keeps its
+		// dispatch and its turn marker.
+		station.settleRootRewind?.(plan, false);
 		if (!sameRef && !sameMeta) return false;
-	} else {
-		station.rewindDispatching = null;
 	}
-	station.rewoundThisTurn = false;
+	station.clearRootRewind?.();
 	if (!pending) return false;
 	station.state.relay = {
 		...relay,
@@ -197,7 +199,7 @@ export function commitRootRewind(station, ctx, plan = null) {
 		try {
 			const rebuilt = station.contextMessages();
 			station.host?.session?.setMessages?.(ctx, rebuilt);
-			station.contextCache = null;
+			station.clearContextCache?.();
 		} catch (error) {
 			station.noteError?.("handoff", error, { stage: "rebuild-context" });
 		}

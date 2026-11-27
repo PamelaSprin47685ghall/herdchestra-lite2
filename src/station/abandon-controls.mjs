@@ -4,11 +4,12 @@
 // `target` (never `/` or self) and forces its next turn into `ABANDONED` mode
 // where only `scope_return` is bound. Does NOT cascade to other scopes.
 
-import { requestAbandon } from "../scope/forkjoin.mjs";
+import { requestAbandon } from "../scope/ledger-brackets.mjs";
 import { findScopeByPath, normalizeScopePath } from "../scope/path.mjs";
 import { decideAbandonRequest } from "./domain/fork-join.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
+import { refusal } from "./errors.mjs";
 import { parseArgs } from "./messages.mjs";
 import { ledgerOf } from "./fork-reads.mjs";
 
@@ -44,41 +45,8 @@ export function handleAbandonCall(station, call) {
     record,
   });
   if (!decision.ok) {
-    if (decision.code === "CANNOT_ABANDON_ROOT") {
-      return errorResult("CANNOT_ABANDON_ROOT", E["cannot-abandon-root"]);
-    }
-    if (decision.code === "CANNOT_ABANDON_SELF") {
-      return errorResult("CANNOT_ABANDON_SELF", E["cannot-abandon-self"]);
-    }
-    if (decision.code === "ROLE_ESCALATION") {
-      return errorResult(
-        "ROLE_ESCALATION",
-        render(
-          E["role-escalation"] ??
-            "Role {callerRole} cannot abandon role {targetRole} ({path}). Privilege narrows monotonically: manager > devops > editor > inspector.",
-          {
-            callerRole: decision.callerRole ?? "unknown",
-            targetRole: decision.targetRole ?? "unknown",
-            path: decision.path ?? targetPath,
-          },
-        ),
-        {
-          target: decision.path ?? targetPath,
-          callerRole: decision.callerRole,
-          targetRole: decision.targetRole,
-        },
-      );
-    }
-    if (decision.code === "SCOPE_ALREADY_DONE") {
-      return errorResult(
-        "SCOPE_ALREADY_DONE",
-        render(E["scope-already-done"], { target: record?.path ?? targetPath }),
-      );
-    }
-    return errorResult(
-      "ABANDON_UNKNOWN_TARGET",
-      render(E["abandon-unknown-target"], { target: targetPath }),
-    );
+    const denied = refusal(decision, { abandon: true, record, targetPath });
+    return errorResult(denied.code, denied.message, denied.details);
   }
 
   const exactPath = record.path ?? targetPath;

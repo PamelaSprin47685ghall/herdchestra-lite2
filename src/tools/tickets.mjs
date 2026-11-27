@@ -19,6 +19,7 @@ import {
 	REQUEST_INTERRUPT_REASON,
 	registerRuntime,
 } from "../scope/request-queue.mjs";
+import { forkRegistryOf } from "../station/ports-contract.mjs";
 
 const errors = loadDoc("errors");
 
@@ -168,8 +169,8 @@ export async function returnTicket(station, toolCallId, params, ctx, _signal = n
 		const result = station.executeReturn(toolCallId, params, ctx, frameId);
 		// Every ledger write wakes its waiters: a parent parked in a join is
 		// waiting for exactly this record.
-		const wait = station.forkWaitPort?.() ?? null;
-		if (wait?.registry) notifyWaiters(wait.registry);
+		const registry = forkRegistryOf(station);
+		if (registry) notifyWaiters(registry);
 		return result;
 	} catch (error) {
 		return errorResult("RETURN_INTERNAL_ERROR", String(error?.message ?? error));

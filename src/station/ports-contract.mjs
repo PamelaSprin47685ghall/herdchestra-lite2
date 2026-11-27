@@ -19,3 +19,20 @@ export function missingPortsError(missing) {
 	error.missing = [...missing];
 	return error;
 }
+
+/**
+ * Resolve the shared ForkRegistry for a station or port-shaped double.
+ * Never falls back to `station.registry` (which used to hold StationRegistry
+ * and caused split-brain state across extension instances).
+ */
+export function forkRegistryOf(station) {
+	if (!station || typeof station !== "object") return null;
+	const direct =
+		typeof station.forkRegistry === "function" ? station.forkRegistry() : null;
+	if (direct && typeof direct === "object") return direct;
+	const fromWait =
+		typeof station.forkWaitPort === "function" ? station.forkWaitPort()?.registry : null;
+	if (fromWait && typeof fromWait === "object") return fromWait;
+	const fromWiring = station.forkWiring?.registry ?? null;
+	return fromWiring && typeof fromWiring === "object" ? fromWiring : null;
+}

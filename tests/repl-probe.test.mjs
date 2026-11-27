@@ -109,7 +109,7 @@ describe("skillReceipt envelope", () => {
 		return {
 			projectionFor: () => projection(),
 			lastCapKeys: [],
-			registry: null,
+			forkRegistry: () => null,
 			state: { features: { autopilot: "off", chinese: "on" }, relay: { canStop: false } },
 			forkOwnerId: () => null,
 			...overrides,

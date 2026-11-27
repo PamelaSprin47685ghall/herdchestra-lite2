@@ -6,6 +6,16 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [6.1.2] — 2026-11-27
+
+### Fixed — single shared `ForkRegistry` for `scope_request` / root runtime and full post-seal drain
+
+- Stopped storing `StationRegistry` on `station.registry` and froze `createStationRegistry()`'s returned method table so accidental writes throw `TypeError` instead of splitting state across extension instances.
+- Added `SessionStation.prototype.forkRegistry()` and `forkRegistryOf(station)` so `capabilitySnapshot`, `requestRuntime`, `noteRootRuntime`, `beginRootBeat`/`endRootBeat`, `skillReceipt`, `request-controls.mjs`, `handleAbandonCall`, `cancelTree`, and `returnTicket` all read and write the shared `ForkRegistry`.
+- Initialized `requests`, `waitFor`, `waitEdgeRefs`, `requestRuntime`, and `requestSeq` on `createForkRegistry()` and made `request-queue.mjs` read/delete helpers side-effect free.
+- Moved root beat tracking (`beginRootBeat` / `endRootBeat`) onto `SessionStation` and cleared child runtime + pending requests on `cancelTree`.
+- Replaced single-item post-seal delivery in `spawnChildTicket` with `drainRequests()`, and skipped draining/idle registration when a child branch is cancelled.
+
 ## [6.1.1] — 2026-11-27
 
 ### Fixed — root is told that `api.bash` is absent

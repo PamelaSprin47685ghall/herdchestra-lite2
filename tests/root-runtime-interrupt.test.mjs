@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { shapeHost } from "../src/station/station.mjs";
+import { SessionStation, shapeHost } from "../src/station/station.mjs";
 import { handleRequestToolCall } from "../src/station/request-controls.mjs";
 import { jsTicket } from "../src/tools/js-ticket.mjs";
 import { createForkRegistry } from "../src/scope/fork-registry.mjs";
@@ -18,7 +18,6 @@ import {
 	registerRuntime,
 	rejectPendingRequests,
 	runtimeOf,
-	runtimeTable,
 } from "../src/scope/request-queue.mjs";
 
 describe("the grouped host shape owns abort", () => {
@@ -33,6 +32,38 @@ describe("the grouped host shape owns abort", () => {
 	});
 });
 
+function rootStation(registry, controller) {
+	return {
+		forkRegistry: () => registry,
+		forkOwnerId: () => null,
+		selfScopePath: () => "/",
+		beginRootBeat(ctx, toolCallId) {
+			return SessionStation.prototype.beginRootBeat.call(this, ctx, toolCallId);
+		},
+		endRootBeat(beatId, toolCallId) {
+			return SessionStation.prototype.endRootBeat.call(this, beatId, toolCallId);
+		},
+		host: shapeHost({
+			session: {
+				abort: (_ctx, reason) => controller.abort(reason),
+			},
+		}),
+		beginJsCall: () => ({
+			mode: "ROOT_AUTOPILOT",
+			tools: [],
+			state: {
+				mode: "ROOT_AUTOPILOT",
+				scope: "/",
+				remaining: {},
+				unreceived: 0,
+				scopes: ["/"],
+			},
+			signature: "ROOT::",
+		}),
+		finishJsCall: () => {},
+	};
+}
+
 describe("a running root is interruptible", () => {
 	test("scope_request({ interrupt: true }) aborts the root beat", async () => {
 		const registry = createForkRegistry();
@@ -40,8 +71,15 @@ describe("a running root is interruptible", () => {
 		const controller = new AbortController();
 		const aborts = [];
 		const station = {
-			registry,
+			forkRegistry: () => registry,
+			forkOwnerId: () => null,
 			selfScopePath: () => "/",
+			beginRootBeat(ctx, toolCallId) {
+				return SessionStation.prototype.beginRootBeat.call(this, ctx, toolCallId);
+			},
+			endRootBeat(beatId, toolCallId) {
+				return SessionStation.prototype.endRootBeat.call(this, beatId, toolCallId);
+			},
 			host: shapeHost({
 				session: {
 					abort: (_ctx, reason) => {
@@ -74,7 +112,7 @@ describe("a running root is interruptible", () => {
 			{},
 		);
 
-		// registerRootBeat runs synchronously before the first await.
+		// beginRootBeat runs synchronously before the first await.
 		expect(runtimeOf(registry, "/")?.state).toBe("running");
 		expect(typeof runtimeOf(registry, "/")?.interrupt).toBe("function");
 
@@ -82,8 +120,8 @@ describe("a running root is interruptible", () => {
 			state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
 			forkLedgerPort: () => ledger,
 			forkIdentityPort: () => ({ forkId: "f-0", path: "/api" }),
-			registry,
-			requestRuntime: runtimeTable(registry),
+			forkWaitPort: () => ({ registry, ledger }),
+			forkRegistry: () => registry,
 		};
 
 		const pending = handleRequestToolCall(
@@ -107,31 +145,6 @@ describe("a running root is interruptible", () => {
 		await pending.catch(() => {});
 	});
 });
-
-function rootStation(registry, controller) {
-	return {
-		registry,
-		selfScopePath: () => "/",
-		host: shapeHost({
-			session: {
-				abort: (_ctx, reason) => controller.abort(reason),
-			},
-		}),
-		beginJsCall: () => ({
-			mode: "ROOT_AUTOPILOT",
-			tools: [],
-			state: {
-				mode: "ROOT_AUTOPILOT",
-				scope: "/",
-				remaining: {},
-				unreceived: 0,
-				scopes: ["/"],
-			},
-			signature: "ROOT::",
-		}),
-		finishJsCall: () => {},
-	};
-}
 
 describe("concurrent root beats do not overwrite each other", () => {
 	test("the root stays running until the last beat leaves", async () => {
@@ -201,8 +214,8 @@ describe("an interrupted root drains its pending request", () => {
 			state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
 			forkLedgerPort: () => ledger,
 			forkIdentityPort: () => ({ forkId: "f-0", path: "/api" }),
-			registry,
-			requestRuntime: runtimeTable(registry),
+			forkWaitPort: () => ({ registry, ledger }),
+			forkRegistry: () => registry,
 		};
 		const pending = handleRequestToolCall(
 			requester,

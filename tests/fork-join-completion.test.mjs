@@ -27,7 +27,6 @@ function rootStation(ledger, state = createState()) {
 	station.state = state;
 	station.manager = null;
 	station.pricingCatalog = createEmptyCatalog();
-	station.registry = { ports: () => ({}) };
 	station.ports = bindStationPorts(state);
 	station.toolCallLedger = createToolCallLedger();
 	station.hostBoundaryKey = null;
@@ -201,7 +200,6 @@ describe("a child record is frozen before the parent can take it", () => {
 describe("the outbound projection keeps a plain record", () => {
 	function projectionStation(state) {
 		const station = rootStation(null, state);
-		station.registry = { ports: () => ({}) };
 		station.noteError = () => {};
 		return station;
 	}

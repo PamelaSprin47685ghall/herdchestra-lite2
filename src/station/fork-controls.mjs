@@ -47,6 +47,7 @@ import { toolCalls } from "../transcript/messages.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 import { parseArgs } from "./messages.mjs";
+import { forkRegistryOf } from "./ports-contract.mjs";
 
 const F = loadDoc("tools/fork-join");
 const S = loadDoc("receipts/scope");
@@ -774,9 +775,8 @@ export function handleAbandonCall(station, call) {
   } else {
     abandon(ledger, record.forkId, reason);
   }
-  const wait = station.forkWaitPort?.() ?? null;
-  const registry = wait?.registry ?? station.registry ?? null;
-  if (registry && typeof registry === "object") {
+  const registry = forkRegistryOf(station);
+  if (registry) {
     setOutcome(registry, record.forkId, { failed: true, reason, record: "" });
     rejectPendingRequests(registry, normalized.path, reason);
     pulse(registry, ledger, record.forkId, { failed: true, reason, record: "" });

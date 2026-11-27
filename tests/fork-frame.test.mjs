@@ -108,10 +108,8 @@ describe("the address book", () => {
       state: createState(),
       forkLedgerPort: () => ledger,
       forkIdentityPort: () => null,
-      registry,
-      get requestRuntime() {
-        return runtimeTable(registry);
-      },
+      forkWaitPort: () => ({ registry, ledger }),
+      forkRegistry: () => registry,
     };
     // A successful join keeps an idle wake hook in the live process; a record
     // without one (the idle table died with the previous process) cannot
@@ -132,10 +130,8 @@ describe("the address book", () => {
       state: createState(),
       forkLedgerPort: () => ledger,
       forkIdentityPort: () => null,
-      registry,
-      get requestRuntime() {
-        return runtimeTable(registry);
-      },
+      forkWaitPort: () => ({ registry, ledger }),
+      forkRegistry: () => registry,
     };
     const result = handleRequestToolCall(station, {
       id: "call#1",

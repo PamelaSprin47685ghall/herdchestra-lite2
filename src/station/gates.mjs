@@ -11,11 +11,13 @@ import {
 import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
 import { abandonDescendants } from "../scope/forkjoin.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
+import { clearRuntime, rejectPendingRequests } from "../scope/request-queue.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
 import { mergeFeatures, parseHerdCommand } from "../features/herd/features.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { hostBoundaryKey } from "./messages.mjs";
+import { forkRegistryOf } from "./ports-contract.mjs";
 import {
 	clearPendingRootRewind,
 	pendingRootRewindPlan,
@@ -186,11 +188,18 @@ export function cancelTree(station, rootOwnerId = "root", reason = CANCELLED_BY_
 	if (abandonedIds.length === 0 && runningIds.length === 0 && liveIds.length === 0) {
 		return { abandonedIds, runningIds };
 	}
-	const wait =
-		typeof station.forkWaitPort === "function" ? station.forkWaitPort() : null;
-	// A join parked anywhere in this tree wakes now: its child is gone, so
-	// waiting for a return that will never come is a deadlock.
-	notifyWaiters(wait?.registry);
+	const registry = forkRegistryOf(station);
+	if (registry) {
+		for (const forkId of abandonedIds) {
+			const path = forkOf(ledger, forkId)?.path;
+			if (typeof path !== "string" || path === "") continue;
+			clearRuntime(registry, path);
+			rejectPendingRequests(registry, path, reason);
+		}
+		// A join parked anywhere in this tree wakes now: its child is gone, so
+		// waiting for a return that will never come is a deadlock.
+		notifyWaiters(registry);
+	}
 	// `persistLedger` is the station's own seam: a child's identity points it
 	// at the root branch, and a bare station falls back to its own persist.
 	if (typeof station.persistLedger === "function") station.persistLedger();

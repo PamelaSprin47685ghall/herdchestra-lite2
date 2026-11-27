@@ -12,7 +12,9 @@ import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
  */
 function normalizeHost(host) {
 	const source = host && typeof host === "object" ? host : {};
-	if (source.session && source.report) return source;
+	if (source.session || source.model || source.tools || source.accounting || source.fork || source.report) {
+		return source;
+	}
 	const session = Object.freeze({
 		managerOf: source.managerOf,
 		conversationKey: source.conversationKeyOf,
@@ -245,7 +247,7 @@ export function createStationRegistry(options = {}) {
 		},
 	};
 
-	return registry;
+	return Object.freeze(registry);
 }
 
 // The registry is owned by the activation wiring that created it. A module

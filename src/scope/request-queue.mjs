@@ -44,11 +44,17 @@ function createWaiter() {
   return { promise, resolve, reject };
 }
 
-// The registry is a plain holder; these tables are created on first use so a
-// registry built by an older wiring still works unchanged.
+// The registry is a plain holder; write helpers initialize missing tables on
+// first use so bare plain-object test registries work unchanged, while read
+// helpers never mutate (so a frozen non-fork object returns empty or throws on
+// writes instead of silently hiding split-brain state).
 function requestsOf(registry) {
   if (!(registry.requests instanceof Map)) registry.requests = new Map();
   return registry.requests;
+}
+
+function readRequestsMap(registry) {
+  return registry?.requests instanceof Map ? registry.requests : null;
 }
 
 function requestQueue(registry, path) {
@@ -64,6 +70,10 @@ function requestQueue(registry, path) {
 function waitForMap(registry) {
   if (!(registry.waitFor instanceof Map)) registry.waitFor = new Map();
   return registry.waitFor;
+}
+
+function readWaitForMap(registry) {
+  return registry?.waitFor instanceof Map ? registry.waitFor : null;
 }
 
 function edgeRefs(registry) {
@@ -103,12 +113,12 @@ export function removeWaitEdge(registry, waiterPath, targetPath) {
   const row = refs instanceof Map ? refs.get(waiterPath) : null;
   if (!row) return false;
   const count = row.get(targetPath) ?? 0;
-  const map = waitForMap(registry);
+  const map = readWaitForMap(registry);
   if (count <= 1) {
     row.delete(targetPath);
     if (row.size === 0) refs.delete(waiterPath);
-    map.get(waiterPath)?.delete(targetPath);
-    if (map.get(waiterPath)?.size === 0) map.delete(waiterPath);
+    map?.get(waiterPath)?.delete(targetPath);
+    if (map?.get(waiterPath)?.size === 0) map.delete(waiterPath);
     return true;
   }
   row.set(targetPath, count - 1);
@@ -117,7 +127,7 @@ export function removeWaitEdge(registry, waiterPath, targetPath) {
 
 /** Every path this one is parked on, for diagnostics and tests. */
 export function waitEdgesOf(registry, waiterPath) {
-  const targets = waitForMap(registry).get(waiterPath);
+  const targets = readWaitForMap(registry)?.get(waiterPath);
   return targets ? [...targets] : [];
 }
 
@@ -129,7 +139,8 @@ export function wouldCycle(registry, callerPath, targetPath) {
   if (typeof callerPath !== "string" || callerPath === "") return false;
   if (typeof targetPath !== "string" || targetPath === "") return false;
   if (callerPath === targetPath) return true;
-  const map = waitForMap(registry);
+  const map = readWaitForMap(registry);
+  if (!map) return false;
   const seen = new Set([targetPath]);
   const queue = [targetPath];
   let steps = 0;
@@ -194,7 +205,7 @@ export function enqueueRequest(registry, { from, target, message, interrupt = fa
 
 /** The request waiting at the head of this scope's queue, if any. */
 export function currentRequest(registry, path) {
-  const queue = requestsOf(registry).get(path);
+  const queue = readRequestsMap(registry)?.get(path);
   if (!Array.isArray(queue) || queue.length === 0) return null;
   return queue[0] ?? null;
 }
@@ -214,12 +225,12 @@ export function markRequestDelivered(registry, path) {
 }
 
 export function hasPendingRequests(registry, path) {
-  const queue = requestsOf(registry).get(path);
+  const queue = readRequestsMap(registry)?.get(path);
   return Array.isArray(queue) && queue.length > 0;
 }
 
 export function pendingRequestCount(registry, path) {
-  const queue = requestsOf(registry).get(path);
+  const queue = readRequestsMap(registry)?.get(path);
   return Array.isArray(queue) ? queue.length : 0;
 }
 
@@ -253,8 +264,8 @@ export function resolveRequest(registry, path, text) {
  * Promise, and cancelling would only make the target answer nothing.
  */
 export function cancelRequest(registry, targetPath, id) {
-  const map = requestsOf(registry);
-  const queue = map.get(targetPath);
+  const map = readRequestsMap(registry);
+  const queue = map?.get(targetPath);
   if (!Array.isArray(queue)) return false;
   const index = queue.findIndex((entry) => entry.id === id && entry.delivered !== true);
   if (index < 0) return false;
@@ -284,8 +295,8 @@ export function withdrawRequest(
   id,
   reason = "The requesting scope interrupted before the answer arrived.",
 ) {
-  const map = requestsOf(registry);
-  const queue = map.get(targetPath);
+  const map = readRequestsMap(registry);
+  const queue = map?.get(targetPath);
   if (!Array.isArray(queue)) return false;
   const index = queue.findIndex((entry) => entry.id === id);
   if (index < 0) return false;
@@ -309,8 +320,8 @@ export function rejectPendingRequests(
   path,
   reason = "The target scope terminated before answering.",
 ) {
-  const map = requestsOf(registry);
-  const queue = map.get(path);
+  const map = readRequestsMap(registry);
+  const queue = map?.get(path);
   if (!Array.isArray(queue) || queue.length === 0) return 0;
   map.delete(path);
   let rejected = 0;
@@ -333,9 +344,11 @@ export function rejectPendingRequests(
  */
 export function forgetScope(registry, path) {
   const rejected = rejectPendingRequests(registry, path);
-  const map = waitForMap(registry);
-  map.delete(path);
-  for (const targets of map.values()) targets.delete(path);
+  const map = readWaitForMap(registry);
+  if (map) {
+    map.delete(path);
+    for (const targets of map.values()) targets.delete(path);
+  }
   registry.waitEdgeRefs?.delete?.(path);
   registry.requests?.delete?.(path);
   return rejected;
@@ -360,6 +373,10 @@ export function runtimeTable(registry) {
   return registry.requestRuntime;
 }
 
+function readRuntimeTable(registry) {
+  return registry?.requestRuntime instanceof Map ? registry.requestRuntime : null;
+}
+
 /**
  * Merge one scope's delivery hooks. Merging keeps fields this patch omits, so
  * a scope going idle keeps whatever the running phase registered.
@@ -367,8 +384,8 @@ export function runtimeTable(registry) {
 export function registerRuntime(registry, path, entry) {
   if (typeof path !== "string" || path === "") return null;
   if (!entry || typeof entry !== "object") return null;
-  const table = runtimeTable(registry);
-  const current = table.get(path);
+  const table = readRuntimeTable(registry);
+  const current = table?.get(path);
   const next = { ...(current && typeof current === "object" ? current : {}) };
   // `parked` is a Set of park ids, not a boolean. A string adds one id, a Set
   // merges, `null` clears. `parkedRemove` removes exactly one id, so two
@@ -420,14 +437,14 @@ export function registerRuntime(registry, path, entry) {
     if (key === "parked" || key === "parkedRemove" || key === "yieldJoin") continue;
     next[key] = value;
   }
-  table.set(path, next);
+  runtimeTable(registry).set(path, next);
   return next;
 }
 
 /** The entry for one path, or null. */
 export function runtimeOf(registry, path) {
   if (typeof path !== "string" || path === "") return null;
-  const entry = runtimeTable(registry).get(path);
+  const entry = readRuntimeTable(registry)?.get(path);
   return entry && typeof entry === "object" ? entry : null;
 }
 
@@ -437,5 +454,5 @@ export function runtimeOf(registry, path) {
  */
 export function clearRuntime(registry, path) {
   if (typeof path !== "string" || path === "") return false;
-  return runtimeTable(registry).delete(path);
+  return readRuntimeTable(registry)?.delete(path) ?? false;
 }

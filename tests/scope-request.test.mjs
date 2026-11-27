@@ -72,10 +72,8 @@ function stationFor(ledger, identity, registry = createForkRegistry()) {
     state: { ...STATE },
     forkLedgerPort: () => ledger,
     forkIdentityPort: () => identity,
-    registry,
-    get requestRuntime() {
-      return runtimeTable(registry);
-    },
+    forkWaitPort: () => ({ registry, ledger }),
+    forkRegistry: () => registry,
   };
 }
 
@@ -308,7 +306,7 @@ describe("handleRequestToolCall drives the round trip as data", () => {
       arguments: { message: "hello?" },
     });
     expect(noTarget.details.code).toBe("INVALID_SCOPE_TARGET");
-    expect(hasPendingRequests(station.registry, "/worker")).toBe(false);
+    expect(hasPendingRequests(station.forkRegistry(), "/worker")).toBe(false);
   });
 
   test("a scope cannot request itself through the handler either", () => {
@@ -335,7 +333,7 @@ describe("handleReplyToolCall answers only what it is holding", () => {
   test("a reply before the request is shown to the model is refused", () => {
     const ledger = ledgerWith("/api", "/worker");
     const responder = stationFor(ledger, { forkId: "f-1", path: "/worker" });
-    enqueueRequest(responder.registry, {
+    enqueueRequest(responder.forkRegistry(), {
       from: "/api",
       target: "/worker",
       message: "did you read this?",
@@ -354,7 +352,7 @@ describe("handleReplyToolCall answers only what it is holding", () => {
       id: "call-req-8",
       arguments: { target: "/worker", message: "one" },
     });
-    markRequestDelivered(responder.registry, "/worker");
+    markRequestDelivered(responder.forkRegistry(), "/worker");
     handleReplyToolCall(responder, { id: "call-rep-5", arguments: "bare" });
     expect((await first).details.result.reply).toBe("bare");
 
@@ -362,7 +360,7 @@ describe("handleReplyToolCall answers only what it is holding", () => {
       id: "call-req-9",
       arguments: { target: "/worker", message: "two" },
     });
-    markRequestDelivered(responder.registry, "/worker");
+    markRequestDelivered(responder.forkRegistry(), "/worker");
     handleReplyToolCall(responder, { id: "call-rep-6", arguments: { reply: "boxed" } });
     expect((await second).details.result.reply).toBe("boxed");
   });

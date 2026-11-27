@@ -25,14 +25,14 @@ import {
 import {
   cancelRequest,
   enqueueRequest,
-  removeWaitEdge,
   resolveRequest,
-  runtimeTable,
+  runtimeOf,
   withdrawRequest,
 } from "../scope/request-queue.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { parseArgs } from "./messages.mjs";
+import { forkRegistryOf } from "./ports-contract.mjs";
 
 const E = loadDoc("errors");
 
@@ -42,11 +42,6 @@ function ledgerOf(station) {
     if (ledger && typeof ledger === "object") return ledger;
   }
   return station.brackets ?? null;
-}
-
-function registryOf(station) {
-  const registry = station?.registry;
-  return registry && typeof registry === "object" ? registry : null;
 }
 
 function identityOf(station) {
@@ -80,33 +75,6 @@ export function senderPathOf(station, ledger = ledgerOf(station)) {
   return "/";
 }
 
-/**
- * The optional runtime table the spawn side fills per scope path. A scope that
- * is running can be interrupted mid-beat; one parked in a join can be asked to
- * yield it; one that is idle or finished can be woken for its reply turn.
- *
- * The table is a Map of path -> { state, parked, interrupt, wake, yieldJoin }.
- * The fields are optional: a missing hook simply skips that delivery branch,
- * which is correct for a scope that will read the request at its own next
- * request anyway.
- */
-function runtimeOf(station, path) {
-  const local = station?.requestRuntime;
-  if (local && typeof local.get === "function") {
-    const runtime = local.get(path);
-    if (runtime && typeof runtime === "object") return runtime;
-  }
-  // The registry owns the table; a station may expose it lazily or not at all
-  // (a child station, or one built before the wiring bound). Reading the owner
-  // keeps a live idle handle from being mistaken for a dead address.
-  const registry = station?.registry;
-  if (!registry || typeof runtimeTable !== "function") return null;
-  const table = runtimeTable(registry);
-  if (!table || typeof table.get !== "function") return null;
-  const runtime = table.get(path);
-  return runtime && typeof runtime === "object" ? runtime : null;
-}
-
 function callHook(station, runtime, hook, details) {
   if (typeof runtime?.[hook] !== "function") return false;
   try {
@@ -128,8 +96,8 @@ function callHook(station, runtime, hook, details) {
  * that is currently running. Every branch is best-effort: if a hook is missing
  * the request still sits in the queue and a later request picks it up.
  */
-function deliverRequest(station, target, entry) {
-  const runtime = runtimeOf(station, target);
+function deliverRequest(station, registry, target, entry) {
+  const runtime = runtimeOf(registry, target);
   if (!runtime || runtime.state !== "running") {
     // A stopped scope answers through a wake: the live idle handle or a
     // one-shot resume. No hook means nothing will ever read the queue.
@@ -185,7 +153,7 @@ export function handleRequestToolCall(station, call, _ctx = null, signal = null)
   if (!ledger) {
     return errorResult("FORK_LEDGER_UNAVAILABLE", "No fork ledger is bound to this scope.");
   }
-  const registry = registryOf(station);
+  const registry = forkRegistryOf(station);
   if (!registry) {
     return errorResult("FORK_REGISTRY_UNAVAILABLE", "No fork registry is bound to this scope.");
   }
@@ -250,7 +218,7 @@ export function handleRequestToolCall(station, call, _ctx = null, signal = null)
   }
   // Tail position: the queue and the wait edge are written before any delivery
   // hook runs, so a woken target never observes a half-registered request.
-  const delivery = deliverRequest(station, target, queued.entry);
+  const delivery = deliverRequest(station, registry, target, queued.entry);
   // A running scope needs no hook: it reads the queue at its own next request.
   // Only a stopped target that nothing can wake leaves the request unread.
   if (delivery === "none" && targetRecord?.status !== "running") {
@@ -328,7 +296,7 @@ export function handleReplyToolCall(station, call, _ctx = null) {
   if (!ledger) {
     return errorResult("FORK_LEDGER_UNAVAILABLE", "No fork ledger is bound to this scope.");
   }
-  const registry = registryOf(station);
+  const registry = forkRegistryOf(station);
   if (!registry) {
     return errorResult("FORK_REGISTRY_UNAVAILABLE", "No fork registry is bound to this scope.");
   }

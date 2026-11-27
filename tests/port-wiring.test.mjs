@@ -236,13 +236,14 @@ test("the registry accepts one wiring shape and refuses a flat name table", () =
 	).toThrow(/LEGACY_PORTS_SHAPE/);
 });
 
-test("implementations() returns one frozen object, not a copy per read", () => {
+test("the registry is frozen and exposes the port table once", () => {
 	const tickets = { steer() {}, prompt() {} };
 	const built = buildPorts({});
 	const registry = createStationRegistry({ tickets,
 		ports: built.names,
 		implementations: built.implementations,
 	});
+	expect(Object.isFrozen(registry)).toBe(true);
 	const first = registry.implementations();
 	expect(first).toBe(registry.implementations());
 	expect(Object.isFrozen(first)).toBe(true);

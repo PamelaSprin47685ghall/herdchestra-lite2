@@ -136,7 +136,7 @@ test("the production entry injects the on port implementations by default", asyn
 test("a station captures the port table once and freezes it", () => {
 	const station = stationWith({});
 	expect(Object.isFrozen(station.portTable)).toBe(true);
-	expect(station.portTable).toBe(station.registry.ports());
+	expect(station.portTable).toEqual(buildPorts({}).names);
 });
 
 test("a station without a complete port table refuses to start", () => {
@@ -211,7 +211,7 @@ test("the extension reads the port table only at composition time", () => {
 		new URL("../src/station/station.mjs", import.meta.url),
 		"utf8",
 	);
-	expect(stationSource).toContain("const portTable = registry?.ports?.();");
+	expect(stationSource).toContain("const portTable = stationRegistry?.ports?.();");
 	const observerSource = readFileSync(
 		new URL("../host-omp/src/host/provider-observer.mjs", import.meta.url),
 		"utf8",

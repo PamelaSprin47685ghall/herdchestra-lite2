@@ -336,6 +336,11 @@ export async function spawnChildTicket(spec, ports) {
 			await prompt(REQUEST_WAKE);
 			return true;
 		};
+		const drainRequests = async () => {
+			let ran = false;
+			while (await deliverRequest()) ran = true;
+			return ran;
+		};
 		// Rewind the child's own BranchManager back to `originEntryId` once the
 		// previous loop has exited cleanly via `stopLoop: true`, then prompt the
 		// reborn child with its birth receipt and formatted generation report.
@@ -431,9 +436,10 @@ export async function spawnChildTicket(spec, ports) {
 		// concurrently while the old generation ran, rewind first so the reborn
 		// child reads them on its clean branch instead of losing them to rewind.
 		// After the child returns (no longer RUNNING), drain any inbox message
-		// that arrived before it finished, matching prior spawn behavior.
-		if (bracket && bracket.status !== "running") {
-			await deliverRequest();
+		// that arrived before it finished without waking a cancelled branch.
+		const cancelled = isCancelled(ledger, spec.forkId);
+		if (bracket && bracket.status !== "running" && !failed && !unpublished && !cancelled) {
+			await drainRequests();
 		}
 		const added = messagesOf(session).slice(before);
 		// The scope is finished, not gone. Hand the prompt handle to the wiring
@@ -441,10 +447,10 @@ export async function spawnChildTicket(spec, ports) {
 		// inbox is drained, the model answers, and a natural stop returns it to
 		// idle. The parent's ready or joined record is never touched, and no
 		// second return is invented.
-		if (!failed && !unpublished) {
+		if (!failed && !unpublished && !cancelled) {
 			ports.registerIdle?.(spec.forkId, {
 				prompt,
-				drain: deliverRequest,
+				drain: drainRequests,
 				abort: () => ports.abortChild?.(session),
 			});
 		}
@@ -498,7 +504,7 @@ export async function spawnChildTicket(spec, ports) {
 		// After the child returns (no longer RUNNING) or fails, no further turn
 		// can answer for it. A scope that keeps an idle handle stays addressable
 		// and keeps its entry; anything else stops answering for good.
-		if (failed || unpublished) {
+		if (failed || unpublished || isCancelled(ledger, spec.forkId)) {
 			const runtimePath = runtimePathOf();
 			if (runtimePath !== null) {
 				clearRuntime(registry, runtimePath);

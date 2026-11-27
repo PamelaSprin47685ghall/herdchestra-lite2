@@ -42,10 +42,8 @@ function stationFor(ledger, registry) {
     state: createState(),
     forkLedgerPort: () => ledger,
     forkIdentityPort: () => null,
-    registry,
-    get requestRuntime() {
-      return runtimeTable(registry);
-    },
+    forkWaitPort: () => ({ registry, ledger }),
+    forkRegistry: () => registry,
   };
 }
 

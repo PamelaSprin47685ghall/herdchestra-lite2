@@ -44,6 +44,11 @@ export function createForkRegistry({ conversationKeyOf: keyOf = conversationKeyO
     // when it looks for its own fork.
     agentForks: new Map(),
     waiters: new Set(),
+    requests: new Map(),
+    waitFor: new Map(),
+    waitEdgeRefs: new Map(),
+    requestRuntime: new Map(),
+    requestSeq: 0,
   };
 }
 

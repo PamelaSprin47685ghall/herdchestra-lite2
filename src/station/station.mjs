@@ -66,9 +66,12 @@ import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { mergeFeatures } from "../features/herd/features.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 import {
+	REQUEST_INTERRUPT_REASON,
 	currentRequest,
 	markRequestDelivered,
+	pendingRequestCount,
 	registerRuntime,
+	runtimeOf,
 	runtimeTable,
 } from "../scope/request-queue.mjs";
 import {
@@ -212,16 +215,17 @@ export function shapeHost(host) {
 }
 
 export class SessionStation {
-	constructor(manager, host, tickets, registry, pricingCatalog) {
+	constructor(manager, host, tickets, stationRegistry, pricingCatalog) {
 		this.manager = manager;
-		this.host = shapeHost(mergeHost(registry?.host?.(), host));
+		this.host = shapeHost(mergeHost(stationRegistry?.host?.(), host));
 		this.tickets = tickets;
-		this.registry = registry;
 		this.pricingCatalog =
 			pricingCatalog ?? this.host?.accounting?.pricing?.emptyCatalog?.() ?? null;
 		this.state = restoreState(manager, this.host?.report?.record);
 		const featureConfig =
-			typeof registry?.features === "function" ? registry.features() : null;
+			typeof stationRegistry?.features === "function"
+				? stationRegistry.features()
+				: null;
 		if (featureConfig) {
 			this.state.features = mergeFeatures(this.state.features, featureConfig.explicit);
 		}
@@ -273,7 +277,7 @@ export class SessionStation {
 		// object: a running tree wins, a restored non-empty tree wins over an
 		// empty index, and two fresh stations of one conversation share one
 		// empty ledger instead of growing two.
-		const forkWiring = registry?.forkWiring?.() ?? null;
+		const forkWiring = stationRegistry?.forkWiring?.() ?? null;
 		this.forkWiring = forkWiring;
 		const key = (this.host?.session?.conversationKey ?? conversationKeyOf)(manager ?? null);
 		const indexed =
@@ -339,12 +343,12 @@ export class SessionStation {
 		// station without a complete bundle cannot start: a fallback here
 		// would be a second composition root and would hide the missing
 		// capability until the port was first used.
-		const implementations = registry?.implementations?.();
+		const implementations = stationRegistry?.implementations?.();
 		const missing = IMPLEMENTATION_KEYS.filter(
 			(key) => !implementations?.[key],
 		);
 		if (missing.length > 0) throw missingPortsError(missing);
-		const portTable = registry?.ports?.();
+		const portTable = stationRegistry?.ports?.();
 		const missingNames = PORT_NAMES.filter(
 			(name) => typeof portTable?.[name] !== "string",
 		);
@@ -683,7 +687,7 @@ export class SessionStation {
 		const record = ownerId && ledger ? (ledger.forks?.[ownerId] ?? null) : null;
 		const isChild = ownerId !== null;
 		const selfPath = record?.path ?? (isChild ? `/${ownerId}` : "/");
-		const registry = this.registry ?? null;
+		const registry = this.forkRegistry();
 		const pendingRequest = registry ? currentRequest(registry, selfPath) : null;
 		const specs = (() => {
 			try {
@@ -744,12 +748,20 @@ export class SessionStation {
 	}
 
 	/**
+	 * The shared ForkRegistry for the whole fork tree, or null when no fork
+	 * wiring or wait port is attached. Never falls back to StationRegistry.
+	 */
+	forkRegistry() {
+		return this.forkWaitPort?.()?.registry ?? this.forkWiring?.registry ?? null;
+	}
+
+	/**
 	 * The cross-scope delivery table, shared by every station through the one
 	 * fork registry. A request must reach a target another station owns, so the
 	 * table cannot live on a single station.
 	 */
 	get requestRuntime() {
-		const registry = this.registry;
+		const registry = this.forkRegistry();
 		if (!registry || typeof registry !== "object") return null;
 		return runtimeTable(registry);
 	}
@@ -762,7 +774,7 @@ export class SessionStation {
 	 * stomp a live beat. A child gets its runtime entry from the spawn ticket.
 	 */
 	noteRootRuntime(wake) {
-		const registry = this.registry;
+		const registry = this.forkRegistry();
 		if (!registry || typeof wake !== "function") return false;
 		// An unbound child station also reports "/"; the identity is the proof
 		// that this is the conversation root and not a child before its fork
@@ -771,10 +783,83 @@ export class SessionStation {
 			return false;
 		}
 		if (this.selfScopePath() !== "/") return false;
-		const current = runtimeTable(registry).get("/");
+		const current = runtimeOf(registry, "/");
 		if (current?.state === "running") return false;
 		registerRuntime(registry, "/", { state: "idle", wake });
 		return true;
+	}
+
+	/**
+	 * Mark a running root js beat. Concurrent beats stay tracked by id so the
+	 * root reports idle only when the last beat leaves.
+	 */
+	beginRootBeat(ctx, toolCallId) {
+		const registry = this.forkRegistry();
+		if (
+			!registry ||
+			(typeof this.forkOwnerId === "function" && this.forkOwnerId() !== null) ||
+			this.selfScopePath() !== "/"
+		) {
+			return null;
+		}
+		try {
+			const beatId = `${toolCallId}#${Date.now()}#${Math.random().toString(36).slice(2)}`;
+			const current = runtimeOf(registry, "/");
+			const beats = current?.beats instanceof Set ? new Set(current.beats) : new Set();
+			beats.add(beatId);
+			registerRuntime(registry, "/", {
+				state: "running",
+				beats,
+				interrupt: () => {
+					try {
+						this.host?.session?.abort?.(ctx, REQUEST_INTERRUPT_REASON);
+					} catch (error) {
+						this.noteError?.("tickets", error, {
+							kind: "js",
+							phase: "root-interrupt",
+							toolCallId,
+						});
+					}
+				},
+			});
+			return beatId;
+		} catch (error) {
+			this.noteError?.("tickets", error, {
+				kind: "js",
+				phase: "root-runtime",
+				toolCallId,
+			});
+			return null;
+		}
+	}
+
+	/**
+	 * Release one root beat. When the last beat leaves, report idle and wake the
+	 * root once if a peer request is waiting in the queue.
+	 */
+	endRootBeat(beatId, toolCallId = null) {
+		const registry = this.forkRegistry();
+		if (!registry || !beatId) return;
+		try {
+			const current = runtimeOf(registry, "/");
+			const beats = current?.beats instanceof Set ? new Set(current.beats) : new Set();
+			beats.delete(beatId);
+			if (beats.size > 0) {
+				registerRuntime(registry, "/", { state: "running", beats });
+				return;
+			}
+			registerRuntime(registry, "/", { state: "idle", interrupt: null, beats: null });
+			if (pendingRequestCount(registry, "/") > 0) {
+				const idle = runtimeOf(registry, "/");
+				if (typeof idle?.wake === "function") idle.wake();
+			}
+		} catch (error) {
+			this.noteError?.("tickets", error, {
+				kind: "js",
+				phase: "root-runtime",
+				toolCallId,
+			});
+		}
 	}
 
 	/** One `scope_request` call: resolve, queue, deliver, then park. */
@@ -1050,7 +1135,10 @@ export class SessionStation {
 		// The receipt is where the question becomes visible to the model, so the
 		// delivery marker is written here and nowhere else: a projection computed
 		// for the cache signature must never consume a delivery.
-		const registry = this.registry ?? null;
+		const registry =
+			typeof this.forkRegistry === "function"
+				? this.forkRegistry()
+				: (this.forkWaitPort?.()?.registry ?? this.forkWiring?.registry ?? null);
 		if (projection.state?.request && registry) {
 			markRequestDelivered(registry, projection.state.scope);
 		}

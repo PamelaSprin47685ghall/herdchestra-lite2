@@ -63,10 +63,8 @@ function stationFor(ledger, identity) {
     state: { ...STATE },
     forkLedgerPort: () => ledger,
     forkIdentityPort: () => identity,
-    registry,
-    get requestRuntime() {
-      return runtimeTable(registry);
-    },
+    forkWaitPort: () => ({ registry, ledger }),
+    forkRegistry: () => registry,
   };
 }
 
@@ -81,8 +79,9 @@ describe("the delivery table picks exactly one hook", () => {
   test("an idle target is woken: nothing else would make it take a turn", () => {
     const ledger = ledgerWith("/worker");
     const station = stationFor(ledger, { forkId: "f-api", path: "/api" });
+    const registry = station.forkRegistry();
     const hooks = [];
-    registerRuntime(station.registry, "/worker", {
+    registerRuntime(registry, "/worker", {
       state: "idle",
       wake: () => hooks.push("wake"),
       interrupt: () => hooks.push("interrupt"),
@@ -94,15 +93,16 @@ describe("the delivery table picks exactly one hook", () => {
     expect(hooks).toEqual(["wake"]);
     // The request is queued regardless: a missing hook would still leave it for
     // the target's next turn.
-    expect(runtimeOf(station.registry, "/worker").state).toBe("idle");
-    expect(currentRequest(station.registry, "/worker").message).toBe("are you there?");
+    expect(runtimeOf(registry, "/worker").state).toBe("idle");
+    expect(currentRequest(registry, "/worker").message).toBe("are you there?");
   });
 
   test("a target parked in a join yields the join before anything else", () => {
     const ledger = ledgerWith("/worker");
     const station = stationFor(ledger, { forkId: "f-api", path: "/api" });
+    const registry = station.forkRegistry();
     const hooks = [];
-    registerRuntime(station.registry, "/worker", {
+    registerRuntime(registry, "/worker", {
       state: "running",
       parked: "join",
       yieldJoin: () => hooks.push("yieldJoin"),
@@ -119,8 +119,9 @@ describe("the delivery table picks exactly one hook", () => {
   test("an interrupt request cuts a running beat", () => {
     const ledger = ledgerWith("/worker");
     const station = stationFor(ledger, { forkId: "f-api", path: "/api" });
+    const registry = station.forkRegistry();
     const hooks = [];
-    registerRuntime(station.registry, "/worker", {
+    registerRuntime(registry, "/worker", {
       state: "running",
       interrupt: () => hooks.push("interrupt"),
       wake: () => hooks.push("wake"),
@@ -133,8 +134,9 @@ describe("the delivery table picks exactly one hook", () => {
   test("a soft request leaves a running target alone", () => {
     const ledger = ledgerWith("/worker");
     const station = stationFor(ledger, { forkId: "f-api", path: "/api" });
+    const registry = station.forkRegistry();
     const hooks = [];
-    registerRuntime(station.registry, "/worker", {
+    registerRuntime(registry, "/worker", {
       state: "running",
       interrupt: () => hooks.push("interrupt"),
       wake: () => hooks.push("wake"),
@@ -148,11 +150,12 @@ describe("the delivery table picks exactly one hook", () => {
   test("a request to a target with no runtime entry simply queues", () => {
     const ledger = ledgerWith("/worker");
     const station = stationFor(ledger, { forkId: "f-api", path: "/api" });
+    const registry = station.forkRegistry();
     askOne(station, "/worker", "hello?");
-    expect(runtimeOf(station.registry, "/worker")).toBeNull();
+    expect(runtimeOf(registry, "/worker")).toBeNull();
     // A missing hook is not a lost request: the target reads it at its own next
     // request, where the projection turns into AWAITING_REPLY.
-    expect(currentRequest(station.registry, "/worker").message).toBe("hello?");
+    expect(currentRequest(registry, "/worker").message).toBe("hello?");
   });
 });
 
@@ -180,12 +183,13 @@ describe("answering a request does not rewrite a finished record", () => {
   test("the sealed record and its outcome survive a reply turn", async () => {
     const ledger = ledgerWith("/worker");
     const station = stationFor(ledger, { forkId: "f-api", path: "/api" });
+    const registry = station.forkRegistry();
     const responder = {
       ...station,
       forkIdentityPort: () => ({ forkId: "f-worker", path: "/worker" }),
     };
     markReady(ledger, "f-worker", { ok: true, record: "the leak is in the parser" });
-    setOutcome(station.registry, "f-worker", {
+    setOutcome(registry, "f-worker", {
       record: "the leak is in the parser",
       failed: false,
       reason: null,
@@ -193,19 +197,19 @@ describe("answering a request does not rewrite a finished record", () => {
     const record = forkOf(ledger, "f-worker");
     expect(record.status).toBe(READY);
     expect(listActiveScopePaths(ledger)).not.toContain("/worker");
-    const sealedOutcome = outcomeOf(station.registry, "f-worker");
+    const sealedOutcome = outcomeOf(registry, "f-worker");
 
     // Waking a finished scope is a reply turn, not a second life. The queue is
     // written directly here: this case is about what the reply does to the
     // sealed record, not about how the question reached the target.
-    registerRuntime(station.registry, "/worker", { state: "idle", wake: () => {} });
-    const queued = enqueueRequest(station.registry, {
+    registerRuntime(registry, "/worker", { state: "idle", wake: () => {} });
+    const queued = enqueueRequest(registry, {
       from: "/api",
       target: "/worker",
       message: "what did you find?",
     });
     expect(queued.ok).toBe(true);
-    markRequestDelivered(station.registry, "/worker");
+    markRequestDelivered(registry, "/worker");
     const replied = handleReplyToolCall(responder, {
       id: "call-rep",
       arguments: "parser.mjs:88",
@@ -216,6 +220,6 @@ describe("answering a request does not rewrite a finished record", () => {
     // Nothing about the handed-over work moved: same status, same outcome, and
     // still one record for the parent to join.
     expect(forkOf(ledger, "f-worker").status).toBe(READY);
-    expect(outcomeOf(station.registry, "f-worker")).toEqual(sealedOutcome);
+    expect(outcomeOf(registry, "f-worker")).toEqual(sealedOutcome);
   });
 });

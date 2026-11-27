@@ -48,12 +48,6 @@ import vm from "node:vm";
 import { renderYamlView } from "../format/yaml-view.mjs";
 import { errorResult, textResult } from "./results.mjs";
 import { JS_INTERRUPTED, JS_STEERED, createBeat } from "./beat.mjs";
-import {
-	REQUEST_INTERRUPT_REASON,
-	pendingRequestCount,
-	registerRuntime,
-	runtimeOf,
-} from "../scope/request-queue.mjs";
 
 /**
  * The fixed echo line at the top of every js result. The code itself is
@@ -156,82 +150,6 @@ function unwrapResult(res) {
 }
 
 /**
- * The root scope's delivery entry. A running root needs an interrupt that
- * aborts its own agent; an idle root keeps the wake hook the host wiring
- * registered. A child is registered by the spawn ticket, so this function
- * does nothing for it.
- */
-function registerRootBeat(station, ctx, toolCallId, host) {
-	const registry = station?.registry;
-	if (!registry || typeof registerRuntime !== "function") return null;
-	const selfPath =
-		typeof station?.selfScopePath === "function" ? station.selfScopePath() : null;
-	if (selfPath !== "/") return null;
-	try {
-		// One root can run more than one js beat (a script started in one turn
-		// does not serialize the next). Keep every beat id so the first one to
-		// finish cannot report the root idle while a sibling is still running.
-		const beatId = `${toolCallId}#${Date.now()}#${Math.random().toString(36).slice(2)}`;
-		const current = runtimeOf(registry, "/");
-		const beats = current?.beats instanceof Set ? new Set(current.beats) : new Set();
-		beats.add(beatId);
-		registerRuntime(registry, "/", {
-			state: "running",
-			beats,
-			interrupt: () => {
-				try {
-					station.host?.session?.abort?.(ctx, REQUEST_INTERRUPT_REASON);
-				} catch (error) {
-					host?.report?.record?.("tickets", error, {
-						kind: "js",
-						phase: "root-interrupt",
-						toolCallId,
-					});
-				}
-			},
-		});
-		return beatId;
-	} catch (error) {
-		host?.report?.record?.("tickets", error, {
-			kind: "js",
-			phase: "root-runtime",
-			toolCallId,
-		});
-		return null;
-	}
-}
-
-/**
- * Release one root beat. The root reports idle only when the last beat leaves,
- * and an idle root with a queued request is woken once: a peer request that
- * interrupted this beat has no spawn loop behind it to drive the reply turn.
- */
-function finishRootBeat(station, beatId, toolCallId, host) {
-	const registry = station?.registry;
-	if (!registry || typeof registerRuntime !== "function" || !beatId) return;
-	try {
-		const current = runtimeOf(registry, "/");
-		const beats = current?.beats instanceof Set ? new Set(current.beats) : new Set();
-		beats.delete(beatId);
-		if (beats.size > 0) {
-			registerRuntime(registry, "/", { state: "running", beats });
-			return;
-		}
-		registerRuntime(registry, "/", { state: "idle", interrupt: null, beats: null });
-		if (pendingRequestCount(registry, "/") > 0) {
-			const idle = runtimeOf(registry, "/");
-			if (typeof idle?.wake === "function") idle.wake();
-		}
-	} catch (error) {
-		host?.report?.record?.("tickets", error, {
-			kind: "js",
-			phase: "root-runtime",
-			toolCallId,
-		});
-	}
-}
-
-/**
  * Execute one `js` tool call.
  *
  * Sandwich shape per the Ticket Station Method: the synchronous pre-check
@@ -276,8 +194,7 @@ export async function jsTicket(
 	const state = projection?.state ?? {};
 	const dispatch = host?.dispatchInnerTool;
 	const beat = createBeat({ signal });
-	const rootBeat = registerRootBeat(station, ctx, toolCallId, host);
-	const registry = station?.registry ?? null;
+	const rootBeat = station.beginRootBeat?.(ctx, toolCallId) ?? null;
 
 	const calls = [];
 	const outputs = [];
@@ -413,7 +330,7 @@ export async function jsTicket(
 		}
 	} finally {
 		beat.dispose();
-		finishRootBeat(station, rootBeat, toolCallId, host);
+		station.endRootBeat?.(rootBeat, toolCallId);
 		// Reconcile exactly once, whatever happened above. The station owns the
 		// accounting; an accounting failure is a bug in the station, not in the
 		// model's script, so it is reported sideways instead of masking the

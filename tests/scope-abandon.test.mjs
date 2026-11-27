@@ -44,7 +44,7 @@ function stationFor(ledger, registry, stopped = []) {
     forkLedgerPort: () => ledger,
     forkIdentityPort: () => null,
     forkWaitPort: () => ({ registry, ledger }),
-    registry,
+    forkRegistry: () => registry,
     selfScopePath: () => "/",
     abortChildrenPort: (liveIds) => stopped.push(...liveIds),
     persist: () => true,

@@ -410,10 +410,8 @@ function requestStation(ledger, identity, registry) {
 		state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
 		forkLedgerPort: () => ledger,
 		forkIdentityPort: () => identity,
-		registry,
-		get requestRuntime() {
-			return runtimeTable(registry);
-		},
+		forkWaitPort: () => ({ registry, ledger }),
+		forkRegistry: () => registry,
 	};
 }
 

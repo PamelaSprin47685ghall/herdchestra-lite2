@@ -47,6 +47,9 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 		ui: ctx?.ui,
 	});
 	if (plan.registerOwnerUI) registerOwnerUI(owner, ctx.ui);
+	// The goal flag is station state, read lazily: the row renders it live and
+	// the same station may flip it mid-session (seal, auto-exit).
+	const goalOf = () => station?.state?.relay?.goal === true;
 	// Descendants use the same root display sink, regardless of adoption.
 	const display =
 		plan.displayKind === "holder"
@@ -54,9 +57,9 @@ export function resolveStationBinding(station, ctx, forkWiring, options = {}) {
 			: plan.displayKind === "child"
 				? childIdentity.display
 				: plan.displayKind === "owner"
-					? childDisplayFor(owner, ctx?.ui)
+					? childDisplayFor(owner, ctx?.ui, { goalOf })
 					: ctx?.ui
-						? childDisplayFor(owner ?? ctx?.session ?? ctx, ctx.ui)
+						? childDisplayFor(owner ?? ctx?.session ?? ctx, ctx.ui, { goalOf })
 						: null;
 	// The session id is the conversation key, not the manager object: a fork
 	// branch holds a per-branch manager proxy, and an object key would give
@@ -110,5 +113,5 @@ export function refreshStationDisplay(station, ctx, forkWiring) {
 	// the same owner.
 	if (ctx?.session === owner) rememberSession(owner);
 	registerOwnerUI(owner, ctx.ui);
-	station.setDisplayPort(childDisplayFor(owner, ctx.ui));
+	station.setDisplayPort(childDisplayFor(owner, ctx.ui, { goalOf: () => station.state?.relay?.goal === true }));
 }

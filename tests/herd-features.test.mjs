@@ -16,10 +16,8 @@ import { buildPorts } from "../src/core/ports/build.mjs";
 import { loadDoc } from "../src/prompts/index.mjs";
 
 describe("the feature table", () => {
-	test("has the eight features in declaration order", () => {
+	test("has the six features in declaration order", () => {
 		expect(FEATURE_NAMES).toEqual([
-			"autopilot",
-			"review",
 			"chinese",
 			"testing",
 			"constitution",
@@ -37,8 +35,6 @@ describe("the feature table", () => {
 			expect(Object.isFrozen(FEATURES[name].states)).toBe(true);
 		}
 		expect(defaultFeatures()).toEqual({
-			autopilot: "off",
-			review: "on",
 			chinese: "on",
 			testing: "lean",
 			constitution: "full",
@@ -147,10 +143,10 @@ describe("environment parsing", () => {
 describe("merge precedence", () => {
 	test("explicit valid values beat persisted values, invalid explicit values are ignored", () => {
 		const merged = mergeFeatures(
-			{ autopilot: "on", testing: "off", scope: "adaptive" },
+			{ testing: "off", scope: "adaptive" },
 			{ testing: "lean", constitution: "nope" },
 		);
-		expect(merged.autopilot).toBe("on");
+		expect(merged).not.toHaveProperty("autopilot");
 		expect(merged.testing).toBe("lean");
 		expect(merged.scope).toBe("adaptive");
 		expect(merged.constitution).toBe("full");

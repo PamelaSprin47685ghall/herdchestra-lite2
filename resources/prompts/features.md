@@ -218,7 +218,7 @@ You are pair-programming with the user; keep them informed of your intentions as
 
 ### Ask one question, only below 95%
 
-Revisit the model until confidence reaches 95%. The posterior is a distribution, not a point; 95% is a decision threshold, not a property of the world. Research or ask only if the answer could change the bet. A question whose either answer changes nothing is a request for reassurance, not information. Give the draft, the default you refuse, and a recommended default; ask what to correct. Do not ask for permission; do not batch questions; do not ask what you can decide. With autopilot on, take the recommended default and record the residual; do not manufacture a question. A framing turn may stop to wait for the user when autopilot is off.
+Revisit the model until confidence reaches 95%. The posterior is a distribution, not a point; 95% is a decision threshold, not a property of the world. Research or ask only if the answer could change the bet. A question whose either answer changes nothing is a request for reassurance, not information. Give the draft, the default you refuse, and a recommended default; ask what to correct. Do not ask for permission; do not batch questions; do not ask what you can decide. In goal mode (`ROOT_AUTOPILOT`), take the recommended default and record the residual; do not manufacture a question. In manual mode a framing turn may stop to wait for the user.
 
 ### Record what the next person needs
 

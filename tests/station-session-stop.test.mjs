@@ -15,17 +15,14 @@ function station(overrides = {}) {
 	const stateOverrides = overrides.state ?? {};
 	const features = {
 		...defaultFeatures(),
-		autopilot: "on",
 		...(stateOverrides.features ?? {}),
 	};
-	if (stateOverrides.autopilot === false && !stateOverrides.features) {
-		features.autopilot = "off";
-	}
+	const relay = { goal: stateOverrides.autopilot !== false, canStop: false, pendingRewind: null, ...(overrides.relay ?? {}) };
 	return {
 		state: {
 			...stateOverrides,
 			features,
-			relay: { canStop: false, pendingRewind: null, ...(overrides.relay ?? {}) },
+			relay,
 		},
 		rewoundThisTurn: overrides.rewoundThisTurn ?? false,
 		forkOwnerId: () => overrides.ownerId ?? null,
@@ -35,7 +32,7 @@ function station(overrides = {}) {
 		projectionFor: () => ({
 			mode:
 				overrides.mode ??
-				(features.autopilot === "on" ? "ROOT_AUTOPILOT" : "ROOT_MANUAL"),
+				(relay.goal === true ? "ROOT_AUTOPILOT" : "ROOT_MANUAL"),
 		}),
 	};
 }
@@ -66,7 +63,7 @@ describe("session stop evidence", () => {
 
 	test("a normal stop when canStop is true or autopilot is off is allowed", () => {
 		expect(onSessionStop(station({ relay: { canStop: true } }), {}, null)).toBeUndefined();
-		expect(onSessionStop(station({ state: { features: { autopilot: "off" } } }), {}, null)).toBeUndefined();
+		expect(onSessionStop(station({ state: { autopilot: false } }), {}, null)).toBeUndefined();
 	});
 
 	test("a root turn with rewoundThisTurn or pendingRewind is never double-nudged", () => {

@@ -36,9 +36,8 @@ const messagesOf = (station) =>
  * Unified across Root (depth 0) and Child (depth >= 1):
  * - Oath `unfinished` -> small handoff rewind (`stopLoop: true`) back to birth.
  * - Oath `a_ferocious_audacious_master_would_change_nothing` -> Child seals and
- *   delivers to parent (`stopLoop: true`);
- *   Root #1 rewinds for independent review (`stopLoop: true`);
- *   Root #2 consecutive promotes without rewind (`stopLoop: false`).
+ *   delivers to parent (`stopLoop: true`); Root promotes without a rewind
+ *   (`stopLoop: false`) and writes the final answer.
  * - A missing or other oath value -> `INVALID_RETURN_OATH`; there is no default.
  * - Woken child -> `dafny` forwards to `..`; the parent receives it as a new
  *   `scope_join` and no second return is invented.
@@ -86,7 +85,6 @@ export function handleReturnCall(station, call, options = {}) {
     orphans,
     unreceived,
     relay: station.state?.relay ?? null,
-    review: station.state?.features?.review ?? "on",
     canRewindRoot,
     mixedToolCalls,
     args,
@@ -167,22 +165,22 @@ export function handleReturnCall(station, call, options = {}) {
     );
   }
 
-  // Root promotion (2nd consecutive big handoff): allow final answer in place.
+  // Root promotion (seal): allow the final answer in place, same as a child
+  // seal ends the child's work.
   if (decision.kind === "promote") {
     station.state.relay = decision.relay;
     return textResult(F["return.finish"], {
       scope: "root",
       accepted: true,
       promoted: true,
-      bigStreak: decision.relay.bigStreak,
       canStop: true,
       stopLoop: false,
     });
   }
 
-  // Root rewind (small handoff or 1st big handoff): format this generation's
-  // record + dafny, persist `pendingRewind` on `state.relay`, and stop the
-  // loop cleanly so `onAgentEnd` dispatches the host rewind ticket.
+  // Root rewind (small handoff): format this generation's record + dafny,
+  // persist `pendingRewind` on `state.relay`, and stop the loop cleanly so
+  // `onAgentEnd` dispatches the host rewind ticket.
   if (decision.kind === "rewind" && decision.scope === "root") {
     const messages = messagesOf(station);
     const report = formatGenerationReport(messages, 0, decision.dafny);
@@ -194,9 +192,8 @@ export function handleReturnCall(station, call, options = {}) {
       ...decision.relay,
       pendingRewind,
     };
-    const template = decision.big ? F["return.review"] : F["return.rewind"];
     return textResult(
-      render(template, { generation: pendingRewind.generation }),
+      render(F["return.rewind"], { generation: pendingRewind.generation }),
       {
         scope: "root",
         accepted: true,

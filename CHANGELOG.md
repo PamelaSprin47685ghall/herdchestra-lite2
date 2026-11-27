@@ -6,6 +6,26 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [9.0.0] — 2026-11-27
+
+### Changed — root `scope_return` matches every other manager (breaking)
+
+- Root no longer runs a two-seal review gate. The seal oath (`a_ferocious_audacious_master_would_change_nothing`) ends root's work on the first call: `canStop` flips on, the next turn projects `FINAL_ANSWER` with no tools bound, and root writes the final answer. `unfinished` still rewinds through compaction with the latest report and the verbatim user messages.
+- Removed the `review` feature (`/herd review off|on`, `HERD_REVIEW`), `relay.bigStreak`, and `pendingRewind.big`; `resetRootPromotion` now only clears `canStop` on a new user message or a new root fork.
+- `system.md`, `fork-join.md`, `receipts/relay.md`, `README.md`, and `.agent/skills/scope-orchestration/SKILL.md` follow the single-seal protocol; `return.review` and `reborn.review` are gone.
+
+### Changed — `autopilot` is a one-shot goal, not a switch (breaking)
+
+- Removed the persistent `autopilot` feature (`/herd autopilot off|on`, `HERD_AUTOPILOT`). Root now defaults to manual mode: `ask` is bound and a natural stop is allowed.
+- New command `/herd-goal <instruction>` starts a single goal session in `ROOT_AUTOPILOT` mode and sends `<instruction>` as one plain user message; `ask` is withheld and a natural stop is redirected to `scope_return`.
+- The goal session ends automatically on the next turn after the sealed final answer is delivered, so manual mode returns without a second command. `state.autopilot` still reports whether a goal session is active.
+
+### Added — goal mode is visible and holdable
+
+- The working row reports goal mode: `[Busy: N, Idle: M, Goal: ON]` while a goal session is active, and the plain `[Busy: N, Idle: M]` otherwise.
+- An interrupted turn (Esc) keeps the goal session; the next message continues it. Only the sealed delivery or a bare `/herd-goal` releases it.
+- A bare `/herd-goal` turns goal mode off immediately and is idempotent when it is already off.
+
 ## [8.0.0] — 2026-11-27
 
 ### Changed — role-bearing scope paths (breaking)

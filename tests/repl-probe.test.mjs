@@ -137,7 +137,7 @@ describe("skillReceipt envelope", () => {
 			capabilitySnapshot: () => snapshot,
 			lastCapKeys: [],
 			forkRegistry: () => null,
-			state: { features: { autopilot: "off", chinese: "on" }, relay: { canStop: false } },
+			state: { features: { chinese: "on" }, relay: { canStop: false, goal: false } },
 			forkOwnerId: () => null,
 			projectionFor(ctx) {
 				return SessionStation.prototype.projectionFor.call(this, ctx);
@@ -169,14 +169,14 @@ describe("skillReceipt envelope", () => {
 
 	test("reports the branch flags the host folds on", () => {
 		const child = receipt(
-			stubStation({ forkOwnerId: () => "api", state: { features: { autopilot: "on", chinese: "on" }, relay: {} } }),
+			stubStation({ forkOwnerId: () => "api", state: { features: { chinese: "on" }, relay: { goal: true } } }),
 		);
 		expect(child.branch).toBe(true);
 		expect(child.autopilot).toBe(true);
 		expect(child.canStop).toBe(false);
 
 		const root = receipt(
-			stubStation({ state: { features: { autopilot: "on", chinese: "on" }, relay: { canStop: true } } }),
+			stubStation({ state: { features: { chinese: "on" }, relay: { canStop: true, goal: true } } }),
 		);
 		expect(root.branch).toBe(false);
 		expect(root.canStop).toBe(true);

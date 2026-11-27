@@ -256,22 +256,16 @@ async function checkRootRewindE2E({ createMockModel }) {
 					{ type: "toolCall", id: "root-ret-0", name: "js", arguments: { code: 'await api.scope_return({ dafny: "gen 0 report: narrowed root cause" })' } },
 				],
 			},
-			{
-				content: [
-					{ type: "text", text: "Gen 1 completing fix." },
-					{ type: "toolCall", id: "root-ret-1", name: "js", arguments: { code: `await api.scope_return({ dafny: "gen 1 report: fix and tests pass", ${RETURN_OATH_KEY}: ${JSON.stringify(RETURN_OATH_VALUE)} })` } },
-				],
-			},
-			{
-				content: [
-					{ type: "text", text: "Gen 2 reviewing independently." },
-					{ type: "toolCall", id: "root-ret-2", name: "js", arguments: { code: `await api.scope_return({ dafny: "gen 2 review: nothing left on the table", ${RETURN_OATH_KEY}: ${JSON.stringify(RETURN_OATH_VALUE)} })` } },
-				],
-			},
-			{
-				content: ["All done! Final user-facing answer."],
-			},
-		],
+  		{
+  			content: [
+  				{ type: "text", text: "Gen 1 sealing." },
+  				{ type: "toolCall", id: "root-ret-1", name: "js", arguments: { code: `await api.scope_return({ dafny: "gen 1 report: fix and tests pass", ${RETURN_OATH_KEY}: ${JSON.stringify(RETURN_OATH_VALUE)} })` } },
+  			],
+  		},
+  		{
+  			content: ["All done! Final user-facing answer."],
+  		},
+  	],
 	});
 	const manager = SessionManager.inMemory();
 	const extPath = resolve(import.meta.dir, "../host-omp/src/main.mjs");
@@ -303,24 +297,23 @@ async function checkRootRewindE2E({ createMockModel }) {
 	await session.prompt(userPrompt);
 	for (let i = 0; i < 150; i += 1) {
 		await new Promise((r) => setTimeout(r, 20));
-		if (!session.isStreaming && station.state.relay.canStop === true && mock.calls.length >= 4) {
+  		if (!session.isStreaming && station.state.relay.canStop === true && mock.calls.length >= 3) {
 			await session.waitForIdle();
 			break;
 		}
 	}
-	assert.equal(mock.calls.length, 4, "expected 4 LLM requests across Gen 0 -> Gen 1 -> Gen 2 -> Final answer");
-	assert.equal(station.state.relay.generation, 2);
-	assert.equal(station.state.relay.bigStreak, 2);
-	assert.equal(station.state.relay.canStop, true);
-	assert.equal(station.state.relay.pendingRewind, null);
-	assert.deepEqual(station.state.relay.userPrompts, [userPrompt]);
-	const finalMessages = manager.buildSessionContext().messages;
-	assert.equal(finalMessages[0]?.role, "compactionSummary");
-	assert.ok(finalMessages[0].summary.includes("gen 1 report: fix and tests pass"));
-	assert.ok(!finalMessages[0].summary.includes("gen 0 report"));
+  	assert.equal(mock.calls.length, 3, "expected 3 LLM requests across Gen 0 rewind -> Gen 1 seal -> Final answer");
+  	assert.equal(station.state.relay.generation, 1);
+  	assert.equal(station.state.relay.canStop, true);
+  	assert.equal(station.state.relay.pendingRewind, null);
+  	assert.deepEqual(station.state.relay.userPrompts, [userPrompt]);
+  	const finalMessages = manager.buildSessionContext().messages;
+  	assert.equal(finalMessages[0]?.role, "compactionSummary");
+  	assert.ok(finalMessages[0].summary.includes("gen 0 report: narrowed root cause"));
+  	assert.ok(!finalMessages[0].summary.includes("gen 1 report"));
 	assert.ok(finalMessages.some((m) => m.role === "user" && !m.herdSkill && !m.synthetic));
 	assert.equal(finalMessages.some((m) => m.stopReason === "aborted"), false);
-	console.log("PASS root rewind E2E: real AgentSession + SessionManager compaction + verbatim user prompts + 2-oath promotion");
+  	console.log("PASS root rewind E2E: real AgentSession + SessionManager compaction + verbatim user prompts + first-seal completion");
 }
 
 try {

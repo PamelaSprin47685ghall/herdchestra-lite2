@@ -121,7 +121,7 @@ describe("abort cascade", () => {
 	test("the session-stop gate never infers a user abort", () => {
 		const { ledger, registry } = tree();
 		const station = {
-			state: { features: { autopilot: "on" }, relay: { canStop: false, pendingRewind: null } },
+			state: { features: {}, relay: { goal: false, canStop: false, pendingRewind: null } },
 			cancelDescendants: () => cancelDescendants(station),
 			...rootStation(ledger, registry),
 		};
@@ -245,7 +245,7 @@ describe("abort cascade", () => {
 		const { ledger, registry } = tree();
 		const aborts = [];
 		const station = {
-			state: { features: { autopilot: "on" }, relay: { canStop: false, pendingRewind: null } },
+			state: { features: {}, relay: { goal: false, canStop: false, pendingRewind: null } },
 			cancelDescendants: () => cancelDescendants(station),
 			...rootStation(ledger, registry, aborts),
 		};
@@ -305,7 +305,7 @@ describe("abort cascade", () => {
 		);
 		const persisted = [];
 		const root = Object.create(SessionStation.prototype);
-		root.state = { features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
+		root.state = { features: {}, relay: { generation: 0, fullFlow: false } };
 		root.manager = null;
 		root.persist = () => {
 			persisted.push("root");
@@ -317,7 +317,7 @@ describe("abort cascade", () => {
 		fork(ledger, "grandchild", "child");
 
 		const child = Object.create(SessionStation.prototype);
-		child.state = { features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
+		child.state = { features: {}, relay: { generation: 0, fullFlow: false } };
 		child.manager = null;
 		child.persist = () => {};
 		attachBaseForkPorts(child, wiring, {

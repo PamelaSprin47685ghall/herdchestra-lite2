@@ -65,15 +65,11 @@ Still unreceived: {{remaining}}.
 
 ## return.rewind
 
-Rewinding to continue with your latest report. This resets the root oath streak.
-
-## return.review
-
-Rewinding for an independent review. Check the work against the user's requirements; seal again only if nothing remains worth changing.
+Rewinding to continue with your latest report.
 
 ## return.finish
 
-The second consecutive seal permits the final reply. Answer the user now.
+Sealed. Answer the user now.
 
 ## return.pending
 

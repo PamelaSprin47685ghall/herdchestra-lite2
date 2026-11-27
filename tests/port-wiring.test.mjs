@@ -49,27 +49,27 @@ test("the station binds one session port object, not one per call", () => {
 	const first = station.herdPort();
 	expect(first).toBe(station.herdPort());
 	expect(first.toggle("hi")).toEqual({ ok: true, mode: "on", text: "hi" });
-	expect(station.state.features.autopilot).toBe("on");
+	expect(station.state.relay?.goal === true).toBe(true);
 });
 
 test("herd off refuses a toggle and never flips the persisted mode", () => {
-	const station = stationWith({ herd: "off" }, { features: { ...defaultFeatures(), autopilot: "off" } });
+	const station = stationWith({ herd: "off" }, { features: defaultFeatures() });
 	expect(station.herdPort().toggle("hi")).toEqual({
 		ok: false,
 		code: "HERD_UNAVAILABLE",
 		port: "herd",
 	});
-	expect(station.state.features.autopilot).toBe("off");
+	expect(station.state.relay?.goal === true).toBe(false);
 });
 
 test("herd on flips the persisted mode and reports it", () => {
-	const station = stationWith({ herd: "on" }, { features: { ...defaultFeatures(), autopilot: "off" } });
+	const station = stationWith({ herd: "on" }, { features: defaultFeatures() });
 	const first = station.herdPort().toggle("hi");
 	expect(first).toEqual({ ok: true, mode: "on", text: "hi" });
-	expect(station.state.features.autopilot).toBe("on");
+	expect(station.state.relay?.goal === true).toBe(true);
 	const second = station.herdPort().toggle("");
 	expect(second).toEqual({ ok: true, mode: "off", text: "" });
-	expect(station.state.features.autopilot).toBe("off");
+	expect(station.state.relay?.goal === true).toBe(false);
 });
 
 test("a station without a complete bundle throws MISSING_PORTS", () => {
@@ -87,7 +87,7 @@ test("one complete bundle binds one object per station", () => {
 		null,
 		null,
 	);
-	station.state.features.autopilot = "off";
+	station.state.relay.goal = false;
 	expect(station.herdPort()).toBe(station.herdPort());
 	expect(station.herdPort().toggle("hi").ok).toBe(true);
 });
@@ -155,20 +155,23 @@ test("observer on binds both provider hooks", () => {
 
 test("features start at their defaults and survive a persist round trip", () => {
 	const fresh = createState();
-	expect(fresh.features.autopilot).toBe("off");
+	expect(fresh.features).toEqual(defaultFeatures());
 	expect(fresh.features.testing).toBe("lean");
 
-	fresh.features.autopilot = "on";
 	fresh.features.testing = "no-red";
+	fresh.relay.goal = true;
 	const restored = deserializeState(serializeState(fresh));
-	expect(restored.features.autopilot).toBe("on");
 	expect(restored.features.testing).toBe("no-red");
+	expect(restored.relay.goal).toBe(true);
 
 	const legacy = serializeState(fresh);
 	delete legacy.features;
+	delete legacy.relay;
 	legacy.autopilot = true;
 	const migrated = deserializeState(legacy);
-	expect(migrated.features.autopilot).toBe("on");
+	// The retired switch is dropped, never reopened as a goal session.
+	expect(migrated.features.autopilot).toBeUndefined();
+	expect(migrated.relay?.goal === true).toBe(false);
 	expect(migrated.features.testing).toBe("lean");
 });
 
@@ -190,10 +193,11 @@ test("the command table registers one bare herd command", async () => {
 	});
 
 	expect(commands.has("herd")).toBe(true);
+	expect(commands.has("herd-goal")).toBe(true);
 	expect(commands.has("herd-autopilot")).toBe(false);
-	const result = await commands.get("herd").handler("autopilot on note this");
+	const result = await commands.get("herd").handler("testing off note this");
 	expect(result).toEqual({ ok: true });
-	expect(calls).toEqual(["autopilot on note this"]);
+	expect(calls).toEqual(["testing off note this"]);
 });
 
 test("one bare command sets a feature and sends optional text once", () => {
@@ -206,16 +210,87 @@ test("one bare command sets a feature and sends optional text once", () => {
 		null,
 	);
 
-	expect(station.state.features.autopilot).toBe("off");
-	const on = station.onHerdCommand("autopilot on hello");
-	expect(on).toMatchObject({ ok: true, kind: "set", feature: "autopilot", state: "on", text: "hello" });
-	expect(station.state.features.autopilot).toBe("on");
+	expect(station.state.features.testing).toBe("lean");
+	const on = station.onHerdCommand("testing no-red hello");
+	expect(on).toMatchObject({ ok: true, kind: "set", feature: "testing", state: "no-red", text: "hello" });
+	expect(station.state.features.testing).toBe("no-red");
 	expect(prompts).toEqual(["hello"]);
 
-	const off = station.onHerdCommand("autopilot off");
-	expect(off).toMatchObject({ ok: true, kind: "set", feature: "autopilot", state: "off" });
-	expect(station.state.features.autopilot).toBe("off");
+	const off = station.onHerdCommand("testing off");
+	expect(off).toMatchObject({ ok: true, kind: "set", feature: "testing", state: "off" });
+	expect(station.state.features.testing).toBe("off");
 	expect(prompts).toEqual(["hello"]);
+
+	// The retired switch is refused, never silently ignored.
+	expect(station.onHerdCommand("autopilot on")).toMatchObject({
+		ok: false,
+		code: "UNKNOWN_FEATURE",
+	});
+});
+
+test("one goal command starts goal mode and delivers the instruction once", () => {
+	const prompts = [];
+	const station = createTestStation(SessionStation,
+		{ getSessionId: () => "s1" },
+		{},
+		{ canPrompt: true, prompt: (text) => prompts.push(text) },
+		{ ports: () => ({ herd: "on" }) },
+		null,
+	);
+
+	// A bare command releases goal mode, and pressing it twice is a no-op.
+	expect(station.onGoalCommand("  ")).toMatchObject({ ok: true, kind: "off", goal: false });
+	expect(prompts).toEqual([]);
+
+	const started = station.onGoalCommand("do x");
+	expect(started).toMatchObject({ ok: true, kind: "goal", text: "do x" });
+	expect(station.state.relay.goal).toBe(true);
+	expect(station.state.relay.canStop).toBe(false);
+	expect(prompts).toEqual(["do x"]);
+
+	const released = station.onGoalCommand("");
+	expect(released).toMatchObject({ ok: true, kind: "off", goal: false });
+	expect(station.state.relay.goal).toBe(false);
+	expect(station.onGoalCommand("")).toMatchObject({
+		ok: true,
+		kind: "off",
+		message: "goal mode is already off",
+	});
+	expect(prompts).toEqual(["do x"]);
+
+	expect(station.onGoalCommand("again").kind).toBe("goal");
+	expect(station.endGoalSession()).toBe(true);
+	expect(station.state.relay.goal).toBe(false);
+	expect(station.endGoalSession()).toBe(false);
+});
+
+test("an interrupted turn keeps goal mode on until a bare command or the sealed delivery", () => {
+	const station = createTestStation(SessionStation,
+		{ getSessionId: () => "s1" },
+		{},
+		{ canPrompt: true, prompt: () => {} },
+		{ ports: () => ({ herd: "on" }) },
+		null,
+	);
+	station.onGoalCommand("do x");
+
+	// Esc aborts the turn: the host reports an aborted stop, so no nudge runs
+	// and the goal flag survives.
+	expect(station.state.relay.goal).toBe(true);
+	expect(station.state.relay.canStop).toBe(false);
+	expect(
+		station.onSessionStop({}, { reason: "aborted", signal: { aborted: true } }),
+	).toBeUndefined();
+	expect(station.state.relay.goal).toBe(true);
+
+	// A plain stop mid-goal is redirected to scope_return, never a silent exit.
+	expect(station.onSessionStop({}, null)).toBeDefined();
+	expect(station.state.relay.goal).toBe(true);
+
+	// Only the sealed delivery releases the session.
+	station.state.relay.canStop = true;
+	expect(station.onSessionStop({}, null)).toBeUndefined();
+	expect(station.state.relay.goal).toBe(false);
 });
 
 test("a refused port or feature switch throws at the composition root", () => {

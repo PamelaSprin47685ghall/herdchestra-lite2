@@ -57,7 +57,7 @@ function assistant(text = "done") {
 
 function nudgeStation(ledger, ownerId) {
 	const station = Object.create(SessionStation.prototype);
-	station.state = { features: { autopilot: "off" }, relay: { canStop: false, pendingRewind: null } };
+	station.state = { features: {}, relay: { canStop: false, pendingRewind: null } };
 	station.nudged = new WeakSet();
 	station.delivered = [];
 	station.forkLedgerPort = () => ledger;
@@ -68,7 +68,7 @@ function nudgeStation(ledger, ownerId) {
 
 function stopStation(ownerId, ledger) {
 	return {
-		state: { features: { autopilot: "off" }, relay: { canStop: false, pendingRewind: null } },
+		state: { features: {}, relay: { canStop: false, pendingRewind: null } },
 		forkOwnerId: () => ownerId,
 		forkLedgerPort: () => ledger,
 		// The stop gate reads two facts from the projection: the mode, and how
@@ -137,7 +137,7 @@ describe("nudgeDecision", () => {
 		expect(auto.kind).toBe("steer");
 		expect(auto.text).toContain("scope_return");
 
-		// Autopilot after two consecutive oaths: root may stop naturally.
+		// Autopilot after a seal: root may stop naturally.
 		expect(
 			nudgeDecision({
 				hasToolCalls: false,

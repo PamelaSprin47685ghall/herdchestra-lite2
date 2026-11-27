@@ -48,7 +48,7 @@ test("one scope-and-relay section serves root and child, manual and autopilot", 
 	const base = injectSystemPrompt("Host instructions");
 	const baseText = Array.isArray(base) ? base.join("\n") : base;
 	expect(baseText).toContain("Subscope duty");
-	expect(baseText).toContain("Only the user toggles autopilot");
+	expect(baseText).toContain("/herd-goal");
 	expect(baseText).toContain("exactly one tool: `js`");
 	expect(baseText).toContain("At root, join every subscope you forked before sealing");
 	expect(baseText).toContain("Split into about `sqrt(n)` scopes");
@@ -84,7 +84,7 @@ test("reinjecting a prompt converted from text to an array retains only the host
 	expect(injectSystemPrompt(prompt)).toEqual(prompt);
 });
 
-test("a root with two consecutive oaths is ready to answer", () => {
+test("a root that sealed is ready to answer", () => {
 	const projection = projectCapabilities({
 		isChild: false,
 		autopilot: true,
@@ -248,7 +248,8 @@ function relayRequest({ features = {}, keepHook = false } = {}) {
 		},
 	};
 	const station = createTestStation(SessionStation, manager, {}, {}, null, null);
-	Object.assign(station.state.features, { autopilot: "on", ...features });
+	Object.assign(station.state.features, features);
+	station.state.relay.goal = true;
 	const remove = installContextPreparation(session, { station, ctx });
 	function commit(message) {
 		manager.appendMessage(message);
@@ -280,7 +281,7 @@ test("a toggle regenerates the mode receipt instead of reusing the previous one"
 		// Autopilot withdraws `ask`: the probe, not a sentence, says so.
 		expect(probeOf(receiptTextOf(auto)).api).not.toContain("ask");
 
-		fixture.station.state.features.autopilot = "off";
+		fixture.station.state.relay.goal = false;
 		const manualMessages = await fixture.request();
 		const manual = manualMessages.filter((message) => message.herdSkill).at(-1);
 		expect(manual).not.toBe(auto);
@@ -288,7 +289,7 @@ test("a toggle regenerates the mode receipt instead of reusing the previous one"
 		expect(probeOf(receiptTextOf(manual)).mode).toBe("ROOT_MANUAL");
 		expect(probeOf(receiptTextOf(manual)).api).toContain("ask");
 
-		fixture.station.state.features.autopilot = "on";
+		fixture.station.state.relay.goal = true;
 		const backMessages = await fixture.request();
 		const back = backMessages.filter((message) => message.herdSkill).at(-1);
 		expect(back).not.toBe(manual);
@@ -340,8 +341,8 @@ test("the language reminder ends every request receipt and follows its feature",
 });
 
 test("a child prompt is byte-identical to the root prompt", () => {
-	for (const autopilot of ["on", "off"]) {
-		const features = { ...defaultFeatures(), autopilot };
+	for (const goal of [true, false]) {
+		const features = { ...defaultFeatures() };
 		const child = injectSystemPrompt("Host instructions", { features });
 		const root = injectSystemPrompt("Host instructions", { features });
 		expect(child).toEqual(root);
@@ -350,6 +351,6 @@ test("a child prompt is byte-identical to the root prompt", () => {
 		expect(text).toContain("Subscope duty");
 		expect(text).toContain("scope_return");
 		expect(text).toContain("### Close the work");
-		expect(text).toContain("Only the user toggles autopilot");
+		expect(text).toContain("/herd-goal");
 	}
 });

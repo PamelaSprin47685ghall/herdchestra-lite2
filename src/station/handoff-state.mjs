@@ -41,9 +41,8 @@ export function finishRewind(station, { rebaseAnchor = false } = {}) {
 
 /**
  * Archive any new real user prompts/steers visible in the live Root context.
- * When genuine new user input arrived after a promotion (or first big handoff),
- * reset `bigStreak` and `canStop` so the new requirement goes through its own
- * two-oath verification cycle.
+ * When genuine new user input arrived after a seal, reset `canStop` so the new
+ * requirement gets its own seal.
  */
 export function syncRootUserPrompts(station, messages = null) {
 	if (isChild(station) || !station?.state?.relay) return false;
@@ -154,7 +153,6 @@ export function commitRootRewind(station, ctx, plan = null) {
 	);
 	const summary = formatRebornPrompt({
 		report: pending.report,
-		big: pending.big === true,
 	});
 	const manager = station.manager ?? null;
 	let firstRestoredId = "";

@@ -23,16 +23,6 @@ function freezeFeature(definition) {
 }
 
 export const FEATURES = Object.freeze({
-	autopilot: freezeFeature({
-		states: ["off", "on"],
-		fallback: "off",
-		runtime: true,
-	}),
-	review: freezeFeature({
-		states: ["off", "on"],
-		fallback: "on",
-		runtime: true,
-	}),
 	chinese: freezeFeature({
 		states: ["off", "on"],
 		fallback: "on",
@@ -226,6 +216,18 @@ export function parseHerdCommand(args = "", current = {}) {
 		text,
 		message: feature + "=" + state,
 	};
+}
+
+/**
+ * Parse `/herd-goal [<instruction>]`.
+ *
+ * A goal session is not a stored switch: the text is the whole command. A bare
+ * command releases goal mode, so one key both presses and releases.
+ */
+export function parseGoalCommand(args = "") {
+	const text = (typeof args === "string" ? args : String(args ?? "")).trim();
+	if (text === "") return { ok: true, kind: "off", text: "" };
+	return { ok: true, kind: "goal", text };
 }
 
 export function featureSections(features = {}) {

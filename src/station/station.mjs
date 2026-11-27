@@ -98,6 +98,7 @@ import {
 	onBeforeAgentStart,
 	onContext,
 	onHerdCommand,
+	onGoalCommand,
 	onMessageEnd,
 	onSessionCompact,
 	onSessionStop,
@@ -823,7 +824,7 @@ export class SessionStation {
 		}
 		return {
 			isChild,
-			autopilot: this.state?.features?.autopilot === "on",
+			autopilot: this.state?.relay?.goal === true,
 			chinese: this.state?.features?.chinese ?? "on",
 			unreceived: ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0,
 			canStop: this.state?.relay?.canStop === true,
@@ -1092,6 +1093,18 @@ export class SessionStation {
 		return onHerdCommand(this, args);
 	}
 
+	onGoalCommand(args) {
+		return onGoalCommand(this, args);
+	}
+
+	/** Clear the one-shot goal flag after a sealed delivery. */
+	endGoalSession() {
+		if (this.state?.relay?.goal !== true) return false;
+		this.state.relay.goal = false;
+		this.persist();
+		return true;
+	}
+
 	onAssistantMessage(message, ctx) {
 		return onAssistantMessage(this, message, ctx);
 	}
@@ -1128,7 +1141,7 @@ export class SessionStation {
 			content: [{ type: "text", text }],
 			attribution: "agent",
 			timestamp: Date.now(),
-			autopilot: this.state?.features?.autopilot === "on",
+			autopilot: this.state?.relay?.goal === true,
 			branch: ownerId !== null,
 			canStop: this.state.relay?.canStop === true,
 			herdSkill: true,

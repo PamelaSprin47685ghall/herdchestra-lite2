@@ -44,9 +44,9 @@
 |---|---|---|
 | pass/total | 官方 verifier 通过题数 / 总题数 | 主指标 |
 | zero-change | 最终 diff 为空或仅注释的题数 | 定位提前停机/不行动 |
-| early-stop | 未完成工具链就自然停止的题数 | 定位 autopilot/ask/review |
+| early-stop | 未完成工具链就自然停止的题数 | 定位 goal 模式/ask |
 | never-tested | 从未运行编译、类型检查或相关测试的题数 | 定位 testing 特征 |
-| timeout | 超时题数 | 定位 review/context/fork 开销 |
+| timeout | 超时题数 | 定位 context/fork 开销 |
 | steps | 每题平均模型步数与工具调用数 | 定位并行与自省成本 |
 | context-limit | 触发 `CONTEXT_LIMIT` 的次数 | 定位读文件策略与 fork 粒度 |
 | forks | 平均 `scope_fork` 次数 | 定位 scope 策略 |
@@ -56,24 +56,24 @@
 
 ## 3. 阶段 1：锚定上下界
 
-所有评测配置默认 `HERD_AUTOPILOT=on`；`M0` 是原版 omp，不加载本插件。
+所有评测配置都在启动后用 `/herd-goal <任务指令>` 进入 goal 模式（等价于过去的 autopilot on 并敲入指令），交付后自动退出；没有持久 `HERD_AUTOPILOT` 开关。`M0` 是原版 omp，不加载本插件。
 
 | 组 | 配置 | 回答的问题 |
 |---|---|---|
 | `M0` | 原版 omp，无插件 | 目标基准线 |
-| `K0` | `autopilot=on, review=off, chinese=off, testing=off, constitution=off, framing=off, scope=off, workspace=off` | 纯机制（js + scope_*）相对原版是正、零还是负 |
-| `K1` | `K0` 仅改 `review=on` | Root 首次大 oath 的强制 rewind 是正还是负 |
-| `F0` | `autopilot=on, review=on, chinese=on, testing=lean, constitution=full, framing=full, scope=aggressive, workspace=full` | 当前 6.1 全量默认的基线（默认值复现 6.0 提示词） |
+| `K0` | goal 模式, `chinese=off, testing=off, constitution=off, framing=off, scope=off, workspace=off` | 纯机制（js + scope_*）相对原版是正、零还是负 |
+| `F0` | goal 模式, `chinese=on, testing=lean, constitution=full, framing=full, scope=aggressive, workspace=full` | 当前全量默认的基线 |
+
+`K0` 的机制内核包含 root 的 `scope_return` 单次 seal 协议：`oath` 即封印并交还最终答案，`unfinished` 即 rewind，与普通 `manager` scope 完全一致，没有二次 rewind 或 review 轮。
 
 闸门：
 
-1. 若 `K0` 与 `K1` 都显著低于 `M0`，先查机制，不要继续调提示词：`js` 报错、Root 无普通工具、`CONTEXT_LIMIT` 50% 锁定、`renderChildRecord` 剥离 `toolResult`、fork/join 摩擦。
-2. 若 `K0`/`K1` 接近或超过 `M0`，进入阶段 2。
-3. 取 `K0`/`K1` 中较高者作为后续的 `K*`，并固定其 `review` 值。
+1. 若 `K0` 显著低于 `M0`，先查机制，不要继续调提示词：`js` 报错、Root 无普通工具、`CONTEXT_LIMIT` 50% 锁定、`renderChildRecord` 剥离 `toolResult`、fork/join 摩擦。
+2. 若 `K0` 接近或超过 `M0`，进入阶段 2，并固定 `K* = K0`。
 
 ## 4. 阶段 2：L9(3^4) 正交筛选
 
-固定：`autopilot=on`、`chinese=off`、`workspace=off`、`review=K1 胜者`。
+固定：goal 模式（`/herd-goal`）、`chinese=off`、`workspace=off`。
 
 四个三态因子：`testing`、`constitution`、`framing`、`scope`。用 `L9(3^4)`，每行只跑 Dev-30 一次；9 轮可并发。
 
@@ -136,8 +136,6 @@ predicted(C_pred) = overall_mean + sum_f (mean(f=best_f) - overall_mean)
 `K0`：
 
 ```sh
-HERD_AUTOPILOT=on \
-HERD_REVIEW=off \
 HERD_CHINESE=off \
 HERD_TESTING=off \
 HERD_CONSTITUTION=off \
@@ -150,8 +148,6 @@ HERD_WORKSPACE=off \
 `L9 Run 5`（`testing=no-red, constitution=core, framing=full, scope=off`）：
 
 ```sh
-HERD_AUTOPILOT=on \
-HERD_REVIEW=<K1-winning-review> \
 HERD_CHINESE=off \
 HERD_TESTING=no-red \
 HERD_CONSTITUTION=core \
@@ -164,8 +160,6 @@ HERD_WORKSPACE=off \
 `F0`：
 
 ```sh
-HERD_AUTOPILOT=on \
-HERD_REVIEW=on \
 HERD_CHINESE=on \
 HERD_TESTING=lean \
 HERD_CONSTITUTION=full \
@@ -175,7 +169,7 @@ HERD_WORKSPACE=full \
 <deep-swe-runner>
 ```
 
-`HERD_HERD=off` 只用于确认命令被禁用，不用于评测。
+`HERD_HERD=off` 只用于确认命令被禁用，不用于评测。goal 模式没有环境变量入口：评测启动后的第一条消息必须是 `/herd-goal <任务指令>`；若 runner 无法注入斜杠命令，则这一维度不可评测，不要伪造 `HERD_AUTOPILOT`。开关也可用 `HERD_DISABLE_<NAME>=1` 表达 `=off`；`HERD_CHINESE_REMINDER` 是 `HERD_CHINESE` 的旧别名。
 
 ## 7. 结果记录模板
 
@@ -195,7 +189,7 @@ HERD_WORKSPACE=full \
 
 - Dev-30 的单轮通过率标准误约 `sqrt(0.25/30) ≈ 9.1%`，约 3 题；不要把 1–2 题的差异当结论。
 - Full-113 的采样噪声通常在 ±3–4 题；最终判断用配对差异与置信区间。
-- 先跑 `M0/K0/K1/F0`，再跑 `L9`；不要因为某一轮“看起来好”就提前锁定。
+- 先跑 `M0/K0/F0`，再跑 `L9`；不要因为某一轮“看起来好”就提前锁定。
 - 所有配置只通过 `HERD_*` 环境变量表达；不要为评测新增代码分支或隐藏提示词。
 - 如果某个特征在 `K0` 上为负，但在 `C*` 组合中为正，记录交互，不把它单独设为默认。
 - 最终默认值取“Full-113 上不劣于 `K*` 且对真实长程任务更稳”的配置；个人交互偏好（`chinese`、`workspace`）默认可以保持日常值，但必须能一键切到评测预设。

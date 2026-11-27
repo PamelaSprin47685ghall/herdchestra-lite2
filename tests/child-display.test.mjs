@@ -412,11 +412,31 @@ test("the native working row follows the latest requester and omits Root", () =>
 	expect(label()).toBe("[Busy: 2, Idle: 2] /oh-my-pie > /oh-my-pie/sub_sub_scope");
 	markReady(ledger, "nested|id");
 	expect(label()).toBe("[Busy: 1, Idle: 3] /oh-my-pie > /oh-my-pie/sub_sub_scope");
-	display.rootWait(-1);
-	display.request(ledger, null);
-	expect(label()).toBe("[Busy: 2, Idle: 2]");
-	bindScopeView(null);
-});
+  	display.rootWait(-1);
+  	display.request(ledger, null);
+  	expect(label()).toBe("[Busy: 2, Idle: 2]");
+  	bindScopeView(null);
+  });
+
+  test("the working row shows Goal: ON while the root goal session is active", () => {
+  	const ledger = createBracketLedger();
+  	registerFork(ledger, { forkId: "opaque|id", ownerId: "root", path: "/oh-my-pie", fsm: "parent", depth: 0 });
+  	registerFork(ledger, { forkId: "plan", ownerId: "root", path: "/plan", fsm: "deferred", depth: 0 });
+  	markReady(ledger, "plan");
+  	const root = new Session();
+  	root.isStreaming = true;
+  	let label;
+  	let goal = false;
+  	const display = childDisplayFor(root, { setWorkingMessage: (value) => { label = value; } }, { goalOf: () => goal });
+  	bindScopeView(createScopes({ forkWiring: { ledger } }));
+  	display.request(ledger, "root");
+  	expect(label()).toBe("[Busy: 2, Idle: 1]");
+  	goal = true;
+  	expect(label()).toBe("[Busy: 2, Idle: 1, Goal: ON]");
+  	goal = false;
+  	expect(label()).toBe("[Busy: 2, Idle: 1]");
+  	bindScopeView(null);
+  });
 
 test("renderChildActivity builds a one-line scope header", () => {
 	const tui = {

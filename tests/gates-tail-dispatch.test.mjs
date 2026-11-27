@@ -19,7 +19,7 @@ function fakeStation({ policy = READ_WRITE_SUBAGENT, recovery = false } = {}) {
 	const station = {
 		state: {
 			features: { autopilot: "off" },
-			relay: { generation: 0, bigStreak: 0, canStop: false, userPrompts: [], pendingRewind: null },
+			relay: { generation: 0, canStop: false, userPrompts: [], pendingRewind: null },
 			modelRecovery: recovery,
 			charges: {},
 		},

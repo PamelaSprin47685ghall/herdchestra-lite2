@@ -100,8 +100,8 @@ describe("decideScopeReturn", () => {
 		});
 	});
 
-	test("root small handoff rewinds, increments generation, and resets bigStreak", () => {
-		const before = Object.freeze({ ...createRelay(), generation: 2, bigStreak: 1, canStop: false });
+	test("root unfinished handoff rewinds and increments generation", () => {
+		const before = Object.freeze({ ...createRelay(), generation: 2, canStop: false });
 		const decision = decideScopeReturn({
 			isRoot: true,
 			relay: before,
@@ -116,11 +116,9 @@ describe("decideScopeReturn", () => {
 		expect(decision.big).toBe(false);
 		expect(decision.stopLoop).toBe(true);
 		expect(decision.relay.generation).toBe(3);
-		expect(decision.relay.bigStreak).toBe(0);
 		expect(decision.relay.canStop).toBe(false);
 		expect(decision.relay.pendingRewind).toEqual({
 			report: "",
-			big: false,
 			generation: 3,
 			id: "c-small",
 		});
@@ -142,62 +140,21 @@ describe("decideScopeReturn", () => {
 		});
 	});
 
-	test("root first big handoff rewinds for review; second consecutive promotes without rewind", () => {
-		const first = decideScopeReturn({
+	test("root seal promotes on the first oath without a rewind", () => {
+		const decision = decideScopeReturn({
 			isRoot: true,
 			relay: createRelay(),
 			canRewindRoot: true,
 			args: { dafny: "everything verified", ...OATH },
 			callId: "c-big-1",
 		});
-		expect(first.ok).toBe(true);
-		expect(first.kind).toBe("rewind");
-		expect(first.big).toBe(true);
-		expect(first.stopLoop).toBe(true);
-		expect(first.relay.generation).toBe(1);
-		expect(first.relay.bigStreak).toBe(1);
-		expect(first.relay.canStop).toBe(false);
-
-		const second = decideScopeReturn({
-			isRoot: true,
-			relay: { ...first.relay, pendingRewind: null },
-			canRewindRoot: true,
-			args: { dafny: "independent review confirms nothing left", ...OATH },
-			callId: "c-big-2",
-		});
-		expect(second.ok).toBe(true);
-		expect(second.kind).toBe("promote");
-		expect(second.stopLoop).toBe(false);
-		expect(second.relay.generation).toBe(1);
-		expect(second.relay.bigStreak).toBe(2);
-		expect(second.relay.canStop).toBe(true);
-		expect(second.relay.pendingRewind).toBeNull();
-	});
-
-	test("root small handoff between two oaths resets streak so another two oaths are required", () => {
-		const firstBig = decideScopeReturn({
-			isRoot: true,
-			relay: createRelay(),
-			canRewindRoot: true,
-			args: { dafny: "first big", ...OATH },
-		});
-		const small = decideScopeReturn({
-			isRoot: true,
-			relay: { ...firstBig.relay, pendingRewind: null },
-			canRewindRoot: true,
-			args: { dafny: "found edge case during review", ...UNFINISHED },
-		});
-		expect(small.relay.bigStreak).toBe(0);
-
-		const nextBig = decideScopeReturn({
-			isRoot: true,
-			relay: { ...small.relay, pendingRewind: null },
-			canRewindRoot: true,
-			args: { dafny: "edge case fixed", ...OATH },
-		});
-		expect(nextBig.kind).toBe("rewind");
-		expect(nextBig.relay.bigStreak).toBe(1);
-		expect(nextBig.relay.canStop).toBe(false);
+		expect(decision.ok).toBe(true);
+		expect(decision.kind).toBe("promote");
+		expect(decision.big).toBe(true);
+		expect(decision.stopLoop).toBe(false);
+		expect(decision.relay.generation).toBe(0);
+		expect(decision.relay.canStop).toBe(true);
+		expect(decision.relay.pendingRewind).toBeNull();
 	});
 
 	test("root rewind refuses when host cannot rewind", () => {
@@ -228,34 +185,25 @@ describe("formatting helpers", () => {
 		expect(out).toBe('checked parser\nread(path="a.mjs")\n\ndeduction: parser is clean');
 	});
 
-	test("formatRebornPrompt renders birth, pins, report, and review vs continue guidance", () => {
+	test("formatRebornPrompt renders birth, report, and continue guidance", () => {
 		const cont = formatRebornPrompt({
 			birth: "You are now in the scope /api,",
 			pins: ["**Finding:** cache key stable"],
 			report: "read(path=\"a.mjs\")\n\nstill patching",
-			big: false,
 		});
 		expect(cont.startsWith("You are now in the scope /api,")).toBe(true);
 		expect(cont).not.toContain("Pinned Context");
 		expect(cont).toContain("Latest Return Report");
 		expect(cont).toContain('read(path="a.mjs")');
-
-		const review = formatRebornPrompt({
-			report: "all verified",
-			pins: [],
-			big: true,
-		});
-		expect(review).not.toContain("Pinned Context");
-		expect(review).toContain("all verified");
-		expect(review).toMatch(/review/i);
+		expect(cont).toMatch(/Continue the work/);
+		expect(cont).not.toMatch(/independent review/i);
 		expect(rebornStartPrompt().length).toBeGreaterThan(0);
 	});
 
-	test("resetRootPromotion clears bigStreak and canStop without mutating input", () => {
-		const before = Object.freeze({ ...createRelay(), bigStreak: 2, canStop: true });
+	test("resetRootPromotion clears canStop without mutating input", () => {
+		const before = Object.freeze({ ...createRelay(), canStop: true });
 		const reset = resetRootPromotion(before);
 		expect(reset.changed).toBe(true);
-		expect(reset.relay.bigStreak).toBe(0);
 		expect(reset.relay.canStop).toBe(false);
 		expect(before.canStop).toBe(true);
 	});

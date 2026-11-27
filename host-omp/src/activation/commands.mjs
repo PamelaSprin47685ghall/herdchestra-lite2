@@ -27,6 +27,17 @@ export function wireCommands(pi, engine) {
 			return result;
 		},
 	});
+	pi.registerCommand?.("herd-goal", {
+		description:
+			"Start one goal session: /herd-goal <instruction> (bare /herd-goal turns goal mode off)",
+		handler: async (args, ctx) => {
+			const result = stationOf(ctx).onGoalCommand(args);
+			if (typeof result?.message === "string") {
+				ctx?.ui?.notify?.(result.message, result.ok === false ? "error" : "info");
+			}
+			return result;
+		},
+	});
 	pi.registerCommand?.("herd-diag", {
 		description: "Print the last host diagnostics",
 		handler: async (_args, ctx) => {

@@ -19,7 +19,7 @@ import { insideScopeNudge, rootReturnNudge, stopNudge } from "./texts.mjs";
  * 4. Unreceived subscopes outrank normal return nudges.
  * 5. A running subscope must exit through `scope_return` while its shared
  *    return-nudge allowance has room.
- * 6. Root under autopilot must call `scope_return` until `canStop` is true.
+ * 6. Root inside a goal session must call `scope_return` until `canStop` is true.
  *
  * @returns {{ kind: "none" } | { kind: "steer", text: string, charge?: "return" }}
  */

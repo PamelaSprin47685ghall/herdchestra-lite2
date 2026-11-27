@@ -197,7 +197,7 @@ await check("scope_fork refuses without a child spawner", async () => {
 			spec: {
 				forks: [
 					{
-						path: "probe",
+						path: "inspector.probe",
 						fsm: "probe",
 						profession: "You are a probe engineer.",
 						n: 1,
@@ -232,7 +232,7 @@ await check("root small handoff rewinds via agent_end ticket preserving verbatim
 	expect(!out.isError, `small handoff failed: ${out.text}`);
 	expect(out.details?.rewind === true && out.details?.stopLoop === true, "expected rewind + stopLoop");
 	expect(station.state.relay.generation === 1, `expected gen 1, got ${station.state.relay.generation}`);
-	expect(station.state.relay.bigStreak === 0, "small handoff must keep bigStreak 0");
+	expect(station.state.relay.canStop === false, "small handoff must keep root open");
 	for (const handler of host.handlers.get("agent_end") ?? []) {
 		handler({ messages: manager.buildSessionContext().messages }, ctx);
 	}
@@ -254,31 +254,16 @@ await check("root small handoff rewinds via agent_end ticket preserving verbatim
 	expect(prompts.length === 1 && prompts[0].options?.synthetic === true, "reborn start prompt did not dispatch");
 });
 
-await check("root first oath rewinds for review; second consecutive oath promotes without rewind", async () => {
-	const first = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "ready for review", ...OATH } });
-	expect(!first.isError, `first oath failed: ${first.text}`);
-	expect(first.details?.rewind === true && first.details?.big === true && first.details?.stopLoop === true, "expected review rewind");
-	expect(station.state.relay.bigStreak === 1, `expected bigStreak 1, got ${station.state.relay.bigStreak}`);
-	for (const handler of host.handlers.get("agent_end") ?? []) {
-		handler({ messages: manager.buildSessionContext().messages }, ctx);
-	}
-	await new Promise((resolve) => setTimeout(resolve, 10));
-	// Starting the reborn generation emits `before_agent_start`, which clears `rewoundThisTurn`.
-	for (const handler of host.handlers.get("before_agent_start") ?? []) {
-		handler({ systemPrompt: [] }, ctx);
-	}
+  await check("root seal promotes on the first oath without a rewind", async () => {
+  	const sealed = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "verified nothing left", ...OATH } });
+  	expect(!sealed.isError, `seal failed: ${sealed.text}`);
+  	expect(sealed.details?.promoted === true && sealed.details?.stopLoop === false, "expected promotion without stopLoop");
+  	expect(station.state.relay.canStop === true, "expected canStop true");
+  	expect(station.state.relay.pendingRewind === null, "a seal must not queue a rewind");
 
-	const stopBeforeSecond = (host.handlers.get("session_stop") ?? []).map((h) => h({}, ctx)).find(Boolean);
-	expect(stopBeforeSecond?.continue === true, "session_stop should nudge before 2nd oath (after rewoundThisTurn cleared)");
-
-	const second = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "verified nothing left", ...OATH } });
-	expect(!second.isError, `second oath failed: ${second.text}`);
-	expect(second.details?.promoted === true && second.details?.stopLoop === false, "expected promotion without stopLoop");
-	expect(station.state.relay.bigStreak === 2 && station.state.relay.canStop === true, "expected canStop true");
-
-	const stopAfterSecond = (host.handlers.get("session_stop") ?? []).map((h) => h({}, ctx)).find(Boolean);
-	expect(stopAfterSecond === undefined, "session_stop must allow final stop after 2nd consecutive oath");
-});
+  	const stopAfterSeal = (host.handlers.get("session_stop") ?? []).map((h) => h({}, ctx)).find(Boolean);
+  	expect(stopAfterSeal === undefined, "session_stop must allow the final stop after a seal");
+  });
 
 let failed = 0;
 for (const result of results) {

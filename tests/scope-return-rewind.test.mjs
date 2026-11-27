@@ -5,9 +5,9 @@
 //   on final oath.
 // - Multi-generation child rewind replaces the previous report instead of
 //   compounding generations.
-// - Root small handoff, first oath (review), small reset, second consecutive
-//   oath (promote without stopLoop), mixed-batch refusal, unreceived-children
-//   refusal, and real-user-prompt reset.
+// - Root small handoff (`unfinished`) rewinds through compaction; the seal
+//   value completes in place (promote without stopLoop), plus mixed-batch
+//   refusal, unreceived-children refusal, and real-user-prompt reset.
 
 import { describe, expect, test } from "bun:test";
 
@@ -368,7 +368,7 @@ describe("mixed tool-call batch refusal and stopAfterScopeReturn", () => {
 			],
 		};
 		const station = {
-			state: { relay: { generation: 0, bigStreak: 0, canStop: false, userPrompts: [], pendingRewind: null } },
+			state: { relay: { generation: 0, canStop: false, userPrompts: [], pendingRewind: null } },
 			forkLedgerPort: () => ledger,
 			forkIdentityPort: () => ({ forkId: "f1", parentOwnerId: "root" }),
 			contextMessages: () => [carrying],
@@ -412,8 +412,8 @@ describe("mixed tool-call batch refusal and stopAfterScopeReturn", () => {
 	});
 });
 
-describe("Root scope_return lifecycle (oath streak + unreceived gate + fork reset)", () => {
-	test("small handoff resets streak, unreceived children block big oath, two consecutive oaths promote, new fork resets promotion", () => {
+  describe("Root scope_return lifecycle (completion gate + unreceived gate + fork reset)", () => {
+	test("unfinished rewinds, unreceived children block the seal, a seal completes, new fork resets completion", () => {
 		const shared = sharedManager();
 		shared.appendMessage({ role: "user", content: "initial request" });
 		const root = createTestStation(SessionStation, shared, {}, {}, null, null);
@@ -422,7 +422,7 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 		root.forkIdentityPort = () => null;
 		root.forkOwnerId = () => null;
 		root.childSpawnPort = () => () => {};
-		root.state.features.autopilot = "on";
+		root.state.relay.goal = true;
 
 		// Fork one child -> Root big oath must be refused while unreceived.
 		const forked = handleForkCall(root, {
@@ -458,7 +458,6 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 		expect(small.details.rewind).toBe(true);
 		expect(small.details.stopLoop).toBe(true);
 		expect(root.state.relay.generation).toBe(1);
-		expect(root.state.relay.bigStreak).toBe(0);
 		expect(root.commitRootRewind({})).toBe(true);
 
 		// The restored user entry precedes the compaction record, and the
@@ -488,31 +487,17 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 		const joined = handleJoinCall(root, { id: "j-1", arguments: {} });
 		expect(joined.details.joined).toBe(true);
 
-		// Root 1st big oath -> rewind for review (bigStreak = 1, canStop = false).
-		const big1 = handleReturnCall(root, {
+		// Root seal -> promote immediately without a rewind (stopLoop = false, canStop = true).
+		const sealed = handleReturnCall(root, {
 			id: "r-big-1",
-			arguments: { dafny: "first oath summary", ...OATH },
+			arguments: { dafny: "verified nothing left", ...OATH },
 		});
-		expect(big1.isError).toBeUndefined();
-		expect(big1.details.rewind).toBe(true);
-		expect(big1.details.big).toBe(true);
-		expect(big1.details.stopLoop).toBe(true);
-		expect(root.state.relay.bigStreak).toBe(1);
-		expect(root.state.relay.canStop).toBe(false);
-		expect(root.commitRootRewind({})).toBe(true);
-
-		// Root 2nd consecutive big oath -> promote without rewind (stopLoop = false, canStop = true).
-		const big2 = handleReturnCall(root, {
-			id: "r-big-2",
-			arguments: { dafny: "independent review confirms complete", ...OATH },
-		});
-		expect(big2.isError).toBeUndefined();
-		expect(big2.details.promoted).toBe(true);
-		expect(big2.details.stopLoop).toBe(false);
-		expect(root.state.relay.bigStreak).toBe(2);
+		expect(sealed.isError).toBeUndefined();
+		expect(sealed.details.promoted).toBe(true);
+		expect(sealed.details.stopLoop).toBe(false);
 		expect(root.state.relay.canStop).toBe(true);
 
-		// Opening a new fork resets promotion (canStop = false, bigStreak = 0).
+		// Opening a new fork resets completion (canStop = false).
 		handleForkCall(root, {
 			id: "f-root-2",
 			arguments: {
@@ -528,7 +513,6 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 				],
 			},
 		});
-		expect(root.state.relay.bigStreak).toBe(0);
 		expect(root.state.relay.canStop).toBe(false);
 	});
 });

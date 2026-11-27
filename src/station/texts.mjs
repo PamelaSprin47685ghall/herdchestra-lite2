@@ -10,7 +10,7 @@ export function insideScopeNudge(openCount) {
 	return render(T["scope.stop-blocked"], { count: openCount });
 }
 
-/** A steer when Root stops naturally under autopilot before sealing. */
+/** A steer when Root stops naturally inside a goal session before sealing. */
 export function rootReturnNudge() {
 	return T["root.return-nudge"];
 }

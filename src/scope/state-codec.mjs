@@ -299,10 +299,9 @@ export function deserializeState(input) {
     // it is dropped whole.
     if (!restoredBrackets.ok) return createState();
     const storedFeatures = isPlainObject(data.features) ? data.features : null;
+    // The retired `autopilot` feature is dropped on purpose: a goal session
+    // is per-command, so a restored session never starts inside one.
     const features = normalizeFeatures(storedFeatures ?? {});
-    if (!storedFeatures || !Object.hasOwn(storedFeatures, "autopilot")) {
-      features.autopilot = data.autopilot === true ? "on" : "off";
-    }
     return {
       version: VERSION,
       startedAt: Number.isFinite(data.startedAt) ? data.startedAt : Date.now(),

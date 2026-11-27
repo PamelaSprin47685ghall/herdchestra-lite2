@@ -46,7 +46,7 @@ describe("mode priority", () => {
 		expect(projection.tools).toEqual(["scope_return"]);
 	});
 
-	test("a root that finished its second oath has no tools at all", () => {
+	test("a root that sealed has no tools at all", () => {
 		const projection = projectCapabilities({ isChild: false, canStop: true });
 		expect(projection.mode).toBe("FINAL_ANSWER");
 		expect(projection.tools).toEqual([]);

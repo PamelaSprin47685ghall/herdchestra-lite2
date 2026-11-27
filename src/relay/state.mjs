@@ -1,13 +1,10 @@
 // Relay state: creation, copying, and validation. Pure data. No I/O.
 //
-// Root handoff is unified with `scope_return`:
-// - A small handoff (oath `unfinished`) rewinds Root to its user prompts + pins +
-//   report, increments `generation`, and resets `bigStreak` to 0.
-// - A first seal handoff (`bigStreak === 0`) rewinds Root for an
-//   independent review pass (`generation += 1`, `bigStreak = 1`, `canStop = false`).
-// - A second consecutive seal handoff (`bigStreak >= 1`) promotes
-//   without rewinding (`bigStreak = 2`, `canStop = true`) so Root may write the
-//   final user-facing answer.
+// Root handoff is unified with `scope_return` and matches a subscope:
+// - A small handoff (oath `unfinished`) rewinds Root to its user prompts +
+//   report and increments `generation`; `canStop` stays false.
+// - A seal handoff sets `canStop = true`, so Root writes the final user-facing
+//   answer without another rewind.
 
 function isPlainObject(value) {
 	if (typeof value !== "object" || value === null) return false;
@@ -29,7 +26,6 @@ function copyPendingRewind(value) {
 	if (!nonNegativeInteger(value.generation)) return null;
 	return {
 		report: value.report,
-		big: value.big === true,
 		generation: value.generation,
 		...(typeof value.id === "string" && value.id !== "" ? { id: value.id } : {}),
 	};
@@ -39,7 +35,6 @@ function isValidPendingRewind(value) {
 	if (value === null || value === undefined) return true;
 	if (!isPlainObject(value)) return false;
 	if (typeof value.report !== "string") return false;
-	if (typeof value.big !== "boolean") return false;
 	if (!nonNegativeInteger(value.generation)) return false;
 	if (value.id !== undefined && typeof value.id !== "string") return false;
 	return true;
@@ -48,8 +43,9 @@ function isValidPendingRewind(value) {
 export function createRelay() {
 	return {
 		generation: 0,
-		bigStreak: 0,
 		canStop: false,
+		// One-shot goal session: set by `/herd-goal`, cleared on sealed delivery.
+		goal: false,
 		// Verbatim user-authored prompts and steers, oldest first. Preserved
 		// across Root rewinds and reloads so the reborn Root always starts from
 		// the complete user requirement record.
@@ -62,8 +58,8 @@ export function copyRelay(relay) {
 	const source = isPlainObject(relay) ? relay : createRelay();
 	return {
 		generation: nonNegativeInteger(source.generation) ? source.generation : 0,
-		bigStreak: nonNegativeInteger(source.bigStreak) ? source.bigStreak : 0,
 		canStop: source.canStop === true,
+		goal: source.goal === true,
 		userPrompts: Array.isArray(source.userPrompts)
 			? source.userPrompts.filter(
 					(text) => typeof text === "string" && text.trim() !== "",
@@ -76,10 +72,8 @@ export function copyRelay(relay) {
 export function isValidRelay(value) {
 	if (!isPlainObject(value)) return false;
 	if (!nonNegativeInteger(value.generation)) return false;
-	if (value.bigStreak !== undefined && !nonNegativeInteger(value.bigStreak)) {
-		return false;
-	}
 	if (typeof value.canStop !== "boolean") return false;
+	if (value.goal !== undefined && typeof value.goal !== "boolean") return false;
 	if (value.userPrompts !== undefined) {
 		if (!Array.isArray(value.userPrompts)) return false;
 		for (const text of value.userPrompts) {

@@ -140,8 +140,9 @@ describe("the control-plane documents", () => {
 	test("the relay receipts carry the return report, not pins", () => {
 		const relay = loadDoc("receipts/relay");
 		expect(relay["reborn.pins"]).toBeUndefined();
+		expect(relay["reborn.review"]).toBeUndefined();
 		expect(placeholderNames(relay["reborn.report"])).toEqual(["report"]);
-		for (const key of ["reborn.continue", "reborn.review", "reborn.start"]) {
+		for (const key of ["reborn.continue", "reborn.start"]) {
 			expect(placeholderNames(relay[key])).toEqual([]);
 		}
 	});

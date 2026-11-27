@@ -18,11 +18,11 @@ import { defaultFeatures } from "../src/features/herd/features.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 
 function featureState(overrides = {}) {
-	return { ...defaultFeatures(), autopilot: "on", ...overrides };
+	return { ...defaultFeatures(), ...overrides };
 }
 
 function relayState(overrides = {}) {
-	return { features: featureState(), relay: { ...createRelay(), ...overrides } };
+	return { features: featureState(), relay: { ...createRelay(), goal: true, ...overrides } };
 }
 
 function stopStation(ownerId, overrides = {}) {
@@ -41,7 +41,7 @@ function stopStation(ownerId, overrides = {}) {
 			mode:
 				ownerId !== null
 					? "SUBSCOPE"
-					: station.state.features.autopilot === "on"
+					: station.state.relay.goal === true
 						? "ROOT_AUTOPILOT"
 						: "ROOT_MANUAL",
 			state: {
@@ -66,12 +66,12 @@ describe("a root's natural stop with unreceived work", () => {
 		expect(out.additionalContext).toContain("scope_join");
 	});
 
-	test("holds even when autopilot is off", () => {
+	test("holds even when goal mode is off", () => {
 		const child = { forkId: "fork_a", status: "ready", ownerId: "root" };
 		const station = stopStation(null, {
 			ledger: { order: ["fork_a"], forks: { fork_a: child } },
 		});
-		station.state.features.autopilot = "off";
+		station.state.relay.goal = false;
 
 		const out = onSessionStop(station, {});
 
@@ -81,20 +81,20 @@ describe("a root's natural stop with unreceived work", () => {
 });
 
 describe("root vs child natural stop", () => {
-	test("root under autopilot without canStop is nudged to call scope_return", () => {
+	test("root in goal mode without canStop is nudged to call scope_return", () => {
 		const station = stopStation(null);
 		const out = onSessionStop(station, {});
 		expect(out).toEqual({ continue: true, additionalContext: rootReturnNudge() });
 	});
 
-	test("root under autopilot with canStop is allowed to stop", () => {
-		const station = stopStation(null, { relay: { bigStreak: 2, canStop: true } });
+	test("root in goal mode with canStop is allowed to stop", () => {
+		const station = stopStation(null, { relay: { canStop: true } });
 		expect(onSessionStop(station, {})).toBeUndefined();
 	});
 
 	test("root in manual duty is allowed to stop naturally", () => {
 		const station = stopStation(null);
-		station.state.features.autopilot = "off";
+		station.state.relay.goal = false;
 		expect(onSessionStop(station, {})).toBeUndefined();
 	});
 
@@ -149,9 +149,9 @@ describe("child isolation from root rewind", () => {
 	});
 });
 
-function promptStation(ownerId, autopilot = true) {
-	return {
-		state: { features: featureState({ autopilot: autopilot ? "on" : "off" }) },
+  function promptStation(ownerId, goal = true) {
+  	return {
+  		state: { features: featureState(), relay: { ...createRelay(), goal } },
 		forkOwnerId: () => ownerId,
 		policy: () => READ_ONLY_SUBAGENT,
 		portTable: {},
@@ -165,25 +165,25 @@ function promptText(station) {
 }
 
 describe("a child's model-facing prompt", () => {
-	for (const autopilot of [true, false]) {
-		test(`matches the root prompt byte for byte when autopilot is ${autopilot}`, () => {
-			const child = promptText(promptStation("fork_a", autopilot));
-			const root = promptText(promptStation(null, autopilot));
+  	for (const goal of [true, false]) {
+  		test(`matches the root prompt byte for byte when goal mode is ${goal}`, () => {
+  			const child = promptText(promptStation("fork_a", goal));
+  			const root = promptText(promptStation(null, goal));
 
 			expect(child).toBe(root);
 			expect(child).toContain("### Scope duties");
 			expect(child).toContain("Subscope duty");
 			expect(child).toContain("scope_return");
 			expect(child).toContain("### Close the work");
-			expect(child).toContain("Only the user toggles autopilot");
+  			expect(child).toContain("/herd-goal");
 		});
 	}
 });
 
 describe("the prompt gate on an inherited prompt", () => {
-	for (const autopilot of [true, false]) {
-		test(`is a no-op for a child when autopilot is ${autopilot}`, () => {
-			const station = promptStation("fork_a", autopilot);
+  	for (const goal of [true, false]) {
+  		test(`is a no-op for a child when goal mode is ${goal}`, () => {
+  			const station = promptStation("fork_a", goal);
 			const inherited = injectSystemPrompt(["Host instructions"]);
 
 			const out = onBeforeAgentStart(station, { systemPrompt: inherited }, {});
@@ -208,7 +208,7 @@ const childBranch = {
 function requestStation(ownerId) {
 	const state = {
 		features: featureState(),
-		relay: createRelay(),
+		relay: { ...createRelay(), goal: ownerId === null },
 		hostBoundaryKey: null,
 	};
 	const branch = ownerId ? childBranch : null;
@@ -225,7 +225,7 @@ function requestStation(ownerId) {
 			// The probe is the receipt: same projection source as the runtime.
 			const projection = projectCapabilities({
 				isChild: ownerId !== null,
-				autopilot: state.features.autopilot === "on",
+  				autopilot: state.relay.goal === true,
 				canStop: false,
 				unreceived: 0,
 				selfPath: ownerId ? "/fork_a" : "/",
@@ -241,7 +241,7 @@ function requestStation(ownerId) {
 }
 
 describe("a child's skill receipt", () => {
-	test("carries the child's own turns instead of root autopilot/return status", () => {
+	test("carries the child's own turns instead of root goal/return status", () => {
 		const text = requestStation("fork_a").skillReceipt().content[0].text;
 		const view = probeOf(text);
 		expect(view.remaining).toEqual({ read: "1/2" });
@@ -263,7 +263,7 @@ describe("a child's skill receipt", () => {
 		expect(text).not.toContain("autopilot:");
 	});
 
-	test("the root receipt carries autopilot mode and scope_return obligation", () => {
+	test("the root receipt carries goal mode and scope_return obligation", () => {
 		const text = requestStation(null).skillReceipt().content[0].text;
 		const view = probeOf(text);
 

@@ -32,9 +32,12 @@ export const EXCLUDED_HOST_TOOLS = Object.freeze(new Set(["ask", "todo", "wait",
  * - ABANDONED: another scope abandoned this scope; only `scope_return` is bound
  *   (outranks CONTEXT_LIMIT and unreceived so the scope returns immediately).
  * - CONTEXT_LIMIT: context is over half the window; only `scope_return` remains.
- * - FINAL_ANSWER: root finished its second oath; no tools at all, the model
- *   can only write the final answer. A new user message resets `canStop`.
+ * - FINAL_ANSWER: root sealed; no tools at all, the model can only write the
+ *   final answer. A new user message resets `canStop`.
  * - Normal family (`SUBSCOPE` / `ROOT_MANUAL` / `ROOT_AUTOPILOT`): full set.
+ *   `ROOT_AUTOPILOT` names an active goal session (`/herd-goal`): no `ask`,
+ *   and root cannot stop before `scope_return`. The name is kept for the
+ *   projection's stability; there is no user-facing toggle.
  *
  * Returns a frozen `{ mode, tools, state, signature }`.
  */

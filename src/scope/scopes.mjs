@@ -48,9 +48,9 @@ export function createScopes({ forkWiring }) {
 			const record = recordOf(id);
 			return Array.isArray(record?.children) ? [...record.children] : [];
 		},
-		activity: (lastOwnerId, rootBusy, clock) => {
+		activity: (lastOwnerId, rootBusy, clock, goal) => {
 			const current = ledger();
-			return current ? scopeActivity(current, lastOwnerId, rootBusy, clock) : "";
+			return current ? scopeActivity(current, lastOwnerId, rootBusy, clock, goal) : "";
 		},
 		record: (messages, options) => renderChildRecord(messages, options),
 		nudge: () => childReturnNudge(),

@@ -11,7 +11,8 @@ import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
 import { abandonDescendants } from "../scope/forkjoin.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
-import { mergeFeatures, parseHerdCommand } from "../features/herd/features.mjs";
+import { mergeFeatures, parseGoalCommand, parseHerdCommand } from "../features/herd/features.mjs";
+import { createRelay } from "../relay/state.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { hostBoundaryKey } from "./messages.mjs";
@@ -290,9 +291,13 @@ function onSessionStop(station, ctx, evidence = null) {
 			stopNudge(projection.mode, { unreceived }),
 		);
 	}
-	if (projection.mode === "FINAL_ANSWER") return undefined;
+	if (projection.mode === "FINAL_ANSWER") {
+		// Delivery seals a one-shot goal session: the next turn starts manual.
+		station.endGoalSession?.();
+		return undefined;
+	}
 	// Unreceived subscopes (running or ready) outrank every other stop rule,
-	// for both Root (even with autopilot off) and subscope scopes.
+	// for both Root (even outside a goal session) and subscope scopes.
 	if (unreceived > 0) {
 		return continueFeedback(insideScopeNudge(unreceived));
 	}
@@ -305,10 +310,10 @@ function onSessionStop(station, ctx, evidence = null) {
 		}
 		return undefined;
 	}
-	// Root natural stop: allowed when autopilot is off or after two consecutive
-	// big `scope_return` oaths (`canStop === true`). Otherwise nudge to call
+	// Root natural stop: allowed outside a goal session, or after a sealed
+	// `scope_return` (`canStop === true`). Otherwise nudge to call
 	// `scope_return`.
-	if (station.state?.features?.autopilot !== "on") return undefined;
+	if (station.state?.relay?.goal !== true) return undefined;
 	if (station.state?.relay?.canStop === true) return undefined;
 	return continueFeedback(rootReturnNudge());
 }
@@ -387,10 +392,51 @@ function onHerdCommand(station, args) {
 	return { ok: true, ...parsed };
 }
 
+/**
+ * `/herd-goal <instruction>`: open one goal session and immediately run it.
+ *
+ * A goal session is a Shift, not Caps Lock: the flag lives in `relay.goal`,
+ * stays on across interrupted turns, and is released by a bare `/herd-goal` or
+ * by the sealed delivery. Every state change lands before the tail dispatch, so
+ * the ticket's synchronous prefix never sees a half-updated relay.
+ */
+function onGoalCommand(station, args) {
+	if (station.portTable?.herd !== "on") {
+		return {
+			ok: false,
+			code: "HERD_UNAVAILABLE",
+			message: "/herd-goal is disabled by HERD_HERD=off",
+		};
+	}
+	const parsed = parseGoalCommand(args);
+	if (parsed.kind === "off") {
+		if (station.state?.relay?.goal === true) {
+			station.state.relay.goal = false;
+			station.persist();
+			return { ok: true, kind: "off", goal: false, message: "goal mode off" };
+		}
+		return { ok: true, kind: "off", goal: false, message: "goal mode is already off" };
+	}
+	if (!station.state.relay || typeof station.state.relay !== "object") {
+		station.state.relay = createRelay();
+	}
+	station.state.relay.goal = true;
+	station.state.relay.canStop = false;
+	station.persist();
+	station.deliverUserMessage(parsed.text);
+	return {
+		ok: true,
+		kind: "goal",
+		text: parsed.text,
+		message: "goal started (auto-exits on delivery)",
+	};
+}
+
 export {
 	onAssistantMessage,
 	onMessageEnd,
 	onHerdCommand,
+	onGoalCommand,
 	prepareRequest,
 	onContext,
 	onAgentEnd,

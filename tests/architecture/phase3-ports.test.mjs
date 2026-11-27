@@ -87,7 +87,7 @@ describe("B5 — buildPorts carries the session port objects", () => {
 		expect(typeof built.implementations.clock).toBe("object");
 		expect(typeof built.implementations.herd?.bindState).toBe("function");
 
-		const herd = built.implementations.herd.bindState({ autopilot: false });
+		const herd = built.implementations.herd.bindState({ relay: { goal: false } });
 		expect(herd.toggle("hi")).toEqual({
 			ok: false,
 			code: "HERD_UNAVAILABLE",
@@ -97,11 +97,11 @@ describe("B5 — buildPorts carries the session port objects", () => {
 
 	test("the on form writes through the store it is bound to", () => {
 		const built = buildPorts({ HERD_HERD: "on" });
-		const store = { features: { autopilot: "off" } };
+		const store = { relay: { goal: false } };
 
 		const herd = built.implementations.herd.bindState(store);
 		expect(herd.toggle("hi")).toEqual({ ok: true, mode: "on", text: "hi" });
-		expect(store.features.autopilot).toBe("on");
+		expect(store.relay.goal).toBe(true);
 	});
 
 	test("a retired pin or amend switch is refused, not silently ignored", () => {

@@ -6,7 +6,7 @@
 import { forkOf, RUNNING, READY } from "./forkjoin.mjs";
 import { publicScopeId, scopeTitle } from "./scope-id.mjs";
 
-export function scopeActivity(ledger, lastOwnerId, rootBusy, clock = null) {
+export function scopeActivity(ledger, lastOwnerId, rootBusy, clock = null, goal = false) {
 	let busy = Number(rootBusy);
 	let idle = Number(!rootBusy);
 	for (const id of ledger.order) {
@@ -27,5 +27,8 @@ export function scopeActivity(ledger, lastOwnerId, rootBusy, clock = null) {
 		id = branch.ownerId;
 	}
 	lineage.reverse();
-	return `[Busy: ${busy}, Idle: ${idle}]${lineage.length ? ` ${lineage.join(" > ")}` : ""}`;
+	const counts = goal === true
+		? `[Busy: ${busy}, Idle: ${idle}, Goal: ON]`
+		: `[Busy: ${busy}, Idle: ${idle}]`;
+	return `${counts}${lineage.length ? ` ${lineage.join(" > ")}` : ""}`;
 }

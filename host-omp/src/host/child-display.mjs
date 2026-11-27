@@ -640,13 +640,14 @@ function releaseApprovalPreviewSuppression(binding) {
 	}
 }
 
-export function childDisplayFor(root, ui) {
+export function childDisplayFor(root, ui, options = {}) {
 	if (!root) return null;
 	const manager = root.sessionManager;
 	const sessionId = manager?.getSessionId?.();
 	const state = stateFor(root);
 	if (state.display && state.display.manager === manager && state.display.sessionId === sessionId) {
 		if (ui) state.display.ui = ui;
+		if (typeof options.goalOf === "function") state.display.goalOf = options.goalOf;
 		return state.display.port;
 	}
 	releaseApprovalPreviewSuppression(state.display);
@@ -654,6 +655,7 @@ export function childDisplayFor(root, ui) {
 		manager,
 		sessionId,
 		ui,
+		goalOf: typeof options.goalOf === "function" ? options.goalOf : null,
 		port: null,
 		approvalPreviewInstalled: false,
 		approvalPreviewDetach: null,
@@ -675,7 +677,7 @@ export function childDisplayFor(root, ui) {
 		request(_ledger, ownerId) {
 			if (!current() || typeof binding.ui?.setWorkingMessage !== "function") return;
 			lastOwnerId = ownerId ?? "root";
-			binding.ui.setWorkingMessage(() => current() ? scopes().activity(lastOwnerId, root.isStreaming === true && rootWaits === 0) : "Working…");
+			binding.ui.setWorkingMessage(() => current() ? scopes().activity(lastOwnerId, root.isStreaming === true && rootWaits === 0, undefined, binding.goalOf?.() === true) : "Working…");
 		},
 		attach(id, child) {
 			const unsubscribe = child.subscribe((event) => {

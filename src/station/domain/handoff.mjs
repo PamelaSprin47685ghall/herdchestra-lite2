@@ -34,6 +34,10 @@ export function parseReturnOath(args) {
 /**
  * Unified `scope_return` decision across Root and Subscope.
  *
+ * Both depths share one rule: the `unfinished` oath rewinds, and the seal oath
+ * finishes the scope. At root, finishing sets `canStop` so the next turn is
+ * FINAL_ANSWER; root joins every outstanding child before a seal.
+ *
  * When a non-root subscope has `record.abandonRequested === true`:
  * - Any oath (missing, invalid, `unfinished`, or seal) is accepted and NEVER rewinds.
  * - Immediately delivers to `receiverId` with `abandoned: true`.
@@ -46,7 +50,6 @@ export function decideScopeReturn({
 	orphans = [],
 	unreceived = 0,
 	relay = null,
-	review = "on",
 	canRewindRoot = true,
 	mixedToolCalls = false,
 	args = {},
@@ -111,7 +114,7 @@ export function decideScopeReturn({
 	if (oath.big && openCount > 0) {
 		return { ok: false, code: "UNRECEIVED_CHILDREN", unreceived: openCount };
 	}
-	if (oath.big && current.bigStreak >= 1) {
+	if (oath.big) {
 		return {
 			ok: true,
 			kind: "promote",
@@ -120,23 +123,6 @@ export function decideScopeReturn({
 			dafny,
 			relay: {
 				...current,
-				bigStreak: 2,
-				canStop: true,
-				pendingRewind: null,
-			},
-			stopLoop: false,
-		};
-	}
-	if (oath.big && review === "off") {
-		return {
-			ok: true,
-			kind: "promote",
-			scope: "root",
-			big: true,
-			dafny,
-			relay: {
-				...current,
-				bigStreak: 1,
 				canStop: true,
 				pendingRewind: null,
 			},
@@ -149,7 +135,6 @@ export function decideScopeReturn({
 	const nextGeneration = current.generation + 1;
 	const pendingRewind = {
 		report: "",
-		big: oath.big,
 		generation: nextGeneration,
 		...(typeof callId === "string" && callId !== "" ? { id: callId } : {}),
 	};
@@ -157,12 +142,11 @@ export function decideScopeReturn({
 		ok: true,
 		kind: "rewind",
 		scope: "root",
-		big: oath.big,
+		big: false,
 		dafny,
 		relay: {
 			...current,
 			generation: nextGeneration,
-			bigStreak: oath.big ? 1 : 0,
 			canStop: false,
 			pendingRewind,
 		},
@@ -181,7 +165,6 @@ export function formatGenerationReport(messages, start = 0, dafny = "") {
 export function formatRebornPrompt({
 	birth = "",
 	report = "",
-	big = false,
 } = {}) {
 	const R = relayDoc();
 	const sections = [];
@@ -193,7 +176,7 @@ export function formatRebornPrompt({
 		sections.push(render(R["reborn.report"], { report: reportText }));
 	}
 
-	sections.push(big ? R["reborn.review"] : R["reborn.continue"]);
+	sections.push(R["reborn.continue"]);
 	return sections.join("\n\n---\n\n");
 }
 
@@ -203,12 +186,11 @@ export function rebornStartPrompt() {
 
 export function resetRootPromotion(relay) {
 	const current = copyRelay(relay);
-	if (current.bigStreak === 0 && current.canStop === false) return { changed: false, relay: current };
+	if (current.canStop === false) return { changed: false, relay: current };
 	return {
 		changed: true,
 		relay: {
 			...current,
-			bigStreak: 0,
 			canStop: false,
 		},
 	};

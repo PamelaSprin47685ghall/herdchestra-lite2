@@ -61,20 +61,19 @@ describe("mergeUserPrompts", () => {
 });
 
 describe("relay state persistence", () => {
-	test("round-trips the 5-field relay including userPrompts and pendingRewind", () => {
+	test("round-trips the relay fields including userPrompts and pendingRewind", () => {
 		const state = createState();
 		state.relay = {
 			generation: 2,
-			bigStreak: 1,
 			canStop: false,
+			goal: false,
 			userPrompts: [FIRST, SECOND],
-			pendingRewind: { report: "work so far", big: true, generation: 2, id: "call-1" },
+			pendingRewind: { report: "work so far", generation: 2, id: "call-1" },
 		};
 		const restored = deserializeState(serializeState(state));
 		expect(restored.relay).toEqual(state.relay);
 		expect(isValidRelay(state.relay)).toBe(true);
 		expect(isValidRelay({ ...createRelay(), userPrompts: [1] })).toBe(false);
-		expect(isValidRelay({ ...createRelay(), bigStreak: -1 })).toBe(false);
 		expect(isValidRelay({ ...createRelay(), pendingRewind: { report: 123 } })).toBe(false);
 	});
 });
@@ -204,14 +203,13 @@ describe("commitRootRewind", () => {
 			{ role: "user", content: SECOND },
 		]);
 		station.state.relay.generation = 1;
-		station.state.relay.pendingRewind = { report: "Gen 1 report", big: false, generation: 1, id: "r1" };
+		station.state.relay.pendingRewind = { report: "Gen 1 report", generation: 1, id: "r1" };
 		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
 
 		// A third real user message arrives in generation 1.
 		manager.appendMessage({ role: "user", content: "Third requirement." });
 		station.state.relay.generation = 2;
-		station.state.relay.bigStreak = 1;
-		station.state.relay.pendingRewind = { report: "Gen 2 report", big: true, generation: 2, id: "r2" };
+		station.state.relay.pendingRewind = { report: "Gen 2 report", generation: 2, id: "r2" };
 		const before = entries.length;
 		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
 		const appended = entries.slice(before);
@@ -235,7 +233,7 @@ describe("commitRootRewind", () => {
 		const { station, manager, entries } = rewindHarness([
 			{ role: "assistant", content: [{ type: "text", text: "Working" }] },
 		]);
-		station.state.relay.pendingRewind = { report: "Gen 1 report", big: false, generation: 1, id: "r1" };
+		station.state.relay.pendingRewind = { report: "Gen 1 report", generation: 1 };
 		const before = entries.length;
 		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
 
@@ -247,10 +245,9 @@ describe("commitRootRewind", () => {
 		expect(rebuilt[0].role).toBe("compactionSummary");
 	});
 
-	test("syncRootUserPrompts resets bigStreak and canStop when a new real user prompt arrives", () => {
+	test("syncRootUserPrompts resets canStop when a new real user prompt arrives", () => {
 		const { station } = rewindHarness([{ role: "user", content: FIRST }]);
 		station.state.relay.userPrompts = [FIRST];
-		station.state.relay.bigStreak = 2;
 		station.state.relay.canStop = true;
 
 		// No new user message -> unchanged.
@@ -260,7 +257,6 @@ describe("commitRootRewind", () => {
 		// New real user message -> resets promotion.
 		expect(syncRootUserPrompts(station, [{ role: "user", content: FIRST }, { role: "user", content: SECOND }])).toBe(true);
 		expect(station.state.relay.userPrompts).toEqual([FIRST, SECOND]);
-		expect(station.state.relay.bigStreak).toBe(0);
 		expect(station.state.relay.canStop).toBe(false);
 	});
 });

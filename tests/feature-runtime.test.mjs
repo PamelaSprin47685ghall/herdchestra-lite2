@@ -20,8 +20,6 @@ import { createRelay } from "../src/relay/index.mjs";
 
 function allOff() {
 	return {
-		autopilot: "off",
-		review: "on",
 		chinese: "off",
 		testing: "off",
 		constitution: "off",
@@ -64,13 +62,14 @@ describe("persistence", () => {
 		expect(restored.features.workspace).toBe("personal");
 	});
 
-	test("migrates the legacy autopilot boolean and falls back for missing features", () => {
+	test("drops the retired autopilot boolean and falls back for missing features", () => {
 		const state = createState();
 		const legacy = serializeState(state);
 		delete legacy.features;
 		legacy.autopilot = true;
 		const restored = deserializeState(legacy);
-		expect(restored.features.autopilot).toBe("on");
+		expect(restored.features.autopilot).toBeUndefined();
+		expect(restored.relay?.goal === true).toBe(false);
 		expect(restored.features.testing).toBe("lean");
 	});
 
@@ -249,45 +248,42 @@ describe("onHerdCommand", () => {
 	});
 });
 
-describe("review policy", () => {
+  describe("root seal completion", () => {
 	const bigOath = {
 		dafny: "done",
 		signed_sealed_hands_off_nothing_left_on_the_table:
 			"a_ferocious_audacious_master_would_change_nothing",
 	};
-	const decide = (relay, review) =>
+	const decide = (relay, args = bigOath) =>
 		decideScopeReturn({
 			isRoot: true,
 			relay,
-			review,
 			canRewindRoot: true,
-			args: bigOath,
+			args,
 			callId: "call-1",
 		});
 
-	test("review on rewinds on the first big oath and promotes on the second", () => {
-		const first = decide(createRelay(), "on");
-		expect(first.kind).toBe("rewind");
-		expect(first.relay.pendingRewind).not.toBeNull();
-
-		const second = decide({ ...createRelay(), bigStreak: 1 }, "on");
-		expect(second.kind).toBe("promote");
-		expect(second.relay.canStop).toBe(true);
-		expect(second.relay.bigStreak).toBe(2);
-	});
-
-	test("review off promotes on the first big oath", () => {
-		const first = decide(createRelay(), "off");
+	test("a seal promotes on the first oath, matching a subscope", () => {
+		const first = decide(createRelay());
 		expect(first.kind).toBe("promote");
 		expect(first.relay.canStop).toBe(true);
-		expect(first.relay.bigStreak).toBe(1);
+		expect(first.relay.pendingRewind).toBeNull();
 	});
 
-	test("open children still refuse the big oath before review policy applies", () => {
+	test("unfinished rewinds root and keeps completion closed", () => {
+		const out = decide(createRelay(), {
+			dafny: "still working",
+			signed_sealed_hands_off_nothing_left_on_the_table: "unfinished",
+		});
+		expect(out.kind).toBe("rewind");
+		expect(out.relay.canStop).toBe(false);
+		expect(out.relay.pendingRewind).not.toBeNull();
+	});
+
+	test("open children still refuse the seal", () => {
 		const out = decideScopeReturn({
 			isRoot: true,
 			relay: createRelay(),
-			review: "off",
 			canRewindRoot: true,
 			unreceived: 1,
 			args: bigOath,
@@ -295,4 +291,4 @@ describe("review policy", () => {
 		});
 		expect(out).toMatchObject({ ok: false, code: "UNRECEIVED_CHILDREN" });
 	});
-});
+  });

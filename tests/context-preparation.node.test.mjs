@@ -620,3 +620,59 @@ test("a receipt whose branch journal disagrees degrades instead of killing the t
 		String(entry.message).includes("Context skill commit failed") &&
 		entry.detail?.tolerated === true));
 });
+
+test("enriched steering user and excludeFromContext tails align without losing receipts", async () => {
+	const f = fixture();
+	installContextPreparation(f.session, f);
+	await f.prepare();
+	const liveSteer = {
+		role: "user",
+		content: [{ type: "text", text: "1 unreceived result(s) from forked scopes." }],
+		steering: true,
+		liveSteered: true,
+		attribution: "agent",
+		timestamp: 500,
+	};
+	const persistedSteer = {
+		role: "user",
+		content: [{ type: "text", text: "1 unreceived result(s) from forked scopes." }],
+		steering: true,
+		attribution: "agent",
+		timestamp: 500,
+		id: "entry-500",
+	};
+	const childCard = {
+		role: "custom",
+		customType: "herdchestra-child-activity",
+		content: "worker running",
+		display: true,
+		excludeFromContext: true,
+		attribution: "agent",
+		timestamp: 501,
+	};
+	const nextInput = { role: "user", content: "follow-up", timestamp: 502 };
+	f.loop.messages.push(liveSteer, nextInput);
+	f.session.agent.state.messages.push(persistedSteer, childCard);
+	f.manager.appendMessage(persistedSteer);
+	await f.prepare();
+	assert.equal(f.loop.messages.at(-2).herdSkill, true);
+	assert.equal(f.loop.messages.at(-1), nextInput);
+	assert.equal(f.loop.messages.filter((message) => message === nextInput).length, 1);
+});
+
+test("a live loop missing an externally appended committed tail degrades open instead of killing the turn", async () => {
+	reset();
+	const f = fixture();
+	installContextPreparation(f.session, f);
+	await f.prepare();
+	const external = { role: "assistant", content: [{ type: "text", text: "external turn" }], timestamp: 900 };
+	f.session.agent.state.messages.push(external);
+	const before = f.loop.messages.slice();
+	await f.prepare();
+	assert.deepEqual(f.loop.messages, before);
+	const records = snapshot().filter((entry) => entry.domain === "context");
+	assert.ok(records.some((entry) =>
+		String(entry.message).includes("The live loop does not contain the last committed message.") &&
+		entry.detail?.tolerated === true &&
+		entry.detail?.tailRole === "assistant"));
+});

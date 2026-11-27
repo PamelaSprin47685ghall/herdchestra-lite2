@@ -16,8 +16,54 @@ function sameMessage(left, right) {
 export function sameAssistantFrame(left, right) {
 	return left?.role === "assistant" && right?.role === "assistant" && Number.isFinite(right.timestamp) &&
 		left.timestamp === right.timestamp && left.provider === right.provider && left.api === right.api &&
-		left.model === right.model && left.responseId === right.responseId && left.stopReason === right.stopReason &&
-		isDeepStrictEqual(left.content, right.content);
+		left.model === right.model && (left.responseId ?? "") === (right.responseId ?? "") &&
+		left.stopReason === right.stopReason && isDeepStrictEqual(left.content, right.content);
+}
+
+const INPUT_ROLES = new Set(["user", "developer", "custom", "fileMention", "hookMessage"]);
+
+function normalizedTimestamp(value) {
+	if (Number.isFinite(value)) return value;
+	if (typeof value === "string" && value.trim() !== "") {
+		const parsed = Date.parse(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return null;
+}
+
+function sameInputAttribution(role, left, right) {
+	if (left === right) return true;
+	if (role === "custom" || role === "hookMessage") {
+		return (left ?? "agent") === (right ?? "agent");
+	}
+	if (role === "user") {
+		return (left ?? "user") === (right ?? "user");
+	}
+	return left === undefined || right === undefined;
+}
+
+function sameInputContent(left, right) {
+	if (left?.role === "fileMention") {
+		return isDeepStrictEqual(left.files, right.files) && isDeepStrictEqual(left.content, right.content);
+	}
+	return isDeepStrictEqual(left.content, right.content) || sameMessage(left.content, right.content);
+}
+
+/**
+ * Compare two input-side messages across loop/live/journal copies.
+ * The host normalizes and enriches persisted input copies (stripping display
+ * details, adding entry metadata, setting `liveSteered`, or formatting ISO
+ * timestamps). Match stable input identity without those runtime fields.
+ */
+export function samePersistedInputMessage(left, right) {
+	if (!left || !right || left.role !== right.role || !INPUT_ROLES.has(left.role)) return false;
+	if (left.role === "custom" || left.role === "hookMessage") {
+		if (left.customType !== right.customType) return false;
+	}
+	if (!sameInputContent(left, right)) return false;
+	if (normalizedTimestamp(left.timestamp) !== normalizedTimestamp(right.timestamp)) return false;
+	if (!sameInputAttribution(left.role, left.attribution, right.attribution)) return false;
+	return (left.excludeFromContext === true) === (right.excludeFromContext === true);
 }
 
 function branchMessages(manager, options) {
@@ -100,12 +146,15 @@ function turnKey(messages) {
 	return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
 }
 
-function journalOmits(message) {
+export function journalOmits(message) {
+	if (message?.excludeFromContext === true) return true;
 	const custom = message?.role === "custom";
 	const hook = message?.role === "hookMessage";
 	// AgentSession.#persistMessageEnd consumes these notes within one run.
 	// Other custom input is persisted and must pass the journal check.
-	if ((custom || hook) && message.customType === "vibe-mode-context") return true;
+	if ((custom || hook) && (message.customType === "vibe-mode-context" || message.customType === "plan-mode-context")) {
+		return true;
+	}
 	if (custom && message.customType === "prewalk-plan") return true;
 	// The scheduler renders these from its own state entries.
 	return custom && /^scope\.(begin|end)$/.test(message.customType);
@@ -121,15 +170,7 @@ function lastTurnMessage(messages) {
 
 function sameTurnMessage(left, right) {
 	if (left === right || sameAssistantFrame(left, right) || sameMessage(left, right)) return true;
-	const custom = (message) => message?.role === "custom" || message?.role === "hookMessage";
-	if (!custom(left) || !custom(right)) return false;
-	// The host normalizes custom messages and removes private display details
-	// when it persists them. Compare the input, not those display-only fields.
-	return left.customType === right.customType &&
-		sameMessage(left.content, right.content) &&
-		left.timestamp === right.timestamp &&
-		(left.attribution ?? "agent") === (right.attribution ?? "agent") &&
-		(left.excludeFromContext === true) === (right.excludeFromContext === true);
+	return samePersistedInputMessage(left, right);
 }
 
 function commitError(phase, cause) {

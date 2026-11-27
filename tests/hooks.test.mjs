@@ -112,7 +112,10 @@ describe("hook wiring", () => {
 		pi.handlers.get("agent_end")({ messages }, {});
 		pi.handlers.get("agent_end")({ willContinue: true, awaitingAsyncWork: true, messages: pausedMessages }, {});
 
-		expect(seen).toEqual([{ messages, willContinue: undefined }, { messages: pausedMessages, willContinue: true }]);
+		expect(seen).toEqual([
+			{ messages, willContinue: undefined },
+			{ messages: pausedMessages, willContinue: true, awaitingAsyncWork: true },
+		]);
 	});
 
 	test("is ok when both message events register", () => {

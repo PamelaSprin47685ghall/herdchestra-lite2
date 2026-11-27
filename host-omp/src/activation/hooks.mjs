@@ -1,6 +1,10 @@
 // Activation hooks: bind each host event to its station gatekeeper.
 
-import { releaseScopeReturnDrain, stopAfterScopeReturn } from "../host/branch-context.mjs";
+import {
+	releaseScopeReturnDrain,
+	releaseScopeReturnRunHold,
+	stopAfterScopeReturn,
+} from "../host/branch-context.mjs";
 import { sessionFor } from "../host/capture.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { installContextPreparation } from "../host/context-preparation.mjs";
@@ -92,7 +96,9 @@ export function wireHooks(pi, engine) {
 		} catch (error) {
 			record("hooks", error, { phase: "user-abort" });
 		} finally {
-			releaseScopeReturnDrain(dispatchSession(ctx));
+			const session = dispatchSession(ctx);
+			releaseScopeReturnDrain(session);
+			releaseScopeReturnRunHold(session);
 		}
 	};
 	installUserAbortCapture(pi, userAbortOf);
@@ -183,18 +189,27 @@ export function wireHooks(pi, engine) {
 		(event, ctx) => bindDispatch(ctx).onContext(event?.messages, ctx),
 	);
 	pi.on("before_agent_start", (event, ctx) => {
-		releaseScopeReturnDrain(dispatchSession(ctx));
+		const session = dispatchSession(ctx);
+		releaseScopeReturnDrain(session);
+		releaseScopeReturnRunHold(session);
 		return bindDispatch(ctx).onBeforeAgentStart(event, ctx);
 	});
 	pi.on("agent_end", (event, ctx) => {
 		// Only the typed abort entry proves USER_ABORT. This frame says what
 		// ended and whether the host is already continuing it.
 		try {
-			stationOf(ctx).onAgentEnd(ctx, { messages: event?.messages, willContinue: event?.willContinue });
+			stationOf(ctx).onAgentEnd(ctx, {
+				messages: event?.messages,
+				willContinue: event?.willContinue,
+				...(event?.awaitingAsyncWork === true ? { awaitingAsyncWork: true } : {}),
+			});
 		} finally {
-			// A rewind ticket claims its own queue hold synchronously. A pause
-			// or a stale/cancelled plan must not leave the original hold armed.
-			releaseScopeReturnDrain(dispatchSession(ctx));
+			// A rewind ticket claims its own queue hold and run-active hold
+			// synchronously. A pause or a stale/cancelled plan must not leave
+			// either original hold armed.
+			const session = dispatchSession(ctx);
+			releaseScopeReturnDrain(session);
+			releaseScopeReturnRunHold(session);
 		}
 	});
 	pi.on("session_stop", (event, ctx) =>
@@ -204,13 +219,17 @@ export function wireHooks(pi, engine) {
 		}),
 	);
 	pi.on("session_switch", (event, ctx) => {
-		releaseScopeReturnDrain(dispatchSession(ctx));
+		const session = dispatchSession(ctx);
+		releaseScopeReturnDrain(session);
+		releaseScopeReturnRunHold(session);
 		const result = stationOf(ctx).onSessionSwitch(event, ctx);
 		bindDispatch(ctx);
 		return result;
 	});
 	pi.on("session_compact", (_event, ctx) => {
-		releaseScopeReturnDrain(dispatchSession(ctx));
+		const session = dispatchSession(ctx);
+		releaseScopeReturnDrain(session);
+		releaseScopeReturnRunHold(session);
 		return stationOf(ctx).onSessionCompact(ctx);
 	});
 	return {

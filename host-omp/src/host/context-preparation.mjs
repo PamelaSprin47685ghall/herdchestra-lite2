@@ -3,16 +3,22 @@
 
 import { rememberSession, sessionMatchesContext } from "./capture.mjs";
 import { messagesOf } from "./adapter.mjs";
-import { commitSkillReceipt, sameAssistantFrame } from "./hack-context.mjs";
+import {
+	commitSkillReceipt,
+	journalOmits,
+	sameAssistantFrame,
+	samePersistedInputMessage,
+} from "./hack-context.mjs";
 import { record } from "./diagnostics.mjs";
 import { isDeepStrictEqual } from "node:util";
 
 const PREPARATION = Symbol.for("herdchestra-lite2.context-preparation.v1");
 const INPUT_ROLES = new Set(["user", "developer", "custom", "fileMention", "hookMessage"]);
 
-function failure(code, message, cause) {
+function failure(code, message, cause, extra = null) {
 	const error = new Error(message, cause === undefined ? undefined : { cause });
 	error.code = code;
+	if (extra && typeof extra === "object") Object.assign(error, extra);
 	return error;
 }
 
@@ -47,6 +53,7 @@ function toolCallIds(message) {
 // persistence key is the host's stable identity for that separate object.
 function samePersistedMessage(live, committed) {
 	if (sameAssistantFrame(live, committed) || isDeepStrictEqual(live, committed)) return true;
+	if (samePersistedInputMessage(live, committed)) return true;
 	if (live?.role !== committed?.role) return false;
 	const sameContent = Array.isArray(live.content) && Array.isArray(committed.content) &&
 		isDeepStrictEqual(live.content, committed.content);
@@ -138,39 +145,91 @@ function partitionPending(pending, prefix) {
 	return { recovered, pending: kept, frameInFlight };
 }
 
+function locateCommittedTail(messages, tail) {
+	let end = messages.lastIndexOf(tail);
+	if (end >= 0 && messages.indexOf(tail) !== end) {
+		throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "The last committed message appears at more than one loop position.");
+	}
+	if (end < 0) {
+		let matches = 0;
+		for (let index = messages.length - 1; index >= 0; index -= 1) {
+			if (samePersistedMessage(messages[index], tail)) {
+				end = index;
+				matches += 1;
+			}
+		}
+		if (matches > 1) {
+			throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "The last committed message has more than one possible loop position.");
+		}
+	}
+	return end;
+}
+
+function tailDiagnosticDetail(messages, committed, tail) {
+	return {
+		tailRole: tail?.role ?? null,
+		tailCustomType: tail?.customType ?? null,
+		tailExcludeFromContext: tail?.excludeFromContext === true,
+		tailSteering: tail?.steering === true,
+		tailTimestamp: tail?.timestamp ?? null,
+		tailKeys: tail && typeof tail === "object" ? Object.keys(tail) : [],
+		committedLength: committed.length,
+		committedTailRoles: committed.slice(-3).map((message) => message?.role ?? null),
+		liveLength: messages.length,
+		liveTailRoles: messages.slice(-3).map((message) => message?.role ?? null),
+	};
+}
+
 /** Separate committed history from input whose host events have not run yet. */
 export function splitRequestHistory(messages, committed) {
 	if (!Array.isArray(messages) || !Array.isArray(committed)) {
 		throw failure("CONTEXT_PREPARATION_INVALID_CONTEXT", "Both loop and Agent histories are required.");
 	}
 	let end = -1;
+	let skippedCommitted = [];
 	if (committed.length > 0) {
-		const tail = committed.at(-1);
-		end = messages.lastIndexOf(tail);
-		if (end >= 0 && messages.indexOf(tail) !== end) {
-			throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "The last committed message appears at more than one loop position.");
-		}
+		const rawTail = committed.at(-1);
+		end = locateCommittedTail(messages, rawTail);
 		if (end < 0) {
-			let matches = 0;
-			for (let index = messages.length - 1; index >= 0; index -= 1) {
-				if (samePersistedMessage(messages[index], tail)) {
-					end = index;
-					matches += 1;
-				}
+			// Skip trailing context-omitted/host-only notes (such as
+			// `excludeFromContext: true` custom cards or one-run notes) that
+			// can land in Agent state without entering the live loop array.
+			let anchorIndex = committed.length - 1;
+			while (anchorIndex >= 0 && journalOmits(committed[anchorIndex])) {
+				anchorIndex -= 1;
 			}
-			if (matches > 1) {
-				throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "The last committed message has more than one possible loop position.");
+			if (anchorIndex < 0) {
+				skippedCommitted = committed.slice();
+			} else if (anchorIndex < committed.length - 1) {
+				const anchor = committed[anchorIndex];
+				end = locateCommittedTail(messages, anchor);
+				if (end >= 0) skippedCommitted = committed.slice(anchorIndex + 1);
 			}
-		}
-		if (end < 0) {
-			throw failure("CONTEXT_PREPARATION_HISTORY_MISMATCH", "The live loop does not contain the last committed message.");
+			if (anchorIndex >= 0 && end < 0) {
+				const anchor = committed[anchorIndex];
+				throw failure(
+					"CONTEXT_PREPARATION_HISTORY_MISMATCH",
+					"The live loop does not contain the last committed message.",
+					undefined,
+					{
+						phase: "history-tail",
+						recoverable: true,
+						detail: tailDiagnosticDetail(messages, committed, anchor),
+					},
+				);
+			}
 		}
 	}
 	const prefix = messages.slice(0, end + 1);
 	const partitioned = partitionPending(messages.slice(end + 1), prefix);
+	const pending = skippedCommitted.length > 0
+		? partitioned.pending.filter(
+			(candidate) => !skippedCommitted.some((item) => item === candidate || samePersistedMessage(candidate, item)),
+		)
+		: partitioned.pending;
 	return {
 		prefix,
-		pending: partitioned.pending,
+		pending,
 		recovered: partitioned.recovered,
 		frameInFlight: partitioned.frameInFlight,
 	};
@@ -257,9 +316,22 @@ function prepareState(registration, binding, signal, context, persistedStamp) {
  * (the screen sits on "Working…" forever) is worse than a missing receipt.
  */
 function tolerateCommitFailure(error) {
-	if (error?.code !== "CONTEXT_SKILL_COMMIT_FAILED") return false;
-	record("context", error, { phase: error.phase ?? "commit", tolerated: true });
-	return true;
+	if (error?.code === "CONTEXT_SKILL_COMMIT_FAILED") {
+		record("context", error, { phase: error.phase ?? "commit", tolerated: true });
+		return true;
+	}
+	// If the host rewrote or externally appended Agent state mid-run so the
+	// live loop no longer holds the committed tail, skip receipt placement
+	// and let the host's own request proceed rather than killing the turn.
+	if (error?.code === "CONTEXT_PREPARATION_HISTORY_MISMATCH" && error?.recoverable === true) {
+		record("context", error, {
+			phase: error.phase ?? "history-tail",
+			tolerated: true,
+			...(error.detail ?? {}),
+		});
+		return true;
+	}
+	return false;
 }
 
 /** Run one preparation step; a receipt-commit failure degrades instead of throwing. */

@@ -24,6 +24,18 @@ export function releaseScopeReturnDrain(session) {
 	session?.agent?.[RETURN_STOP]?.releaseDrain?.();
 }
 
+export function takeScopeReturnRunHold(session) {
+	const binding = session?.agent?.[RETURN_STOP];
+	if (!binding?.releaseRun) return null;
+	const release = binding.releaseRun;
+	binding.releaseRun = null;
+	return release;
+}
+
+export function releaseScopeReturnRunHold(session) {
+	takeScopeReturnRunHold(session)?.();
+}
+
 /** Stop at the host's native terminal-result seam, after the result is accepted. */
 export function stopAfterScopeReturn(agent, session = null) {
 	if (typeof agent?.abort !== "function") return;
@@ -33,7 +45,7 @@ export function stopAfterScopeReturn(agent, session = null) {
 		return;
 	}
 	const original = agent.afterToolCall;
-	const binding = { session, hook: null, releaseDrain: null };
+	const binding = { session, hook: null, releaseDrain: null, releaseRun: null };
 	const holdDrain = () => {
 		const owner = binding.session;
 		if (typeof owner?.withQueueDrainPaused !== "function" || binding.releaseDrain) return;
@@ -57,6 +69,51 @@ export function stopAfterScopeReturn(agent, session = null) {
 			failed(error);
 		}
 	};
+	const holdRewindRun = () => {
+		const owner = binding.session;
+		const jobs = owner?.asyncJobManager;
+		if (typeof jobs?.register !== "function" || binding.releaseRun) return;
+		let release;
+		const held = new Promise((resolve) => { release = resolve; });
+		let jobId = null;
+		let released = false;
+		const releaseRun = () => {
+			if (released) return;
+			released = true;
+			if (binding.releaseRun === releaseRun) binding.releaseRun = null;
+			if (jobId !== null) {
+				try {
+					jobs.acknowledgeDeliveries?.([jobId]);
+				} catch (error) {
+					record("hooks", error, { phase: "scope-return-run-hold" });
+				}
+			}
+			release();
+		};
+		const ownerId =
+			typeof owner.getAgentId === "function"
+				? owner.getAgentId()
+				: owner.agent?.id;
+		try {
+			// Register a silent running job before aborting the old loop so
+			// AgentSession keeps `isRunActive` true across the rewind handoff
+			// and print-mode (`--wait-async`) waits for the resumed turn
+			// instead of disposing the session in the gap.
+			jobId = jobs.register(
+				"herd-rewind",
+				"Root scope rewind handoff",
+				async () => {
+					await held;
+					return "";
+				},
+				ownerId ? { ownerId } : undefined,
+			);
+			binding.releaseRun = releaseRun;
+		} catch (error) {
+			release();
+			record("hooks", error, { phase: "scope-return-run-hold" });
+		}
+	};
 	const hook = function (ctx, signal) {
 		const after = original?.call(this, ctx, signal);
 		// The tool's own name no longer decides this. Every call arrives as `js`
@@ -67,7 +124,10 @@ export function stopAfterScopeReturn(agent, session = null) {
 			// The per-tool signal also covers steers. An accepted return still
 			// ends the loop when a steer raced it; only an Agent abort wins.
 			if (!agent.isAborting && !(override?.isError ?? ctx.isError) && details?.stopLoop === true) {
-				if (details.scope === "root" && details.rewind === true) holdDrain();
+				if (details.scope === "root" && details.rewind === true) {
+					holdDrain();
+					holdRewindRun();
+				}
 				agent.abort(TERMINAL_RESULT);
 			}
 			return override;
@@ -80,6 +140,7 @@ export function stopAfterScopeReturn(agent, session = null) {
 	return () => {
 		if (agent[RETURN_STOP] !== binding) return;
 		binding.releaseDrain?.();
+		binding.releaseRun?.();
 		if (agent.afterToolCall === hook) agent.afterToolCall = original;
 		delete agent[RETURN_STOP];
 	};

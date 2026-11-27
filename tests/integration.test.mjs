@@ -274,7 +274,9 @@ describe("root rewind host lifecycle", () => {
 			},
 			onAgentEnd(endedCtx, event) {
 				expect(endedCtx).toBe(ctx);
-				if (event.willContinue !== true) ticket = tickets.rewindRoot(this, endedCtx, plan);
+				if (event.willContinue !== true || event.awaitingAsyncWork === true) {
+					ticket = tickets.rewindRoot(this, endedCtx, plan);
+				}
 			},
 			commitRootRewind(endedCtx, pending) {
 				expect(endedCtx).toBe(ctx);
@@ -337,6 +339,79 @@ describe("root rewind host lifecycle", () => {
 		await ticket();
 		expect(events).toEqual([Symbol.for("pi-agent-core.terminal-tool-result"), "idle", "persistence", "stale"]);
 		expect(paused()).toBe(0);
+	});
+
+	test("holds the host run active across root rewind until agent_start and surfaces takeover failure", async () => {
+		const jobs = new Map();
+		const acknowledged = [];
+		let nextJob = 0;
+		const listeners = new Set();
+		const externalEvents = [];
+		const { host, ctx, session, plan, events, settle, paused, ticket, terminalReturn } = bindRewind();
+		session.getAgentId = () => "main-agent";
+		session.asyncJobManager = {
+			register(_type, _label, executor, options) {
+				const id = `job-${++nextJob}`;
+				const entry = { id, status: "running", ownerId: options?.ownerId, promise: null };
+				entry.promise = Promise.resolve().then(() => executor({ jobId: id })).then(() => {
+					entry.status = "completed";
+				});
+				jobs.set(id, entry);
+				return id;
+			},
+			acknowledgeDeliveries(ids) {
+				acknowledged.push(...ids);
+			},
+		};
+		session.subscribe = (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		};
+		session.agent.emitExternalEvent = (event) => {
+			externalEvents.push(event);
+			if (event.type === "message_end") session.agent.state.messages.push(event.message);
+		};
+		const originalPrompt = session.prompt;
+		session.prompt = async (text, options) => {
+			const res = await originalPrompt(text, options);
+			for (const listener of [...listeners]) listener({ type: "agent_start" });
+			return res;
+		};
+
+		await emit(host.handlers, "session_start", {}, ctx);
+		await terminalReturn();
+		expect(jobs.size).toBe(1);
+		expect(jobs.get("job-1").status).toBe("running");
+		expect(jobs.get("job-1").ownerId).toBe("main-agent");
+
+		// Host pauses with awaitingAsyncWork because the run-hold job is active.
+		await emit(host.handlers, "agent_end", { messages: [], willContinue: true, awaitingAsyncWork: true }, ctx);
+		expect(jobs.get("job-1").status).toBe("running");
+		settle();
+		await ticket();
+		await jobs.get("job-1").promise;
+		expect(acknowledged).toEqual(["job-1"]);
+		expect(jobs.get("job-1").status).toBe("completed");
+		expect(paused()).toBe(0);
+		expect(externalEvents).toEqual([]);
+
+		// Takeover failure: resume prompt drops -> error assistant emitted before run hold releases.
+		session.prompt = async () => {
+			throw new Error("prompt dropped");
+		};
+		await terminalReturn();
+		expect(jobs.get("job-2").status).toBe("running");
+		await emit(host.handlers, "agent_end", { messages: [], willContinue: true, awaitingAsyncWork: true }, ctx);
+		await ticket();
+		await jobs.get("job-2").promise;
+		expect(acknowledged).toEqual(["job-1", "job-2"]);
+		expect(externalEvents.map((entry) => entry.type)).toEqual(["message_start", "message_end"]);
+		expect(session.agent.state.messages.at(-1)).toMatchObject({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "Root rewind takeover failed: prompt dropped",
+		});
+		expect(events.slice(-2)).toEqual(["commit", "persistence"]);
 	});
 });
 

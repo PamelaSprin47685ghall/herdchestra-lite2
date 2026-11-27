@@ -227,7 +227,12 @@ export function cancelTree(station, rootOwnerId = "root", reason = CANCELLED_BY_
  * USER_ABORT never enters here: Esc enters only through `onUserAbort`.
  */
 function onAgentEnd(station, ctx, event = null) {
-	if (event?.willContinue === true) return undefined;
+	// Ignore pauses where the host itself is continuing the turn (retry,
+	// compaction continuation, session_stop). When the host paused only because
+	// async work is pending (`awaitingAsyncWork: true` — including our rewind
+	// run-hold job or live forked children during a small rewind), the old turn
+	// has yielded and the root rewind handoff must proceed.
+	if (event?.willContinue === true && event?.awaitingAsyncWork !== true) return undefined;
 	if (ownerIdOf(station) !== null) return undefined;
 	const plan = pendingRootRewindPlan(station);
 	if (!plan) return undefined;

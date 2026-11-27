@@ -6,6 +6,16 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [8.0.0] — 2026-11-27
+
+### Changed — role-bearing scope paths (breaking)
+
+- A scope path segment is now `<role>.<name>`: the role decides which host tools the scope may hold. Root `/` is a `manager`, and privilege narrows monotonically — `manager > devops > editor > inspector` — so `scope_fork` and `scope_abandon` refuse a wider role than the caller's. A segment without a role is no longer a valid scope id.
+- New `src/scope/roles.mjs` owns the ranks, the per-role host-tool sets, the `editor` concrete-file `targets` check, and the single-`running`-`devops` mutex; `fork-join.mjs`, `capabilities.mjs`, `abandon.mjs`, and `tool-view.mjs` consume it without importing each other.
+- `scope_fork` items now require `path`, `fsm`, `profession`, and `n`; `budget` and `targets` are optional and role-checked (`FORBIDDEN_ROLE_BUDGET`, `INVALID_EDITOR_TARGETS`). `state.role` reports the scope's role in every REPL probe.
+- `README.md`, `resources/prompts/**`, the scope receipt, and `.agent/skills/scope-orchestration/SKILL.md` document the role model; the host UI tool view follows the new control surface.
+
+
 ## [7.0.0] — 2026-11-27
 
 ### Changed — immutable-context decoupling (`upscope` / `subscope` / `caller`)

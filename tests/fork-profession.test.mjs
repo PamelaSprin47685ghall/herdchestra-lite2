@@ -8,7 +8,7 @@ import { handleForkCall } from "../src/station/fork-controls.mjs";
 import { loadDoc } from "../src/prompts/index.mjs";
 
 const base = {
-  path: "alpha",
+  path: "inspector.alpha",
   fsm: "read the parser",
   profession: "You are a precise reviewer who rejects a claim without evidence",
   budget: { read: 2 },
@@ -60,7 +60,7 @@ describe("scope_fork profession", () => {
 
   test("validateForkBatch rejects the whole batch on a mistyped identity", () => {
     const out = validateForkBatch({
-      forks: [base, { ...base, path: "beta", profession: "just do it" }],
+      forks: [base, { ...base, path: "inspector.beta", profession: "just do it" }],
     });
     assert.equal(out.ok, false);
     assert.equal(out.code, "INVALID_PROFESSION");

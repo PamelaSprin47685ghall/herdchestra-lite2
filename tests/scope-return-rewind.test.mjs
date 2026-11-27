@@ -265,7 +265,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 								if (generation === 2) {
 									// Gen 2: the prompt carries the birth receipt and the previous
 									// generation's report, and nothing else from gen 1.
-									expect(text.startsWith("You are now in the scope /worker,")).toBe(true);
+									expect(text.startsWith("You are now in the scope /inspector.worker,")).toBe(true);
 									expect(text).toContain("gen1 distilled summary");
 									expect(text).toContain('read(path="noisy.mjs")');
 
@@ -316,7 +316,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 			arguments: {
 				forks: [
 					{
-						path: "/worker",
+						path: "/inspector.worker",
 						fsm: "solve cleanly",
 						profession: "You are a careful engineer.",
 						n: 2,
@@ -344,7 +344,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 		// pointed onto any child message entry.
 		expect(shared.getEntry(shared.getLeafId())?.type).toBe("custom");
 		expect(shared.getEntry(shared.getLeafId())?.parentId).toBeTruthy();
-		expect(shared.getBranch().some((entry) => entry.type === "message" && entry.message?.role === "user" && String(entry.message?.content).includes("You are now in the scope /worker"))).toBe(false);
+		expect(shared.getBranch().some((entry) => entry.type === "message" && entry.message?.role === "user" && String(entry.message?.content).includes("You are now in the scope /inspector.worker"))).toBe(false);
 
 		// Final published outcome contains ONLY the final clean generation + dafny, not gen1 noise!
 		const outcome = outcomeOf(wiring.registry, "fork-rewind");
@@ -430,7 +430,7 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 			arguments: {
 				forks: [
 					{
-						path: "/sub",
+						path: "/inspector.sub",
 						fsm: "do sub",
 						profession: "You are a worker.",
 						n: 1,
@@ -518,7 +518,7 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 			arguments: {
 				forks: [
 					{
-						path: "/extra",
+						path: "/inspector.extra",
 						fsm: "more work",
 						profession: "You are a worker.",
 						n: 1,

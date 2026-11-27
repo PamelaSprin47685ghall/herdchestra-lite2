@@ -1,6 +1,6 @@
 // The host only ends a running tool on a queued user message when the tool
 // declares itself interruptible. `js` is the only tool left, and it is the one
-// that parks inside `await api.scope_join()` / `await api.scope_request(...)`,
+// that parks inside `await api.scope_join()` / `await api.scope_abandon(...)`,
 // so the declaration belongs to it: dropping it would silently turn a join back
 // into a wait the user cannot break into.
 

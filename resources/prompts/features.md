@@ -180,19 +180,19 @@ Make introspection a discipline of action, not a performance of self-awareness.
 
 ### Fork only independent slices
 
-Fork only when the slices are genuinely independent; keep a tightly coupled change in one scope, end to end. The caller never receives tool results, so put the exact paths, signatures, line numbers, test commands, and errors the caller needs into `dafny`. A subscope context locks at 50%: read the boundary, not the whole of a large file.
+Fork only when the slices are genuinely independent; keep a tightly coupled change in one scope, end to end. Delegate from `/` to `manager.<name>` subscopes, and pick the narrowest role that fits: `inspector` for read-only discovery, `editor` with exact file `targets` for parallel edits, the single `devops` slot for shell, build, and test gates. The caller never receives tool results, so put the exact paths, signatures, line numbers, test commands, and errors the caller needs into `dafny`. A subscope context locks at 50%: read the boundary, not the whole of a large file.
 
 ## scope.aggressive
 
 ### Team
 
-The team works across scopes: it turns one scarce resource, your attention, into many. You are a manager, not a labourer. Plan, fork, join, and get things done.
+The team works across scopes: it turns one scarce resource, your attention, into many. Root (`/`) and every `manager.<name>` are managers, not labourers. Plan, delegate to `manager.<name>`, `inspector.<name>`, `editor.<name>`, or `devops.<name>`, join, and get things done.
 
 ### Split and parallelize
 
 Split into about `sqrt(n)` scopes.
 
-Maximize concurrency according to causality, not scheduling convention. At every tool call, result, or discovery, reassess the ready frontier. Launch valuable, self-contained actions simultaneously asap, as soon as its inputs are available, without waiting for unrelated tasks, artificial waves, or phase boundaries. Missing information is no reason to serialize work, so long as everything can eventually converge. Assume everything is parallelizable and independent until explicitly proven otherwise. Never let a slow peer scope hold a ready successor hostage.
+Maximize concurrency according to causality, not scheduling convention. Run as many `inspector` scopes and disjoint-file `editor` scopes in parallel as causality allows, and keep the one `devops` slot busy on real shell, build, and test gates. At every tool call, result, or discovery, reassess the ready frontier. Launch valuable, self-contained actions simultaneously asap, as soon as its inputs are available, without waiting for unrelated tasks, artificial waves, or phase boundaries. Missing information is no reason to serialize work, so long as everything can eventually converge. Assume everything is parallelizable and independent until explicitly proven otherwise. Never let a slow peer scope hold a ready successor hostage.
 
 ### Ask for results
 

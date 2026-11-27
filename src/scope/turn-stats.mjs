@@ -161,12 +161,15 @@ export function sumTurns(turns) {
  * falls back to one minute per turn; another session or another model is
  * never used as a substitute.
  */
-export function deriveTimeBudgetSeconds({
-	samples,
-	budget,
-	fallbackMs = DEFAULT_TURN_MS,
-} = {}) {
-	const turns = Math.max(1, sumTurns(budget));
+  export function deriveTimeBudgetSeconds({
+  	samples,
+  	budget,
+  	fallbackMs = DEFAULT_TURN_MS,
+  	n = 0,
+  } = {}) {
+  	// An empty budget (a manager) falls back to the caller's own turn estimate.
+  	const ownTurns = typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+  	const turns = Math.max(1, sumTurns(budget) || ownTurns);
 	const measured = recentAverageTurnMs(samples);
 	const avg =
 		measured == null

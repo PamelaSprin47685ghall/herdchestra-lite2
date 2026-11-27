@@ -8,6 +8,7 @@
 
 import { forkOf, unreceivedChildren } from "../scope/forkjoin.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
+import { roleOfPath } from "../scope/roles.mjs";
 import { targetsText } from "../scope/targets.mjs";
 import { joinReceipt } from "../transcript/replay.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
@@ -73,6 +74,10 @@ const REFUSAL_KEY = {
   INVALID_BUDGET: "invalid-budget",
   INVALID_ARGUMENT: "invalid-argument",
   INVALID_TARGETS: "invalid-targets",
+  ROLE_ESCALATION: "role-escalation",
+  DEVOPS_ALREADY_RUNNING: "devops-already-running",
+  INVALID_EDITOR_TARGETS: "invalid-editor-targets",
+  FORBIDDEN_ROLE_BUDGET: "forbidden-role-budget",
 };
 
 function budgetText(turns) {
@@ -284,6 +289,7 @@ function childReceiptText(spec) {
   const lines = [
     render(S["fork.subscope-status"], {
       marker: scopeReceiptMarker(path),
+      role: spec.role ?? roleOfPath(path) ?? "unknown",
       depth: spec.childDepth,
       upscopePath,
       callerPath,

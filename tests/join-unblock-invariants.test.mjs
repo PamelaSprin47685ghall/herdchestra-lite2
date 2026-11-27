@@ -378,7 +378,7 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 			arguments: {
 				forks: [
 					{
-						path: "/c-broken",
+						path: "/editor.c-broken",
 						fsm: "will fail to spawn",
 						profession: "You are a careful worker like Ada Lovelace.",
 						n: 1,

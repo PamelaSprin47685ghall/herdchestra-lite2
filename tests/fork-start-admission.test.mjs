@@ -24,7 +24,7 @@ function stationFor(ledger, options = {}) {
 
 function forkArgs(overrides = {}) {
   return {
-    path: "f1",
+    path: "manager.f1",
     fsm: "audit one seam",
     profession: "You are a seam auditor like Michael Feathers.",
     budget: {},
@@ -73,8 +73,8 @@ describe("a fork start that a known window cannot hold", () => {
     const out = handleForkCall(
       station,
       callWith(
-        forkArgs({ path: "small" }),
-        forkArgs({ path: "huge", fsm: "x".repeat(20_000) }),
+        forkArgs({ path: "manager.small" }),
+        forkArgs({ path: "manager.huge", fsm: "x".repeat(20_000) }),
       ),
     );
 
@@ -101,7 +101,7 @@ describe("a fork start with room", () => {
     expect(out.isError).toBeUndefined();
     expect(spawned).toHaveLength(1);
     expect(spawned[0].forkId).toBe("f1");
-    expect(spawned[0].receipt.startsWith("You are now in the scope /f1,")).toBe(true);
+    expect(spawned[0].receipt.startsWith("You are now in the scope /manager.f1,")).toBe(true);
     expect(ledger.order).toEqual(["f1"]);
   });
 });

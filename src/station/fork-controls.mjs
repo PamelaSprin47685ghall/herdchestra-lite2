@@ -127,6 +127,61 @@ export function handleForkCall(station, call, options = {}) {
         { index: decision.index, upscopePath: decision.upscopePath },
       );
     }
+    if (decision.code === "ROLE_ESCALATION") {
+      return errorResult(
+        decision.code,
+        render(
+          E["role-escalation"] ??
+            "Role {callerRole} cannot open role {targetRole} ({path}). Privilege narrows monotonically: manager > devops > editor > inspector.",
+          {
+            callerRole: decision.callerRole ?? "unknown",
+            targetRole: decision.targetRole ?? "unknown",
+            path: decision.path,
+          },
+        ),
+        {
+          index: decision.index,
+          path: decision.path,
+          callerRole: decision.callerRole,
+          targetRole: decision.targetRole,
+        },
+      );
+    }
+    if (decision.code === "DEVOPS_ALREADY_RUNNING") {
+      return errorResult(
+        decision.code,
+        render(
+          E["devops-already-running"] ??
+            "Only one devops scope may be running at a time ({activePath} is still running). Wait for it to turn done before forking another devops.",
+          { activePath: decision.activePath ?? "another scope" },
+        ),
+        { index: decision.index, path: decision.path, activePath: decision.activePath },
+      );
+    }
+    if (decision.code === "INVALID_EDITOR_TARGETS") {
+      return errorResult(
+        decision.code,
+        E["invalid-editor-targets"] ??
+          'An editor subscope must declare concrete target file paths in targets (for example ["src/foo.mjs"]). Vague prose, globs, and bare directories are rejected.',
+        { index: decision.index, path: decision.path },
+      );
+    }
+    if (decision.code === "FORBIDDEN_ROLE_BUDGET") {
+      return errorResult(
+        decision.code,
+        render(
+          E["forbidden-role-budget"] ??
+            "Tool {tool} is not available to role {role}. Remove it from budget or choose a higher-privilege role.",
+          { tool: decision.tool ?? "unknown", role: decision.role ?? "unknown" },
+        ),
+        {
+          index: decision.index,
+          path: decision.path,
+          role: decision.role,
+          tool: decision.tool,
+        },
+      );
+    }
     if (decision.code === "CHILD_SPAWNER_UNAVAILABLE") {
       return errorResult(decision.code, E["child-spawner-unavailable"]);
     }
@@ -167,10 +222,11 @@ export function handleForkCall(station, call, options = {}) {
   const callerOwnerId = ownerIdOf(station);
   const clock = typeof station.clockPort === "function" ? station.clockPort() : createClockOn();
   const turnModelKey = station.state?.baseModelKey ?? station.turnModelKey;
-  const timeOf = (budget) =>
+  const timeOf = (budget, n) =>
     deriveTimeBudgetSeconds({
       samples: modelSamples(ledger, turnModelKey),
       budget,
+      n,
     });
   const baseId = typeof call.id === "string" && call.id !== "" ? call.id : `fork-${Date.now()}`;
   const started = [];
@@ -230,7 +286,7 @@ export function handleForkCall(station, call, options = {}) {
       profession: item.profession,
       depth,
       budget: item.budget,
-      time: timeOf(item.budget),
+      time: timeOf(item.budget, item.n),
       startedAt: Date.now(),
       targets: item.targets,
       birthContextTokens: item.birthContextTokens,

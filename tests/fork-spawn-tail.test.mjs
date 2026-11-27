@@ -34,7 +34,7 @@ function stationFor(ledger, options = {}) {
 
 function forkArgs(overrides = {}) {
   return {
-    path: "one",
+    path: "editor.one",
     fsm: "audit the first seam",
     profession: "You are an auditor who trusts only evidence.",
     budget: {},
@@ -63,7 +63,7 @@ describe("a batch whose first spawner throws", () => {
 
     const out = handleForkCall(station, {
       id: "batch",
-      arguments: { forks: [forkArgs(), forkArgs({ path: "two", fsm: "audit the second seam" })] },
+      arguments: { forks: [forkArgs(), forkArgs({ path: "editor.two", fsm: "audit the second seam" })] },
     });
 
     expect(out.isError).toBeUndefined();
@@ -78,7 +78,7 @@ describe("a batch whose first spawner throws", () => {
       statuses: [RUNNING, RUNNING],
     });
     expect(seenAtSpawn[1].forkId).toBe("batch:1");
-    expect(spawned.map((spec) => spec.scopeId)).toEqual(["two"]);
+    expect(spawned.map((spec) => spec.scopeId)).toEqual(["editor.two"]);
 
     const failedFork = forkOf(ledger, "batch:0");
     expect(failedFork.status).toBe(READY);

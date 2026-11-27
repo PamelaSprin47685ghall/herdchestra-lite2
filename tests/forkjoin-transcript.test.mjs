@@ -145,21 +145,6 @@ describe("child record rendering", () => {
     expect(rendered).not.toContain("[result");
   });
 
-  test("renders scope_request with its arguments and drops its OK result", () => {
-    const messages = [
-      assistant([
-        text("Fix confirmed."),
-        call("r1", "scope_request", { target: "/api", message: "Where does the bug live?" }),
-      ]),
-      result("r1", "scope_request", "OK"),
-    ];
-    const rendered = renderChildRecord(messages);
-    expect(rendered).toBe(
-      'Fix confirmed.\nscope_request(target="/api", message="Where does the bug live?")',
-    );
-    expect(rendered).not.toContain("[result scope_request]");
-  });
-
   test("renders scope_fork and scope_return with their arguments", () => {
     const messages = [
       assistant([call("f1", "scope_fork", { forks: [{ fsm: "audit" }] })]),
@@ -178,10 +163,12 @@ describe("child record rendering", () => {
     expect(rendered).not.toContain("[result scope_return]");
   });
 
-  test("renders a boolean argument as JSON", () => {
-    const messages = [assistant([call("s1", "scope_request", { interrupt: true })])];
-    expect(renderChildRecord(messages)).toBe("scope_request(interrupt=true)");
-  });
+    test("renders scalar arguments as JSON", () => {
+      const messages = [assistant([call("f1", "scope_fork", { forks: [{ path: "inspector.spy", n: 2 }] })])];
+      expect(renderChildRecord(messages)).toBe(
+        'scope_fork(forks=[{"path":"inspector.spy","n":2}])'
+      );
+    });
 
   test("skips user broadcasts and custom entries", () => {
     const messages = [

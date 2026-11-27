@@ -8,6 +8,7 @@
 
 import { createHash } from "node:crypto";
 import { deadlineInfo } from "../../scope/clock.mjs";
+import { roleTools } from "../../scope/roles.mjs";
 import { renderYamlView } from "../../format/yaml-view.mjs";
 
 // Free control-plane primitives every normal scope keeps.
@@ -39,6 +40,7 @@ export const EXCLUDED_HOST_TOOLS = Object.freeze(new Set(["ask", "todo", "wait",
  */
 export function projectCapabilities({
 	isChild = false,
+	role = null,
 	autopilot = false,
 	unreceived = 0,
 	canStop = false,
@@ -76,7 +78,9 @@ export function projectCapabilities({
 		const set = new Set(BASE_TOOLS);
 		if (!isChild && autopilot !== true) set.add("ask");
 		if (isChild) {
-			for (const name of Array.isArray(hostToolNames) ? hostToolNames : []) {
+			// The role decides which host tools exist at all; the projection only
+			// removes the executor and the root's own channels.
+			for (const name of roleTools(role, hostToolNames)) {
 				if (typeof name !== "string" || name === "") continue;
 				if (EXCLUDED_HOST_TOOLS.has(name)) continue;
 				set.add(name);
@@ -90,6 +94,7 @@ export function projectCapabilities({
 
 	const state = {
 		mode,
+		...(typeof role === "string" && role !== "" ? { role } : {}),
 		scope: isChild ? selfPath : "/",
 		...(abandonedInfo ? { abandoned: abandonedInfo } : {}),
 		...(isChild

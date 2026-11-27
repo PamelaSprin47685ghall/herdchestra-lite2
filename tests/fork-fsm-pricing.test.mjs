@@ -37,7 +37,7 @@ function stationFor(ledger, options = {}) {
 
 function item(overrides = {}) {
   return {
-    path: "f1",
+		path: "editor.f1",
     fsm: "audit one seam",
     // Every fork creates a scope, so every field is required: the identity
     // statement, and the declared size of the work.
@@ -114,9 +114,9 @@ describe("a fork is priced by the receipt it sends", () => {
   });
 });
 
-// A generation and a revived checkpoint no longer exist: a fork only creates,
-// and a message to an existing scope is `scope_request`, which is a free control
-// call with no pricing path. No case here can re-pin them.
+// A generation and a revived checkpoint no longer exist: a fork only creates.
+// The control plane (fork/join/return/abandon) has no pricing path, so no case
+// here can re-pin them.
 
 describe("the ledger snapshot format", () => {
   test("a version-1 snapshot is refused and rebuilt without throwing", () => {

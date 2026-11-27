@@ -71,7 +71,7 @@ export function createTools({ stationFor, tickets }) {
 		description: JS_DESCRIPTION,
 		parameters: jsParameters,
 		loadMode: ESSENTIAL,
-		// `scope_join` and `scope_request` park; a queued user message must be
+		// `scope_join` parks; a queued user message must be
 		// able to take the turn back exactly as the native join allowed.
 		interruptible: true,
 		handlesToolInterrupt: true,

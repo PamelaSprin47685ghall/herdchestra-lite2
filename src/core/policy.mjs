@@ -5,7 +5,7 @@
 // `readOnly` is the host's own verdict on the agent definition
 // (task/read-only-policy.ts), and it is authoritative. `tools` records every
 // tool the session was granted, including extension-owned ones (`js`,
-// `scope_request`), so it must never be read as a capability list on
+// `scope_abandon`), so it must never be read as a capability list on
 // its own. A read-only subagent is exempt from scope enforcement.
 //
 // This module is pure: it reads the context's branch and agent metadata, never

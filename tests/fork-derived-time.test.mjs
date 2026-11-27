@@ -26,7 +26,7 @@ function forkCall(argumentsForFork) {
 		arguments: {
 			forks: [
 				{
-					path: "parser",
+					path: "devops.parser",
 					fsm: "read the parser",
 					profession: "You are a careful parser reader like Ada Lovelace.",
 					budget: { read: 2, bash: 2 },
@@ -72,7 +72,7 @@ describe("fork time is derived from measured turns", () => {
 
 	test("a fork item without time is valid", () => {
 		const verdict = validateFork({
-			path: "parser",
+			path: "devops.parser",
 			fsm: "read the parser",
 			profession: "You are a careful parser reader like Ada Lovelace.",
 			budget: { read: 2, bash: 2 },

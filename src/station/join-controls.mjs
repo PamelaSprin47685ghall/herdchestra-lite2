@@ -129,6 +129,7 @@ export function renderJoinResult(station, record, options = {}) {
       ok: !childFailed,
       scope: publicScopeId(record),
       failed: childFailed,
+      ...(record.role ? { role: record.role } : {}),
       ...(abandoned ? { abandoned: true, abandonedBy, abandonReason } : {}),
       reason: childReason,
       record: rendered,

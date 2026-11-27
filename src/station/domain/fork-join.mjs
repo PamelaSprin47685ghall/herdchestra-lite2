@@ -13,6 +13,16 @@ import { decideAbandon, decideAbandonRequest } from "../../scope/abandon.mjs";
 import { findScopeByPath, resolveForkPath } from "../../scope/path.mjs";
 import { normalizeBudget, validBudget } from "../../scope/turns.mjs";
 import { normalizeTargets, validTargets } from "../../scope/targets.mjs";
+import {
+	ROLE_DEVOPS,
+	ROLE_EDITOR,
+	canActOn,
+	roleBudgetAllowed,
+	roleOfPath,
+	roleOfSegment,
+	runningDevops,
+	validEditorTargets,
+} from "../../scope/roles.mjs";
 import { resolveModelSelector } from "../../scope/model-selector.mjs";
 import { modelKey } from "../models.mjs";
 import { trimText } from "../messages.mjs";
@@ -84,12 +94,20 @@ export function decideForkAdmission({
 export function validateFork(args) {
 	const fsm = trimText(args?.fsm);
 	if (fsm === "") return { ok: false, code: "INVALID_FSM" };
-	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
+	// A budget is optional: a manager holds no host tool, and a pure-reasoning
+	// inspector may need none. The role check happens in `decideRegister`, once
+	// the path names the role.
+	const hasBudget =
+		Object.hasOwn(args ?? {}, "budget") && args.budget !== undefined && args.budget !== null;
+	if (hasBudget && !validBudget(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}
-	const budget = normalizeBudget(args.budget);
-	if (!validBudget(budget)) return { ok: false, code: "INVALID_BUDGET" };
-	if (!validTargets(args?.targets)) {
+	const budget = hasBudget ? normalizeBudget(args.budget) : {};
+	if (hasBudget && !validBudget(budget)) return { ok: false, code: "INVALID_BUDGET" };
+	// Targets are optional too; `editor` must supply concrete files, checked
+	// once the role is known.
+	const hasTargets = args?.targets !== undefined && args.targets !== null;
+	if (hasTargets && !validTargets(args.targets)) {
 		return { ok: false, code: "INVALID_TARGETS" };
 	}
 	if (args.model !== undefined && args.model !== null && typeof args.model !== "string") {
@@ -111,7 +129,9 @@ export function validateFork(args) {
 		fsm,
 		profession,
 		budget,
-		targets: normalizeTargets(args.targets),
+		targets: hasTargets ? normalizeTargets(args.targets) : [],
+		// The caller's own turn estimate; a manager's empty budget uses it.
+		n: Number.isInteger(args?.n) && args.n > 0 ? args.n : 0,
 		model: typeof args.model === "string" ? args.model.trim() : null,
 	};
 }
@@ -173,6 +193,7 @@ export function decideRegister({
 		snapshot.order.push(record.forkId);
 	}
 	const caller = typeof callerPath === "string" && callerPath.startsWith("/") ? callerPath : "/";
+	const callerRole = roleOfPath(caller);
 	const callerForkId = typeof ownerId === "string" && ownerId !== "" && ownerId !== "root" ? ownerId : null;
 
 	// Phase 1: Resolve paths, fail-closed on invalid path, duplicate path,
@@ -207,6 +228,53 @@ export function decideRegister({
 			};
 		}
 		batchPaths.add(pathLower);
+
+		// The name is the privilege. The caller may only open an equal or narrower
+		// role, one `devops` runs globally at a time, an `editor` must name
+		// concrete files, and a role's budget may only fund tools it can hold.
+		const role = roleOfSegment(resolved.name);
+		if (!role) {
+			return { ok: false, code: "INVALID_PATH", index, path: resolved.path };
+		}
+		if (!canActOn(callerRole, role)) {
+			return {
+				ok: false,
+				code: "ROLE_ESCALATION",
+				index,
+				path: resolved.path,
+				callerRole,
+				targetRole: role,
+			};
+		}
+		if (role === ROLE_DEVOPS) {
+			const active = runningDevops(records);
+			const batched = next.find((entry) => entry.role === ROLE_DEVOPS);
+			if (active || batched) {
+				return {
+					ok: false,
+					code: "DEVOPS_ALREADY_RUNNING",
+					index,
+					path: resolved.path,
+					activePath: active?.path ?? batched?.path ?? resolved.path,
+				};
+			}
+		}
+		if (role === ROLE_EDITOR && !validEditorTargets(item.targets)) {
+			return { ok: false, code: "INVALID_EDITOR_TARGETS", index, path: resolved.path };
+		}
+		if (!roleBudgetAllowed(role, item.budget)) {
+			const tool = Object.keys(item.budget ?? {}).find(
+				(name) => !roleBudgetAllowed(role, { [name]: 1 }),
+			);
+			return {
+				ok: false,
+				code: "FORBIDDEN_ROLE_BUDGET",
+				index,
+				path: resolved.path,
+				role,
+				tool,
+			};
+		}
 
 		let upscopeId = null;
 		let upscopePath = "/";
@@ -266,6 +334,7 @@ export function decideRegister({
 		next.push({
 			...rest,
 			action: "register",
+			role,
 			scopeId: resolved.name,
 			path: resolved.path,
 			upscopeId,

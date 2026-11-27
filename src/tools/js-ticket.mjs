@@ -132,7 +132,7 @@ export function formatReplValue(value, outputs) {
 /**
  * Unwrap one inner tool result into the value the script receives.
  *
- * Control tools (`scope_fork`, `scope_join`, `scope_request`, …) hand their
+ * Control tools (`scope_fork`, `scope_join`, `scope_abandon`, …) hand their
  * info-rich object back through `details.result`; everything else unwraps to
  * the concatenated text of the result content. An `isError` result throws —
  * inside the script that is a plain exception the model can catch or let

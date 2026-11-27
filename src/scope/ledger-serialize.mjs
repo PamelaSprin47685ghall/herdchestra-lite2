@@ -174,6 +174,12 @@ export function validRecord(forkId, record) {
   if (record.abandonRequested !== undefined && typeof record.abandonRequested !== "boolean") {
     return false;
   }
+  // Absent on a legacy bare-id record; the name encodes the role otherwise.
+  if (record.role !== null && record.role !== undefined) {
+    if (record.role !== "manager" && record.role !== "devops" && record.role !== "editor" && record.role !== "inspector") {
+      return false;
+    }
+  }
   return true;
 }
 

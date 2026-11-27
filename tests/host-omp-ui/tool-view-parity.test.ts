@@ -51,32 +51,11 @@ describe("the js card", () => {
 });
 
 describe("the scope control plane", () => {
-  test("scope_request asks, and shows the reply once it returned", () => {
-    const waiting = describeTool(
-      execution("scope_request", { target: "/api", message: "字段名？", interrupt: true }),
-    );
-    expect(waiting.kind).toBe("ask");
-    if (waiting.kind !== "ask") return;
-    expect(waiting.title).toBe("scope_request → /api");
-    expect(waiting.summary).toContain("→ /api · interrupt: 字段名？");
-
-    const answered = describeTool(execution("scope_request", { target: "/api", message: "字段名？" }, "accessToken"));
-    if (answered.kind !== "ask") throw new Error(`expected ask, got ${answered.kind}`);
-    expect(answered.summary).toContain("← accessToken");
-  });
-
-  test("scope_reply reads as an answer", () => {
-    const reply = describeTool(execution("scope_reply", {}, "accessToken"));
-    expect(reply.kind).toBe("ask");
-    if (reply.kind !== "ask") return;
-    expect(reply.summary).toBe("← accessToken");
-  });
-
   test("scope_fork lists the batch and scope_join shows the record", () => {
     const fork = describeTool(
       execution(
         "scope_fork",
-        { forks: [{ scopeId: "api", fsm: "S1 audit\nS2 fix" }, { scopeId: "ui", fsm: "polish" }] },
+        { forks: [{ path: "devops.api", fsm: "S1 audit\nS2 fix" }, { path: "editor.ui", fsm: "polish" }] },
         "Started (2): /api, /ui",
       ),
     );
@@ -84,8 +63,8 @@ describe("the scope control plane", () => {
     if (fork.kind !== "task") return;
     expect(fork.title).toBe("scope_fork (2)");
     expect(fork.agent).toBe("scope_fork");
-    expect(fork.prompt).toContain("api — S1 audit");
-    expect(fork.prompt).toContain("ui — polish");
+    expect(fork.prompt).toContain("devops.api — S1 audit");
+    expect(fork.prompt).toContain("editor.ui — polish");
     expect(fork.result).toContain("Started (2)");
 
     const join = describeTool(execution("scope_join", {}, "Record from /api: done"));

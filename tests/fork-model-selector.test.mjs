@@ -57,7 +57,7 @@ function forkOne(station, ctx, overrides = {}) {
       arguments: {
         forks: [
           {
-            path: "parser",
+            path: "inspector.parser",
             fsm: "read the parser",
             profession: "You are a careful parser reader like Ada Lovelace.",
             budget: { read: 1 },
@@ -197,8 +197,8 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
         id: "fork-batch",
         arguments: {
           forks: [
-            { path: "one", fsm: "first", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
-            { path: "two", fsm: "second", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
+            { path: "inspector.one", fsm: "first", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
+            { path: "inspector.two", fsm: "second", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
           ],
         },
       },

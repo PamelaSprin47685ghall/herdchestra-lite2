@@ -1,6 +1,6 @@
 ## invalid-path
 
-Pass a valid scope `path` (e.g. `"worker"`, `"../api/spy"`, or `"/api/spy"`). No empty segments, trailing slash, wildcards, `..` past `/`, or `root` segment.
+Every scope path segment must be `<role>.<name>` with `<role>` one of `manager`, `devops`, `editor`, or `inspector` (e.g. `"editor.eve"`, `"../inspector.peter/editor.eve"`, or `"/manager.tom/devops.alice"`). No empty segments, trailing slash, wildcards, `..` past `/`, bare names without a role, or `root` segment.
 
 ## duplicate-scope-path
 
@@ -52,7 +52,23 @@ Start `profession` with "You are " and name the role of the LLM in the new scope
 
 ## invalid-targets
 
-`targets` must be a non-empty array of strings, each a natural-language description of what this scope expects to create, read, update, or delete. A file path is only one kind; `["fix any defect you find", "the parts of the source that involve caching"]` is valid. If it is empty, how could a scope with no output be a separate scope?
+`targets` must be an array of strings. An `editor` requires concrete file paths (e.g. `["src/foo.mjs", "tests/foo.test.mjs"]`) with no spaces, globs, or bare directories. A `manager`, `devops`, or `inspector` may also name a behavior, finding, or open-ended goal, e.g. `["the parts of the source that involve caching"]`.
+
+## role-escalation
+
+Role `{{callerRole}}` cannot open or abandon role `{{targetRole}}` (`{{path}}`). Privilege narrows monotonically: `manager > devops > editor > inspector`; use your own role or a narrower one.
+
+## devops-already-running
+
+Only one `devops` scope may be `running` at a time (`{{activePath}}` is still running). Wait for it to turn `done`, or abandon it and wait for `done`, before forking another `devops`.
+
+## invalid-editor-targets
+
+An `editor` must declare concrete target file paths in `targets` (e.g. `["src/foo.mjs", "tests/foo.test.mjs"]`). Prose, spaces, globs, and bare directories are refused.
+
+## forbidden-role-budget
+
+Tool `{{tool}}` is not available to role `{{role}}`. Remove it from `budget`, or choose a role that may hold it.
 
 ## fork-ledger-unavailable
 

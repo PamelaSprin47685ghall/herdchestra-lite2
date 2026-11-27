@@ -216,50 +216,20 @@ test("a js card without inner calls renders no children", async () => {
 	expect(view.output).toBe("2");
 });
 
-test("scope_request reads as a question and shows the answer when it returns", async () => {
-	const { describeToolCall } = await load();
-	const waiting = describeToolCall(
-		...call("scope_request", { target: "/api", message: "字段名是 token 还是 accessToken？", interrupt: true }, ""),
-	);
-	expect(waiting.kind).toBe("ask");
-	expect(waiting.title).toBe("scope_request → /api");
-	expect(waiting.summary).toContain("字段名是 token 还是 accessToken？");
-	expect(waiting.summary).toContain("interrupt");
-
-	const polite = describeToolCall(...call("scope_request", { target: "/ui", message: "进度？", interrupt: false }, ""));
-	expect(polite.summary).toBe("→ /ui: 进度？");
-
-	// The same card carries the reply once the call has returned: one block
-	// reads top to bottom as the whole exchange.
-	const answered = describeToolCall(
-		...call("scope_request", { target: "/api", message: "字段名？" }, "accessToken，见 src/auth.mjs:42"),
-	);
-	expect(answered.summary).toContain("→ /api: 字段名？");
-	expect(answered.summary).toContain("← accessToken，见 src/auth.mjs:42");
-});
-
-test("scope_reply reads as an answer", async () => {
-	const { describeToolCall } = await load();
-	const reply = describeToolCall(...call("scope_reply", {}, "accessToken，见 src/auth.mjs:42"));
-	expect(reply.kind).toBe("ask");
-	expect(reply.title).toBe("scope_reply");
-	expect(reply.summary).toBe("← accessToken，见 src/auth.mjs:42");
-});
-
 test("scope_fork lists the batch and scope_join shows the record it brought", async () => {
 	const { describeToolCall } = await load();
 	const fork = describeToolCall(
 		...call(
 			"scope_fork",
-			{ forks: [{ scopeId: "api", fsm: "S1 audit\nS2 fix" }, { scopeId: "ui", fsm: "polish" }] },
+			{ forks: [{ path: "devops.api", fsm: "S1 audit\nS2 fix" }, { path: "editor.ui", fsm: "polish" }] },
 			"Started (2): /api, /ui",
 		),
 	);
 	expect(fork.kind).toBe("task");
 	expect(fork.title).toBe("scope_fork (2)");
 	expect(fork.agent).toBe("scope_fork");
-	expect(fork.prompt).toContain("api — S1 audit");
-	expect(fork.prompt).toContain("ui — polish");
+	expect(fork.prompt).toContain("devops.api — S1 audit");
+	expect(fork.prompt).toContain("editor.ui — polish");
 	expect(fork.result).toContain("Started (2)");
 
 	const join = describeToolCall(...call("scope_join", {}, "Record from /api: done"));
@@ -378,29 +348,23 @@ test("js without innerCalls renders one card and no children", async () => {
 test("the scope control plane gets question, answer and subtask cards", async () => {
 	const { describeToolCall } = await load();
 
-	const request = describeToolCall(
-		...call("scope_request", { target: "/api", message: "登录字段名？", interrupt: true }, "accessToken"),
-	);
-	expect(request.kind).toBe("ask");
-	expect(request.title).toContain("/api");
-	expect(request.summary).toContain("interrupt");
-	expect(request.summary).toContain("登录字段名？");
-	expect(request.summary).toContain("accessToken");
-
-	const reply = describeToolCall(...call("scope_reply", { text: "accessToken" }, "ok"));
-	expect(reply.kind).toBe("ask");
-	expect(reply.summary).toContain("accessToken");
-
 	const fork = describeToolCall(
 		...call(
 			"scope_fork",
-			{ forks: [{ scopeId: "api", fsm: "S1 read → S2 write" }, { scopeId: "ui" }] },
+			{ forks: [{ path: "devops.api", fsm: "S1 read → S2 write" }, { path: "editor.ui" }] },
 			"Started (2): /api, /ui",
 		),
 	);
 	expect(fork.kind).toBe("task");
 	expect(fork.agent).toBe("scope_fork");
-	expect(fork.prompt.split("\n")).toEqual(["api — S1 read → S2 write", "ui"]);
+	expect(fork.prompt.split("\n")).toEqual(["devops.api — S1 read → S2 write", "editor.ui"]);
+
+	const abandon = describeToolCall(
+		...call("scope_abandon", { target: "/devops.api", reason: "stale" }, "Abandoned."),
+	);
+	expect(abandon.kind).toBe("task");
+	expect(abandon.title).toBe("scope_abandon /devops.api");
+	expect(abandon.prompt).toContain("stale");
 	expect(fork.result).toContain("/api");
 
 	const join = describeToolCall(...call("scope_join", {}, "History only; do not re-execute it."));

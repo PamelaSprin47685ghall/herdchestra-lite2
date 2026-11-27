@@ -24,8 +24,9 @@
  * - `pi.sendUserMessage(text, { deliverAs: "steer" })` queues a user prompt.
  */
 
-import {
-	chargeBranch,
+  import { roleOfPath } from "../scope/roles.mjs";
+  import {
+  	chargeBranch,
 	createBracketLedger,
 	abandonRequest,
 	beginRequest,
@@ -829,8 +830,9 @@ export class SessionStation {
 			contextOverHalf: this.contextNudgeArmed(),
 			abandoned,
 			remaining: clock ? forkRemaining(record, Date.now(), clock) : null,
-			selfPath,
-			scopesDelta,
+  		selfPath,
+  		role: selfPath === "/" ? "manager" : (record?.role ?? roleOfPath(selfPath)),
+  		scopesDelta,
 			_currentDir: currentDir,
 			_dirSeq: dirSeq,
 			hostToolNames,

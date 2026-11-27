@@ -7,6 +7,8 @@
 // 2. `decideAbandon` (hard Esc/User-abort cascade): closes a bracket directly as
 //    FAILED when the user aborts the conversation tree.
 
+import { canActOn, roleOfPath } from "./roles.mjs";
+
 /** Interrupt reason for `scope_abandon`, distinct from `USER_ABORT` and `TOOL_INTERRUPT_ABORT_REASON`. */
 export const ABANDON_INTERRUPT_REASON = Symbol.for("herdchestra-lite2.scope-abandon-interrupt.v1");
 
@@ -25,6 +27,7 @@ export function decideAbandon({ record = null } = {}) {
 export function decideAbandonRequest({
   targetPath = "",
   callerPath = "/",
+  callerRole = null,
   record = null,
 } = {}) {
   if (targetPath === "/") {
@@ -40,6 +43,17 @@ export function decideAbandonRequest({
     record.path.toLowerCase() === callerPath.toLowerCase()
   ) {
     return { ok: false, code: "CANNOT_ABANDON_SELF" };
+  }
+  const effectiveCallerRole = callerRole ?? roleOfPath(callerPath);
+  const targetRole = roleOfPath(typeof record.path === "string" ? record.path : targetPath);
+  if (effectiveCallerRole && targetRole && !canActOn(effectiveCallerRole, targetRole)) {
+    return {
+      ok: false,
+      code: "ROLE_ESCALATION",
+      callerRole: effectiveCallerRole,
+      targetRole,
+      path: record.path ?? targetPath,
+    };
   }
   if (record.status !== "running") {
     return { ok: false, code: "SCOPE_ALREADY_DONE" };

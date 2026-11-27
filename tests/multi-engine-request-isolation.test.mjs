@@ -191,15 +191,15 @@ describe("multi-engine shared ForkRegistry isolation and poka-yoke", () => {
 		const forked = await rootJs.execute(
 			"root-fork-1",
 			{
-				code: `return await api.scope_fork({ forks: [{ path: "/worker", fsm: "inspect parser", profession: "You are a worker like Ada Lovelace.", n: 1, budget: { read: 2 }, targets: ["src/a.mjs"] }] });`,
+				code: `return await api.scope_fork({ forks: [{ path: "/inspector.worker", fsm: "inspect parser", profession: "You are a worker like Ada Lovelace.", n: 1, budget: { read: 2 }, targets: ["src/a.mjs"] }] });`,
 			},
 			null,
 			null,
 			rootCtx,
 		);
 		expect(forked.isError).toBeUndefined();
-		expect(spawnedSpec.path).toBe("/worker");
-		expect(identityOf(wiring.registry, spawnedSpec.forkId)?.path).toBe("/worker");
+		expect(spawnedSpec.path).toBe("/inspector.worker");
+		expect(identityOf(wiring.registry, spawnedSpec.forkId)?.path).toBe("/inspector.worker");
 
 		const joinResult = await rootJs.execute(
 			"root-join-1",
@@ -226,7 +226,7 @@ describe("multi-engine shared ForkRegistry isolation and poka-yoke", () => {
 			{
 				forks: [
 					{
-						path: "/worker",
+						path: "/inspector.worker",
 						fsm: "cancel tree",
 						profession: "You are worker.",
 						n: 1,

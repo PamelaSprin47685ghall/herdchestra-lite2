@@ -95,7 +95,7 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 			arguments: {
 				forks: [
 					{
-						path: "api",
+						path: "inspector.api",
 						fsm: "build api",
 						profession: "You are an API engineer.",
 						n: 3,
@@ -104,7 +104,7 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 						model: "anthropic/claude-opus-4-5:high",
 					},
 					{
-						path: "ui",
+						path: "inspector.ui",
 						fsm: "build ui",
 						profession: "You are a UI engineer.",
 						n: 3,
@@ -116,8 +116,8 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 		});
 		expect(r1.isError).toBeUndefined();
 		const ledger = root.forkLedgerPort();
-		const apiRec = findScopeByPath(ledger, "/api");
-		const uiRec = findScopeByPath(ledger, "/ui");
+		const apiRec = findScopeByPath(ledger, "/inspector.api");
+		const uiRec = findScopeByPath(ledger, "/inspector.ui");
 		expect(apiRec).toBeTruthy();
 		expect(uiRec).toBeTruthy();
 
@@ -145,7 +145,7 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 			arguments: {
 				forks: [
 					{
-						path: "/api/spy",
+						path: "/inspector.api/inspector.spy",
 						fsm: "inspect api",
 						profession: "You are a spy.",
 						n: 1,
@@ -165,7 +165,7 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 			arguments: {
 				forks: [
 					{
-						path: "/api/spy",
+						path: "/inspector.api/inspector.spy",
 						fsm: "inspect api",
 						profession: "You are a spy.",
 						n: 1,
@@ -177,22 +177,22 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 		});
 		expect(okSpy.isError).toBeUndefined();
 		expect(okSpy.details.result.started[0]).toMatchObject({
-			path: "/api/spy",
-			upscope: "/api",
+			path: "/inspector.api/inspector.spy",
+			upscope: "/inspector.api",
 		});
 
 		const spySpec = spawned.at(-1);
-		expect(spySpec.upscopePath).toBe("/api");
-		expect(spySpec.callerPath).toBe("/ui");
+		expect(spySpec.upscopePath).toBe("/inspector.api");
+		expect(spySpec.callerPath).toBe("/inspector.ui");
 		expect(spySpec.upscopeSnapshotLeafId).toBe("api-closed-leaf-4");
 		expect(spySpec.sourceToolCallId).toBeNull();
 		expect(spySpec.model).toBe("anthropic/claude-opus-4-5");
 		expect(spySpec.thinkingLevel).toBe("high");
-		expect(spySpec.receipt).toContain("upscope /api, caller /ui");
-		expect(spySpec.receipt).toContain("does not share /api's context");
+		expect(spySpec.receipt).toContain("upscope /inspector.api, caller /inspector.ui");
+		expect(spySpec.receipt).toContain("does not share /inspector.api's context");
 
 		// /api/spy returns -> delivers to /ui (caller), NOT /api!
-		const spyRec = findScopeByPath(ledger, "/api/spy");
+		const spyRec = findScopeByPath(ledger, "/inspector.api/inspector.spy");
 		const { station: spyStation } = makeStation({
 			wiring,
 			identity: { forkId: spyRec.forkId, ledger, childDepth: spyRec.childDepth },
@@ -210,7 +210,7 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 		// /ui joins /api/spy directly
 		const joined = handleJoinCall(uiStation, { id: "join-ui" });
 		expect(joined.isError).toBeUndefined();
-		expect(joined.details.result.scope).toBe("/api/spy");
+		expect(joined.details.result.scope).toBe("/inspector.api/inspector.spy");
 		expect(joined.details.result.record).toContain("API endpoint is /v2/users");
 		// /api was never interrupted
 		expect(apiRec.status).toBe("running");
@@ -278,16 +278,16 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 
 describe("fail-closed paths & duplicates", () => {
 	test("normalizeScopePath refuses .. past /, trailing slash, //, wildcards, root segment", () => {
-		expect(normalizeScopePath("/api", "../..").ok).toBe(false);
+		expect(normalizeScopePath("/inspector.api", "../..").ok).toBe(false);
 		expect(normalizeScopePath("/", "..").ok).toBe(false);
 		expect(normalizeScopePath("/", "/api/").ok).toBe(false);
-		expect(normalizeScopePath("/", "/api//spy").ok).toBe(false);
+		expect(normalizeScopePath("/", "/inspector.api//inspector.spy").ok).toBe(false);
 		expect(normalizeScopePath("/", "/api/*").ok).toBe(false);
 		expect(normalizeScopePath("/", "/root").ok).toBe(false);
 		expect(normalizeScopePath("/", "/Root/a").ok).toBe(false);
-		expect(normalizeScopePath("/api", "../ui/spy")).toEqual({
+		expect(normalizeScopePath("/inspector.api", "../inspector.ui/inspector.spy")).toEqual({
 			ok: true,
-			path: "/ui/spy",
+			path: "/inspector.ui/inspector.spy",
 			isGlob: false,
 		});
 	});
@@ -300,18 +300,18 @@ describe("fail-closed paths & duplicates", () => {
 		const first = handleForkCall(root, {
 			id: "c1",
 			arguments: {
-				forks: [{ path: "api", fsm: "api", profession: "You are API.", n: 1, budget: {}, targets: ["api"] }],
+				forks: [{ path: "inspector.api", fsm: "api", profession: "You are API.", n: 1, budget: {}, targets: ["api"] }],
 			},
 		});
 		expect(first.isError).toBeUndefined();
 		const ledger = root.forkLedgerPort();
-		const api = findScopeByPath(ledger, "/api");
+		const api = findScopeByPath(ledger, "/inspector.api");
 
 		// Duplicate running path (case-insensitive)
 		const dupRunning = handleForkCall(root, {
 			id: "c2",
 			arguments: {
-				forks: [{ path: "/API", fsm: "api2", profession: "You are API.", n: 1, budget: {}, targets: ["api"] }],
+				forks: [{ path: "/inspector.API", fsm: "api2", profession: "You are API.", n: 1, budget: {}, targets: ["api"] }],
 			},
 		});
 		expect(dupRunning.isError).toBe(true);
@@ -321,7 +321,7 @@ describe("fail-closed paths & duplicates", () => {
 		const unready = handleForkCall(root, {
 			id: "c3",
 			arguments: {
-				forks: [{ path: "/api/spy", fsm: "spy", profession: "You are Spy.", n: 1, budget: {}, targets: ["spy"] }],
+				forks: [{ path: "/inspector.api/inspector.spy", fsm: "spy", profession: "You are Spy.", n: 1, budget: {}, targets: ["spy"] }],
 			},
 		});
 		expect(unready.isError).toBe(true);
@@ -331,7 +331,7 @@ describe("fail-closed paths & duplicates", () => {
 		const unknown = handleForkCall(root, {
 			id: "c4",
 			arguments: {
-				forks: [{ path: "/missing/spy", fsm: "spy", profession: "You are Spy.", n: 1, budget: {}, targets: ["spy"] }],
+				forks: [{ path: "/inspector.missing/inspector.spy", fsm: "spy", profession: "You are Spy.", n: 1, budget: {}, targets: ["spy"] }],
 			},
 		});
 		expect(unknown.isError).toBe(true);
@@ -342,8 +342,8 @@ describe("fail-closed paths & duplicates", () => {
 			id: "c5",
 			arguments: {
 				forks: [
-					{ path: "/ui", fsm: "ui", profession: "You are UI.", n: 1, budget: {}, targets: ["ui"] },
-					{ path: "/ui/spy", fsm: "spy", profession: "You are Spy.", n: 1, budget: {}, targets: ["spy"] },
+					{ path: "/inspector.ui", fsm: "ui", profession: "You are UI.", n: 1, budget: {}, targets: ["ui"] },
+					{ path: "/inspector.ui/inspector.spy", fsm: "spy", profession: "You are Spy.", n: 1, budget: {}, targets: ["spy"] },
 				],
 			},
 		});
@@ -355,8 +355,8 @@ describe("fail-closed paths & duplicates", () => {
 			id: "c6",
 			arguments: {
 				forks: [
-					{ path: "/ui", fsm: "ui", profession: "You are UI.", n: 1, budget: {}, targets: ["ui"] },
-					{ path: "/UI", fsm: "ui2", profession: "You are UI.", n: 1, budget: {}, targets: ["ui"] },
+					{ path: "/inspector.ui", fsm: "ui", profession: "You are UI.", n: 1, budget: {}, targets: ["ui"] },
+					{ path: "/inspector.UI", fsm: "ui2", profession: "You are UI.", n: 1, budget: {}, targets: ["ui"] },
 				],
 			},
 		});
@@ -369,7 +369,7 @@ describe("fail-closed paths & duplicates", () => {
 		const dupDone = handleForkCall(root, {
 			id: "c7",
 			arguments: {
-				forks: [{ path: "/api", fsm: "api3", profession: "You are API.", n: 1, budget: {}, targets: ["api"] }],
+				forks: [{ path: "/inspector.api", fsm: "api3", profession: "You are API.", n: 1, budget: {}, targets: ["api"] }],
 			},
 		});
 		expect(dupDone.isError).toBe(true);
@@ -378,7 +378,7 @@ describe("fail-closed paths & duplicates", () => {
 		// Simulate resume / restoreLedgerChecked: done scope remains forkable as upscope
 		const restored = restoreLedgerChecked(serializeLedger(ledger));
 		expect(restored.ok).toBe(true);
-		const restoredApi = findScopeByPath(restored.ledger, "/api");
+		const restoredApi = findScopeByPath(restored.ledger, "/inspector.api");
 		expect(restoredApi.safeSnapshotLeafId).toBe("api-done-leaf");
 	});
 });
@@ -394,8 +394,8 @@ describe("directory delta sparsity & resets", () => {
 		});
 		registerFork(ledger, {
 			forkId: "f1",
-			scopeId: "api",
-			path: "/api",
+			scopeId: "inspector.api",
+			path: "/inspector.api",
 			upscopePath: "/",
 			ownerId: "root",
 			callerPath: "/",
@@ -409,7 +409,7 @@ describe("directory delta sparsity & resets", () => {
 
 		const dir1 = projectDirectory(ledger);
 		expect(dir1.get("/")).toBe("running | anthropic/claude-opus-4-5:high | 12k+ / 200k");
-		expect(dir1.get("/api")).toBe("running | anthropic/claude-opus-4-5:high | 12k+ / 200k");
+		expect(dir1.get("/inspector.api")).toBe("running | anthropic/claude-opus-4-5:high | 12k+ / 200k");
 
 		// Live token updates on running /api do NOT change directory
 		updateRecordSnapshot(ledger, "f1", { snapshotContextTokens: 42_000 });
@@ -420,7 +420,7 @@ describe("directory delta sparsity & resets", () => {
 		markReady(ledger, "f1", { ok: true, record: "done" });
 		const dir3 = projectDirectory(ledger);
 		expect(diffDirectory(dir2, dir3)).toEqual({
-			"/api": "done | anthropic/claude-opus-4-5:high | 42k / 200k",
+			"/inspector.api": "done | anthropic/claude-opus-4-5:high | 42k / 200k",
 		});
 	});
 });
@@ -436,8 +436,8 @@ describe("graceful scope_abandon", () => {
 		const ledger = root.forkLedgerPort();
 		registerFork(ledger, {
 			forkId: "f-api",
-			scopeId: "api",
-			path: "/api",
+			scopeId: "inspector.api",
+			path: "/inspector.api",
 			upscopePath: "/",
 			ownerId: "root",
 			callerPath: "/",
@@ -446,12 +446,12 @@ describe("graceful scope_abandon", () => {
 		});
 		registerFork(ledger, {
 			forkId: "f-sub",
-			scopeId: "sub",
-			path: "/api/sub",
+			scopeId: "inspector.sub",
+			path: "/inspector.api/inspector.sub",
 			upscopeId: "f-api",
-			upscopePath: "/api",
+			upscopePath: "/inspector.api",
 			ownerId: "f-api",
-			callerPath: "/api",
+			callerPath: "/inspector.api",
 			fsm: "sub",
 			depth: 1,
 		});
@@ -473,17 +473,17 @@ describe("graceful scope_abandon", () => {
 		// Abandon /api from Root
 		const ab1 = handleAbandonCall(root, {
 			id: "a2",
-			arguments: { target: "/api", reason: "pivot to v2" },
+			arguments: { target: "/inspector.api", reason: "pivot to v2" },
 		});
 		expect(ab1.isError).toBeUndefined();
-		expect(ab1.details.result).toEqual({ ok: true, target: "/api" });
+		expect(ab1.details.result).toEqual({ ok: true, target: "/inspector.api" });
 		expect(interruptedCount).toBe(1);
 		expect(forkOf(ledger, "f-api").status).toBe("running");
 
 		// Repeat abandon is idempotent (no second interrupt)
 		const ab2 = handleAbandonCall(root, {
 			id: "a3",
-			arguments: { target: "/api", reason: "again" },
+			arguments: { target: "/inspector.api", reason: "again" },
 		});
 		expect(ab2.isError).toBeUndefined();
 		expect(ab2.details.result.alreadyAbandoning).toBe(true);
@@ -522,8 +522,8 @@ describe("graceful scope_abandon", () => {
 		const ledger = root.forkLedgerPort();
 		registerFork(ledger, {
 			forkId: "f-stuck",
-			scopeId: "stuck",
-			path: "/stuck",
+			scopeId: "inspector.stuck",
+			path: "/inspector.stuck",
 			upscopePath: "/",
 			ownerId: "root",
 			callerPath: "/",
@@ -533,7 +533,7 @@ describe("graceful scope_abandon", () => {
 
 		let prompts = 0;
 		const res = await spawnChildTicket(
-			{ forkId: "f-stuck", path: "/stuck", receipt: "You are now in the scope /stuck," },
+			{ forkId: "f-stuck", path: "/inspector.stuck", receipt: "You are now in the scope /inspector.stuck," },
 			{
 				registry: wiring.registry,
 				ledger,

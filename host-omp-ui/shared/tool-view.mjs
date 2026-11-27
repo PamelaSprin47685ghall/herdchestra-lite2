@@ -87,38 +87,22 @@ export function languageFor(path, extended = false) {
 /**
  * One view for the scope control plane, or null for every other tool.
  *
- * Both mappers described these five calls with the same titles, summaries and
+ * Both mappers described these calls with the same titles, summaries and
  * plan words; the parity test pinned them one by one. Keeping the strings here
  * makes the two views agree by construction, not by two copies agreeing.
  */
 export function describeScopeCall(name, args, output) {
-  const spec = args ?? {};
+    const spec = args ?? {};
 
-  if (name === "scope_request") {
-    const target = String(spec.target ?? "");
-    const message = String(spec.message ?? "");
-    const interrupt = spec.interrupt === true ? " · interrupt" : "";
-    return {
-      kind: "ask",
-      title: `scope_request → ${target || "?"}`,
-      summary: [`→ ${target}${interrupt}: ${message}`, output && `← ${output}`]
-        .filter(Boolean)
-        .join("\n"),
-    };
-  }
-
-  if (name === "scope_reply") {
-    const reply = String(spec.text ?? spec.reply ?? spec.message ?? output);
-    return { kind: "ask", title: "scope_reply", summary: `← ${reply}` };
-  }
-
-  if (name === "scope_fork") {
-    const forks = Array.isArray(spec.forks) ? spec.forks : [];
+    if (name === "scope_fork") {
+      const forks = Array.isArray(spec.forks) ? spec.forks : [];
     const requested = forks.map((fork) => {
       const entry = fork ?? {};
-      const id = String(entry.path ?? entry.scopeId ?? entry.name ?? "?");
+      // The path carries the role ("devops.api"), so the card shows the
+      // privilege and the context tree without a second field.
+      const path = String(entry.path ?? "?");
       const fsm = String(entry.fsm ?? "").slice(0, 80);
-      return fsm ? `${id} — ${fsm}` : id;
+      return fsm ? `${path} — ${fsm}` : path;
     });
     const described = typeof spec.description === "string" && spec.description !== "" ? spec.description : "";
     return {

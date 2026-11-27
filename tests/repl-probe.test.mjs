@@ -191,7 +191,8 @@ describe("skillReceipt envelope", () => {
 describe("capSig distinguishes what the model can see", () => {
 	const base = {
 		isChild: true,
-		selfPath: "/api",
+		role: "devops",
+		selfPath: "/api/devops.api",
 		hostToolNames: ["read"],
 	};
 

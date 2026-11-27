@@ -109,7 +109,7 @@ describe("prompt assembly", () => {
 			"Bayesian",
 			"three gates",
 			"sqrt(n)",
-			"manager, not a labourer",
+			"managers, not labourers",
 			"Fei Xiaotong",
 			"<inlined-skill",
 		]) {
@@ -131,7 +131,7 @@ describe("prompt assembly", () => {
 			"Bayesian",
 			"three gates",
 			"sqrt(n)",
-			"manager, not a labourer",
+			"managers, not labourers",
 			"Fei Xiaotong",
 			"<inlined-skill",
 		]) {
@@ -173,7 +173,7 @@ describe("prompt assembly", () => {
 		expect(adaptive).toContain("caller never receives tool results");
 		expect(adaptive).not.toContain("sqrt(n)");
 		expect(aggressive).toContain("sqrt(n)");
-		expect(aggressive).toContain("manager, not a labourer");
+		expect(aggressive).toContain("managers, not labourers");
 		expect(aggressive).not.toContain("caller never receives tool results");
 	});
 

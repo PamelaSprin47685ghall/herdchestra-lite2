@@ -49,24 +49,10 @@ test("the web mapper walks js inner calls into real cards", async () => {
 test("the web mapper gives the scope control plane cards, not JSON", async () => {
 	const { describeTool } = await load();
 
-	const request = describeTool(
-		tool("scope_request", { target: "/api", message: "登录字段名？", interrupt: true }, "accessToken"),
-	);
-	expect(request.kind).toBe("ask");
-	if (request.kind !== "ask") return;
-	expect(request.title).toContain("/api");
-	expect(request.summary).toContain("interrupt");
-	expect(request.summary).toContain("登录字段名？");
-	expect(request.summary).toContain("accessToken");
-
-	const reply = describeTool(tool("scope_reply", { text: "accessToken" }, "ok"));
-	expect(reply.kind).toBe("ask");
-	if (reply.kind === "ask") expect(reply.summary).toContain("accessToken");
-
 	const fork = describeTool(
 		tool(
 			"scope_fork",
-			{ forks: [{ scopeId: "api", fsm: "S1 read → S2 write" }, { scopeId: "ui" }] },
+			{ forks: [{ path: "devops.api", fsm: "S1 read → S2 write" }, { path: "editor.ui" }] },
 			"Started (2): /api, /ui",
 		),
 	);
@@ -74,7 +60,14 @@ test("the web mapper gives the scope control plane cards, not JSON", async () =>
 	if (fork.kind !== "task") return;
 	expect(fork.agent).toBe("scope_fork");
 	expect(fork.title).toBe("scope_fork (2)");
-	expect(fork.prompt.split("\n")).toEqual(["api — S1 read → S2 write", "ui"]);
+	expect(fork.prompt.split("\n")).toEqual(["devops.api — S1 read → S2 write", "editor.ui"]);
+
+	const abandon = describeTool(tool("scope_abandon", { target: "/devops.api", reason: "stale" }, "Abandoned."));
+	expect(abandon.kind).toBe("task");
+	if (abandon.kind === "task") {
+		expect(abandon.title).toBe("scope_abandon /devops.api");
+		expect(abandon.prompt).toContain("stale");
+	}
 	expect(fork.result).toContain("/api");
 
 	const join = describeTool(tool("scope_join", {}, "History only; do not re-execute it."));

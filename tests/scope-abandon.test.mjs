@@ -17,7 +17,7 @@ import {
 import { projectCapabilities } from "../src/station/domain/capabilities.mjs";
 import { handleAbandonCall, handleReturnCall } from "../src/station/fork-controls.mjs";
 
-function ledgerWith({ forkId = "f1", path = "/probe", ownerId = "root", status = "running" } = {}) {
+function ledgerWith({ forkId = "f1", path = "/devops.probe", ownerId = "root", status = "running" } = {}) {
   const ledger = createBracketLedger();
   const registered = registerFork(ledger, {
     forkId,
@@ -51,14 +51,14 @@ function stationFor(ledger, { selfPath = "/", identity = null, interrupted = [] 
 
 describe("scope_abandon", () => {
   test("sets abandonRequested, calls interruptScopePort, does not cascade, and is idempotent", () => {
-    const ledger = ledgerWith({ forkId: "f1", path: "/probe" });
+    const ledger = ledgerWith({ forkId: "f1", path: "/devops.probe" });
     registerFork(ledger, {
       forkId: "f2",
       ownerId: "f1",
-      path: "/probe/child",
+      path: "/devops.probe/inspector.child",
       upscopeId: "f1",
-      upscopePath: "/probe",
-      callerPath: "/probe",
+      upscopePath: "/devops.probe",
+      callerPath: "/devops.probe",
       levelKey: "L1",
       fsm: "nested task",
       depth: 1,
@@ -70,10 +70,10 @@ describe("scope_abandon", () => {
 
     const first = handleAbandonCall(station, {
       id: "abandon-1",
-      arguments: { target: "/probe", reason: "pivot" },
+      arguments: { target: "/devops.probe", reason: "pivot" },
     });
     expect(first?.isError).toBeUndefined();
-    expect(first?.details?.result).toEqual({ ok: true, target: "/probe" });
+    expect(first?.details?.result).toEqual({ ok: true, target: "/devops.probe" });
     const record = forkOf(ledger, "f1");
     expect(record.status).toBe("running");
     expect(record.abandonRequested).toBe(true);
@@ -87,68 +87,68 @@ describe("scope_abandon", () => {
     // Idempotent if already abandoning (does not interrupt twice).
     const second = handleAbandonCall(station, {
       id: "abandon-2",
-      arguments: { target: "/probe" },
+      arguments: { target: "/devops.probe" },
     });
     expect(second?.isError).toBeUndefined();
     expect(second?.details?.result).toEqual({
       ok: true,
-      target: "/probe",
+      target: "/devops.probe",
       alreadyAbandoning: true,
     });
     expect(interrupted).toEqual(["f1"]);
   });
 
   test("allows abandoning any running scope (even one owned by another scope)", () => {
-    const ledger = ledgerWith({ forkId: "f1", path: "/probe", ownerId: "other-caller" });
+    const ledger = ledgerWith({ forkId: "f1", path: "/devops.probe", ownerId: "other-caller" });
     const interrupted = [];
     const station = stationFor(ledger, {
-      selfPath: "/sibling",
-      identity: { forkId: "f-sib", path: "/sibling" },
+      selfPath: "/manager.sibling",
+      identity: { forkId: "f-sib", path: "/manager.sibling" },
       interrupted,
     });
     const out = handleAbandonCall(station, {
       id: "abandon-cross",
-      arguments: { target: "/probe", reason: "superseded" },
+      arguments: { target: "/devops.probe", reason: "superseded" },
     });
     expect(out?.isError).toBeUndefined();
     expect(forkOf(ledger, "f1").abandonRequested).toBe(true);
-    expect(forkOf(ledger, "f1").abandonedBy).toBe("/sibling");
+    expect(forkOf(ledger, "f1").abandonedBy).toBe("/manager.sibling");
     expect(interrupted).toEqual(["f1"]);
   });
 
   test("refuses /, self, unknown path, and already done scopes", () => {
-    const ledger = ledgerWith({ forkId: "f1", path: "/probe" });
+    const ledger = ledgerWith({ forkId: "f1", path: "/devops.probe" });
     const rootStation = stationFor(ledger);
     expect(
       handleAbandonCall(rootStation, { id: "a-root", arguments: { target: "/" } })?.details?.code,
     ).toBe("CANNOT_ABANDON_ROOT");
     expect(
-      handleAbandonCall(rootStation, { id: "a-missing", arguments: { target: "/nope" } })?.details?.code,
+      handleAbandonCall(rootStation, { id: "a-missing", arguments: { target: "/devops.nope" } })?.details?.code,
     ).toBe("ABANDON_UNKNOWN_TARGET");
 
     const selfStation = stationFor(ledger, {
-      selfPath: "/probe",
-      identity: { forkId: "f1", path: "/probe" },
+      selfPath: "/devops.probe",
+      identity: { forkId: "f1", path: "/devops.probe" },
     });
     expect(
-      handleAbandonCall(selfStation, { id: "a-self", arguments: { target: "/probe" } })?.details?.code,
+      handleAbandonCall(selfStation, { id: "a-self", arguments: { target: "/devops.probe" } })?.details?.code,
     ).toBe("CANNOT_ABANDON_SELF");
 
-    const doneLedger = ledgerWith({ forkId: "f1", path: "/probe", status: "ready" });
+    const doneLedger = ledgerWith({ forkId: "f1", path: "/devops.probe", status: "ready" });
     expect(
-      handleAbandonCall(stationFor(doneLedger), { id: "a-done", arguments: { target: "/probe" } })?.details?.code,
+      handleAbandonCall(stationFor(doneLedger), { id: "a-done", arguments: { target: "/devops.probe" } })?.details?.code,
     ).toBe("SCOPE_ALREADY_DONE");
   });
 
   test("ABANDONED scope_return ignores oath and delivers immediately without rewinding", () => {
-    const ledger = ledgerWith({ forkId: "f1", path: "/probe" });
+    const ledger = ledgerWith({ forkId: "f1", path: "/devops.probe" });
     handleAbandonCall(stationFor(ledger), {
       id: "abandon-1",
-      arguments: { target: "/probe", reason: "pivot" },
+      arguments: { target: "/devops.probe", reason: "pivot" },
     });
     let capturedOutcome = null;
     const childStation = {
-      ...stationFor(ledger, { selfPath: "/probe", identity: { forkId: "f1", path: "/probe" } }),
+      ...stationFor(ledger, { selfPath: "/devops.probe", identity: { forkId: "f1", path: "/devops.probe" } }),
       contextMessages: () => [],
       setChildOutcome: (_id, outcome) => {
         capturedOutcome = outcome;

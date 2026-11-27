@@ -41,7 +41,7 @@ const messagesOf = (station) =>
  *   Root #2 consecutive promotes without rewind (`stopLoop: false`).
  * - A missing or other oath value -> `INVALID_RETURN_OATH`; there is no default.
  * - Woken child -> `dafny` forwards to `..`; the parent receives it as a new
- *   `scope_request` and no second return is invented.
+ *   `scope_join` and no second return is invented.
  */
 export function handleReturnCall(station, call, options = {}) {
   const args = parseArgs(call);

@@ -50,6 +50,25 @@ export function handleAbandonCall(station, call) {
     if (decision.code === "CANNOT_ABANDON_SELF") {
       return errorResult("CANNOT_ABANDON_SELF", E["cannot-abandon-self"]);
     }
+    if (decision.code === "ROLE_ESCALATION") {
+      return errorResult(
+        "ROLE_ESCALATION",
+        render(
+          E["role-escalation"] ??
+            "Role {callerRole} cannot abandon role {targetRole} ({path}). Privilege narrows monotonically: manager > devops > editor > inspector.",
+          {
+            callerRole: decision.callerRole ?? "unknown",
+            targetRole: decision.targetRole ?? "unknown",
+            path: decision.path ?? targetPath,
+          },
+        ),
+        {
+          target: decision.path ?? targetPath,
+          callerRole: decision.callerRole,
+          targetRole: decision.targetRole,
+        },
+      );
+    }
     if (decision.code === "SCOPE_ALREADY_DONE") {
       return errorResult(
         "SCOPE_ALREADY_DONE",

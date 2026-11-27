@@ -161,15 +161,26 @@ const CONTROL_PLANE_BLOCK = `/**
  * space; whether one is callable this turn is decided by the live binding
  * printed in the REPL probe, never by this declaration.
  */
+type ScopeRole = "manager" | "devops" | "editor" | "inspector";
+
 interface ScopeForkItem {
-	/** New subscope path: bare name ("worker") is relative to state.scope; "../a/b" or "/a/b" inherits upscope's last-turn context snapshot. Duplicate paths fail closed. */
+	/**
+	 * New subscope path ending in "<role>.<name>" (manager | devops | editor | inspector).
+	 * Bare name ("editor.eve") is relative to state.scope; "../inspector.peter/editor.eve"
+	 * or "/manager.tom/devops.alice" inherits that upscope's last-turn context snapshot
+	 * while delivering scope_return back to you (the caller). A segment without a role,
+	 * a wider role than yours, a duplicate path, an unknown or unready upscope, and a
+	 * second running devops all fail closed.
+	 */
 	path: string;
 	fsm: string;
 	profession: string;
 	n: number;
-	budget: Record<string, number>;
-	targets: string[];
-	/** Optional override; omit or null to inherit upscope's model + thinking level (reuses prefix cache). */
+	/** Allowed tool turn budgets for the target role. Omit or {} for a manager and a pure-reasoning inspector. */
+	budget?: Record<string, number>;
+	/** Required concrete file paths for editor; optional descriptive or exploratory targets for other roles. */
+	targets?: string[];
+	/** Optional override; omit or null to inherit upscope's model + thinking level (reuses prompt prefix cache). */
 	model?: string | null;
 }
 
@@ -179,7 +190,7 @@ interface ScopeForkArgs {
 
 interface ScopeForkResult {
 	ok: boolean;
-	started: Array<{ path: string; upscope: string; depth: number; fsm: string }>;
+	started: Array<{ path: string; role: ScopeRole; upscope: string; depth: number; fsm: string }>;
 	failed: Array<{ index: number; error?: string }>;
 	unreceived: string[];
 }
@@ -187,6 +198,7 @@ interface ScopeForkResult {
 interface ScopeJoinResult {
 	ok: boolean;
 	scope: string;
+	role: ScopeRole;
 	failed: boolean;
 	abandoned?: boolean;
 	abandonedBy?: string | null;
@@ -200,7 +212,7 @@ interface ScopeJoinResult {
 }
 
 interface ScopeAbandonArgs {
-	/** Exact path of any running scope (never "/" or state.scope). Interrupts it and forces scope_return on its next turn. */
+	/** Exact path of one running scope (never "/", never state.scope, never a wider role than yours). Interrupts it and forces scope_return on its next turn. */
 	target: string;
 	/** Optional reason shown to the target (to guide its final dafny) and to its caller on scope_join. */
 	reason?: string;
@@ -222,6 +234,7 @@ interface ScopeReturnArgs {
 
 interface ScopeState {
 	mode: "SUBSCOPE" | "ROOT_MANUAL" | "ROOT_AUTOPILOT" | "FINAL_ANSWER" | "CONTEXT_LIMIT" | "ABANDONED";
+	role: ScopeRole;
 	scope: string;
 	autopilot?: boolean;
 	canStop?: boolean;

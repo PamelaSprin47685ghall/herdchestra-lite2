@@ -28,7 +28,7 @@ Call `scope_return` alone with fresh `dafny` and the required oath: `unfinished`
 
 ## mode.abandoned
 
-This scope was abandoned by `{{by}}`{{reasonClause}}. Only `scope_return` is bound: hand back your current findings and partial state in `dafny` now (no rewind will happen).
+This scope was abandoned by `{{by}}`{{reasonClause}}. Only `scope_return` is bound: hand back your current findings and partial state in `dafny` now (no rewind will happen; the oath field is not required).
 
 ## mode.context-limit
 
@@ -40,7 +40,7 @@ Nothing remains worth changing. No tool is bound; answer the user.
 
 ## fork.subscope-status
 
-{{marker}} depth {{depth}}, upscope {{upscopePath}}, caller {{callerPath}}.
+{{marker}} role {{role}}, depth {{depth}}, upscope {{upscopePath}}, caller {{callerPath}}.
 State machine: {{fsm}}
 Turns left: {{remaining}}. Targets: {{targets}}.
 

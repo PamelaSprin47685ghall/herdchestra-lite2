@@ -82,19 +82,19 @@ describe("a batch projects one item into each child", () => {
       id: "fb",
       arguments: {
         forks: [
-          { path: "one", fsm: "one", profession: "You are the first worker like Ada Lovelace.", budget: { read: 1 }, time: 60, targets: ["one.mjs"] },
-          { path: "two", fsm: "two", profession: "You are the second worker like Grace Hopper.", budget: { read: 1 }, time: 60, targets: ["two.mjs"] },
+          { path: "editor.one", fsm: "one", profession: "You are the first worker like Ada Lovelace.", budget: { read: 1 }, time: 60, targets: ["one.mjs"] },
+          { path: "editor.two", fsm: "two", profession: "You are the second worker like Grace Hopper.", budget: { read: 1 }, time: 60, targets: ["two.mjs"] },
         ],
       },
     });
     expect(out.isError).toBeUndefined();
     expect(specs.map((spec) => spec.forkId)).toEqual(["fb:0", "fb:1"]);
-    expect(specs[0].receipt).toContain("You are now in the scope /one");
+    expect(specs[0].receipt).toContain("You are now in the scope /editor.one");
     expect(specs[0].receipt).toContain("State machine: one");
     expect(specs[0].receipt).toContain("User messages go to the stable root");
     expect(specs[0].receipt).toContain("Use `scope_return` to submit your record");
     expect(specs[0].receipt).not.toContain("State machine: two");
-    expect(specs[1].receipt).toContain("You are now in the scope /two");
+    expect(specs[1].receipt).toContain("You are now in the scope /editor.two");
     expect(specs[1].receipt).toContain("State machine: two");
     expect(specs[1].receipt).not.toContain("State machine: one");
   });

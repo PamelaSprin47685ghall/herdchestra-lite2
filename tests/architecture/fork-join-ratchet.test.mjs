@@ -64,10 +64,10 @@ describe("fork/join ratchet", () => {
 	});
 });
 
-// A `scope_request` is a live Promise, not a record: it exists only while the
-// requester is parked. Persisting it would serialize a resolver that no reload can
-// honour, so the persistence layer must never name the request table.
-describe("the request queue stays in memory", () => {
+// The retired request queue was a live Promise, not a record: persisting it
+// would have serialized a resolver no reload could honour. The queue is gone;
+// this ratchet still guards the persistence layer against naming it again.
+describe("the retired request queue stays out of persistence", () => {
 	// The persistence implementation is split, and scanning only the facade would
 	// make this ratchet vacuous. Files are selected by the shape they carry, so a
 	// further split is covered without touching this test.

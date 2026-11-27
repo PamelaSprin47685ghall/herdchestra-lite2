@@ -129,7 +129,7 @@ describe("branch charging", () => {
     const charged = chargeBranch(s, ledger, {
       ownerId: "f1",
       toolCallId: "c1",
-      toolName: "scope_request",
+      toolName: "scope_join",
     });
     expect(charged.ok).toBe(true);
     expect(ledger.forks.f1.remaining.read).toBe(1);

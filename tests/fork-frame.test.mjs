@@ -17,7 +17,7 @@ import { createTools } from "../src/tools/catalog.mjs";
 import { textResult } from "../src/tools/results.mjs";
 
 const ITEM = {
-  path: "probe",
+  path: "inspector.probe",
   fsm: "x",
   profession: "You are a probe engineer like Barbara Liskov.",
   n: 1,
@@ -48,7 +48,7 @@ function joinedLedger(outcome) {
     profession: "You are a worker.",
   });
   expect(registered.ok).toBe(true);
-  registered.fork.path = "/probe";
+  registered.fork.path = "/inspector.probe";
   markReady(ledger, "f1", outcome);
   const taken = takeReady(ledger, { ownerId: "root", levelKey: "L0" });
   expect(taken.ok).toBe(true);
@@ -91,7 +91,7 @@ describe("the address book", () => {
   test("a joined scope whose outcome failed is still found by path and cannot be abandoned", () => {
     const ledger = joinedLedger({ ok: false, reason: "NO_FORK_FRAME: no frame", record: "" });
     expect(forkOf(ledger, "f1").outcome).toBe("failed");
-    expect(findScopeByPath(ledger, "/probe")?.forkId).toBe("f1");
+    expect(findScopeByPath(ledger, "/inspector.probe")?.forkId).toBe("f1");
     const station = {
       state: createState(),
       forkLedgerPort: () => ledger,
@@ -100,7 +100,7 @@ describe("the address book", () => {
     const result = handleAbandonCall(station, {
       id: "call#1",
       frameId: "call",
-      arguments: { target: "/probe" },
+      arguments: { target: "/inspector.probe" },
     });
     expect(result?.isError).toBe(true);
     expect(result?.details?.code).toBe("SCOPE_ALREADY_DONE");
@@ -108,6 +108,6 @@ describe("the address book", () => {
 
   test("a joined scope that returned keeps its address", () => {
     const ledger = joinedLedger({ ok: true, record: "done" });
-    expect(findScopeByPath(ledger, "/probe")?.forkId).toBe("f1");
+    expect(findScopeByPath(ledger, "/inspector.probe")?.forkId).toBe("f1");
   });
 });

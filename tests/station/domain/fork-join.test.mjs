@@ -82,7 +82,7 @@ describe("admission decisions", () => {
 
 describe("fork validation and register", () => {
 	const item = {
-		path: "probe",
+		path: "inspector.probe",
 		fsm: "x",
 		profession: "You are a probe engineer like Barbara Liskov.",
 		budget: { read: 1 },
@@ -107,7 +107,7 @@ describe("fork validation and register", () => {
 		const sandbox = vm.createContext(Object.create(null));
 		const foreign = vm.runInContext(
 			`({
-				path: "probe",
+				path: "inspector.probe",
 				fsm: "x",
 				profession: "You are a probe engineer like Barbara Liskov.",
 				budget: { read: 1 },
@@ -127,9 +127,9 @@ describe("fork validation and register", () => {
 			forks: [
 				{
 					forkId: "f1",
-					scopeId: "probe",
+					scopeId: "inspector.probe",
 					ownerId: "root",
-					path: "/probe",
+					path: "/inspector.probe",
 					status: "running",
 				},
 			],
@@ -145,9 +145,9 @@ describe("fork validation and register", () => {
 			forks: [
 				{
 					forkId: "f1",
-					scopeId: "probe",
+					scopeId: "inspector.probe",
 					ownerId: "someone-else",
-					path: "/probe",
+					path: "/inspector.probe",
 					status: "running",
 				},
 			],
@@ -180,6 +180,141 @@ describe("fork validation and register", () => {
 		expect(out.ok).toBe(false);
 		expect(out.code).toBe("FORK_CONTEXT_EXCEEDED");
 		expect(out.index).toBe(0);
+	});
+
+	test("decideRegister refuses a path segment that carries no role", () => {
+		const out = decideRegister({
+			items: [validateFork({ ...item, path: "worker" })],
+			forks: [],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(out.ok).toBe(false);
+		expect(out.code).toBe("INVALID_PATH");
+		expect(out.index).toBe(0);
+	});
+
+	test("decideRegister refuses a wider role than the caller holds", () => {
+		// A devops caller may open devops, editor, or inspector — never a manager.
+		const out = decideRegister({
+			items: [validateFork({ ...item, path: "/manager.boss" })],
+			forks: [],
+			callerPath: "/devops.api",
+			hasSpawner: true,
+		});
+		expect(out.ok).toBe(false);
+		expect(out.code).toBe("ROLE_ESCALATION");
+		expect(out.callerRole).toBe("devops");
+		expect(out.targetRole).toBe("manager");
+	});
+
+	test("decideRegister lets a manager fork a narrower role under a done upscope", () => {
+		const out = decideRegister({
+			items: [validateFork({ ...item, path: "/inspector.peter/editor.eve" })],
+			forks: [
+				{
+					forkId: "pete",
+					scopeId: "inspector.peter",
+					path: "/inspector.peter",
+					status: "ready",
+					safeSnapshotLeafId: "leaf-peter",
+				},
+			],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(out.ok).toBe(true);
+		expect(out.items[0].role).toBe("editor");
+		expect(out.items[0].path).toBe("/inspector.peter/editor.eve");
+		expect(out.items[0].upscopeId).toBe("pete");
+	});
+
+	test("decideRegister keeps one devops running globally, including within one batch", () => {
+		const live = {
+			forkId: "dv",
+			scopeId: "devops.alice",
+			path: "/devops.alice",
+			status: "running",
+		};
+		const busy = decideRegister({
+			items: [validateFork({ ...item, path: "devops.bob" })],
+			forks: [live],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(busy.ok).toBe(false);
+		expect(busy.code).toBe("DEVOPS_ALREADY_RUNNING");
+		expect(busy.activePath).toBe("/devops.alice");
+
+		const free = decideRegister({
+			items: [validateFork({ ...item, path: "devops.bob" })],
+			forks: [{ ...live, status: "ready" }],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(free.ok).toBe(true);
+
+		const batch = decideRegister({
+			items: [
+				validateFork({ ...item, path: "devops.one" }),
+				validateFork({ ...item, path: "devops.two" }),
+			],
+			forks: [],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(batch.ok).toBe(false);
+		expect(batch.code).toBe("DEVOPS_ALREADY_RUNNING");
+		expect(batch.index).toBe(1);
+	});
+
+	test("an editor must name concrete files, and no role may fund a tool it cannot hold", () => {
+		const noFiles = decideRegister({
+			items: [validateFork({ ...item, path: "editor.eve", targets: ["the caching parts"] })],
+			forks: [],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(noFiles.ok).toBe(false);
+		expect(noFiles.code).toBe("INVALID_EDITOR_TARGETS");
+
+		const editorBash = decideRegister({
+			items: [validateFork({ ...item, path: "editor.eve", budget: { bash: 1 } })],
+			forks: [],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(editorBash.ok).toBe(false);
+		expect(editorBash.code).toBe("FORBIDDEN_ROLE_BUDGET");
+		expect(editorBash.tool).toBe("bash");
+
+		const managerPaid = decideRegister({
+			items: [validateFork({ ...item, path: "manager.tom", budget: { read: 1 } })],
+			forks: [],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(managerPaid.ok).toBe(false);
+		expect(managerPaid.code).toBe("FORBIDDEN_ROLE_BUDGET");
+		expect(managerPaid.role).toBe("manager");
+	});
+
+	test("a manager may omit budget and targets entirely", () => {
+		const bare = {
+			path: "manager.tom",
+			fsm: "delegate the work",
+			profession: "You are a manager like Grace Hopper.",
+		};
+		const out = decideRegister({
+			items: [validateFork(bare)],
+			forks: [],
+			callerPath: "/",
+			hasSpawner: true,
+		});
+		expect(out.ok).toBe(true);
+		expect(out.items[0].role).toBe("manager");
+		expect(out.items[0].budget).toEqual({});
+		expect(out.items[0].targets).toEqual([]);
 	});
 });
 

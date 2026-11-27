@@ -9,7 +9,7 @@ import { decideRegister, validateFork } from "../src/station/domain/fork-join.mj
 import { loadDoc } from "../src/prompts/index.mjs";
 
 const item = {
-  path: "worker",
+  path: "inspector.worker",
   fsm: "do the work",
   profession: "You are a careful worker like Ada Lovelace.",
   n: 2,
@@ -52,8 +52,8 @@ describe("decideRegister fails closed on duplicate paths", () => {
     expect(out.ok).toBe(true);
     expect(out.items[0]).toMatchObject({
       action: "register",
-      scopeId: "worker",
-      path: "/worker",
+      scopeId: "inspector.worker",
+      path: "/inspector.worker",
       upscopePath: "/",
       callerPath: "/",
     });
@@ -65,9 +65,9 @@ describe("decideRegister fails closed on duplicate paths", () => {
       forks: [
         {
           forkId: "f1",
-          scopeId: "worker",
+          scopeId: "inspector.worker",
           upscopeId: null,
-          path: "/worker",
+          path: "/inspector.worker",
           status: "running",
         },
       ],
@@ -76,13 +76,13 @@ describe("decideRegister fails closed on duplicate paths", () => {
     });
     expect(out.ok).toBe(false);
     expect(out.code).toBe("DUPLICATE_SCOPE_PATH");
-    expect(out.path).toBe("/worker");
+    expect(out.path).toBe("/inspector.worker");
     expect(out.status).toBe("running");
   });
 
   test("a repeat inside one batch fails closed (case-insensitive)", () => {
     const out = decideRegister({
-      items: [validateFork(item), validateFork({ ...item, path: "Worker" })],
+      items: [validateFork(item), validateFork({ ...item, path: "inspector.Worker" })],
       forks: [],
       callerPath: "/",
       hasSpawner: true,
@@ -95,26 +95,26 @@ describe("decideRegister fails closed on duplicate paths", () => {
 
   test("the same leaf name under two distinct upscopes is allowed", () => {
     const forks = [
-      { forkId: "a", scopeId: "a", upscopeId: null, path: "/a", status: "running", safeSnapshotLeafId: "leaf-a" },
-      { forkId: "b", scopeId: "b", upscopeId: null, path: "/b", status: "running", safeSnapshotLeafId: "leaf-b" },
+      { forkId: "a", scopeId: "manager.a", upscopeId: null, path: "/manager.a", status: "running", safeSnapshotLeafId: "leaf-a" },
+      { forkId: "b", scopeId: "manager.b", upscopeId: null, path: "/manager.b", status: "running", safeSnapshotLeafId: "leaf-b" },
       {
         forkId: "aw",
-        scopeId: "worker",
-        upscopeId: "a",
-        path: "/a/worker",
+        scopeId: "inspector.worker",
+        upscopeId: "manager.a",
+        path: "/manager.a/inspector.worker",
         status: "running",
       },
     ];
     const out = decideRegister({
       items: [validateFork(item)],
       forks,
-      callerPath: "/b",
+      callerPath: "/manager.b",
       ownerId: "b",
       hasSpawner: true,
     });
     expect(out.ok).toBe(true);
-    expect(out.items[0].scopeId).toBe("worker");
-    expect(out.items[0].path).toBe("/b/worker");
+    expect(out.items[0].scopeId).toBe("inspector.worker");
+    expect(out.items[0].path).toBe("/manager.b/inspector.worker");
     expect(out.items[0].upscopeId).toBe("b");
   });
 
@@ -124,9 +124,9 @@ describe("decideRegister fails closed on duplicate paths", () => {
       forks: [
         {
           forkId: "f1",
-          scopeId: "worker",
+          scopeId: "inspector.worker",
           upscopeId: null,
-          path: "/worker",
+          path: "/inspector.worker",
           status: "ready",
         },
       ],
@@ -170,11 +170,11 @@ describe("handleForkCall", () => {
     const root = stationFor(ledger, spawned);
     handleForkCall(root, {
       id: "call-root",
-      arguments: { forks: [{ ...item, path: "api" }] },
+      arguments: { forks: [{ ...item, path: "devops.api" }] },
     });
     const parentForkId = spawned[0].forkId;
     const parentPath = ledger.forks[parentForkId].path;
-    expect(parentPath).toBe("/api");
+    expect(parentPath).toBe("/devops.api");
 
     const childStation = {
       ...stationFor(ledger, spawned),
@@ -185,9 +185,9 @@ describe("handleForkCall", () => {
       arguments: { forks: [item] },
     });
     expect(out.isError).toBeUndefined();
-    expect(spawned[1].scopeId).toBe("worker");
-    expect(spawned[1].path).toBe("/api/worker");
-    expect(spawned[1].receipt).toContain("You are now in the scope /api/worker");
+    expect(spawned[1].scopeId).toBe("inspector.worker");
+    expect(spawned[1].path).toBe("/devops.api/inspector.worker");
+    expect(spawned[1].receipt).toContain("You are now in the scope /devops.api/inspector.worker");
     expect(ledger.forks[spawned[1].forkId].upscopeId).toBe(parentForkId);
   });
 });

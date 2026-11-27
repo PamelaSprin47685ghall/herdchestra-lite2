@@ -6,6 +6,7 @@
 // clock, and performs no I/O.
 
 import { decideAbandon } from "./abandon.mjs";
+import { roleOfSegment } from "./roles.mjs";
 import { isPlainObject } from "./plain.mjs";
 import { emptyTotals } from "./turn-stats.mjs";
 import { subscopePath } from "./path.mjs";
@@ -236,9 +237,12 @@ export function registerFork(ledger, spec, options = {}) {
   const targets = Array.isArray(s.targets)
     ? s.targets.map((target) => target)
     : undefined;
+  const role = roleOfSegment(scopeId);
   const record = {
     forkId: s.forkId,
     scopeId,
+    // The name encodes the role; a bare legacy id has none.
+    ...(role ? { role } : {}),
     path,
     upscopeId,
     upscopePath,
@@ -775,7 +779,7 @@ export function abandonDescendants(ledger, ownerId, reason = null) {
   const runningIds = [];
   // Every descendant whose agent may still exist. A closed record is not a
   // stopped agent: a returned or joined child keeps a live prompt loop that a
-  // `scope_request` can wake. Esc means the whole conversation branch stops,
+  // `scope_abandon` can interrupt. Esc means the whole conversation branch stops,
   // so the caller gets these ids even though their records stay untouched.
   const liveIds = [];
   for (let index = levels.length - 1; index >= 0; index -= 1) {

@@ -19,7 +19,8 @@ import {
 
 const SUBSCOPE = {
 	isChild: true,
-	selfPath: "/api",
+	role: "devops",
+	selfPath: "/api/devops.api",
 	hostToolNames: ["read", "write", "bash", "ask", "todo", "wait", "js"],
 };
 
@@ -114,7 +115,7 @@ describe("the state object", () => {
 			},
 		}).state;
 
-		expect(state.scope).toBe("/api");
+		expect(state.scope).toBe("/api/devops.api");
 		expect(state.remaining).toEqual({ read: "2/3" });
 		expect(state.unreceived).toBe(1);
 		expect(state.scopes_delta).toEqual({

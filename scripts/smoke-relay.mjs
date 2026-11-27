@@ -18,9 +18,10 @@
  */
 
 import { activate } from "../host-omp/src/main.mjs";
-import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+import { RETURN_OATH_KEY, RETURN_OATH_UNFINISHED, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
 
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
+const SMALL = { [RETURN_OATH_KEY]: RETURN_OATH_UNFINISHED };
 
 function memoryManager(idPrefix = "smoke-session") {
 	const entries = [];
@@ -227,7 +228,7 @@ await check("scope_return refuses non-matching oath values strictly", async () =
 });
 
 await check("root small handoff rewinds via agent_end ticket preserving verbatim user prompt", async () => {
-	const out = await callJs('await api.scope_return({ dafny: "gen 0 progress" })');
+	const out = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "gen 0 progress", ...SMALL } });
 	expect(!out.isError, `small handoff failed: ${out.text}`);
 	expect(out.details?.rewind === true && out.details?.stopLoop === true, "expected rewind + stopLoop");
 	expect(station.state.relay.generation === 1, `expected gen 1, got ${station.state.relay.generation}`);

@@ -8,6 +8,8 @@ Persistent operating rules
 
 Root is outside all scopes. It plans, forks, joins, and answers; no ordinary tools: they run in forked scopes. The final answer lives outside all scopes.
 
+At root, `api.bash` is absent: calling it throws `TypeError: api.bash is not a function` and spends a turn for nothing. The probe had already said so. To list a directory, run a command, or change a file, fork a scope that holds the capability, then join its record.
+
 ### The one tool
 
 - You hold exactly one tool: `js`. It evaluates the async JavaScript you write with three bindings in scope: `api` (this scope's capability object), `state` (a read-only snapshot of this scope), and `inputs` (the sidecar payload you passed). A bare expression returns its own value; a multi-statement body needs its own `return`. Always `await` an api method.

@@ -6,6 +6,43 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [6.2.0] — 2026-11-27
+
+### Changed — `scope_return` requires an explicit oath (breaking)
+
+The oath is no longer optional. Pass `unfinished` to rewind or the seal value to
+deliver; a missing field, `undefined`, `null`, or a typo is refused with
+`INVALID_RETURN_OATH` instead of defaulting to a small handoff.
+
+### Added — one process-wide FIFO barrier for file-writing tools
+
+Two concurrent `edit`/`write` calls on one file both read the old bytes, so the
+later write silently erased the earlier one while both reported success.
+`host-omp/src/host/write-serialization.mjs` queues every write tool (including
+`ast_edit` and patch input) behind one module-level FIFO. A write whose targets
+cannot be named takes the exclusive key instead of guessing; a nested write runs
+at once only when its ancestor already covers its targets; an aborted queued
+call leaves the queue immediately.
+
+### Fixed — a pending root rewind survives the host's async pause
+
+`onAgentEnd` returned early on every `willContinue: true` event, including the
+pause created by the rewind run-hold job itself, so the rewind never resumed. It
+now proceeds when the pause reports `awaitingAsyncWork`, holds the host run until
+`agent_start`, and emits an error assistant when takeover fails.
+
+### Fixed — context preparation tolerates repeated or appended tails
+
+Tail positioning no longer aborts the turn when the same frame repeats an entry
+or another writer appends after it; the mismatch is recorded as a tolerated
+diagnostic.
+
+### Fixed — `cwdOf(ctx)` never guesses a cwd
+
+The write barrier needs the session cwd to key two paths to one lock. It returns
+`null` when the context carries none, so the call takes the exclusive key instead
+of pairing two writes under different locks.
+
 ## [6.1.2] — 2026-11-27
 
 ### Fixed — single shared `ForkRegistry` for `scope_request` / root runtime and full post-seal drain

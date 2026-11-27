@@ -6,6 +6,15 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [6.1.1] — 2026-11-27
+
+### Fixed — root is told that `api.bash` is absent
+
+Root holds the control plane and no host tools, so a `bash` call throws
+`TypeError: api.bash is not a function` and spends a turn for nothing. The
+prompt says so beside the rule that root plans, forks, joins and answers, and
+names the remedy: fork a scope that holds the capability, then join its record.
+
 ## [6.1.0] — 2026-11-27
 
 ### Changed — one `/herd` command replaces `/herd-autopilot` (breaking)

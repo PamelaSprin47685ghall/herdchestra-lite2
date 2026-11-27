@@ -5,18 +5,22 @@
 // is: the switch lives in the wiring.
 
 /**
- * `store` is the caller's persistent mode holder (`{ autopilot: boolean }`).
- * Writing through it keeps a session restore on the same answer this port
- * reports; a closure-owned flag would flip back to "off" on reload.
+ * `store` is the caller's persistent feature holder
+ * (`{ features: { autopilot } }`). Writing through it keeps a session restore
+ * on the same answer this port reports; a closure-owned flag would flip back to
+ * "off" on reload.
  */
-export function createHerdOn(store = { autopilot: false }) {
+export function createHerdOn(store = { features: { autopilot: "off" } }) {
 	return {
 		name: "on",
 		mode() {
-			return store.autopilot === true ? "on" : "off";
+			return store.features?.autopilot === "on" ? "on" : "off";
 		},
 		toggle(text) {
-			store.autopilot = store.autopilot !== true;
+			if (!store.features || typeof store.features !== "object") {
+				store.features = { autopilot: "off" };
+			}
+			store.features.autopilot = store.features.autopilot === "on" ? "off" : "on";
 			return { ok: true, mode: this.mode(), text: typeof text === "string" ? text : "" };
 		},
 	};
@@ -33,8 +37,3 @@ export function createHerdOff() {
 		},
 	};
 }
-
-const HERD_IMPLEMENTATIONS = Object.freeze({
-	on: createHerdOn,
-	off: createHerdOff,
-});

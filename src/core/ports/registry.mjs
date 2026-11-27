@@ -11,7 +11,6 @@
 /** Port name -> { implementations: readonly string[], fallback: string }. */
 export const PORTS = Object.freeze({
 	clock: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
-	chineseReminder: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	vibeCompat: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	herd: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),
 	modelSwitch: Object.freeze({ implementations: Object.freeze(["on", "off"]), fallback: "on" }),

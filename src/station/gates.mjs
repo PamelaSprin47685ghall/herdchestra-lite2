@@ -12,6 +12,7 @@ import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
 import { abandonDescendants } from "../scope/forkjoin.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
+import { mergeFeatures, parseHerdCommand } from "../features/herd/features.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
 import { continueFeedback } from "../tools/results.mjs";
 import { hostBoundaryKey } from "./messages.mjs";
@@ -290,7 +291,7 @@ function onSessionStop(station, ctx, evidence = null) {
 	// Root natural stop: allowed when autopilot is off or after two consecutive
 	// big `scope_return` oaths (`canStop === true`). Otherwise nudge to call
 	// `scope_return`.
-	if (!station.state?.autopilot) return undefined;
+	if (station.state?.features?.autopilot !== "on") return undefined;
 	if (station.state?.relay?.canStop === true) return undefined;
 	return continueFeedback(rootReturnNudge());
 }
@@ -331,7 +332,7 @@ function onBeforeAgentStart(station, event, ctx) {
 			? station.host.tools.listSpecs(ctx) ?? []
 			: [];
 	const prompt = injectSystemPrompt(event?.systemPrompt, {
-		...station.portTable,
+		features: station.state?.features,
 		toolSpecs: specs,
 	});
 	const promptChanged = prompt !== event?.systemPrompt;
@@ -352,19 +353,25 @@ function onBeforeAgentStart(station, event, ctx) {
 	return result;
 }
 
-function onAutopilotCommand(station, args) {
-	const text = typeof args === "string" ? args.trim() : "";
-	const toggled = station.herdPort().toggle(text);
-	if (!toggled.ok) return toggled;
-	station.persist();
-	if (toggled.text) station.deliverUserMessage(toggled.text);
-	return toggled;
+function onHerdCommand(station, args) {
+	if (station.portTable?.herd !== "on") {
+		return { ok: false, code: "HERD_UNAVAILABLE", message: "/herd is disabled by HERD_HERD=off" };
+	}
+	if (!station.state.features) station.state.features = mergeFeatures({}, {});
+	const parsed = parseHerdCommand(args, station.state.features);
+	if (parsed.kind === "refuse") return { ok: false, ...parsed };
+	if (parsed.kind === "set") {
+		station.state.features[parsed.feature] = parsed.state;
+		station.persist();
+		if (parsed.text) station.deliverUserMessage(parsed.text);
+	}
+	return { ok: true, ...parsed };
 }
 
 export {
 	onAssistantMessage,
 	onMessageEnd,
-	onAutopilotCommand,
+	onHerdCommand,
 	prepareRequest,
 	onContext,
 	onAgentEnd,

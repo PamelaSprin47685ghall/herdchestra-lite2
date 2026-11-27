@@ -23,9 +23,9 @@ import {
 const errors = loadDoc("errors");
 
 // The agent loop aborts an interruptible tool's signal with this registered
-// symbol when a queued user message wants the model. `Symbol.for` resolves to
-// the host's symbol without importing its package.
-export const TOOL_INTERRUPT_ABORT_REASON = Symbol.for("pi-agent-core.tool-interrupt");
+// symbol when a queued user message wants the model. It lives in beat.mjs so
+// the state machine and the ticket share one definition.
+export { TOOL_INTERRUPT_ABORT_REASON } from "./beat.mjs";
 
 // `scope_request` interrupts a peer for an answer, which is a different
 // decision from the user taking the turn back. The interrupt symbol lives with
@@ -93,7 +93,9 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 			}
 			registerRuntime(wait.registry, selfPath, {
 				state: "running",
-				parked: "join",
+				// One id per join, not one boolean for the whole scope: two joins in
+				// one beat must both remain visible until each finishes.
+				parked: toolCallId,
 				yieldJoin: () => yieldController.abort(REQUEST_INTERRUPT_REASON),
 			});
 			// The parent's own clock stops while it waits for a child. Hiring
@@ -114,9 +116,9 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 				station.noteRootWait?.(-1);
 				station.resumeBranchClock?.();
 				signal?.removeEventListener?.("abort", relay);
-				// The join is over either way, so the parking hooks must stop
-				// answering: a request that lands now belongs to the next turn.
-				registerRuntime(wait.registry, selfPath, { parked: null, yieldJoin: null });
+				// Remove only this join's id and yield hook. A sibling join in the
+				// same beat keeps its own entry, so a request can still yield it.
+				registerRuntime(wait.registry, selfPath, { parkedRemove: toolCallId });
 			}
 		})();
 		if (!waited.ok) {

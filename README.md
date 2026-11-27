@@ -18,7 +18,7 @@ A scope is addressed by where it sits: the root is `/`, and a child's path is it
 
 Call `scope_return` alone in its script, always with non-empty `dafny`. Omitting the oath rewinds the context and continues the same scope; a child keeps its birth instructions and latest report. The new report replaces the old one, so carry forward evidence and unresolved work that still matter. To publish a child's record, pass `signed_sealed_hands_off_nothing_left_on_the_table: "a_ferocious_audacious_master_would_change_nothing"`. The child seal appends the trimmed `dafny` to the record. Any unreceived children transfer to the receiving scope and keep their identities and turns. An unsealed child that stops is nudged to return.
 
-A scope's budget and wall clock come from the `scope_fork` item that created it. The parent's budget never funds a child and never shrinks when a child starts. The root has no budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `scope_return`, `scope_request`, `scope_abandon`, `wait`, and `ask` while autopilot is off) stay available at the root; a `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) spends no turn wherever it is bound, and the root binds neither, because the skills are already inlined in its system prompt. Turns are a ledger, not a fence. When a scope's turns for a tool are spent, the call still runs and the receipt records that the call was panhandled; the scope's panhandle count travels with its record, so the caller reads it at `scope_join`. Panhandling buys the call and nothing else: it is the receipt saying in public that the scope sized itself wrong, and a scope that panhandles its way to a checkpoint has told its caller it could not plan. The root is the one exception, because it is outside every scope and holds no budget to overrun. `scope_return` is child-only: it submits a scope's own record, so the root has no use for it.
+A scope's budget and wall clock come from the `scope_fork` item that created it. The parent's budget never funds a child and never shrinks when a child starts. The root has no budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `scope_return`, `scope_request`, `scope_abandon`, `wait`, and `ask` while autopilot is off) stay available at the root; a `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) spends no turn wherever it is bound, and the root binds neither, because the active policy sections are already in its system prompt. Turns are a ledger, not a fence. When a scope's turns for a tool are spent, the call still runs and the receipt records that the call was panhandled; the scope's panhandle count travels with its record, so the caller reads it at `scope_join`. Panhandling buys the call and nothing else: it is the receipt saying in public that the scope sized itself wrong, and a scope that panhandles its way to a checkpoint has told its caller it could not plan. The root is the one exception, because it is outside every scope and holds no budget to overrun. `scope_return` is child-only: it submits a scope's own record, so the root has no use for it.
 
 The root (`Root`) keeps its native transcript and input stream. Descendants at every depth appear in the main transcript as labelled message and tool components; full records arrive through `scope_join`. Root and descendants compete equally for one streaming slot: the first stream holds it through completion, and an overlapping stream appears as a single block after it ends. The native working row displays `[Busy: X, Idle: Y]` and the path to the latest requesting scope, omitting `Root`. Each fork item supplies a short `scopeId` such as `oh-my-pie`, displayed as `Oh My Pie`. Only explicit tool prompts and approvals can use the root UI. An accepted child oath ends the child loop at the tool-result boundary, without an extra model request or an interruption message.
 
@@ -55,30 +55,29 @@ bun scripts/sync-plugin.mjs --check    # report drift without copying
 bun run smoke:relay                    # check relay behavior in this working tree
 ```
 
-With `omp plugin link`, `~/.omp/plugins/node_modules/herdchestra-host-omp` is a symlink at `host-omp/`, so every edit here is live after a restart — no sync step. `sync:plugin` detects that shape, prints `link install` and writes nothing; it also refuses to touch a link that points outside this repository. The six skills live in the core's `resources/skills/` and are inlined into the system prompt; the host package ships no `skills/` directory.
+With `omp plugin link`, `~/.omp/plugins/node_modules/herdchestra-host-omp` is a symlink at `host-omp/`, so every edit here is live after a restart — no sync step. `sync:plugin` detects that shape, prints `link install` and writes nothing; it also refuses to touch a link that points outside this repository. The three meta skills live in the core's `resources/skills/`; the feature policy sections live in `resources/prompts/features.md`. Both are composed into the managed system-prompt block only when enabled; the host package ships no `skills/` directory.
 
-With `omp plugin install <git-url>`, the host installs and resolves a copy under its own plugin directory. That directory is the host's, not this tree's, so `sync:plugin` classifies it as `installed copy` and writes nothing; refresh it by installing again. A `--vendor` run is the separate case: only an explicit `--vendor` (or `HERDCHESTRA_SYNC=vendor`) lets the script write a real directory — the host package at the target root, and the core under the target's `node_modules/herdchestra-lite2` (including `resources/skills/`). In that mode an edit here does not reach a running session until you sync again. `sync:plugin` never writes through a link, so it can no longer rewrite this repository's own `package.json`.
+With `omp plugin install <git-url>`, the host installs and resolves a copy under its own plugin directory. That directory is the host's, not this tree's, so `sync:plugin` classifies it as `installed copy` and writes nothing; refresh it by installing again. A `--vendor` run is the separate case: only an explicit `--vendor` (or `HERDCHESTRA_SYNC=vendor`) lets the script write a real directory — the host package at the target root, and the core under the target's `node_modules/herdchestra-lite2` (including `resources/skills/` and `resources/prompts/features.md`). In that mode an edit here does not reach a running session until you sync again. `sync:plugin` never writes through a link, so it can no longer rewrite this repository's own `package.json`.
 
 Restart the session afterwards; modules load at process start.
 
 Tests stay in the repository root and cover all three packages: `bun test tests` runs the core domain, both host wirings, and the architecture ratchets that hold the boundaries. `bun run smoke:relay` tests the working tree against a fake host. It checks fork/join registration and refusals, along with return and rewind behavior. It does not test the installed copy.
 
-## Skills
+## Skills and policy sections
 
-Guidance ships as Markdown under `resources/skills/<name>/SKILL.md` in the core. `src/prompts/skills.mjs` reads all six at startup, strips the YAML frontmatter, and `src/prompts/inject.mjs` embeds every body in the managed system-prompt block. The host package ships no `skills/` directory, so no `skill://` read is needed. Direct execution needs no skill.
+The system prompt is mechanism plus feature policy. Mechanism lives in `resources/prompts/system.md` and `resources/prompts/tools/fork-join.md`; policy lives in `resources/prompts/features.md` as `## <feature>.<state>` sections. `src/prompts/inject.mjs` composes the managed block in `FEATURES` order.
+
+Only three meta skills remain under `resources/skills/<name>/SKILL.md`; they are inlined only when `workspace=full`:
 
 | Skill | Question |
 |---|---|
-| `constitution` | Stance: engineering, communication, team, execution, candor, courage, language |
-| `decision-framing` | Why: intent, non-goals, the decision and its bounds |
 | `polish` | How: preserve claims, causal links, and voice while improving expression |
 | `prompt-craft` | Where model-facing text lives and how to write it |
 | `skill-authoring` | How to split, name, and maintain a skill |
-| `tdd-crowdsource` | What and who: contracts, test seams, and a rolling dispatch plan |
 
-The inlined skills are authoritative: apply `constitution` before work, `prompt-craft` before changing model-facing text, `skill-authoring` before creating or splitting a skill, and `polish` before polishing an existing text. Apply `decision-framing` when the goal or limits are unclear, and `tdd-crowdsource` before writing code or tests.
+The former `constitution`, `decision-framing`, and `tdd-crowdsource` skills are now the `constitution.*`, `framing.*`, and `testing.*` policy sections. `workspace=personal` carries the human-facing repository conventions; `workspace=full` adds the three meta skills.
 
-Red contracts may be written by the lead or delegated. As contracts become ready, write the current dispatch plan into the design record instead of running Red, then start the corresponding Green slices without waiting for the rest. A child may report unrun checks to its parent; only checks that ran count as verification. Keep design artifacts as skills under `.agent/skills/<name>/SKILL.md`.
+The inlined meta skills are authoritative when enabled: apply `prompt-craft` before changing model-facing text, `skill-authoring` before creating or splitting a skill, and `polish` before polishing an existing text. The `framing.*` and `testing.*` sections carry decision and verification policy. Keep design artifacts as skills under `.agent/skills/<name>/SKILL.md`.
 
 Model-facing text lives in `resources/prompts/` as Markdown documents with `## section` blocks. Code loads them through `src/prompts/index.mjs`; no prompt, tool description, parameter description, receipt, or model-facing error is duplicated in source.
 
@@ -88,16 +87,26 @@ Every fork item declares `targets`, a non-empty array of natural-language descri
 
 `targets` is a declaration, not an enforcement boundary. The system never audits a tool call against the list; a scope that turns out to need another target may still touch it. The required list is the mistake-proofing: a scope that can name no output is not a separate scope, so think again before forking one. A refused batch changes no state, and no flow starts.
 
-## Autopilot
+## Feature switches
 
-Autopilot is off by default and is toggled only by the user, with `/herd-autopilot`. No model turn can enter or leave it.
+Every switch uses one grammar, and the same names work as environment variables. `/herd` prints every value; `/herd <feature>` prints the current value and allowed states; `/herd <feature> <state>` sets and persists; `/herd <feature> <state> <text...>` also sends `<text>` as one plain user message. Only the user can set a switch; no model turn can enter or leave one.
 
-A bare `/herd-autopilot` flips the mode and sends nothing to the model: the next request learns the new mode from its receipt. `/herd-autopilot <text>` is that same flip followed by one plain user message carrying `<text>`, so the model starts exactly one turn and reads the sentence as the user's request.
+| Feature | States | Default | Effect |
+|---|---|---|---|
+| `autopilot` | `off` / `on` | `off` | `off`: `ask` is allowed and root may stop naturally. `on`: `ask` is blocked and root is nudged to `scope_return`; an unreceived child takes precedence. |
+| `review` | `off` / `on` | `on` | `off`: root's first big oath promotes immediately. `on`: the first oath rewinds for a fresh review; a second consecutive oath permits the final reply. |
+| `chinese` | `off` / `on` | `on` | Adds the Chinese thinking/reply requirement to the system prompt and the per-turn probe. |
+| `testing` | `off` / `no-red` / `lean` | `lean` | `no-red`: skip running Red. `lean`: adds static-first verification, focused checks, and unrun-check handoff. |
+| `constitution` | `off` / `core` / `full` | `full` | `core`: ledger, Chesterton's fence, poka-yoke, anti-Goodhart, candor. `full`: adds style, clean break, read-the-whole, courage. |
+| `framing` | `off` / `plan` / `full` | `full` | `plan`: goal, Bayesian model, residual, asymmetric bet. `full`: adds the three introspection gates. |
+| `scope` | `off` / `adaptive` / `aggressive` | `aggressive` | `adaptive`: fork independent slices, put exact facts in `dafny`, watch the 50% context lock. `aggressive`: adds `sqrt(n)`, manager-not-labourer, and always-parallel guidance. |
+| `workspace` | `off` / `personal` / `full` | `full` | `personal`: repository conventions, human-facing prose, ask-below-95%, design records. `full`: adds the three meta skills. |
 
-- Off (manual duty): `ask` is allowed and root may stop naturally.
-- On (autopilot): `ask` is blocked and root is nudged to call `scope_return` before stopping. If children remain unreceived, the join nudge takes precedence.
+`off` means no policy text for that feature: the model falls back to the host's defaults. The defaults above reproduce the 6.0 prompt, except that the three retired skills now live in `features.md`.
 
-`ask` needs one condition: autopilot off.
+The canonical environment variable is `HERD_<FEATURE>` — `HERD_AUTOPILOT`, `HERD_REVIEW`, `HERD_CHINESE`, `HERD_TESTING`, `HERD_CONSTITUTION`, `HERD_FRAMING`, `HERD_SCOPE`, `HERD_WORKSPACE`. Precedence is explicit environment > persisted state > fallback. `HERD_DISABLE_<FEATURE>=1` maps to `off` when `off` is valid. Legacy `HERD_CHINESE_REMINDER=on|off` and `HERD_DISABLE_CHINESE_REMINDER=1` map to `chinese`; the canonical variable wins. `HERD_HERD=off` disables `/herd` itself.
+
+`ask` needs one condition: `autopilot=off`.
 
 ## Rewind
 
@@ -129,7 +138,7 @@ birth; a fold keeps the baseline and simply reclaims room.
 
 At root, a small return (no oath) uses compaction to rewind and continue. Root keeps verbatim user prompts and steers as actual messages, plus the new `dafny` report. Do not repeat those user messages in the report. The old report is replaced, not appended: carry forward any evidence a later turn still needs.
 
-Root must receive all outstanding children with `scope_join` before taking the oath. The first oath rewinds for a fresh review against the user's requirements. A second consecutive oath permits the final reply. If review identifies work worth doing, continue working; a small rewind resets the streak. A natural stop is not a rewind or an oath.
+Root must receive all outstanding children with `scope_join` before taking the oath. With `/herd review on` (the default), the first oath rewinds for a fresh review against the user's requirements; `/herd review off` promotes the first oath instead. A second consecutive oath permits the final reply. If review identifies work worth doing, continue working; a small rewind resets the streak. A natural stop is not a rewind or an oath.
 
 ## Diagnostics
 

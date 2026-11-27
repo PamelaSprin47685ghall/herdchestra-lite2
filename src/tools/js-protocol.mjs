@@ -157,7 +157,7 @@ function argsTypeName(toolName) {
 // The scope control plane's result shapes are fixed by the protocol itself,
 // so they are declared inline once instead of being derived from anywhere.
 const CONTROL_PLANE_BLOCK = `/**
- * The scope control plane. These six primitives always exist in the type
+ * The scope control plane. These seven primitives always exist in the type
  * space; whether one is callable this turn is decided by the live binding
  * printed in the REPL probe, never by this declaration.
  */
@@ -277,6 +277,7 @@ export function renderCapabilitiesDts(toolSpecs = []) {
 		`\t"scope_request"(args: ScopeRequestArgs): Promise<ScopeRequestResult>;`,
 		`\t"scope_return"(args: ScopeReturnArgs): Promise<never>;`,
 		`\t"scope_reply"(reply: string): Promise<{ ok: boolean }>;`,
+		`\t"scope_abandon"(args: ScopeAbandonArgs): Promise<ScopeAbandonResult>;`,
 	];
 
 	sections.push(`/**

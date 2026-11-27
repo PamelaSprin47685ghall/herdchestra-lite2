@@ -1,26 +1,49 @@
 import { expect, test } from "bun:test";
 
 import { resolvePorts } from "../src/core/ports/resolve.mjs";
+import {
+	defaultFeatures,
+	parseFeatureEnv,
+} from "../src/features/herd/features.mjs";
 import { injectSystemPrompt, persistentOperatingSkill } from "../src/prompts/inject.mjs";
 import { rewriteVibeMessage } from "../src/transcript/tail.mjs";
 
-test("each prompt-fragment switch resolves from its environment name", () => {
-	const chineseReminder = resolvePorts({}, { HERD_DISABLE_CHINESE_REMINDER: "1" });
+function features(overrides = {}) {
+	return { ...defaultFeatures(), ...overrides };
+}
+
+test("the chinese feature resolves from its canonical and legacy environment names", () => {
+	const canonical = parseFeatureEnv({ HERD_CHINESE: "off" });
+	expect(canonical.ok).toBe(true);
+	expect(canonical.explicit.chinese).toBe("off");
+
+	const legacy = parseFeatureEnv({ HERD_CHINESE_REMINDER: "off" });
+	expect(legacy.ok).toBe(true);
+	expect(legacy.explicit.chinese).toBe("off");
+
+	const disabled = parseFeatureEnv({ HERD_DISABLE_CHINESE_REMINDER: "1" });
+	expect(disabled.ok).toBe(true);
+	expect(disabled.explicit.chinese).toBe("off");
+});
+
+test("the vibeCompat port still resolves from its environment name", () => {
 	const vibeCompat = resolvePorts({}, { HERD_DISABLE_VIBE_COMPAT: "1" });
-	expect(chineseReminder.ports.chineseReminder).toBe("off");
 	expect(vibeCompat.ports.vibeCompat).toBe("off");
 });
 
-test("chineseReminder off removes only the reminder line", () => {
-	const prompt = injectSystemPrompt("plain prompt", { chineseReminder: "off" });
+test("chinese off removes the language section and leaves the rest intact", () => {
+	const prompt = injectSystemPrompt("plain prompt", { features: features({ chinese: "off" }) });
 	expect(prompt).not.toContain("强制以简体中文思考");
-	expect(prompt).toContain("Persistent operating rules");
-	expect(persistentOperatingSkill).toContain("强制以简体中文思考");
+	expect(prompt).not.toContain("Punish You Otherwise");
+	expect(prompt).toContain("The one tool");
+	expect(prompt).toContain("plain prompt");
+	expect(persistentOperatingSkill).not.toContain("强制以简体中文思考");
 });
 
-test("chineseReminder on keeps the shipped skill text byte for byte", () => {
-	const prompt = injectSystemPrompt("plain prompt", { chineseReminder: "on" });
-	expect(prompt).toContain(persistentOperatingSkill);
+test("chinese on includes the language section exactly once", () => {
+	const prompt = injectSystemPrompt("plain prompt", { features: features({ chinese: "on" }) });
+	expect(prompt).toContain("Punish You Otherwise");
+	expect(prompt.split("强制以简体中文思考").length - 1).toBe(1);
 });
 
 test("vibeCompat off leaves the message untouched", () => {
@@ -39,7 +62,5 @@ test("vibeCompat on rewrites the two shipped lines", () => {
 		content: "drive two worker CLIs",
 	};
 	const rewritten = rewriteVibeMessage(message, { vibeCompat: "on" });
-	expect(rewritten.content).toBe(
-		"direct as many parallel slice/swarm workers as causality allows",
-	);
+	expect(rewritten.content).toBe("direct as many parallel slice/swarm workers as causality allows");
 });

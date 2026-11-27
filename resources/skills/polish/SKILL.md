@@ -5,7 +5,7 @@ description: Use when editing an existing text. Preserve its claims, causal link
 
 # Polish
 
-The standing constitution applies; this skill adds only the polish method.
+The enabled constitution policy applies; this skill adds only the polish method.
 
 Polish is not writing a new scripture. It is writing "I explain the scripture": the original judgment stays; the prose makes it land. Grammar-only is not enough, and a rewrite into your own ontology is too much. The target is the middle: same claim, same causal links, same strength, same voice, better expression. Do not turn a Taoist sentence into a Confucian one; preserving the words while changing the values is still a rewrite.
 
@@ -19,9 +19,9 @@ Write a one-line paraphrase of each sentence's claim before you touch the wordin
 
 The best polish often adds a layer of explanation: why the original claim is true. Use economics when the claim is about choice: scarcity, opportunity cost, marginal cost, option value, coordination cost, information cost, incentives, comparative advantage, critical path. If the original has no economic logic, use its own logic. Do not import a mechanism the author did not write.
 
-A dispatch rule is a good example. "Do not run Red. The dispatch record states the written contract and authorizes Green; a red run spends a turn to prove what the test already states, and proves nothing about the implementation." The second sentence gives the reason for the first. Do not turn them into two parallel actions. Explain the reason: the contract already states what the test asserts, so a red run buys no information and spends a turn. That keeps the causal link and adds why it holds.
+A dispatch rule is a good example. "Do not run the red test. The dispatch record states the written contract and authorizes Green; a red run spends a turn to prove what the test already states, and proves nothing about the implementation." The second sentence gives the reason for the first. Do not turn them into two parallel actions. Explain the reason: the contract already states what the test asserts, so a red run buys no information and spends a turn. That keeps the causal link and adds why it holds.
 
-Do not replace the author's ontology with yours. "Do not run Red" is a judgment about what a turn buys; it is not a claim that the runner forbids red tests. Explain the instruction, not the implementation. If the mechanism matters, put it in the tool document, not in the polished text.
+Do not replace the author's ontology with yours. "Do not run the red test" is a judgment about what a turn buys; it is not a claim that the runner forbids red tests. Explain the instruction, not the implementation. If the mechanism matters, put it in the tool document, not in the polished text.
 
 ## Keep the voice
 

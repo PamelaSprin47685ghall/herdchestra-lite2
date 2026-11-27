@@ -20,8 +20,8 @@ import { loadDoc, placeholderNames, render } from "../src/prompts/index.mjs";
 import { injectSystemPrompt, persistentOperatingSkill } from "../src/prompts/inject.mjs";
 import {
 	inlinedSkills,
-	inlinedSkillsSection,
-	SKILL_NAMES,
+	META_SKILLS,
+	metaSkillsSection,
 } from "../src/prompts/skills.mjs";
 
 const DOCS = [
@@ -229,7 +229,7 @@ describe("the capabilities block", () => {
 
 	test("declares the control plane by its real names", () => {
 		const dts = renderCapabilitiesDts([]);
-		for (const name of ["scope_fork", "scope_join", "scope_return", "scope_request", "scope_reply"]) {
+		for (const name of ["scope_fork", "scope_join", "scope_return", "scope_request", "scope_reply", "scope_abandon"]) {
 			expect(dts).toContain(`"${name}"`);
 		}
 		expect(dts).toContain("AWAITING_REPLY");
@@ -373,9 +373,9 @@ describe("inlined skills", () => {
 			.map((entry) => entry.name)
 			.sort();
 
-		expect(shipped).toEqual([...SKILL_NAMES]);
+		expect(shipped).toEqual([...META_SKILLS].sort());
 		expect(inlinedSkills.map((skill) => skill.name).sort()).toEqual(shipped);
-		expect(inlinedSkillsSection).toContain("reproduced in full below");
+		expect(metaSkillsSection).toContain("reproduced in full below");
 	});
 
 	test("every body appears exactly once and reinjection is byte-identical", () => {

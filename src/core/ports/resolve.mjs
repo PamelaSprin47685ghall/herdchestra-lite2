@@ -44,6 +44,9 @@ export function readSwitch(port, env) {
 		return { ok: true, implementation: name, explicit: true };
 	}
 	if (truthy(source[disableName(port)])) {
+		if (!entry.implementations.includes("off")) {
+			return refusal(port, "off", entry.implementations);
+		}
 		return { ok: true, implementation: "off", explicit: true };
 	}
 	return { ok: true, implementation: entry.fallback, explicit: false };

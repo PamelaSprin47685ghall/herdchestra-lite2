@@ -5,10 +5,12 @@
 // depending on the host adapter.
 
 import { loadDoc, placeholderNames } from "./index.mjs";
-import { inlinedSkillsSection } from "./skills.mjs";
+import { metaSkillsSection } from "./skills.mjs";
+import { featureSections, META_SKILLS_SENTINEL } from "../features/herd/features.mjs";
 import { renderCapabilitiesDts } from "../tools/js-protocol.mjs";
 
 const system = loadDoc("system");
+const featuresDoc = loadDoc("features");
 const forkJoin = loadDoc("tools/fork-join");
 
 const systemPromptStart = "<!-- herdchestra-lite2:system-prompt v1 -->";
@@ -26,10 +28,10 @@ const scopeRules = system["scope-rules"];
 
 /**
  * The control plane's own contract. `js` is the only registered tool, so the
- * five `scope_*` methods have no JSON schema to carry a description; this text
- * is the carrier, compiled next to the declarations it constrains. A section
- * that declares a placeholder is a receipt rendered elsewhere, not prose, and
- * a raw template must never enter the prompt: those are skipped.
+ * scope methods have no JSON schema to carry a description; this text is the
+ * carrier, compiled next to the declarations it constrains. A section that
+ * declares a placeholder is a receipt rendered elsewhere, not prose, and a raw
+ * template must never enter the prompt: those are skipped.
  */
 function controlPlaneSkill() {
 	const sections = Object.keys(forkJoin)
@@ -39,18 +41,23 @@ function controlPlaneSkill() {
 	return `<skill version="1.0" enforced>\n${sections.join("\n\n")}\n</skill>`;
 }
 
-// The Simplified-Chinese reminder is one line inside the persistent rules.
-// Turning `chineseReminder` off removes that line and nothing else, so the
-// rest of the skill text stays byte-identical. The line is matched by its
-// text, not by a bullet prefix, because the document may carry it either way.
-const CHINESE_REMINDER = "强制以简体中文思考";
-
-function persistentRulesBlock(options) {
-	if (options?.chineseReminder !== "off") return persistentOperatingSkill;
-	return persistentOperatingSkill
-		.split("\n")
-		.filter((line) => !line.includes(CHINESE_REMINDER))
-		.join("\n");
+/**
+ * The enabled policy sections, in FEATURES declaration order. The sentinel
+ * expands to the meta-skill block, so workspace=full carries the three writing
+ * skills and every other profile carries none of them.
+ */
+function featureBlocks(options = {}) {
+	const blocks = [];
+	for (const key of featureSections(options.features)) {
+		if (key === META_SKILLS_SENTINEL) {
+			blocks.push(metaSkillsSection);
+			continue;
+		}
+		const text = featuresDoc[key];
+		if (text === undefined) throw new Error(`Missing feature prompt section: ${key}`);
+		blocks.push(text);
+	}
+	return blocks;
 }
 
 // The tool declarations are compiled from the confiscated tools' own JSON
@@ -75,8 +82,8 @@ function capabilitiesSection(options = {}) {
 }
 
 /**
- * Build the managed block: persistent rules, the inlined skill bodies, the one
- * scope-and-relay section, then the tool declarations. Nothing in the block
+ * Build the managed block: persistent rules, the enabled policy sections, the
+ * one scope-and-relay section, then the tool declarations. Nothing in the block
  * depends on the request, so an owner and a forked scope share the same bytes.
  * The block is replaced between its markers on every injection, so a second
  * call returns the same string instead of appending.
@@ -84,8 +91,8 @@ function capabilitiesSection(options = {}) {
 function managedBlock(options = {}) {
 	const capabilities = capabilitiesSection(options);
 	return `${systemPromptStart}\n${[
-		persistentRulesBlock(options),
-		inlinedSkillsSection,
+		persistentOperatingSkill,
+		...featureBlocks(options),
 		scopeRules,
 		controlPlaneSkill(),
 		capabilities,

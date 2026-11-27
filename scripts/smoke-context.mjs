@@ -298,7 +298,7 @@ async function checkRootRewindE2E({ createMockModel }) {
 	session.modelRegistry.getApiKey = async () => "mock-key";
 	session.agent.streamFn = mock.stream;
 	const station = wired.engine.station({ sessionManager: manager, session });
-	station.onAutopilotCommand("");
+	station.onHerdCommand("autopilot on");
 	const userPrompt = "Refactor handoff with verbatim spacing:   keep-me  ";
 	await session.prompt(userPrompt);
 	for (let i = 0; i < 150; i += 1) {

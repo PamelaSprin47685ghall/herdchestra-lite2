@@ -23,14 +23,15 @@ describe("B1 — the dead scope switch is deleted", () => {
 		expect(PORT_NAMES).not.toContain("scope");
 	});
 
-	test("a stray HERD_SCOPE is ignored, not resolved", () => {
-		const resolved = resolvePorts({}, { HERD_SCOPE: "bare" });
+	test("HERD_SCOPE is a feature env now, never a port", () => {
+		const resolved = resolvePorts({}, { HERD_SCOPE: "aggressive" });
 		expect(resolved.ok).toBe(true);
 		expect(Object.hasOwn(resolved.ports, "scope")).toBe(false);
 
-		const built = buildPorts({ HERD_SCOPE: "bare" });
+		const built = buildPorts({ HERD_SCOPE: "aggressive" });
 		expect(built.ok).toBe(true);
 		expect(Object.hasOwn(built.names, "scope")).toBe(false);
+		expect(built.features.values.scope).toBe("aggressive");
 	});
 
 	test("a ticket that still asks for scope is refused as an unknown port", () => {
@@ -96,11 +97,11 @@ describe("B5 — buildPorts carries the session port objects", () => {
 
 	test("the on form writes through the store it is bound to", () => {
 		const built = buildPorts({ HERD_HERD: "on" });
-		const store = { autopilot: false };
+		const store = { features: { autopilot: "off" } };
 
 		const herd = built.implementations.herd.bindState(store);
 		expect(herd.toggle("hi")).toEqual({ ok: true, mode: "on", text: "hi" });
-		expect(store.autopilot).toBe(true);
+		expect(store.features.autopilot).toBe("on");
 	});
 
 	test("a retired pin or amend switch is refused, not silently ignored", () => {

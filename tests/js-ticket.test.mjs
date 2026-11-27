@@ -283,6 +283,26 @@ describe("reconciliation", () => {
 	});
 });
 
+describe("long strings are never truncated", () => {
+	test("a 120k object field is printed whole", async () => {
+		const long = "x".repeat(120_000);
+		const { result } = await run("return { record: inputs.long }", { inputs: { long } });
+		expect(body(result)).toContain(long);
+		expect(result.content[0].text).not.toContain("truncated");
+	});
+
+	test("innerCalls keeps a 120k nested result whole", async () => {
+		const long = "x".repeat(120_000);
+		const projection = { ...PROJECTION, tools: ["scope_join"] };
+		const { result } = await run("return await api.scope_join()", {
+			projection,
+			answers: { scope_join: text("joined", { result: { record: long } }) },
+		});
+		expect(result.details.innerCalls[0].resultText).toBe(`record: ${long}`);
+		expect(result.details.innerCalls[0].resultText).not.toContain("truncated");
+	});
+});
+
 describe("helpers", () => {
 	test("compileAsync accepts an expression and a statement body", () => {
 		const sandbox = vm.createContext(Object.create(null));

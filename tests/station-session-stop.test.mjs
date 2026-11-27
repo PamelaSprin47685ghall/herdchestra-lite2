@@ -8,14 +8,24 @@
 import { describe, expect, test } from "bun:test";
 
 import { onSessionStop } from "../src/station/gates.mjs";
+import { defaultFeatures } from "../src/features/herd/features.mjs";
 import { rootReturnNudge } from "../src/station/texts.mjs";
 
 function station(overrides = {}) {
+	const stateOverrides = overrides.state ?? {};
+	const features = {
+		...defaultFeatures(),
+		autopilot: "on",
+		...(stateOverrides.features ?? {}),
+	};
+	if (stateOverrides.autopilot === false && !stateOverrides.features) {
+		features.autopilot = "off";
+	}
 	return {
 		state: {
-			autopilot: true,
+			...stateOverrides,
+			features,
 			relay: { canStop: false, pendingRewind: null, ...(overrides.relay ?? {}) },
-			...(overrides.state ?? {}),
 		},
 		rewoundThisTurn: overrides.rewoundThisTurn ?? false,
 		forkOwnerId: () => overrides.ownerId ?? null,
@@ -25,7 +35,7 @@ function station(overrides = {}) {
 		projectionFor: () => ({
 			mode:
 				overrides.mode ??
-				((overrides.state?.autopilot ?? true) ? "ROOT_AUTOPILOT" : "ROOT_MANUAL"),
+				(features.autopilot === "on" ? "ROOT_AUTOPILOT" : "ROOT_MANUAL"),
 		}),
 	};
 }
@@ -56,7 +66,7 @@ describe("session stop evidence", () => {
 
 	test("a normal stop when canStop is true or autopilot is off is allowed", () => {
 		expect(onSessionStop(station({ relay: { canStop: true } }), {}, null)).toBeUndefined();
-		expect(onSessionStop(station({ state: { autopilot: false } }), {}, null)).toBeUndefined();
+		expect(onSessionStop(station({ state: { features: { autopilot: "off" } } }), {}, null)).toBeUndefined();
 	});
 
 	test("a root turn with rewoundThisTurn or pendingRewind is never double-nudged", () => {

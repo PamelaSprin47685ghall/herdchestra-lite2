@@ -1,6 +1,6 @@
 ## fork.tool
 
-`scope_fork` starts new scopes without waiting; `scope_join` receives their records. Ask for results, not for a chronicle: side effects are all you need. To reach a scope that already exists, call `scope_request`; a fork always starts a new one.
+`scope_fork` starts new scopes without waiting; `scope_join` receives their records. To reach a scope that already exists, call `scope_request`; a fork always starts a new one.
 
 ## fork.scope-id
 
@@ -12,7 +12,7 @@ Required: your estimate of the ideal turns of work in hand.
 
 ## fork.fsm
 
-Required and non-empty: describe the work as a set of state machines, one per branch — each machine's states, the transition that advances it, and which branches run at once. Say how to build the result fastest, not only what the finished thing is. A read-only scope still names what it reads in `targets` and answers in `dafny`.
+Required and non-empty: the `fsm` field describes the work as a set of state machines, one per branch — each machine's states, the transition that advances it, and which branches run at once. Say how to build the result fastest, not only what the finished thing is. A read-only scope still names what it reads in `targets` and answers in `dafny`.
 
 ## fork.profession
 
@@ -32,7 +32,7 @@ Required and non-empty: natural-language descriptions of what the scope will cre
 
 ## fork.forks
 
-Include the whole plan you are ready to run now; order carries no dependency, and invalid input prevents the batch from starting. The call resolves to `{ ok, started: [{ path, depth, fsm }], failed: [{ index, error }], unreceived }`: read `started` for the paths you now own.
+Include the whole plan you are ready to run now; order carries no dependency, and invalid input prevents the batch from starting. Forking stops two levels below you; a third is too far. The call resolves to `{ ok, started: [{ path, depth, fsm }], failed: [{ index, error }], unreceived }`: read `started` for the paths you now own.
 
 ## fork.model
 
@@ -68,7 +68,7 @@ Call `scope_return` alone in its script. Omit the oath to rewind and continue. A
 
 ## return.dafny
 
-Required. A fresh, dense report: reliable deductions, verification evidence, unresolved work, and results the caller cannot recover. The new report replaces the old one on a rewind; carry forward evidence that still matters. On a seal, this text is appended to the published record, so do not restate what the replay already carries.
+Required. A fresh, dense report: reliable deductions, verification evidence, unresolved work, and results the caller cannot recover. The new report replaces the old one on a rewind; carry forward evidence that still matters. On a seal, this text is appended to the published record.
 
 ## return.oath
 

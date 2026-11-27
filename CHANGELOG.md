@@ -6,6 +6,49 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [6.1.0] — 2026-11-27
+
+### Changed — one `/herd` command replaces `/herd-autopilot` (breaking)
+
+`/herd-autopilot` is gone. Use `/herd autopilot off|on`; the same grammar sets
+every feature: `/herd` lists, `/herd <feature>` shows the allowed states,
+`/herd <feature> <state>` persists, and `/herd <feature> <state> <text...>`
+also sends one user message. Only the user can set a feature.
+
+### Added — eight orthogonal feature switches
+
+`autopilot`, `review`, `chinese`, `testing`, `constitution`, `framing`,
+`scope`, and `workspace`. Defaults reproduce 6.0. Each switch accepts
+`HERD_<FEATURE>`; explicit environment beats persisted state, which beats the
+fallback. `HERD_DISABLE_<FEATURE>=1` maps to `off`. Legacy
+`HERD_CHINESE_REMINDER` and `HERD_DISABLE_CHINESE_REMINDER` still map to
+`chinese`.
+
+### Added — `resources/prompts/features.md`
+
+The prompt is now mechanism plus `## <feature>.<state>` policy sections. The
+three retired skills — `constitution`, `decision-framing`,
+`tdd-crowdsource` — moved into those sections. Only `polish`,
+`prompt-craft`, and `skill-authoring` remain as meta skills, inlined only at
+`workspace=full`.
+
+### Changed — session state carries `features`
+
+`state.autopilot` is replaced by `state.features`; the map is shared by root
+and children. Persistence writes `features` and migrates an old
+`autopilot: true` snapshot to `autopilot=on`. The capability signature now
+includes `chinese`, so a mid-session change refreshes the receipt.
+
+### Fixed — `scope_abandon` in the Api declaration
+
+The control-plane declaration now lists `scope_abandon`, matching the live
+binding.
+
+### Fixed — disable switches for ports without `off`
+
+`HERD_DISABLE_<PORT>=1` is refused when the port has no `off`
+implementation, instead of returning an illegal `off`.
+
 ## [6.0.0] — 2026-11-27
 
 ### Changed — the language reminder prints as an output comment

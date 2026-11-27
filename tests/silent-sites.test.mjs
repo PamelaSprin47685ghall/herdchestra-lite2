@@ -1,5 +1,5 @@
 // Every site here used to swallow a failure that changes what the user lives
-// through: a nudge that never arrives, a `/herd-autopilot <text>` message that vanishes,
+// through: a nudge that never arrives, a `/herd autopilot on <text>` message that vanishes,
 // a handoff transcript that is never rebuilt, a usage baseline that silently
 // starts at zero, and a diagnostic whose evidence is never printed.
 //

@@ -26,7 +26,7 @@ import { notifyWaiters, pulse } from "../src/scope/fork-registry.mjs";
 function stateOf() {
   return {
     scopes: [],
-    autopilot: false,
+    features: { autopilot: "off" },
     epoch: 0,
     relay: { generation: 0, fullFlow: false },
   };

@@ -57,7 +57,7 @@ function assistant(text = "done") {
 
 function nudgeStation(ledger, ownerId) {
 	const station = Object.create(SessionStation.prototype);
-	station.state = { autopilot: false, relay: { canStop: false, pendingRewind: null } };
+	station.state = { features: { autopilot: "off" }, relay: { canStop: false, pendingRewind: null } };
 	station.nudged = new WeakSet();
 	station.delivered = [];
 	station.forkLedgerPort = () => ledger;
@@ -68,7 +68,7 @@ function nudgeStation(ledger, ownerId) {
 
 function stopStation(ownerId, ledger) {
 	return {
-		state: { autopilot: false, relay: { canStop: false, pendingRewind: null } },
+		state: { features: { autopilot: "off" }, relay: { canStop: false, pendingRewind: null } },
 		forkOwnerId: () => ownerId,
 		forkLedgerPort: () => ledger,
 		// The stop gate reads two facts from the projection: the mode, and how

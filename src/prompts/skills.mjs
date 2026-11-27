@@ -1,14 +1,13 @@
 /**
- * The project skills. They live under resources/skills/ and are read once,
- * synchronously, at module scope -- never inside a station method. inject.mjs
- * embeds the frozen bodies into the managed system prompt, so every request
- * carries the full text instead of a skill:// pointer the model may skip.
+ * The project's meta skills. They live under resources/skills/ and are read
+ * once, synchronously, at module scope -- never inside a station method.
+ * inject.mjs embeds the frozen bodies only when the workspace feature selects
+ * the full profile; the engineering policy itself lives in features.md.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 const ROOT = new URL("../../resources/skills/", import.meta.url);
-const NAME = /^[a-z0-9][a-z0-9-]*$/;
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 
 function fail(message, cause) {
@@ -29,36 +28,24 @@ function readSkill(name) {
 	return Object.freeze({ name, body });
 }
 
-let names;
-try {
-	names = readdirSync(ROOT, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory())
-		.map((entry) => entry.name)
-		.sort();
-} catch (error) {
-	throw fail("Missing resources/skills directory", error);
-}
+/** The only skills that are inlined, and only for workspace=full. */
+export const META_SKILLS = Object.freeze(["polish", "prompt-craft", "skill-authoring"]);
 
-for (const name of names) {
-	if (!NAME.test(name)) throw fail(`Invalid skill directory: ${name}`);
-}
-if (names.length === 0) throw fail("No skills under resources/skills");
-
-/** Every skill, sorted by name, with the YAML frontmatter removed. */
-export const inlinedSkills = Object.freeze(names.map(readSkill));
-
-export const SKILL_NAMES = Object.freeze(inlinedSkills.map((skill) => skill.name));
+/** Every meta skill, sorted by name, with the YAML frontmatter removed. */
+export const inlinedSkills = Object.freeze(
+	META_SKILLS.map(readSkill).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+);
 
 /** One deterministic block; inject.mjs places it inside its managed markers. */
-export const inlinedSkillsSection = [
+export const metaSkillsSection = [
 	"## Skills (inlined)",
-	"The project skills are reproduced in full below. They are authoritative and need no `skill://` read.",
+	"The project meta skills are reproduced in full below. They are authoritative and need no `skill://` read.",
 	...inlinedSkills.map(
 		({ name, body }) => `<inlined-skill name="${name}">\n${body}\n</inlined-skill>`,
 	),
 ].join("\n\n");
 
-/** Load every skill now; a missing body throws here, at startup. */
+/** Load every meta skill now; a missing body throws here, at startup. */
 export function preloadSkills() {
 	return inlinedSkills.length;
 }

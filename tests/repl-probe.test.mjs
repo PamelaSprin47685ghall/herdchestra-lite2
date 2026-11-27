@@ -70,7 +70,7 @@ describe("renderConsoleReceipt", () => {
 
 	test("carries the language requirement by default and drops it on 'off'", () => {
 		expect(renderConsoleReceipt(projection())).toContain("强制以简体中文思考");
-		expect(renderConsoleReceipt(projection(), { chineseReminder: "off" })).not.toContain(
+		expect(renderConsoleReceipt(projection(), { chinese: "off" })).not.toContain(
 			"强制以简体中文思考",
 		);
 	});
@@ -110,8 +110,7 @@ describe("skillReceipt envelope", () => {
 			projectionFor: () => projection(),
 			lastCapKeys: [],
 			registry: null,
-			portTable: { chineseReminder: "on" },
-			state: { autopilot: false, relay: { canStop: false } },
+			state: { features: { autopilot: "off", chinese: "on" }, relay: { canStop: false } },
 			forkOwnerId: () => null,
 			...overrides,
 		};
@@ -139,14 +138,14 @@ describe("skillReceipt envelope", () => {
 
 	test("reports the branch flags the host folds on", () => {
 		const child = receipt(
-			stubStation({ forkOwnerId: () => "api", state: { autopilot: true, relay: {} } }),
+			stubStation({ forkOwnerId: () => "api", state: { features: { autopilot: "on", chinese: "on" }, relay: {} } }),
 		);
 		expect(child.branch).toBe(true);
 		expect(child.autopilot).toBe(true);
 		expect(child.canStop).toBe(false);
 
 		const root = receipt(
-			stubStation({ state: { autopilot: true, relay: { canStop: true } } }),
+			stubStation({ state: { features: { autopilot: "on", chinese: "on" }, relay: { canStop: true } } }),
 		);
 		expect(root.branch).toBe(false);
 		expect(root.canStop).toBe(true);

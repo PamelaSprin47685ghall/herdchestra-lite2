@@ -6,6 +6,7 @@ import { installStatus } from "../host-omp/src/host/status.mjs";
 import { queueModelSwitch, takePendingModelSwitch } from "../src/station/models.mjs";
 import { SessionStation } from "../src/station/station.mjs";
 import { buildPorts } from "../src/core/ports/build.mjs";
+import { defaultFeatures } from "../src/features/herd/features.mjs";
 import { createEngine } from "herdchestra-lite2";
 import { createStationRegistry } from "../src/station/registry.mjs";
 import { wireCommands } from "../host-omp/src/activation/commands.mjs";
@@ -48,27 +49,27 @@ test("the station binds one session port object, not one per call", () => {
 	const first = station.herdPort();
 	expect(first).toBe(station.herdPort());
 	expect(first.toggle("hi")).toEqual({ ok: true, mode: "on", text: "hi" });
-	expect(station.state.autopilot).toBe(true);
+	expect(station.state.features.autopilot).toBe("on");
 });
 
 test("herd off refuses a toggle and never flips the persisted mode", () => {
-	const station = stationWith({ herd: "off" }, { autopilot: false });
+	const station = stationWith({ herd: "off" }, { features: { ...defaultFeatures(), autopilot: "off" } });
 	expect(station.herdPort().toggle("hi")).toEqual({
 		ok: false,
 		code: "HERD_UNAVAILABLE",
 		port: "herd",
 	});
-	expect(station.state.autopilot).toBe(false);
+	expect(station.state.features.autopilot).toBe("off");
 });
 
 test("herd on flips the persisted mode and reports it", () => {
-	const station = stationWith({ herd: "on" }, { autopilot: false });
+	const station = stationWith({ herd: "on" }, { features: { ...defaultFeatures(), autopilot: "off" } });
 	const first = station.herdPort().toggle("hi");
 	expect(first).toEqual({ ok: true, mode: "on", text: "hi" });
-	expect(station.state.autopilot).toBe(true);
+	expect(station.state.features.autopilot).toBe("on");
 	const second = station.herdPort().toggle("");
 	expect(second).toEqual({ ok: true, mode: "off", text: "" });
-	expect(station.state.autopilot).toBe(false);
+	expect(station.state.features.autopilot).toBe("off");
 });
 
 test("a station without a complete bundle throws MISSING_PORTS", () => {
@@ -86,7 +87,7 @@ test("one complete bundle binds one object per station", () => {
 		null,
 		null,
 	);
-	Object.assign(station.state, { autopilot: false });
+	station.state.features.autopilot = "off";
 	expect(station.herdPort()).toBe(station.herdPort());
 	expect(station.herdPort().toggle("hi").ok).toBe(true);
 });
@@ -152,19 +153,26 @@ test("observer on binds both provider hooks", () => {
 	expect(events).toEqual(["before_provider_request", "after_provider_response"]);
 });
 
-test("autopilot is off in a fresh state and survives a persist round trip", () => {
+test("features start at their defaults and survive a persist round trip", () => {
 	const fresh = createState();
-	expect(fresh.autopilot).toBe(false);
+	expect(fresh.features.autopilot).toBe("off");
+	expect(fresh.features.testing).toBe("lean");
 
-	fresh.autopilot = true;
-	expect(deserializeState(serializeState(fresh)).autopilot).toBe(true);
+	fresh.features.autopilot = "on";
+	fresh.features.testing = "no-red";
+	const restored = deserializeState(serializeState(fresh));
+	expect(restored.features.autopilot).toBe("on");
+	expect(restored.features.testing).toBe("no-red");
 
 	const legacy = serializeState(fresh);
-	delete legacy.autopilot;
-	expect(deserializeState(legacy).autopilot).toBe(false);
+	delete legacy.features;
+	legacy.autopilot = true;
+	const migrated = deserializeState(legacy);
+	expect(migrated.features.autopilot).toBe("on");
+	expect(migrated.features.testing).toBe("lean");
 });
 
-test("the command table registers herd-autopilot and no bare herd", async () => {
+test("the command table registers one bare herd command", async () => {
 	const commands = new Map();
 	const calls = [];
 	const pi = {
@@ -174,21 +182,21 @@ test("the command table registers herd-autopilot and no bare herd", async () => 
 	};
 	wireCommands(pi, {
 		stationFor: () => ({
-			onAutopilotCommand(args) {
+			onHerdCommand(args) {
 				calls.push(args);
 				return { ok: true };
 			},
 		}),
 	});
 
-	expect(commands.has("herd-autopilot")).toBe(true);
-	expect(commands.has("herd")).toBe(false);
-	const result = await commands.get("herd-autopilot").handler("note this");
+	expect(commands.has("herd")).toBe(true);
+	expect(commands.has("herd-autopilot")).toBe(false);
+	const result = await commands.get("herd").handler("autopilot on note this");
 	expect(result).toEqual({ ok: true });
-	expect(calls).toEqual(["note this"]);
+	expect(calls).toEqual(["autopilot on note this"]);
 });
 
-test("one bare command toggles autopilot and sends optional text once", () => {
+test("one bare command sets a feature and sends optional text once", () => {
 	const prompts = [];
 	const station = createTestStation(SessionStation, 
 		{ getSessionId: () => "s1" },
@@ -198,23 +206,26 @@ test("one bare command toggles autopilot and sends optional text once", () => {
 		null,
 	);
 
-	expect(station.state.autopilot).toBe(false);
-	const on = station.onAutopilotCommand("hello");
-	expect(on).toEqual({ ok: true, mode: "on", text: "hello" });
-	expect(station.state.autopilot).toBe(true);
+	expect(station.state.features.autopilot).toBe("off");
+	const on = station.onHerdCommand("autopilot on hello");
+	expect(on).toMatchObject({ ok: true, kind: "set", feature: "autopilot", state: "on", text: "hello" });
+	expect(station.state.features.autopilot).toBe("on");
 	expect(prompts).toEqual(["hello"]);
 
-	const off = station.onAutopilotCommand("");
-	expect(off).toEqual({ ok: true, mode: "off", text: "" });
-	expect(station.state.autopilot).toBe(false);
+	const off = station.onHerdCommand("autopilot off");
+	expect(off).toMatchObject({ ok: true, kind: "set", feature: "autopilot", state: "off" });
+	expect(station.state.features.autopilot).toBe("off");
 	expect(prompts).toEqual(["hello"]);
 });
 
-test("a refused port switch throws at the composition root", () => {
+test("a refused port or feature switch throws at the composition root", () => {
 	// An empty table would wire every port to its fallback and hide the typo.
 	// The engine owns port resolution now, so the refusal surfaces there.
 	expect(() => createEngine({ host: {}, tickets: {}, env: { HERD_CLOCK: "bogus" } })).toThrow(
 		/PORT_UNAVAILABLE port=clock wanted=bogus/,
+	);
+	expect(() => createEngine({ host: {}, tickets: {}, env: { HERD_TESTING: "maybe" } })).toThrow(
+		/INVALID_FEATURE_STATE feature=testing/,
 	);
 });
 

@@ -23,7 +23,7 @@ import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handof
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
 
 function state() {
-  return { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } };
+  return { scopes: [], features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
 }
 
 function stationFor(ledger, identity = null) {
@@ -166,7 +166,7 @@ describe("a join leaves the parent where it was", () => {
         },
       ],
       modelCaches: { "parent-model": { cachedUntilPos: 5, chars: 900 } },
-      autopilot: false,
+      features: { autopilot: "off" },
       relay: { generation: 0, fullFlow: false, canStop: false },
       pins: [],
       receipts: [],

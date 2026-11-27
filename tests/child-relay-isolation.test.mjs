@@ -14,10 +14,15 @@ import { unreceivedChildren } from "../src/scope/index.mjs";
 import { probeOf } from "./helpers/probe-view.mjs";
 import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 import { injectSystemPrompt } from "../src/prompts/inject.mjs";
+import { defaultFeatures } from "../src/features/herd/features.mjs";
 import { READ_ONLY_SUBAGENT, READ_WRITE_SUBAGENT } from "../src/core/policy.mjs";
 
+function featureState(overrides = {}) {
+	return { ...defaultFeatures(), autopilot: "on", ...overrides };
+}
+
 function relayState(overrides = {}) {
-	return { autopilot: true, relay: { ...createRelay(), ...overrides } };
+	return { features: featureState(), relay: { ...createRelay(), ...overrides } };
 }
 
 function stopStation(ownerId, overrides = {}) {
@@ -36,7 +41,7 @@ function stopStation(ownerId, overrides = {}) {
 			mode:
 				ownerId !== null
 					? "CHILD"
-					: station.state.autopilot === true
+					: station.state.features.autopilot === "on"
 						? "ROOT_AUTOPILOT"
 						: "ROOT_MANUAL",
 			state: {
@@ -66,7 +71,7 @@ describe("a root's natural stop with unreceived work", () => {
 		const station = stopStation(null, {
 			ledger: { order: ["fork_a"], forks: { fork_a: child } },
 		});
-		station.state.autopilot = false;
+		station.state.features.autopilot = "off";
 
 		const out = onSessionStop(station, {});
 
@@ -89,7 +94,7 @@ describe("root vs child natural stop", () => {
 
 	test("root in manual duty is allowed to stop naturally", () => {
 		const station = stopStation(null);
-		station.state.autopilot = false;
+		station.state.features.autopilot = "off";
 		expect(onSessionStop(station, {})).toBeUndefined();
 	});
 
@@ -121,7 +126,7 @@ describe("child isolation from root rewind", () => {
 			pendingRewind: { report: "root pending", big: false, generation: 1 },
 		};
 		const station = {
-			state: { autopilot: true, relay, pins: [] },
+			state: { features: featureState(), relay, pins: [] },
 			forkOwnerId: () => "fork_a",
 		};
 		expect(commitRootRewind(station, {})).toBe(false);
@@ -132,7 +137,7 @@ describe("child isolation from root rewind", () => {
 		const dispatched = [];
 		const station = {
 			state: {
-				autopilot: true,
+				features: featureState(),
 				relay: { ...createRelay(), pendingRewind: { report: "x", big: false, generation: 1 } },
 			},
 			forkOwnerId: () => "fork_a",
@@ -146,7 +151,7 @@ describe("child isolation from root rewind", () => {
 
 function promptStation(ownerId, autopilot = true) {
 	return {
-		state: { autopilot },
+		state: { features: featureState({ autopilot: autopilot ? "on" : "off" }) },
 		forkOwnerId: () => ownerId,
 		policy: () => READ_ONLY_SUBAGENT,
 		portTable: {},
@@ -202,7 +207,7 @@ const childBranch = {
 
 function requestStation(ownerId) {
 	const state = {
-		autopilot: true,
+		features: featureState(),
 		relay: createRelay(),
 		hostBoundaryKey: null,
 	};
@@ -220,7 +225,7 @@ function requestStation(ownerId) {
 			// The probe is the receipt: same projection source as the runtime.
 			const projection = projectCapabilities({
 				isChild: ownerId !== null,
-				autopilot: state.autopilot,
+				autopilot: state.features.autopilot === "on",
 				canStop: false,
 				unreceived: 0,
 				selfPath: ownerId ? "/fork_a" : "/",

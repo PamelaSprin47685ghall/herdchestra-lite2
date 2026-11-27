@@ -8,7 +8,23 @@ import {
 } from "../host-omp/src/host/child-display.mjs";
 
 const BASE = "/home/kunweiz/.cache/.bun/install/global/node_modules/@oh-my-pi";
-const available = existsSync(`${BASE}/pi-tui/package.json`) && existsSync(`${BASE}/pi-coding-agent/package.json`);
+// The global install may carry only compiled files; these tests drive the host
+// source directly, so require every module they import before opting in.
+const SOURCES = [
+	`${BASE}/pi-tui/src/term/paint.ts`,
+	`${BASE}/pi-tui/src/term/backend.ts`,
+	`${BASE}/pi-tui/src/theme/loader.ts`,
+	`${BASE}/pi-tui/src/term/painters/checklist.ts`,
+	`${BASE}/pi-coding-agent/src/ui/extensions/render-output.tsx`,
+	`${BASE}/pi-coding-agent/src/ui/styles/messages/assistant.ts`,
+	`${BASE}/pi-coding-agent/src/ui/styles/messages/frame.ts`,
+	`${BASE}/pi-coding-agent/src/ui/shell/transcript.tsx`,
+	`${BASE}/pi-coding-agent/src/ui/transcript/messages/assistant-message.tsx`,
+];
+const available =
+	existsSync(`${BASE}/pi-tui/package.json`) &&
+	existsSync(`${BASE}/pi-coding-agent/package.json`) &&
+	SOURCES.every((path) => existsSync(path));
 const run = available ? test : test.skip;
 
 class FakeSession {

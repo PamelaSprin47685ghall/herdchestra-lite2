@@ -407,7 +407,7 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 		root.forkIdentityPort = () => null;
 		root.forkOwnerId = () => null;
 		root.childSpawnPort = () => () => {};
-		root.state.autopilot = true;
+		root.state.features.autopilot = "on";
 
 		// Fork one child -> Root big oath must be refused while unreceived.
 		const forked = handleForkCall(root, {

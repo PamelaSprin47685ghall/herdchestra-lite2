@@ -130,7 +130,7 @@ function scalar(value, indent, frame) {
 
 function stringValue(value, indent, frame) {
 	let text = value;
-	if (text.length > frame.maxStringLength) {
+	if (Number.isFinite(frame.maxStringLength) && text.length > frame.maxStringLength) {
 		text = text.slice(0, frame.maxStringLength) + "… [truncated at " + frame.maxStringLength + " chars]";
 	}
 	if (text === "") return inline(quote(""));

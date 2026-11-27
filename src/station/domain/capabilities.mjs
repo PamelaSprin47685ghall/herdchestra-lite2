@@ -58,6 +58,7 @@ export function projectCapabilities({
 	selfPath = "/",
 	activePaths = ["/"],
 	hostToolNames = [],
+	chinese = "on",
 } = {}) {
 	let mode;
 	let tools;
@@ -114,7 +115,7 @@ export function projectCapabilities({
 	// hash only stops a rewrite when the bytes would be identical anyway.
 	// The pending request id stays outside the hash: two requests carrying
 	// identical text still each need their own delivery turn.
-	const projected = JSON.stringify({ api: tools, ...state });
+	const projected = JSON.stringify({ api: tools, ...state, chinese });
 	const signature = `${typeof pendingRequest?.id === "string" ? pendingRequest.id : ""}:${createHash("sha256").update(projected).digest("hex")}`;
 
 	return Object.freeze({
@@ -195,7 +196,7 @@ const CHINESE_REMINDER_LINE =
  */
 export function renderConsoleReceipt(
 	projection,
-	{ removedKeys = [], chineseReminder = "on" } = {},
+	{ removedKeys = [], chinese = "on" } = {},
 ) {
 	const lines = [];
 	for (const key of Array.isArray(removedKeys) ? removedKeys : []) {
@@ -204,7 +205,7 @@ export function renderConsoleReceipt(
 	}
 	const view = { api: projection?.tools ?? [], ...(projection?.state ?? {}) };
 	lines.push(PROBE_COMMAND, renderYamlView(view, { depth: 3 }));
-	if (chineseReminder !== "off") {
+	if (chinese !== "off") {
 		lines.push(CHINESE_REMINDER_LINE);
 	}
 	return lines.join("\n");

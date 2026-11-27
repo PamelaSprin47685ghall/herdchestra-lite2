@@ -1,6 +1,7 @@
 // Scope state: creation, inspection, and the base copy helpers.
 // Pure data. No I/O.
 
+import { defaultFeatures } from "../features/herd/features.mjs";
 import { createRelay } from "../relay/state.mjs";
 import { createBracketLedger } from "./forkjoin.mjs";
 import { isPlainObject } from "./plain.mjs";
@@ -55,7 +56,7 @@ export function createState() {
     // frozen record of every child that returned. It is persisted with the
     // state because a reload must be able to close or explain every bracket.
     brackets: createBracketLedger(),
-    autopilot: false,
+    features: defaultFeatures(),
     relay: createRelay(),
     // Persisted base model identity. The base model lives outside all
     // scopes; the host integration fills these from preparseModelSpec.
@@ -77,9 +78,9 @@ export function createState() {
 /** Make a flow-local view while keeping session fields shared with its owner. */
 export function createFlowState(base) {
   const flow = createState();
-  // `brackets` is the session's single ledger; `autopilot` and `relay` are
+  // `brackets` is the session's single ledger; `features` and `relay` are
   // session switches every scope reads live.
-  const shared = new Set(["autopilot", "relay", "brackets"]);
+  const shared = new Set(["features", "relay", "brackets"]);
   // A child starts its own receive chain: the parent's receipts belong to the
   // parent's level and must not be folded twice from a child's projection.
   const local = new Set(["receipts"]);

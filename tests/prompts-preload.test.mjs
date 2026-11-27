@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import { DOCUMENTS, preloadDocs } from "../src/prompts/index.mjs";
-import { inlinedSkills, preloadSkills } from "../src/prompts/skills.mjs";
+import { inlinedSkills, META_SKILLS, preloadSkills } from "../src/prompts/skills.mjs";
 
 const ROOT = new URL("../resources/prompts/", import.meta.url);
 
@@ -26,8 +26,9 @@ describe("prompt preload", () => {
 		expect(preloadDocs()).toBe(DOCUMENTS.length);
 	});
 
-	test("preloadSkills loads every shipped skill body", () => {
+	test("preloadSkills loads every shipped meta skill body", () => {
 		expect(preloadSkills()).toBe(inlinedSkills.length);
-		expect(inlinedSkills).toHaveLength(6);
+		expect(inlinedSkills).toHaveLength(3);
+		expect(inlinedSkills.map((skill) => skill.name)).toEqual([...META_SKILLS].sort());
 	});
 });

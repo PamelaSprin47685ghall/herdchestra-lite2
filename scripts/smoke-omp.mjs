@@ -450,7 +450,7 @@ function memoryManager() {
 await check("a fresh session writes a checkpoint first", () => {
 	const manager = memoryManager();
 	const station = createTestStation(SessionStation, manager, {}, {}, null, null);
-	station.state.autopilot = true;
+	station.state.features.autopilot = "on";
 	station.persist();
 	assert(manager.entries.length === 1, `wrote ${manager.entries.length} entries`);
 	assert(
@@ -464,28 +464,28 @@ await check("a later write appends a delta and restores", () => {
 	const manager = memoryManager();
 	const station = createTestStation(SessionStation, manager, {}, {}, null, null);
 	station.persist();
-	station.state.autopilot = true;
+	station.state.features.autopilot = "on";
 	station.persist();
 	const kinds = manager.entries.map((entry) => entry.data.kind ?? "legacy");
 	assert(kinds[0] === "checkpoint", `first entry was ${kinds[0]}`);
 	assert(kinds[1] === "delta", `second entry was ${kinds[1]}`);
 	const restored = restoreState(manager);
-	assert(restored.autopilot === true, `restored autopilot: ${restored.autopilot}`);
+	assert(restored.features.autopilot === "on", `restored autopilot: ${restored.features.autopilot}`);
 	return kinds.join(" → ");
 });
 
 await check("a reopened session continues with deltas", () => {
 	const manager = memoryManager();
 	const first = createTestStation(SessionStation, manager, {}, {}, null, null);
-	first.state.autopilot = true;
+	first.state.features.autopilot = "on";
 	first.persist();
 	const reopened = createTestStation(SessionStation, manager, {}, {}, null, null);
-	reopened.state.autopilot = false;
+	reopened.state.features.autopilot = "off";
 	reopened.persist();
 	const kinds = manager.entries.map((entry) => entry.data.kind ?? "legacy");
 	assert(kinds.at(-1) === "delta", `last entry was ${kinds.at(-1)}`);
 	const restored = restoreState(manager);
-	assert(restored.autopilot === false, `restored autopilot: ${restored.autopilot}`);
+	assert(restored.features.autopilot === "off", `restored autopilot: ${restored.features.autopilot}`);
 	return `${kinds.join(" → ")}`;
 });
 

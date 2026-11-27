@@ -27,7 +27,7 @@ function assistant(text = "done") {
 
 function nudgeStation(ledger, ownerId = null) {
 	const station = Object.create(SessionStation.prototype);
-	station.state = { autopilot: true };
+	station.state = { features: { autopilot: "on" } };
 	station.nudged = new WeakSet();
 	station.delivered = [];
 	station.relayOn = () => false;
@@ -127,7 +127,7 @@ describe("SessionStation.maybeNudge", () => {
 	test("the steer is not withheld when the relay is unavailable", () => {
 		const station = nudgeStation(ledgerWith("running"));
 		station.relayOn = () => false;
-		station.state.autopilot = false;
+		station.state.features.autopilot = "off";
 
 		station.maybeNudge(assistant(), {});
 

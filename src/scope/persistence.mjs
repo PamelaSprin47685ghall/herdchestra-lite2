@@ -11,6 +11,7 @@ import {
   createState,
 } from "./state.mjs";
 import { isPlainObject } from "./plain.mjs";
+import { copyFeatures, normalizeFeatures } from "../features/herd/features.mjs";
 import { copyRelay, createRelay, isValidRelay } from "../relay/state.mjs";
 import {
   createBracketLedger,
@@ -154,7 +155,7 @@ function serializeStateWith(state, serializeBrackets, _includeAmends = true, sha
     brackets: serializeBrackets(state.brackets),
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
-    autopilot: state.autopilot === true,
+    features: copyFeatures(state.features),
     relay: copyRelay(state.relay),
     baseModelSpec:
       typeof state.baseModelSpec === "string" ? state.baseModelSpec : null,
@@ -268,6 +269,11 @@ export function deserializeState(input) {
     // A tree whose queues and levels do not pair is not partially loadable, so
     // it is dropped whole.
     if (!restoredBrackets.ok) return createState();
+    const storedFeatures = isPlainObject(data.features) ? data.features : null;
+    const features = normalizeFeatures(storedFeatures ?? {});
+    if (!storedFeatures || !Object.hasOwn(storedFeatures, "autopilot")) {
+      features.autopilot = data.autopilot === true ? "on" : "off";
+    }
     return {
       version: VERSION,
       startedAt: Number.isFinite(data.startedAt) ? data.startedAt : Date.now(),
@@ -275,7 +281,7 @@ export function deserializeState(input) {
       epoch:
         Number.isInteger(data.epoch) && data.epoch >= 0 ? data.epoch : 0,
       brackets: restoredBrackets.ledger,
-      autopilot: data.autopilot === true,
+      features,
       relay: data.version === VERSION ? copyRelay(data.relay) : createRelay(),
       baseModelSpec:
         typeof data.baseModelSpec === "string" ? data.baseModelSpec : null,

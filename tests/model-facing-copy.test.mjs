@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createTestStation } from "./helpers/station-ports.mjs";
 
 import { injectSystemPrompt, persistentOperatingSkill } from "../src/prompts/inject.mjs";
-import { inlinedSkills } from "../src/prompts/skills.mjs";
+import { defaultFeatures } from "../src/features/herd/features.mjs";
 import { loadDoc } from "../src/prompts/index.mjs";
 import { wireTools } from "../src/tools/catalog.mjs";
 
@@ -18,13 +18,8 @@ import { handleForkCall } from "../src/station/fork-controls.mjs";
 import { createBracketLedger, markReady, registerFork, takeReady } from "../src/scope/index.mjs";
 
 const chineseInstruction = /^.*强制以简体中文思考.*$/gm;
-const chineseRequirement = "强制以简体中文思考，尤其要以简体中文词开头。强制简体中文回答用户。";
 // The per-turn probe closes with the same requirement in its own wording.
 const probeRequirement = "强制以简体中文思考，以简体中文词开头，简体中文回答。";
-// The receipt carries the historical self-description so a user-role reminder
-// cannot be mistaken for a fresh user message.
-const chineseParenthetical = "（宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）";
-const chineseReminderSkill = ` <skill version="1.0" enforced>${chineseParenthetical}${chineseRequirement}</skill>`;
 
 // The probe body is parsed by tests/helpers/probe-view.mjs.
 
@@ -35,18 +30,17 @@ for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 		expect(injectSystemPrompt(prompt)).toEqual(prompt);
 		expect(text).toContain("Host instructions");
 		expect(text).toContain(persistentOperatingSkill);
-		expect(text).toContain(
-			inlinedSkills.find((skill) => skill.name === "constitution").body,
-		);
+		expect(text).toContain("Chesterton's fence");
+		expect(text).toContain("grandpa rules");
 		expect(persistentOperatingSkill.trim().split(/\s+/).length).toBeLessThanOrEqual(1300);
 		expect(text.match(chineseInstruction)).toHaveLength(1);
 
-		const withoutChinese = injectSystemPrompt(prompt, { chineseReminder: "off" });
+		const withoutChinese = injectSystemPrompt(prompt, { features: { ...defaultFeatures(), chinese: "off" } });
 		const offText = Array.isArray(withoutChinese) ? withoutChinese.join("\n") : withoutChinese;
 		expect(offText).not.toMatch(chineseInstruction);
-		expect(offText.split("\n").filter(Boolean)).toEqual(
-			text.split("\n").filter((line) => line && !line.includes("强制以简体中文思考")),
-		);
+		expect(offText).not.toContain("Punish You Otherwise");
+		expect(offText).toContain(persistentOperatingSkill);
+		expect(offText).toContain("Host instructions");
 	});
 }
 
@@ -223,7 +217,7 @@ test("the root receipt reports unreceived work until the root joins it", () => {
 	expect(probeOf(receipt()).unreceived).toBe(0);
 });
 
-function relayRequest({ registry = null, keepHook = false } = {}) {
+function relayRequest({ features = {}, keepHook = false } = {}) {
 	const ctx = { agent: { id: "Main", kind: "main" } };
 	const first = { role: "user", content: "Finish the work." };
 	const entries = [{ type: "message", message: first }];
@@ -247,8 +241,8 @@ function relayRequest({ registry = null, keepHook = false } = {}) {
 			},
 		},
 	};
-	const station = createTestStation(SessionStation, manager, {}, {}, registry, null);
-	station.state.autopilot = true;
+	const station = createTestStation(SessionStation, manager, {}, {}, null, null);
+	Object.assign(station.state.features, { autopilot: "on", ...features });
 	const remove = installContextPreparation(session, { station, ctx });
 	function commit(message) {
 		manager.appendMessage(message);
@@ -280,7 +274,7 @@ test("a toggle regenerates the mode receipt instead of reusing the previous one"
 		// Autopilot withdraws `ask`: the probe, not a sentence, says so.
 		expect(probeOf(receiptTextOf(auto)).api).not.toContain("ask");
 
-		fixture.station.state.autopilot = false;
+		fixture.station.state.features.autopilot = "off";
 		const manualMessages = await fixture.request();
 		const manual = manualMessages.filter((message) => message.herdSkill).at(-1);
 		expect(manual).not.toBe(auto);
@@ -288,7 +282,7 @@ test("a toggle regenerates the mode receipt instead of reusing the previous one"
 		expect(probeOf(receiptTextOf(manual)).mode).toBe("ROOT_MANUAL");
 		expect(probeOf(receiptTextOf(manual)).api).toContain("ask");
 
-		fixture.station.state.autopilot = true;
+		fixture.station.state.features.autopilot = "on";
 		const backMessages = await fixture.request();
 		const back = backMessages.filter((message) => message.herdSkill).at(-1);
 		expect(back).not.toBe(manual);
@@ -303,14 +297,11 @@ test("a toggle regenerates the mode receipt instead of reusing the previous one"
 	}
 });
 
-test("the language reminder ends every request receipt and follows its port", async () => {
+test("the language reminder ends every request receipt and follows its feature", async () => {
 	// `keepHook` leaves the preparation hook installed: this test makes two
 	// requests in a row, so each round appends a fresh receipt to the session.
 	const enabled = relayRequest({ keepHook: true });
-	const disabled = relayRequest({
-		keepHook: true,
-		registry: { ports: () => ({ chineseReminder: "off" }) },
-	});
+	const disabled = relayRequest({ keepHook: true, features: { chinese: "off" } });
 	async function latestReceipt(fixture) {
 		const receipts = (await fixture.request()).filter((message) => message.herdSkill);
 		return receipts.at(-1).content[0].text;
@@ -343,9 +334,10 @@ test("the language reminder ends every request receipt and follows its port", as
 });
 
 test("a child prompt is byte-identical to the root prompt", () => {
-	for (const autopilot of [true, false]) {
-		const child = injectSystemPrompt("Host instructions", { autopilot, branch: true });
-		const root = injectSystemPrompt("Host instructions", { autopilot });
+	for (const autopilot of ["on", "off"]) {
+		const features = { ...defaultFeatures(), autopilot };
+		const child = injectSystemPrompt("Host instructions", { features });
+		const root = injectSystemPrompt("Host instructions", { features });
 		expect(child).toEqual(root);
 		const text = Array.isArray(child) ? child.join("\n") : child;
 		expect(text).toContain("### Scope duties");

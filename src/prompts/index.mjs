@@ -101,6 +101,7 @@ export function render(template, vars = {}) {
  */
 export const DOCUMENTS = [
 	"errors",
+	"features",
 	"receipts/relay",
 	"receipts/scope",
 	"system",

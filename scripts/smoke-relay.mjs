@@ -141,7 +141,7 @@ for (const handler of host.handlers.get("session_start") ?? []) {
 	handler({}, ctx);
 }
 const station = wired.engine.station(ctx);
-station.state.autopilot = true;
+station.state.features.autopilot = "on";
 
 let callSeq = 0;
 

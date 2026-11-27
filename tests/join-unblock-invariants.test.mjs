@@ -438,7 +438,7 @@ describe("shared ledger across registries and wiring resilience", () => {
 		expect(fallback.registry).toBeTruthy();
 
 		const stubStation = Object.create(SessionStation.prototype);
-		stubStation.state = { autopilot: false, relay: { generation: 0, fullFlow: false } };
+		stubStation.state = { features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
 		stubStation.manager = null;
 		stubStation.persist = () => {};
 		const emptyWiringAttached = attachBaseForkPorts(stubStation, {});
@@ -475,7 +475,7 @@ describe("shared ledger across registries and wiring resilience", () => {
 		// reuse the registry carried by its identity so parent and child share waiters.
 		const wiringB = createForkWiring();
 		const childStation = Object.create(SessionStation.prototype);
-		childStation.state = { autopilot: false, relay: { generation: 0, fullFlow: false } };
+		childStation.state = { features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
 		childStation.manager = null;
 		childStation.persist = () => {};
 

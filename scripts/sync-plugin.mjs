@@ -56,9 +56,9 @@ const CORE_INSTALL = "node_modules/herdchestra-lite2";
  * package.json to sanitize there, plus the directories to prune.
  *
  * The core must own `resources/`: prompts resolve relative to
- * `src/prompts/index.mjs`, two levels up, and the six skills live under
- * `resources/skills/` so the core can inline their bodies into the system
- * prompt. The host package is the extension entry, so it owns the root
+ * `src/prompts/index.mjs`, two levels up, and the meta skills live under
+ * `resources/skills/` so the core can inline them when workspace=full. The
+ * host package is the extension entry, so it owns the root
  * `package.json`. Skills are no longer a host asset; a stale plugin-root
  * `skills/` from an older vendor copy is removed below.
  */
@@ -99,7 +99,10 @@ const FINGERPRINTS = [
   { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_request", min: 1 },
   { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_ask", min: 0, max: 0 },
   { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_send", min: 0, max: 0 },
-  { root: CORE_INSTALL, file: "resources/prompts/errors.md", needle: "request-deadlock-cycle", min: 1 },
+  { root: CORE_INSTALL, file: "resources/prompts/features.md", needle: "testing.no-red", min: 1 },
+  { root: CORE_INSTALL, file: "resources/prompts/features.md", needle: "scope.aggressive", min: 1 },
+  { root: CORE_INSTALL, file: "src/features/herd/features.mjs", needle: "META_SKILLS_SENTINEL", min: 1 },
+  { root: CORE_INSTALL, file: "resources/prompts/errors.md", needle: "request-unreachable", min: 1 },
 ];
 
 /**

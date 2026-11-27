@@ -5,7 +5,7 @@ description: Use when authoring or revising model-facing text: system prompts, t
 
 # Prompt Craft
 
-The standing constitution applies; this skill adds only the authoring method for model-facing text. Use polish for line-level fidelity; use this skill to decide what the text must do and where it lives.
+The enabled constitution policy applies; this skill adds only the authoring method for model-facing text. Use polish for line-level fidelity; use this skill to decide what the text must do and where it lives.
 
 A prompt is not a manual. It is a control surface: it should change the model's next move. If a sentence only documents the system, it is in the wrong layer.
 
@@ -28,7 +28,7 @@ System-guaranteed facts need only simple use. Do not teach the model why the gat
 No: "The return tool is forked-scope-only."
 Yes: "The worker in a forked scope finishes by returning the scope's record; the scope that forked it receives it."
 
-Judgment needs the principle. The principle can come from economics, decision-framing, systems, or the author's own logic. Do not import a mechanism the model cannot use, and do not mistake a mechanism for a reason.
+Judgment needs the principle. The principle can come from economics, the framing policy, systems, or the author's own logic. Do not import a mechanism the model cannot use, and do not mistake a mechanism for a reason.
 
 A rule that needs a paragraph of internals to justify itself is probably in the wrong layer. Move the internals to the tool document; keep the behavior where the model acts.
 
@@ -40,7 +40,7 @@ Keep the surface calm and the criterion hard. Prefer goal to outcome, acceptance
 
 Use evidence or proof only to shift a burden, never as a ritual. Keep a negation for a real constraint or an observed failure; delete the defensive "this is not X" unless X is a real confusion.
 
-The constitution's language rules are the stance; this section is how to apply them when authoring. When in doubt, state the action and the condition, not the prohibition and the reassurance.
+The enabled constitution policy's language rules are the stance; this section is how to apply them when authoring. When in doubt, state the action and the condition, not the prohibition and the reassurance.
 
 ## Examples and confessions
 

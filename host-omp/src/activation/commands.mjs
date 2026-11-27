@@ -17,9 +17,15 @@ function compactDetail(detail) {
 export function wireCommands(pi, engine) {
 	// A wiring may hand a full engine or a station-shaped double.
 	const stationOf = (ctx) => (engine.station ?? engine.stationFor)(ctx);
-	pi.registerCommand?.("herd-autopilot", {
-		description: "Toggle autopilot: when on, natural stops prompt the root to review or finish",
-		handler: async (args, ctx) => stationOf(ctx).onAutopilotCommand(args),
+	pi.registerCommand?.("herd", {
+		description: "Feature switches: /herd [feature [state [text...]]]",
+		handler: async (args, ctx) => {
+			const result = stationOf(ctx).onHerdCommand(args);
+			if (typeof result?.message === "string") {
+				ctx?.ui?.notify?.(result.message, result.ok === false ? "error" : "info");
+			}
+			return result;
+		},
 	});
 	pi.registerCommand?.("herd-diag", {
 		description: "Print the last host diagnostics",

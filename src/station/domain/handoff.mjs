@@ -57,6 +57,7 @@ export function decideScopeReturn({
 	orphans = [],
 	unreceived = 0,
 	relay = null,
+	review = "on",
 	canRewindRoot = true,
 	mixedToolCalls = false,
 	args = {},
@@ -128,6 +129,24 @@ export function decideScopeReturn({
 			relay: {
 				...current,
 				bigStreak: 2,
+				canStop: true,
+				pendingRewind: null,
+			},
+			stopLoop: false,
+		};
+	}
+	// Review off: the first big oath is the review. Promote instead of
+	// spending a compaction rewind on a second look.
+	if (oath.big && review === "off") {
+		return {
+			ok: true,
+			kind: "promote",
+			scope: "root",
+			big: true,
+			dafny,
+			relay: {
+				...current,
+				bigStreak: 1,
 				canStop: true,
 				pendingRewind: null,
 			},

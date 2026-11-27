@@ -16,6 +16,12 @@
  * variables never persist across turns — a fork, a rewind, or a session reload
  * rebuilds the identical `api` from durable station state.
  *
+ * Interrupts are owned by `beat.mjs`, not by the host signal. Every inner call
+ * gets its own AbortController; the host signal only drives the beat's one
+ * decision. A soft interrupt steers when work is in flight; an explicit one
+ * interrupts. The script races `beat.closing`, so a bare Promise that never
+ * settles cannot hold the tool call hostage.
+ *
  * Injected contracts (implemented outside this module, do not implement here):
  *
  * - `station.beginJsCall(ctx)` — synchronous pre-check. Returns the frozen
@@ -41,6 +47,16 @@
 import vm from "node:vm";
 import { renderYamlView } from "../format/yaml-view.mjs";
 import { errorResult, textResult } from "./results.mjs";
+import {
+	BEAT_CLOSED,
+	JS_INTERRUPTED,
+	JS_STEERED,
+	createBeat,
+} from "./beat.mjs";
+import {
+	REQUEST_INTERRUPT_REASON,
+	registerRuntime,
+} from "../scope/request-queue.mjs";
 
 /**
  * The fixed echo line at the top of every js result. The code itself is
@@ -151,13 +167,51 @@ function unwrapResult(res) {
 }
 
 /**
+ * The root scope's delivery entry. A running root needs an interrupt that
+ * aborts its own agent; an idle root keeps the wake hook the host wiring
+ * registered. A child is registered by the spawn ticket, so this function
+ * does nothing for it.
+ */
+function registerRootBeat(station, ctx, toolCallId, host) {
+	const registry = station?.registry;
+	if (!registry || typeof registerRuntime !== "function") return false;
+	const selfPath =
+		typeof station?.selfScopePath === "function" ? station.selfScopePath() : null;
+	if (selfPath !== "/") return false;
+	try {
+		registerRuntime(registry, "/", {
+			state: "running",
+			interrupt: () => {
+				try {
+					station.host?.session?.abort?.(ctx, REQUEST_INTERRUPT_REASON);
+				} catch (error) {
+					host?.report?.record?.("tickets", error, {
+						kind: "js",
+						phase: "root-interrupt",
+						toolCallId,
+					});
+				}
+			},
+		});
+		return true;
+	} catch (error) {
+		host?.report?.record?.("tickets", error, {
+			kind: "js",
+			phase: "root-runtime",
+			toolCallId,
+		});
+		return false;
+	}
+}
+
+/**
  * Execute one `js` tool call.
  *
  * Sandwich shape per the Ticket Station Method: the synchronous pre-check
  * (`station.beginJsCall`) and the synchronous reconcile
  * (`station.finishJsCall` in `finally`) bracket the only async region — the
- * vm execution itself. The station never awaits; this ticket never holds
- * station state of its own.
+ * vm execution and the beat's interrupt race. The station never awaits; this
+ * ticket never holds station state of its own.
  *
  * Poka-yoke inventory:
  *
@@ -168,10 +222,21 @@ function unwrapResult(res) {
  *   the same execution throws `MIXED_RETURN_TOOL_CALLS`, mirroring the
  *   station's native-batch rule. A failed validation does not poison retries:
  *   only calls other than `scope_return` count.
+ * - `beat.closed`: after an interrupt, every later `api.*` throws
+ *   `BEAT_CLOSED` without dispatch, charge, or an inner-call entry.
+ * - `beat.parksAllowed`: after a steer, a new park throws
+ *   `BEAT_NO_MORE_WAITS`; the script cannot re-block the turn it just gave up.
  * - Errors after a successful halt are expected fallout (the halted guard
  *   throwing inside user code) and do not mark the result as failed.
  */
-export async function jsTicket(station, toolCallId, params, ctx, signal = null, host = {}) {
+export async function jsTicket(
+	station,
+	toolCallId,
+	params,
+	ctx,
+	signal = null,
+	host = {},
+) {
 	let projection;
 	try {
 		projection = station.beginJsCall(ctx);
@@ -183,6 +248,9 @@ export async function jsTicket(station, toolCallId, params, ctx, signal = null, 
 	const toolNames = Array.isArray(projection?.tools) ? projection.tools : [];
 	const state = projection?.state ?? {};
 	const dispatch = host?.dispatchInnerTool;
+	const beat = createBeat({ signal });
+	const rootBeat = registerRootBeat(station, ctx, toolCallId, host);
+	const registry = station?.registry ?? null;
 
 	const calls = [];
 	const outputs = [];
@@ -195,25 +263,44 @@ export async function jsTicket(station, toolCallId, params, ctx, signal = null, 
 		if (typeof name !== "string" || name === "") continue;
 		const fn = async (args = {}) => {
 			if (halted) {
-				throw new Error(`Turn already terminated by scope_return: api.${name} is no longer available.`);
+				throw new Error(
+					`Turn already terminated by scope_return: api.${name} is no longer available.`,
+				);
 			}
 			if (name === "scope_return" && calls.some((call) => call.name !== "scope_return")) {
-				throw new Error("MIXED_RETURN_TOOL_CALLS: call scope_return alone in its own js execution.");
+				throw new Error(
+					"MIXED_RETURN_TOOL_CALLS: call scope_return alone in its own js execution.",
+				);
 			}
 			if (typeof dispatch !== "function") {
 				throw new Error("js runtime is not wired: host.dispatchInnerTool is missing.");
 			}
+			// The beat refuses a late call before it can reach the host or the
+			// accounting: no dispatch, no charge, no inner-call row.
+			const op = beat.beginOp(name);
 			const innerId = `${toolCallId}#${calls.length}`;
 			const entry = { id: innerId, name, args };
 			calls.push(entry);
 			let raw;
 			try {
-				raw = await dispatch(name, innerId, args, ctx, signal, toolCallId);
+				// Every op carries its own controller. The host's signal stops at
+				// the beat: forwarding it here would let one soft steer kill bash.
+				const rawPromise = dispatch(
+					name,
+					innerId,
+					args,
+					ctx,
+					op.controller.signal,
+					toolCallId,
+				);
+				raw = await beat.attach(op, rawPromise, entry);
 			} catch (error) {
 				entry.isError = true;
-				entry.resultText = String(error?.message ?? error);
+				entry.resultText = capText(String(error?.message ?? error));
+				beat.endOp(op);
 				throw error;
 			}
+			beat.endOp(op);
 			// Control tools answer with the info-rich object the model reads, and
 			// that same object is the machine channel: `scope_return` reports the
 			// rewind, the seal, or the promotion there, and the host reads
@@ -236,7 +323,11 @@ export async function jsTicket(station, toolCallId, params, ctx, signal = null, 
 				throw error;
 			}
 			entry.isError = false;
-			entry.resultText = capText(typeof value === "string" ? value : renderYamlView(value, { depth: 4, maxStringLength: RESULT_TEXT_CAP }));
+			entry.resultText = capText(
+				typeof value === "string"
+					? value
+					: renderYamlView(value, { depth: 4, maxStringLength: RESULT_TEXT_CAP }),
+			);
 			outputs.push(value);
 			return value;
 		};
@@ -246,14 +337,52 @@ export async function jsTicket(station, toolCallId, params, ctx, signal = null, 
 	Object.freeze(api);
 
 	const sandbox = vm.createContext(Object.create(null));
-	let value;
-	let failure = null;
+	const script = (async () => {
+		try {
+			const compiled = compileAsync(sandbox, params?.code);
+			const value = await compiled(api, state, params?.inputs ?? {});
+			return { ok: true, value };
+		} catch (error) {
+			return { ok: false, error };
+		}
+	})();
+
+	let outcome = null;
+	let interrupted = false;
 	try {
-		const compiled = compileAsync(sandbox, params?.code);
-		value = await compiled(api, state, params?.inputs ?? {});
-	} catch (error) {
-		failure = error;
+		if (beat.decision === "interrupt") {
+			interrupted = true;
+		} else {
+			const raced = await Promise.race([
+				script,
+				beat.closing.then(() => ({ interrupted: true })),
+			]);
+			if (raced?.interrupted) interrupted = true;
+			else outcome = raced;
+		}
+		// A script that finished in the same microtask as an explicit abort
+		// still honors the abort: the host asked for the turn back.
+		if (!interrupted && beat.decision === "interrupt") interrupted = true;
+		if (interrupted) {
+			beat.sealOps();
+		} else if (beat.decision === "steer") {
+			// Work keeps its own signal and its own life. The tool call waits for
+			// it so the result and the accounting describe the work that ran.
+			await beat.waitForWork();
+		}
 	} finally {
+		beat.dispose();
+		if (rootBeat) {
+			try {
+				registerRuntime(registry, "/", { state: "idle", interrupt: null });
+			} catch (error) {
+				host?.report?.record?.("tickets", error, {
+					kind: "js",
+					phase: "root-runtime",
+					toolCallId,
+				});
+			}
+		}
 		// Reconcile exactly once, whatever happened above. The station owns the
 		// accounting; an accounting failure is a bug in the station, not in the
 		// model's script, so it is reported sideways instead of masking the
@@ -261,15 +390,14 @@ export async function jsTicket(station, toolCallId, params, ctx, signal = null, 
 		try {
 			station.finishJsCall(toolCallId, calls, ctx);
 		} catch (settleError) {
-			host?.report?.record?.("tickets", settleError, { kind: "js", phase: "settle", toolCallId });
+			host?.report?.record?.("tickets", settleError, {
+				kind: "js",
+				phase: "settle",
+				toolCallId,
+			});
 		}
 	}
 
-	const failed = failure !== null && !halted;
-	const body = failed
-		? `Uncaught ${failure?.name ?? "Error"}: ${failure?.message ?? String(failure)}`
-		: formatReplValue(value, outputs);
-	const text = `${REPL_ECHO}\n${body}`;
 	const details = {
 		...(controlDetails ?? {}),
 		...(terminalDetails ?? {}),
@@ -280,7 +408,43 @@ export async function jsTicket(station, toolCallId, params, ctx, signal = null, 
 			...(resultText !== undefined ? { resultText } : {}),
 			...(isError !== undefined ? { isError } : {}),
 		})),
+		beat: beat.details,
 	};
+
+	if (interrupted) {
+		const reason = beat.details.reason ?? "explicit";
+		return {
+			isError: true,
+			content: [
+				{
+					type: "text",
+					text: `${REPL_ECHO}\nbeat interrupted (${reason}) before the script finished.`,
+				},
+			],
+			details: { code: JS_INTERRUPTED, ...details },
+		};
+	}
+
+	const failed = outcome?.ok === false && !halted;
+	if (failed && beat.decision === "steer") {
+		const error = outcome.error;
+		return {
+			isError: true,
+			content: [
+				{
+					type: "text",
+					text: `${REPL_ECHO}\nUncaught ${error?.name ?? "Error"}: ${error?.message ?? String(error)}`,
+				},
+			],
+			details: { code: JS_STEERED, ...details },
+		};
+	}
+
+	const value = outcome?.ok === true ? outcome.value : undefined;
+	const body = failed
+		? `Uncaught ${outcome.error?.name ?? "Error"}: ${outcome.error?.message ?? String(outcome.error)}`
+		: formatReplValue(value, outputs);
+	const text = `${REPL_ECHO}\n${body}`;
 	if (failed) {
 		return {
 			isError: true,

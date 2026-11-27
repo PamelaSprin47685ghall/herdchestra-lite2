@@ -17,10 +17,11 @@ import { preloadSkills } from "./prompts/skills.mjs";
 function resolvePortsOrThrow(env, report) {
 	const built = buildPorts(env);
 	if (built.ok) return built;
-	report?.("activation", new Error(built.detail), { port: built.port });
+	report?.("activation", new Error(built.detail), { port: built.port, feature: built.feature });
 	const error = new Error(built.detail);
 	error.code = built.code ?? "PORT_UNAVAILABLE";
 	error.port = built.port;
+	error.feature = built.feature;
 	throw error;
 }
 
@@ -54,6 +55,7 @@ export function createEngine({ host = {}, tickets = {}, env = process.env, prici
 		pricingCatalog,
 		ports: ports.names,
 		implementations: ports.implementations,
+		features: ports.features,
 		forkWiring,
 		onStation: host.fork?.attachStation ?? null,
 		onStationRefresh: host.fork?.refreshStation ?? null,

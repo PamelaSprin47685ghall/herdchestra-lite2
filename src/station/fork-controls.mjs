@@ -1012,6 +1012,7 @@ export function handleReturnCall(station, call, options = {}) {
     orphans,
     unreceived,
     relay: station.state?.relay ?? null,
+    review: station.state?.features?.review ?? "on",
     canRewindRoot,
     mixedToolCalls,
     args,

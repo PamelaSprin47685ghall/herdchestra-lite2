@@ -89,6 +89,7 @@ function readWiring(input) {
 	return {
 		table,
 		implementations,
+		features: source.features,
 		onStation: source.onStation,
 		onStationRefresh: source.onStationRefresh,
 		forkOptions: source.forkOptions,
@@ -125,6 +126,10 @@ export function createStationRegistry(options = {}) {
 	// the same decision for the ports that have one.
 	const resolvedPorts = wiring.table;
 	const resolvedImplementations = wiring.implementations;
+	const resolvedFeatures = Object.freeze({
+		values: Object.freeze({ ...(wiring.features?.values ?? {}) }),
+		explicit: Object.freeze({ ...(wiring.features?.explicit ?? {}) }),
+	});
 	const stations = new WeakMap();
 	let orphanStation = null;
 	// One fork tree per process; the ledger is chosen by conversation, so a
@@ -171,6 +176,10 @@ export function createStationRegistry(options = {}) {
 		/** The one frozen table chosen at startup; every reader shares it. */
 		ports() {
 			return resolvedPorts;
+		},
+		/** The startup feature values and the explicit environment subset. */
+		features() {
+			return resolvedFeatures;
 		},
 		/** Object implementations for the ports that have one; frozen once. */
 		implementations() {

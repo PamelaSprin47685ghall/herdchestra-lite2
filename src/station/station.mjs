@@ -63,6 +63,7 @@ import {
 	READ_WRITE_SUBAGENT,
 } from "../core/policy.mjs";
 import { PORT_NAMES } from "../core/ports/registry.mjs";
+import { mergeFeatures } from "../features/herd/features.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 import {
 	currentRequest,
@@ -98,7 +99,7 @@ import {
 	onAssistantMessage,
 	onBeforeAgentStart,
 	onContext,
-	onAutopilotCommand,
+	onHerdCommand,
 	onMessageEnd,
 	onSessionCompact,
 	onSessionStop,
@@ -211,6 +212,11 @@ export class SessionStation {
 		this.pricingCatalog =
 			pricingCatalog ?? this.host?.accounting?.pricing?.emptyCatalog?.() ?? null;
 		this.state = restoreState(manager, this.host?.report?.record);
+		const featureConfig =
+			typeof registry?.features === "function" ? registry.features() : null;
+		if (featureConfig) {
+			this.state.features = mergeFeatures(this.state.features, featureConfig.explicit);
+		}
 		// A replayable base on disk anchors a delta; a fresh session, or a
 		// chain whose anchor fell outside the replay window, starts with a
 		// checkpoint instead.
@@ -695,7 +701,8 @@ export class SessionStation {
 		}
 		return {
 			isChild,
-			autopilot: this.state?.autopilot === true,
+			autopilot: this.state?.features?.autopilot === "on",
+			chinese: this.state?.features?.chinese ?? "on",
 			unreceived: ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0,
 			canStop: this.state?.relay?.canStop === true,
 			contextOverHalf: this.contextNudgeArmed(),
@@ -985,8 +992,8 @@ export class SessionStation {
 
 	// -- Gatekeepers (sync event entries) ---------------------------------------
 
-	onAutopilotCommand(args) {
-		return onAutopilotCommand(this, args);
+	onHerdCommand(args) {
+		return onHerdCommand(this, args);
 	}
 
 	onAssistantMessage(message, ctx) {
@@ -1019,7 +1026,7 @@ export class SessionStation {
 		}
 		const text = renderConsoleReceipt(projection, {
 			removedKeys,
-			chineseReminder: this.portTable.chineseReminder,
+			chinese: this.state?.features?.chinese ?? "on",
 		});
 		const ownerId =
 			typeof this.forkOwnerId === "function" ? this.forkOwnerId() : null;
@@ -1028,7 +1035,7 @@ export class SessionStation {
 			content: [{ type: "text", text }],
 			attribution: "agent",
 			timestamp: Date.now(),
-			autopilot: this.state.autopilot === true,
+			autopilot: this.state?.features?.autopilot === "on",
 			branch: ownerId !== null,
 			canStop: this.state.relay?.canStop === true,
 			herdSkill: true,

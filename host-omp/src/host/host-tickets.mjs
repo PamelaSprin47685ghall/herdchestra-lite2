@@ -52,7 +52,7 @@ export async function sendSteerTicket(pi, text) {
 
 /**
  * Fire-and-forget user-message delivery. A plain message without `deliverAs`
- * always starts one turn, which is what `/herd-autopilot <text>` promises.
+ * always starts one turn, which is what `/herd autopilot on <text>` promises.
  */
 export async function sendUserMessageTicket(pi, text) {
 	if (!text) return;
@@ -60,7 +60,7 @@ export async function sendUserMessageTicket(pi, text) {
 		await pi?.sendUserMessage?.(text, { attribution: "agent" });
 	} catch (error) {
 		// A host that rejects the message must not leak an unhandled rejection,
-		// but `/herd-autopilot <text>` promises the user one turn: losing that message in
+		// but `/herd autopilot on <text>` promises the user one turn: losing that message in
 		// silence is the worst outcome, so it is recorded instead.
 		record("tickets", error, { kind: "prompt", chars: text.length });
 	}

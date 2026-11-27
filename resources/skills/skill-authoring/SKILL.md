@@ -5,13 +5,13 @@ description: Use when creating, splitting, or maintaining a skill. Keep one resp
 
 # Skill Authoring
 
-The standing constitution applies; this skill adds only the packaging method for skills. Use prompt-craft for the text and polish for line-level fidelity.
+The enabled constitution policy applies; this skill adds only the packaging method for skills. Use prompt-craft for the text and polish for line-level fidelity.
 
 A skill is a responsibility, not a folder. If you cannot state what it owns and what it refuses, it is not ready.
 
 ## One responsibility
 
-Constitution is stance. Decision-framing is method. TDD-crowdsource is process. Prompt-craft is authoring. Polish is line editing. Each answers a different question; if two answer the same question, one is redundant.
+The constitution policy is stance. The framing policy is method. The testing policy is process. Prompt-craft is authoring. Polish is line editing. Each answers a different question; if two answer the same question, one is redundant.
 
 A skill may use another skill's concept, but it must not restate its rules. Link the owner. A pointer is cheaper than a copy and cannot drift.
 

@@ -22,7 +22,7 @@ import { childReturnNudge } from "../src/scope/return-nudge.mjs";
 
 function stationOf() {
   const station = Object.create(SessionStation.prototype);
-  station.state = { autopilot: false, relay: { generation: 0, fullFlow: false } };
+  station.state = { features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
   station.manager = null;
   station.persist = () => {};
   return station;
@@ -155,7 +155,7 @@ describe("attachForkPorts", () => {
   test("a frozen child record survives a spawn failure after the work", async () => {
     const wiring = createForkWiring();
     const station = Object.create(SessionStation.prototype);
-    station.state = { autopilot: false, relay: { generation: 0, fullFlow: false } };
+    station.state = { features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
     station.manager = null;
     station.persist = () => {
       throw new Error("persist exploded");

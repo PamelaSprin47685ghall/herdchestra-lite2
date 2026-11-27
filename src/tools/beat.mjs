@@ -25,7 +25,7 @@ export const BEAT_STEERED = "BEAT_STEERED";
 export const JS_INTERRUPTED = "JS_INTERRUPTED";
 export const JS_STEERED = "JS_STEERED";
 
-const PARK_TOOLS = new Set(["scope_join", "scope_request", "wait", "ask"]);
+const PARK_TOOLS = new Set(["scope_join", "wait", "ask"]);
 
 /** A park is a pure wait; everything else is work with a real side effect. */
 export function opClassOf(name) {

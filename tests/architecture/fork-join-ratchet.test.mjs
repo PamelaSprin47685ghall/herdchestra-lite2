@@ -25,11 +25,7 @@ function count(text, pattern) {
 	return [...text.matchAll(pattern)].length;
 }
 
-// The handlers still own take/commit/persist. This baseline was 17 while the
-// scan was a hand-written list of five files; discovery covered
-// `request-controls.mjs` and `fork-controls.mjs` as well, which the list had
-// never counted. 24 is therefore the first honest number, not a relaxation:
-// from here a new station-taking free function must remove one, not add one.
+// The control surface is split by handler family.
 const STATION_FUNCTIONS_BASELINE = 24;
 
 describe("fork/join ratchet", () => {
@@ -94,7 +90,7 @@ describe("the request queue stays in memory", () => {
 		expect(persistence).not.toMatch(/\bwaitFor\b/);
 	});
 
-	test("the queue lives beside the fork registry, not on the state", () => {
+	test("the state holds no request queue", () => {
 		const state = readFileSync(
 			new URL("../../src/scope/state.mjs", import.meta.url),
 			"utf8",

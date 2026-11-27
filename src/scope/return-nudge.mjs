@@ -8,22 +8,27 @@
 // paths spend it: the station's in-turn steer and the ticket's out-of-turn
 // prompt. A bound that two paths can spend lives where both paths read.
 
-import { loadDoc } from "../prompts/index.mjs";
+import { loadDoc, render } from "../prompts/index.mjs";
 import { editRecord } from "./record-mutation.mjs";
 
 const S = loadDoc("receipts/scope");
 
 /**
- * How many times a child that stopped without `scope_return` is asked again.
- *
- * Past this count the ticket closes the bracket as failed rather than burn
- * the branch on a model that will not return, and the station stops steering
- * because it reads the same field.
+ * How many times a subscope that stopped without `scope_return` is asked again.
  */
 export const MAX_RETURN_NUDGES = 2;
 
 export function childReturnNudge() {
-	return S["fork.child-return-nudge"];
+	return S["fork.subscope-return-nudge"];
+}
+
+export function abandonedReturnNudge({ by = "/", reason = null } = {}) {
+	const cleanBy = typeof by === "string" && by !== "" ? by : "/";
+	const reasonClause =
+		typeof reason === "string" && reason.trim() !== ""
+			? ` (${reason.trim()})`
+			: "";
+	return render(S["mode.abandoned"], { by: cleanBy, reasonClause });
 }
 
 /** Return nudges already given to this record; a record without the field has none. */

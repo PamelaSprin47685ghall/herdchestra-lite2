@@ -9,17 +9,15 @@
 import { describe, expect, test } from "bun:test";
 
 import { createBracketLedger, forkOf, markReady, registerFork, takeReady } from "../src/scope/forkjoin.mjs";
-import { createForkRegistry } from "../src/scope/fork-registry.mjs";
-import { listAddressableScopePaths } from "../src/scope/path.mjs";
-import { runtimeTable } from "../src/scope/request-queue.mjs";
+import { findScopeByPath } from "../src/scope/path.mjs";
 import { createState } from "../src/scope/state.mjs";
 import { handleForkCall } from "../src/station/fork-controls.mjs";
-import { handleRequestToolCall } from "../src/station/request-controls.mjs";
+import { handleAbandonCall } from "../src/station/abandon-controls.mjs";
 import { createTools } from "../src/tools/catalog.mjs";
 import { textResult } from "../src/tools/results.mjs";
 
 const ITEM = {
-  scopeId: "probe",
+  path: "probe",
   fsm: "x",
   profession: "You are a probe engineer like Barbara Liskov.",
   n: 1,
@@ -90,57 +88,26 @@ describe("the journal frame of a control call", () => {
 });
 
 describe("the address book", () => {
-  test("a joined scope whose outcome failed is not offered as a target", () => {
+  test("a joined scope whose outcome failed is still found by path and cannot be abandoned", () => {
     const ledger = joinedLedger({ ok: false, reason: "NO_FORK_FRAME: no frame", record: "" });
     expect(forkOf(ledger, "f1").outcome).toBe("failed");
-    expect(listAddressableScopePaths(ledger)).not.toContain("/probe");
+    expect(findScopeByPath(ledger, "/probe")?.forkId).toBe("f1");
+    const station = {
+      state: createState(),
+      forkLedgerPort: () => ledger,
+      forkIdentityPort: () => null,
+    };
+    const result = handleAbandonCall(station, {
+      id: "call#1",
+      frameId: "call",
+      arguments: { target: "/probe" },
+    });
+    expect(result?.isError).toBe(true);
+    expect(result?.details?.code).toBe("SCOPE_ALREADY_DONE");
   });
 
   test("a joined scope that returned keeps its address", () => {
     const ledger = joinedLedger({ ok: true, record: "done" });
-    expect(listAddressableScopePaths(ledger)).toContain("/probe");
-  });
-
-  test("a joined scope with no wake hook refuses a request", () => {
-    const ledger = joinedLedger({ ok: true, record: "done" });
-    const registry = createForkRegistry();
-    const station = {
-      state: createState(),
-      forkLedgerPort: () => ledger,
-      forkIdentityPort: () => null,
-      forkWaitPort: () => ({ registry, ledger }),
-      forkRegistry: () => registry,
-    };
-    // A successful join keeps an idle wake hook in the live process; a record
-    // without one (the idle table died with the previous process) cannot
-    // answer, and queueing would park this caller forever.
-    const result = handleRequestToolCall(station, {
-      id: "call#2",
-      frameId: "call",
-      arguments: { target: "/probe", message: "are you there?" },
-    });
-    expect(result?.isError).toBe(true);
-    expect(result?.details?.code).toBe("REQUEST_UNREACHABLE");
-  });
-
-  test("a request to a failed scope refuses instead of parking", () => {
-    const ledger = joinedLedger({ ok: false, reason: "NO_FORK_FRAME: no frame", record: "" });
-    const registry = createForkRegistry();
-    const station = {
-      state: createState(),
-      forkLedgerPort: () => ledger,
-      forkIdentityPort: () => null,
-      forkWaitPort: () => ({ registry, ledger }),
-      forkRegistry: () => registry,
-    };
-    const result = handleRequestToolCall(station, {
-      id: "call#1",
-      frameId: "call",
-      arguments: { target: "/probe", message: "what happened?" },
-    });
-    // The handler refuses synchronously; nothing is left parked.
-    expect(result?.isError).toBe(true);
-    expect(result?.details?.code).toBe("REQUEST_UNREACHABLE");
-    expect(registry.requests?.get?.("/probe") ?? []).toHaveLength(0);
+    expect(findScopeByPath(ledger, "/probe")?.forkId).toBe("f1");
   });
 });

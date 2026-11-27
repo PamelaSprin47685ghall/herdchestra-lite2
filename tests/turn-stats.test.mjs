@@ -208,12 +208,12 @@ describe("derived fork time limit", () => {
 				budget: { read: 0.5 },
 				fallbackMs: 10_000,
 			}),
-		).toBe(5);
+		).toBe(10);
 	});
 
-	test("the result is rounded and never below one second", () => {
+	test("the result is rounded and never below one turn", () => {
 		expect(deriveTimeBudgetSeconds({ samples: [1_500], budget: { read: 1 } })).toBe(2);
-		expect(deriveTimeBudgetSeconds({ samples: [], budget: { read: 0.001 } })).toBe(1);
-		expect(deriveTimeBudgetSeconds({ samples: [], budget: {} })).toBe(1);
+		expect(deriveTimeBudgetSeconds({ samples: [], budget: { read: 0.001 } })).toBe(60);
+		expect(deriveTimeBudgetSeconds({ samples: [], budget: {} })).toBe(60);
 	});
 });

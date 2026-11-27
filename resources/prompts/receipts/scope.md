@@ -1,10 +1,10 @@
 ## scope.unreceived
 
-Unreceived results from forked scopes: {{count}}. Receive them with `scope_join`.
+Unreceived results from forked subscopes: {{count}}. Receive them with `scope_join`.
 
 ## scope.stop-blocked
 
-{{count}} unreceived result(s) from forked scopes. Call `scope_join` before stopping.
+{{count}} unreceived result(s) from forked subscopes. Call `scope_join` before stopping.
 
 ## receipt.autopilot
 
@@ -26,9 +26,9 @@ Call `scope_return` before stopping. The oath field is required: pass `unfinishe
 
 Call `scope_return` alone with fresh `dafny` and the required oath: `unfinished` to rewind and continue, the seal value only if nothing is left to change.
 
-## mode.awaiting-reply
+## mode.abandoned
 
-`{{from}}` is waiting on your answer. Only `scope_reply` is bound this turn: answer in one string.
+This scope was abandoned by `{{by}}`{{reasonClause}}. Only `scope_return` is bound: hand back your current findings and partial state in `dafny` now (no rewind will happen).
 
 ## mode.context-limit
 
@@ -38,24 +38,28 @@ Context is past its midpoint; only `scope_return` is bound. Hand the record back
 
 Nothing remains worth changing. No tool is bound; answer the user.
 
-## fork.child-status
+## fork.subscope-status
 
-{{marker}} depth {{depth}}.
+{{marker}} depth {{depth}}, upscope {{upscopePath}}, caller {{callerPath}}.
 State machine: {{fsm}}
 Turns left: {{remaining}}. Targets: {{targets}}.
 
-## fork.child-return
+## fork.subscope-cross-caller
 
-Use the `scope_return` oath to submit your record. The oath field is required: `unfinished` rewinds without submitting it; the seal value publishes it.
+Your context was inherited from {{upscopePath}}, but your `scope_return` delivers to caller {{callerPath}} (which does not share {{upscopePath}}'s context). Put every fact, path, and deduction {{callerPath}} needs into `dafny`.
 
-## fork.child-return-nudge
+## fork.subscope-return
 
-Your record is still unpublished. Call `scope_return` with the seal value to hand it to the scope that forked this one, or with `unfinished` to rewind and continue.
+Use `scope_return` to submit your record. The oath field is required: `unfinished` rewinds without submitting it; the seal value publishes it to {{callerPath}}.
+
+## fork.subscope-return-nudge
+
+Your record is still unpublished. Call `scope_return` with the seal value to hand it to your caller, or with `unfinished` to rewind and continue.
+
+## fork.subscope-routing
+
+User messages go to the stable root (`/`). Tool approvals appear there under this scope's path.
 
 ## language
 
 （宿主扩展在每轮末尾附带的常规友情提醒，非用户新消息，请继续当前工作）强制以简体中文思考，尤其要以简体中文词开头，强制简体中文回答用户。
-
-## fork.child-routing
-
-User messages go to the stable root. Tool approvals appear there under this scope.

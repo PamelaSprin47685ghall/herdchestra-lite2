@@ -47,10 +47,10 @@ for (const hostPrompt of ["Host instructions", ["Host instructions"]]) {
 test("one scope-and-relay section serves root and child, manual and autopilot", () => {
 	const base = injectSystemPrompt("Host instructions");
 	const baseText = Array.isArray(base) ? base.join("\n") : base;
-	expect(baseText).toContain("Forked scope duty");
+	expect(baseText).toContain("Subscope duty");
 	expect(baseText).toContain("Only the user toggles autopilot");
 	expect(baseText).toContain("exactly one tool: `js`");
-	expect(baseText).toContain("At root, join every scope you forked before sealing");
+	expect(baseText).toContain("At root, join every subscope you forked before sealing");
 	expect(baseText).toContain("Split into about `sqrt(n)` scopes");
 	expect(baseText).not.toContain("sqrt(2n)");
 
@@ -106,16 +106,24 @@ test("routine scope status keeps local turns and pending work without repeating 
 		unreceived: 3,
 		selfPath: "/api",
 		remaining: { read: "2/8", edit: "1/3", time: "0:20 left of 0:24" },
-		activePaths: ["/", "/api", "/ui"],
+		scopesDelta: {
+			"/": "done | m1 | 10k / 200k",
+			"/api": "running | m1 | 10k+ / 200k",
+			"/ui": "running | m1 | 12k+ / 200k",
+		},
 		hostToolNames: ["read", "edit", "write"],
 	});
 	const text = renderConsoleReceipt(projection);
 	const view = probeOf(text);
-	// The child reads its own turns and the fanout address book; it never sees
+	// The subscope reads its own turns and scopes_delta; it never sees
 	// the root's autopilot switch or its return obligation.
 	expect(view.remaining).toEqual({ read: "2/8", edit: "1/3", time: "0:20 left of 0:24" });
 	expect(view.unreceived).toBe(3);
-	expect(view.scopes).toEqual(["/", "/api", "/ui"]);
+	expect(view.scopes_delta).toEqual({
+		"/": "done | m1 | 10k / 200k",
+		"/api": "running | m1 | 10k+ / 200k",
+		"/ui": "running | m1 | 12k+ / 200k",
+	});
 	expect(view).not.toHaveProperty("autopilot");
 	expect(view).not.toHaveProperty("canStop");
 	// The assignment is not repeated: the model already has it.
@@ -134,7 +142,6 @@ test("a forked scope with no ledger record still learns that its turns are unava
 				autopilot: true,
 				remaining: null,
 				selfPath: "/orphan",
-				activePaths: ["/"],
 				hostToolNames: [],
 			}),
 		),
@@ -148,7 +155,6 @@ test("a forked scope with no ledger record still learns that its turns are unava
 				autopilot: true,
 				canStop: false,
 				unreceived: 0,
-				activePaths: ["/"],
 			}),
 		),
 	);
@@ -162,9 +168,9 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 		forkLedgerPort: () => ledger,
 		childSpawnPort: () => () => {},
 	};
-	const launch = (scopeId, fsmText) => handleForkCall(station, {
-		id: `call-${scopeId}`,
-		arguments: { forks: [{ scopeId, fsm: fsmText, profession: "You are a careful observer of tides and harbor lights", n: 1, budget: { read: 1 }, targets: [`${scopeId}.mjs`] }] },
+	const launch = (path, fsmText) => handleForkCall(station, {
+		id: `call-${path}`,
+		arguments: { forks: [{ path, fsm: fsmText, profession: "You are a careful observer of tides and harbor lights", n: 1, budget: { read: 1 }, targets: [`${path}.mjs`] }] },
 	});
 	const prior = launch("earlier", "Measure the tide");
 	expect(prior.isError).toBeUndefined();
@@ -173,10 +179,10 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 	const text = current.content[0].text;
 	// The batch is described once, with the assignment attached to the scope
 	// that owns it, and the earlier batch is not restated.
-	expect(text).toMatch(/latest \(depth \d+\): Check the harbor lights/);
+	expect(text).toMatch(/\/latest \(upscope \/, depth \d+\): Check the harbor lights/);
 	expect(text.match(/Check the harbor lights/g)).toHaveLength(1);
 	expect(text).not.toContain("Measure the tide");
-	expect(text).toContain("Still unreceived: earlier, latest.");
+	expect(text).toContain("Still unreceived: /earlier, /latest.");
 	// The machine channel carries the same facts without the prose.
 	expect(current.details.result.started.map((entry) => entry.path)).toEqual(["/latest"]);
 });
@@ -192,10 +198,10 @@ test("the scope_return documentation explains the return-only script and fresh r
 	expect(doc).toMatch(/appended to the published record/);
 });
 
-test("the scope_fork documentation renames a repeated sibling name instead of amending", () => {
+test("the scope_fork documentation explains path resolution and fail-closed duplicates", () => {
 	const doc = Object.values(loadDoc("tools/fork-join")).join("\n");
-	expect(doc).toMatch(/lowest free numeric suffix/i);
-	expect(doc).toMatch(/unique among the scopes at the same level only/i);
+	expect(doc).toMatch(/duplicate paths fail closed/i);
+	expect(doc).toMatch(/inherited context/i);
 	expect(doc).toMatch(/state machine/i);
 	expect(doc).not.toMatch(/blocked/i);
 });
@@ -341,7 +347,7 @@ test("a child prompt is byte-identical to the root prompt", () => {
 		expect(child).toEqual(root);
 		const text = Array.isArray(child) ? child.join("\n") : child;
 		expect(text).toContain("### Scope duties");
-		expect(text).toContain("Forked scope duty");
+		expect(text).toContain("Subscope duty");
 		expect(text).toContain("scope_return");
 		expect(text).toContain("### Close the work");
 		expect(text).toContain("Only the user toggles autopilot");

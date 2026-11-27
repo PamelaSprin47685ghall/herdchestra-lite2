@@ -91,13 +91,11 @@ describe("the js call seam is synchronous", () => {
 	for (const name of [
 		"beginJsCall",
 		"finishJsCall",
-		"handleScopeRequest",
-		"handleScopeReply",
 		"capabilitySnapshot",
 		"forkRegistry",
-		"noteRootRuntime",
-		"beginRootBeat",
-		"endRootBeat",
+		"noteSnapshotLeaf",
+		"noteDirectoryModel",
+		"noteDirectoryUsage",
 	]) {
 		test(`${name} neither awaits nor is declared async`, () => {
 			const body = methodBody(name);

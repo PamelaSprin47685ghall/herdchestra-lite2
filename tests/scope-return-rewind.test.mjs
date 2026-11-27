@@ -316,7 +316,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 			arguments: {
 				forks: [
 					{
-						scopeId: "worker",
+						path: "/worker",
 						fsm: "solve cleanly",
 						profession: "You are a careful engineer.",
 						n: 2,
@@ -430,7 +430,7 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 			arguments: {
 				forks: [
 					{
-						scopeId: "sub",
+						path: "/sub",
 						fsm: "do sub",
 						profession: "You are a worker.",
 						n: 1,
@@ -518,7 +518,7 @@ describe("Root scope_return lifecycle (oath streak + unreceived gate + fork rese
 			arguments: {
 				forks: [
 					{
-						scopeId: "extra",
+						path: "/extra",
 						fsm: "more work",
 						profession: "You are a worker.",
 						n: 1,

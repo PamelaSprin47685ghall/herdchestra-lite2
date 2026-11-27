@@ -156,18 +156,23 @@ export function validRecord(forkId, record) {
   if (record.handoffCount !== null && record.handoffCount !== undefined) {
     if (!Number.isInteger(record.handoffCount) || record.handoffCount < 0) return false;
   }
-  // Address and mailbox: absent in older snapshots, but a present value must
-  // be the shape the sender and the resolver both assume.
   if (record.path !== null && record.path !== undefined) {
     if (typeof record.path !== "string" || !record.path.startsWith("/")) return false;
   }
-  if (record.parentForkId !== null && record.parentForkId !== undefined) {
-    if (typeof record.parentForkId !== "string") return false;
+  if (record.upscopeId !== null && record.upscopeId !== undefined) {
+    if (typeof record.upscopeId !== "string") return false;
   }
-  // The branch leaf a resume starts from. Absent is legal (older snapshots); a
-  // present value must name an entry, so an empty string is not a tail.
-  if (record.branchTail !== null && record.branchTail !== undefined) {
-    if (typeof record.branchTail !== "string" || record.branchTail === "") return false;
+  if (record.upscopePath !== null && record.upscopePath !== undefined) {
+    if (typeof record.upscopePath !== "string" || !record.upscopePath.startsWith("/")) return false;
+  }
+  if (record.callerPath !== null && record.callerPath !== undefined) {
+    if (typeof record.callerPath !== "string" || !record.callerPath.startsWith("/")) return false;
+  }
+  if (record.safeSnapshotLeafId !== null && record.safeSnapshotLeafId !== undefined) {
+    if (typeof record.safeSnapshotLeafId !== "string" || record.safeSnapshotLeafId === "") return false;
+  }
+  if (record.abandonRequested !== undefined && typeof record.abandonRequested !== "boolean") {
+    return false;
   }
   return true;
 }
@@ -220,9 +225,15 @@ export function validLedger(value) {
  */
 export function ledgerShapeOk(value) {
   if (!isPlainObject(value)) return false;
-  if (value.version !== 2) return false;
+  if (value.version !== 3) return false;
   for (const key of ["seq", "closedSeq", "receiveSeq"]) {
     if (!Number.isInteger(value[key]) || value[key] < 0) return false;
+  }
+  if (value.dirSeq !== undefined && (!Number.isInteger(value.dirSeq) || value.dirSeq < 0)) {
+    return false;
+  }
+  if (value.root !== undefined && value.root !== null && !isPlainObject(value.root)) {
+    return false;
   }
   if (!isPlainObject(value.forks)) return false;
   if (!Array.isArray(value.order)) return false;
@@ -272,9 +283,15 @@ export function ledgerShapeOk(value) {
  */
 function validLedgerShallow(value) {
   if (!isPlainObject(value)) return false;
-  if (value.version !== 2) return false;
+  if (value.version !== 3) return false;
   for (const key of ["seq", "closedSeq", "receiveSeq"]) {
     if (!Number.isInteger(value[key]) || value[key] < 0) return false;
+  }
+  if (value.dirSeq !== undefined && (!Number.isInteger(value.dirSeq) || value.dirSeq < 0)) {
+    return false;
+  }
+  if (value.root !== undefined && value.root !== null && !isPlainObject(value.root)) {
+    return false;
   }
   if (!isPlainObject(value.forks)) return false;
   if (!Array.isArray(value.order)) return false;
@@ -524,9 +541,11 @@ export function serializeLedgerShared(ledger) {
       // Nothing changed, so the copy stands.
       const next = {
         version: ledger.version,
+        dirSeq: ledger.dirSeq ?? 0,
         seq: ledger.seq,
         closedSeq: ledger.closedSeq,
         receiveSeq: ledger.receiveSeq,
+        root: previous.root ?? copyData(ledger.root),
         forks,
         order: previous.order,
         queues: previous.queues,
@@ -580,9 +599,11 @@ export function serializeLedgerShared(ledger) {
   }
   const next = {
     version: ledger.version,
+    dirSeq: ledger.dirSeq ?? 0,
     seq: ledger.seq,
     closedSeq: ledger.closedSeq,
     receiveSeq: ledger.receiveSeq,
+    root: copyData(ledger.root),
     forks,
     order: copyData(ledger.order),
     queues: copyData(ledger.queues),
@@ -619,9 +640,16 @@ export function serializeLedgerShared(ledger) {
 export function restoreLedgerChecked(value) {
   const out = createBracketLedger();
   if (!validLedger(value)) return { ok: false, ledger: out };
+  out.dirSeq = Number.isInteger(value.dirSeq) ? value.dirSeq : 0;
   out.seq = value.seq;
   out.closedSeq = value.closedSeq;
   out.receiveSeq = value.receiveSeq;
+  if (isPlainObject(value.root)) {
+    out.root = {
+      ...out.root,
+      ...copyData(value.root),
+    };
+  }
   out.totals = normalizeTotals(value.totals);
   for (const forkId of value.order) {
     put(out.forks, forkId, copyData(value.forks[forkId]));
@@ -647,7 +675,7 @@ export function restoreLedgerChecked(value) {
   }
   const ready = out.order
     .map((forkId) => out.forks[forkId])
-    .filter((record) => record.status === READY && !record.supersededAt)
+    .filter((record) => record.status === READY)
     .sort((left, right) => (left.readySeq ?? 0) - (right.readySeq ?? 0));
   for (const record of ready) {
     if (!Number.isInteger(record.readySeq) || record.readySeq <= 0) {

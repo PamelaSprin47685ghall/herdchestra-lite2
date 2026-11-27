@@ -157,17 +157,19 @@ function argsTypeName(toolName) {
 // The scope control plane's result shapes are fixed by the protocol itself,
 // so they are declared inline once instead of being derived from anywhere.
 const CONTROL_PLANE_BLOCK = `/**
- * The scope control plane. These seven primitives always exist in the type
+ * The scope control plane. These four primitives always exist in the type
  * space; whether one is callable this turn is decided by the live binding
  * printed in the REPL probe, never by this declaration.
  */
 interface ScopeForkItem {
-	scopeId: string;
+	/** New subscope path: bare name ("worker") is relative to state.scope; "../a/b" or "/a/b" inherits upscope's last-turn context snapshot. Duplicate paths fail closed. */
+	path: string;
 	fsm: string;
 	profession: string;
 	n: number;
 	budget: Record<string, number>;
 	targets: string[];
+	/** Optional override; omit or null to inherit upscope's model + thinking level (reuses prefix cache). */
 	model?: string | null;
 }
 
@@ -177,7 +179,7 @@ interface ScopeForkArgs {
 
 interface ScopeForkResult {
 	ok: boolean;
-	started: Array<{ path: string; depth: number; fsm: string }>;
+	started: Array<{ path: string; upscope: string; depth: number; fsm: string }>;
 	failed: Array<{ index: number; error?: string }>;
 	unreceived: string[];
 }
@@ -186,6 +188,9 @@ interface ScopeJoinResult {
 	ok: boolean;
 	scope: string;
 	failed: boolean;
+	abandoned?: boolean;
+	abandonedBy?: string | null;
+	abandonReason?: string | null;
 	reason: string | null;
 	/** History only; do not re-execute it. */
 	record: string;
@@ -194,49 +199,39 @@ interface ScopeJoinResult {
 	persisted: boolean;
 }
 
-interface ScopeRequestArgs {
-	/** Exact scope path, e.g. "/api" or ".." — no wildcards. */
-	target: string;
-	message: string;
-	/** true interrupts the target at once; false lands at its next request. */
-	interrupt?: boolean;
-}
-
-interface ScopeRequestResult {
-	ok: boolean;
-	from: string;
-	reply: string;
-}
-
 interface ScopeAbandonArgs {
-	/** Exact path of a scope this scope forked, never a wildcard. */
+	/** Exact path of any running scope (never "/" or state.scope). Interrupts it and forces scope_return on its next turn. */
 	target: string;
+	/** Optional reason shown to the target (to guide its final dafny) and to its caller on scope_join. */
+	reason?: string;
 }
 
 interface ScopeAbandonResult {
 	ok: boolean;
-	/** Every path this call closed, the target first. */
-	abandoned: string[];
+	target: string;
+	alreadyAbandoning?: boolean;
 }
 
-  interface ScopeReturnArgs {
-  	dafny: string;
-  	/** Required, exactly one of two values: "unfinished" rewinds; the seal value publishes. */
-  	signed_sealed_hands_off_nothing_left_on_the_table:
-  		| "a_ferocious_audacious_master_would_change_nothing"
-  		| "unfinished";
-  }
+interface ScopeReturnArgs {
+	dafny: string;
+	/** Required in normal mode: "unfinished" rewinds; the seal value publishes. Ignored in ABANDONED mode (always publishes without rewinding). */
+	signed_sealed_hands_off_nothing_left_on_the_table?:
+		| "a_ferocious_audacious_master_would_change_nothing"
+		| "unfinished";
+}
 
 interface ScopeState {
-	mode: "CHILD" | "ROOT_MANUAL" | "ROOT_AUTOPILOT" | "FINAL_ANSWER" | "CONTEXT_LIMIT" | "AWAITING_REPLY";
+	mode: "SUBSCOPE" | "ROOT_MANUAL" | "ROOT_AUTOPILOT" | "FINAL_ANSWER" | "CONTEXT_LIMIT" | "ABANDONED";
 	scope: string;
 	autopilot?: boolean;
 	canStop?: boolean;
-	/** Child only, and always what is left, never what is used. Each tool as "remaining/budget" in turns; time as "<left> left of <budget>" in m:ss, or "OVERTIME"; panhandled, only when nonzero, as the cumulative count of calls that ran past their budget. */
+	/** Subscope only: what is left, never what is used. Tools as "remaining/budget"; time as "<left> left of <budget>" or "OVERTIME"; panhandled only when nonzero. */
 	remaining?: Record<string, string | number>;
 	unreceived: number;
-	scopes: string[];
-	request?: { from: string; message: string };
+	/** Global directory delta since your previous turn (overwrite semantics per path): "running | model | base+ / window" or "done | model | ctx / window". Omitted when unchanged. */
+	scopes_delta?: Record<string, string>;
+	/** Present only in ABANDONED mode. */
+	abandoned?: { by: string; reason?: string };
 }`;
 
 /**
@@ -277,9 +272,7 @@ export function renderCapabilitiesDts(toolSpecs = []) {
 	const controlMethods = [
 		`\t"scope_fork"(args: ScopeForkArgs): Promise<ScopeForkResult>;`,
 		`\t"scope_join"(): Promise<ScopeJoinResult>;`,
-		`\t"scope_request"(args: ScopeRequestArgs): Promise<ScopeRequestResult>;`,
 		`\t"scope_return"(args: ScopeReturnArgs): Promise<never>;`,
-		`\t"scope_reply"(reply: string): Promise<{ ok: boolean }>;`,
 		`\t"scope_abandon"(args: ScopeAbandonArgs): Promise<ScopeAbandonResult>;`,
 	];
 

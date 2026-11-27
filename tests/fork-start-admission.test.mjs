@@ -24,7 +24,7 @@ function stationFor(ledger, options = {}) {
 
 function forkArgs(overrides = {}) {
   return {
-    scopeId: "f1",
+    path: "f1",
     fsm: "audit one seam",
     profession: "You are a seam auditor like Michael Feathers.",
     budget: {},
@@ -73,8 +73,8 @@ describe("a fork start that a known window cannot hold", () => {
     const out = handleForkCall(
       station,
       callWith(
-        forkArgs({ scopeId: "small" }),
-        forkArgs({ scopeId: "huge", fsm: "x".repeat(20_000) }),
+        forkArgs({ path: "small" }),
+        forkArgs({ path: "huge", fsm: "x".repeat(20_000) }),
       ),
     );
 

@@ -28,6 +28,9 @@ export const USER_ABORT_ENGINES_KEY = Symbol.for("herdchestra-lite2.user-abort-e
 /** Abort reason that ends a child because its parent is gone. */
 export const CASCADE_ABORT_REASON = Symbol.for("herdchestra-lite2.scope-cascade-abort.v1");
 
+/** Abort reason that interrupts a scope because `scope_abandon` was called. */
+export const ABANDON_ABORT_REASON = Symbol.for("herdchestra-lite2.scope-abandon-abort.v1");
+
 /** Session hook that reports a native user interrupt (Esc, Web UI abort). */
 export const USER_ABORT_CAPTURE = Symbol.for("herdchestra-lite2.user-abort-capture.v1");
 

@@ -92,9 +92,12 @@ describe("buildChildIdentity", () => {
 	test("turns absent values into nulls without inventing facts", () => {
 		expect(buildChildIdentity()).toEqual({
 			forkId: null,
+			callerId: null,
 			parentOwnerId: null,
 			ownScopeId: null,
 			path: null,
+			upscopePath: null,
+			callerPath: null,
 			fsm: null,
 			budget: null,
 			time: null,

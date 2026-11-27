@@ -40,7 +40,7 @@ function stopStation(ownerId, overrides = {}) {
 		return {
 			mode:
 				ownerId !== null
-					? "CHILD"
+					? "SUBSCOPE"
 					: station.state.features.autopilot === "on"
 						? "ROOT_AUTOPILOT"
 						: "ROOT_MANUAL",
@@ -62,7 +62,7 @@ describe("a root's natural stop with unreceived work", () => {
 		const out = onSessionStop(station, {});
 
 		expect(out?.continue).toBe(true);
-		expect(out.additionalContext).toContain("1 unreceived result(s) from forked scopes");
+		expect(out.additionalContext).toContain("1 unreceived result(s) from forked subscopes");
 		expect(out.additionalContext).toContain("scope_join");
 	});
 
@@ -172,7 +172,7 @@ describe("a child's model-facing prompt", () => {
 
 			expect(child).toBe(root);
 			expect(child).toContain("### Scope duties");
-			expect(child).toContain("Forked scope duty");
+			expect(child).toContain("Subscope duty");
 			expect(child).toContain("scope_return");
 			expect(child).toContain("### Close the work");
 			expect(child).toContain("Only the user toggles autopilot");

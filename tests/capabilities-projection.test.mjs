@@ -17,22 +17,22 @@ import {
 	renderConsoleReceipt,
 } from "../src/station/domain/capabilities.mjs";
 
-const CHILD = {
+const SUBSCOPE = {
 	isChild: true,
 	selfPath: "/api",
 	hostToolNames: ["read", "write", "bash", "ask", "todo", "wait", "js"],
 };
 
 describe("mode priority", () => {
-	test("a queued request outranks the context limit so the caller is unblocked", () => {
+	test("ABANDONED outranks the context limit and canStop so the subscope returns immediately", () => {
 		const projection = projectCapabilities({
-			...CHILD,
-			pendingRequest: { id: "req-1", from: "/", message: "which field?" },
+			...SUBSCOPE,
+			abandoned: { by: "/", reason: "taking another path" },
 			contextOverHalf: true,
 			canStop: true,
 		});
-		expect(projection.mode).toBe("AWAITING_REPLY");
-		expect(projection.tools).toEqual(["scope_reply"]);
+		expect(projection.mode).toBe("ABANDONED");
+		expect(projection.tools).toEqual(["scope_return"]);
 	});
 
 	test("the context limit outranks the final answer", () => {
@@ -51,18 +51,24 @@ describe("mode priority", () => {
 		expect(projection.tools).toEqual([]);
 	});
 
-	test("a child ignores canStop: only root can finish", () => {
-		const projection = projectCapabilities({ ...CHILD, canStop: true });
-		expect(projection.mode).toBe("CHILD");
+	test("a subscope ignores canStop and abandoned on root: only root can finish", () => {
+		const projection = projectCapabilities({ ...SUBSCOPE, canStop: true });
+		expect(projection.mode).toBe("SUBSCOPE");
 		expect(projection.tools).toContain("read");
+
+		const rootAbandoned = projectCapabilities({
+			isChild: false,
+			abandoned: { by: "/api", reason: "ignored" },
+		});
+		expect(rootAbandoned.mode).toBe("ROOT_MANUAL");
 	});
 });
 
 describe("normal scope sets", () => {
-	test("a child gets the base tools plus its host tools, minus the retired ones", () => {
-		const projection = projectCapabilities(CHILD);
+	test("a subscope gets the base tools plus its host tools, minus the retired ones", () => {
+		const projection = projectCapabilities(SUBSCOPE);
 
-		expect(projection.mode).toBe("CHILD");
+		expect(projection.mode).toBe("SUBSCOPE");
 		for (const name of BASE_TOOLS) expect(projection.tools).toContain(name);
 		expect(projection.tools).toContain("read");
 		expect(projection.tools).toContain("write");
@@ -77,7 +83,7 @@ describe("normal scope sets", () => {
 
 	test("the tool list is sorted and carries no duplicates", () => {
 		const tools = projectCapabilities({
-			...CHILD,
+			...SUBSCOPE,
 			hostToolNames: ["write", "read", "read"],
 		}).tools;
 		expect(tools).toEqual([...tools].sort());
@@ -91,34 +97,41 @@ describe("normal scope sets", () => {
 		expect(projectCapabilities({ isChild: false, autopilot: false }).mode).toBe("ROOT_MANUAL");
 	});
 
-	test("a child never receives ask even when the host lists it", () => {
-		expect(projectCapabilities({ ...CHILD, autopilot: false }).tools).not.toContain("ask");
-	});
-
-	test("scope_reply exists only inside AWAITING_REPLY", () => {
-		expect(projectCapabilities(CHILD).tools).not.toContain("scope_reply");
-		expect(
-			projectCapabilities({ ...CHILD, pendingRequest: { id: "r", from: "/", message: "m" } })
-				.tools,
-		).toEqual(["scope_reply"]);
+	test("a subscope never receives ask even when the host lists it", () => {
+		expect(projectCapabilities({ ...SUBSCOPE, autopilot: false }).tools).not.toContain("ask");
 	});
 });
 
 describe("the state object", () => {
-	test("a child reports its path, balance, and tree", () => {
+	test("a subscope reports its path, balance, and scopes_delta when non-empty", () => {
 		const state = projectCapabilities({
-			...CHILD,
+			...SUBSCOPE,
 			remaining: { read: "2/3" },
 			unreceived: 1,
-			activePaths: ["/", "/api", "/ui"],
+			scopesDelta: {
+				"/": "done | m1 | 10k / 200k",
+				"/api": "running | m1 | 10k+ / 200k",
+			},
 		}).state;
 
 		expect(state.scope).toBe("/api");
 		expect(state.remaining).toEqual({ read: "2/3" });
 		expect(state.unreceived).toBe(1);
-		expect(state.scopes).toEqual(["/", "/api", "/ui"]);
+		expect(state.scopes_delta).toEqual({
+			"/": "done | m1 | 10k / 200k",
+			"/api": "running | m1 | 10k+ / 200k",
+		});
+		expect(state.scopes).toBeUndefined();
 		expect(state.autopilot).toBeUndefined();
 		expect(state.canStop).toBeUndefined();
+	});
+
+	test("omits scopes_delta when empty or null", () => {
+		const state = projectCapabilities({
+			...SUBSCOPE,
+			scopesDelta: {},
+		}).state;
+		expect(state.scopes_delta).toBeUndefined();
 	});
 
 	test("root reports autopilot and canStop instead of a balance", () => {
@@ -129,16 +142,22 @@ describe("the state object", () => {
 		expect(state.remaining).toBeUndefined();
 	});
 
-	test("an awaiting scope carries who asked and what they asked", () => {
+	test("an abandoned scope carries who abandoned it and optional reason", () => {
 		const state = projectCapabilities({
-			...CHILD,
-			pendingRequest: { id: "req-9", from: "/ui", message: "field name?" },
+			...SUBSCOPE,
+			abandoned: { by: "/ui", reason: "superseded" },
 		}).state;
-		expect(state.request).toEqual({ from: "/ui", message: "field name?" });
+		expect(state.abandoned).toEqual({ by: "/ui", reason: "superseded" });
+
+		const noReason = projectCapabilities({
+			...SUBSCOPE,
+			abandoned: { by: "/" },
+		}).state;
+		expect(noReason.abandoned).toEqual({ by: "/" });
 	});
 
 	test("the projection is frozen so no consumer can mutate shared truth", () => {
-		const projection = projectCapabilities(CHILD);
+		const projection = projectCapabilities(SUBSCOPE);
 		expect(Object.isFrozen(projection)).toBe(true);
 		expect(Object.isFrozen(projection.tools)).toBe(true);
 		expect(Object.isFrozen(projection.state)).toBe(true);
@@ -146,23 +165,26 @@ describe("the state object", () => {
 });
 
 describe("the signature", () => {
-	test("changes with the mode, the queued request, the tools, and the stop flag", () => {
-		const pending = projectCapabilities({
-			...CHILD,
-			pendingRequest: { id: "req-3", from: "/", message: "m" },
+	test("changes with the mode, abandoned info, the tools, and the stop flag", () => {
+		const abandoned = projectCapabilities({
+			...SUBSCOPE,
+			abandoned: { by: "/", reason: "stop" },
 			canStop: true,
 		});
-		const idle = projectCapabilities({ ...CHILD, canStop: true });
+		const idle = projectCapabilities({ ...SUBSCOPE, canStop: true });
 
-		expect(pending.signature).not.toBe(idle.signature);
-		// The request id stays outside the hash: a second request carrying the
-		// same text still needs its own delivery turn.
-		expect(pending.signature).toContain("req-3");
+		expect(abandoned.signature).not.toBe(idle.signature);
+		const otherReason = projectCapabilities({
+			...SUBSCOPE,
+			abandoned: { by: "/", reason: "other" },
+			canStop: true,
+		});
+		expect(abandoned.signature).not.toBe(otherReason.signature);
 	});
 
 	test("covers every value the probe prints, not only the mode", () => {
 		// The probe is the trailing message, so rewriting it costs nothing in
-		// prefix cache. A signature blind to `remaining` or `scopes` would let a
+		// prefix cache. A signature blind to `remaining` or `scopes_delta` would let a
 		// stale budget survive every turn inside one mode and print a lie.
 		const variants = [
 			{ remaining: { read: "3/3" } },
@@ -171,9 +193,9 @@ describe("the signature", () => {
 			{
 				remaining: { read: "2/3" },
 				unreceived: 1,
-				activePaths: ["/", "/api", "/ui"],
+				scopesDelta: { "/": "done | m1 | 10k / 200k" },
 			},
-		].map((variant) => projectCapabilities({ ...CHILD, ...variant }));
+		].map((variant) => projectCapabilities({ ...SUBSCOPE, ...variant }));
 		for (const left of variants) {
 			for (const right of variants) {
 				if (renderConsoleReceipt(left) === renderConsoleReceipt(right)) continue;
@@ -183,8 +205,8 @@ describe("the signature", () => {
 	});
 
 	test("a keyword order change in host tools cannot change it", () => {
-		const left = projectCapabilities({ ...CHILD, hostToolNames: ["read", "bash"] });
-		const right = projectCapabilities({ ...CHILD, hostToolNames: ["bash", "read"] });
+		const left = projectCapabilities({ ...SUBSCOPE, hostToolNames: ["read", "bash"] });
+		const right = projectCapabilities({ ...SUBSCOPE, hostToolNames: ["bash", "read"] });
 		expect(left.signature).toBe(right.signature);
 	});
 });

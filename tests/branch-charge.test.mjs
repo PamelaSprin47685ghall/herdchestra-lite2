@@ -54,7 +54,7 @@ describe("branch charging", () => {
     const s = state();
     const ledger = ledgerWith("f1", { read: 2 });
     for (const [toolName, input] of [
-      ["scope_request", { target: "/api", message: "?" }],
+      ["scope_abandon", { target: "/api" }],
       ["scope_fork", { forks: [] }],
       ["read", { path: "skill://tdd-crowdsource" }],
       ["write", { path: "xd://resolve" }],

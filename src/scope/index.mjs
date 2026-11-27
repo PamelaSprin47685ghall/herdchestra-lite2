@@ -44,19 +44,32 @@ export {
   touchRecord,
   validLedger,
   applyCharge,
+  requestAbandon,
+  updateRecordSnapshot,
+  updateRootMeta,
 } from "./forkjoin.mjs";
 export {
-  childScopePath,
+  subscopePath,
+  splitScopePath,
   normalizeScopePath,
+  resolveForkPath,
   looksLikePattern,
   scopePathOf,
   findScopeByPath,
   forkIdsUnderPath,
-  isScopeActive,
-  allocateSiblingScopeId,
-  listActiveScopePaths,
-  listAddressableScopePaths,
 } from "./path.mjs";
+export {
+  formatContextK,
+  formatDirModel,
+  formatDirectoryEntry,
+  projectDirectory,
+  diffDirectory,
+} from "./directory.mjs";
+export {
+  ABANDON_INTERRUPT_REASON,
+  decideAbandon,
+  decideAbandonRequest,
+} from "./abandon.mjs";
 export {
   pauseClock,
   resumeClock,

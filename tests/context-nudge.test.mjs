@@ -168,12 +168,11 @@ describe("trailing injection", () => {
 		autopilot: false,
 		canStop: false,
 		unreceived: 0,
-		activePaths: ["/"],
 	};
 
 	test("past the midpoint the tools collapse to one, and nothing moves into the prompt", () => {
 		const quiet = renderConsoleReceipt(projectCapabilities(quietFacts));
-		expect(quiet).toContain("scope_request");
+		expect(quiet).toContain("scope_abandon");
 		// The signal is a hard mode, not a paragraph: the whole api disappears.
 		const armed = projectCapabilities({ ...quietFacts, contextOverHalf: true });
 		expect(armed.mode).toBe("CONTEXT_LIMIT");
@@ -181,21 +180,25 @@ describe("trailing injection", () => {
 	});
 
 	test("the collapsed probe keeps the state the model still needs", () => {
+		const delta = {
+			"/": "running | model | 10k+ / 100k",
+			"/api": "running | model | 5k+ / 100k",
+		};
 		const view = probeOf(
 			renderConsoleReceipt(
 				projectCapabilities({
 					...quietFacts,
 					contextOverHalf: true,
 					unreceived: 2,
-					activePaths: ["/", "/api"],
+					scopesDelta: delta,
 				}),
 			),
 		);
 		expect(view.api).toEqual(["scope_return"]);
 		expect(view.mode).toBe("CONTEXT_LIMIT");
-		// The address book and the pending count survive the collapse.
+		// The directory delta and the pending count survive the collapse.
 		expect(view.unreceived).toBe(2);
-		expect(view.scopes).toEqual(["/", "/api"]);
+		expect(view.scopes_delta).toEqual(delta);
 	});
 
 	test("disarming restores the quiet bytes", () => {
@@ -204,7 +207,7 @@ describe("trailing injection", () => {
 		);
 		const quiet = renderConsoleReceipt(projectCapabilities({ ...quietFacts }));
 		expect(quiet).not.toContain("CONTEXT_LIMIT");
-		expect(quiet).toContain("scope_request");
+		expect(quiet).toContain("scope_abandon");
 		expect(quiet).toBe(renderConsoleReceipt(projectCapabilities({ ...quietFacts })));
 		expect(armed).not.toBe(quiet);
 	});

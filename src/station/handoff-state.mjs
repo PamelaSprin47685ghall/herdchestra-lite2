@@ -30,6 +30,7 @@ export function finishRewind(station, { rebaseAnchor = false } = {}) {
 	truncateForHostBoundary(station.state);
 	station.contextCache = null;
 	station.hostBoundaryScan = null;
+	station.resetDirectoryBaseline?.();
 	station.resetUsageWatermark?.();
 	if (rebaseAnchor && typeof station.anchor?.rebase === "function") {
 		station.anchor.rebase();

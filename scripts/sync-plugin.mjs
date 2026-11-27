@@ -96,13 +96,14 @@ const FINGERPRINTS = [
   // These two prompts are inlined into the system prompt, so a retired tool name
   // there teaches the model a call that no longer exists while the code is fine.
   // Pin the live vocabulary and forbid the retired names (`max: 0`).
-  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_request", min: 1 },
+  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_abandon", min: 1 },
+  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_request", min: 0, max: 0 },
   { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_ask", min: 0, max: 0 },
   { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_send", min: 0, max: 0 },
   { root: CORE_INSTALL, file: "resources/prompts/features.md", needle: "testing.no-red", min: 1 },
   { root: CORE_INSTALL, file: "resources/prompts/features.md", needle: "scope.aggressive", min: 1 },
   { root: CORE_INSTALL, file: "src/features/herd/features.mjs", needle: "META_SKILLS_SENTINEL", min: 1 },
-  { root: CORE_INSTALL, file: "resources/prompts/errors.md", needle: "request-unreachable", min: 1 },
+  { root: CORE_INSTALL, file: "resources/prompts/errors.md", needle: "duplicate-scope-path", min: 1 },
 ];
 
 /**

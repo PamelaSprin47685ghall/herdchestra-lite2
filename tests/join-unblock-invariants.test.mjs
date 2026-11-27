@@ -41,9 +41,11 @@ import { attachForkPorts } from "./helpers/fork-attach.mjs";
 
 const LEDGER_KEYS = [
 	"version",
+	"dirSeq",
 	"seq",
 	"closedSeq",
 	"receiveSeq",
+	"root",
 	"forks",
 	"order",
 	"queues",
@@ -310,7 +312,7 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 		const refused = outs.find((o) => o?.isError === true);
 
 		expect(joined?.details?.joined).toBe(true);
-		expect(joined?.content?.[0]?.text ?? "").toContain("[Record from forked scope — fork scope-1]");
+		expect(joined?.content?.[0]?.text ?? "").toContain("[Record from forked scope — fork /c1]");
 		expect(refused?.details?.code).toBe("NO_UNRECEIVED_WORK");
 		expect(rootWaits).toBe(0);
 		expect(clockPauseBalance).toBe(0);
@@ -376,7 +378,7 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 			arguments: {
 				forks: [
 					{
-						scopeId: "c-broken",
+						path: "/c-broken",
 						fsm: "will fail to spawn",
 						profession: "You are a careful worker like Ada Lovelace.",
 						n: 1,

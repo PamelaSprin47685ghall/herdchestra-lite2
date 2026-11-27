@@ -6,6 +6,17 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [7.0.0] — 2026-11-27
+
+### Changed — immutable-context decoupling (`upscope` / `subscope` / `caller`)
+
+- Removed `scope_request`, `scope_reply`, `AWAITING_REPLY`, `request-queue.mjs`, `request-controls.mjs`, `cold-wake.mjs`, and `resumeBranchSession`.
+- `scope_fork` now takes `path` (relative to caller or absolute `/...`), fails closed on duplicate paths (`DUPLICATE_SCOPE_PATH`), unknown/unready upscopes (`UNKNOWN_UPSCOPE` / `UPSCOPE_NOT_READY`), and invalid segments. Omitting `model` inherits the upscope's resolved model and thinking level; fork admission checks the upscope's context snapshot against the new subscope's window; empty `{}` budgets receive at least 1 turn of derived wall-clock time.
+- Cross-branch spy subscopes inherit their upscope's `safeSnapshotLeafId` (validated closed, no dangling `toolCall`) while delivering `scope_return` directly to `caller` (`ownerId`).
+- Global scope directory (`running | <model> | <base>+ / <win>` and `done | <model> | <ctx> / <win>`, including Root `/`) is delivered via sparse overwrite-semantics `state.scopes_delta` (zero noise while `running`, baseline reset on Turn 1 / rewind / compaction / resume).
+- `scope_abandon({ target, reason? })` interrupts any single `running` scope (never `/` or self) and forces its next turn into `ABANDONED` mode (only `scope_return` bound, never rewinds, skips oath validation, reparents orphans on return, idempotent if already abandoning, with bounded-nudge forced-close fallback).
+- Ledger snapshot bumped to `version: 3`.
+
 ## [6.2.1] — 2026-11-27
 
 ### Changed — one module per responsibility across the ledger, the stations, and the host

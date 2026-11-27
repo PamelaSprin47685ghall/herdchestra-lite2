@@ -1,7 +1,7 @@
 // The js beat: what one \`js\` tool call does when the host interrupts it.
 //
 // The contract is driven by what is actually in flight, not by the tool name:
-//   park = scope_join / scope_request / wait / ask: a pure wait, safe to cancel.
+//   park = scope_join / wait / ask: a pure wait, safe to cancel.
 //   work = everything else: a real side effect, including bash and read.
 //
 // soft (a queued user message) steers when any work is in flight: parks are
@@ -10,47 +10,31 @@
 // bash calls.
 //
 // These tests drive the public jsTicket entry with a fake station and a fake
-// host. They import only the entry and the two stable reason symbols, so a
+// host. They import only the entry and the stable reason symbol, so a
 // missing beat module fails an assertion instead of the whole file.
 
 import { describe, expect, test } from "bun:test";
 
 import { jsTicket } from "../src/tools/js-ticket.mjs";
 import { TOOL_INTERRUPT_ABORT_REASON } from "../src/tools/tickets.mjs";
-import {
-	currentRequest,
-	hasPendingRequests,
-	markRequestDelivered,
-	pendingRequestCount,
-	registerRuntime,
-	rejectPendingRequests,
-	resolveRequest,
-	runtimeOf,
-	clearRuntime,
-	runtimeTable,
-	waitEdgesOf,
-} from "../src/scope/request-queue.mjs";
-import { handleRequestToolCall } from "../src/station/request-controls.mjs";
-import { createBracketLedger, registerFork } from "../src/scope/forkjoin.mjs";
-import { createForkRegistry } from "../src/scope/fork-registry.mjs";
+import { opClassOf } from "../src/tools/beat.mjs";
 
-const TOOLS = ["bash", "scope_join", "scope_request", "read"];
+const TOOLS = ["bash", "scope_join", "wait", "read"];
 
 function station(tools = TOOLS) {
 	const settled = [];
 	return {
 		settled,
 		beginJsCall: () => ({
-			mode: "CHILD",
+			mode: "SUBSCOPE",
 			tools,
 			state: {
-				mode: "CHILD",
+				mode: "SUBSCOPE",
 				scope: "/api",
 				remaining: {},
 				unreceived: 0,
-				scopes: ["/", "/api"],
 			},
-			signature: "CHILD::" + tools.join(",") + "|stop=false",
+			signature: "SUBSCOPE::" + tools.join(",") + "|stop=false",
 		}),
 		finishJsCall: (toolCallId, calls) => {
 			settled.push({ toolCallId, calls });
@@ -94,7 +78,7 @@ function parkUntilAbort(signal, label) {
 	const answer = deferred();
 	const stop = () => {
 		const error = new Error(label + " interrupted");
-		error.code = label === "scope_join" ? "JOIN_INTERRUPTED" : "REQUEST_INTERRUPTED";
+		error.code = label === "scope_join" ? "JOIN_INTERRUPTED" : "WAIT_INTERRUPTED";
 		answer.reject(error);
 	};
 	if (signal?.aborted) stop();
@@ -385,115 +369,13 @@ describe("the normal path is unchanged", () => {
 	});
 });
 
-// --- the station-side half of the contract -------------------------------
-
-function ledgerWith(...paths) {
-	const ledger = createBracketLedger();
-	for (const [index, path] of paths.entries()) {
-		const registered = registerFork(ledger, {
-			forkId: "f-" + index,
-			ownerId: "root",
-			levelKey: "L0",
-			fsm: "task " + path,
-			depth: 0,
-			budget: { read: 1 },
-			profession: "You are a worker.",
-		});
-		expect(registered.ok).toBe(true);
-		registered.fork.path = path;
-	}
-	return ledger;
-}
-
-function requestStation(ledger, identity, registry) {
-	return {
-		state: { scopes: [], autopilot: false, relay: { generation: 0, fullFlow: false } },
-		forkLedgerPort: () => ledger,
-		forkIdentityPort: () => identity,
-		forkWaitPort: () => ({ registry, ledger }),
-		forkRegistry: () => registry,
-	};
-}
-
-describe("scope_request carries its signal", () => {
-	test("aborting the caller withdraws the queued request and answers REQUEST_INTERRUPTED", async () => {
-		const ledger = ledgerWith("/api", "/worker");
-		const registry = createForkRegistry();
-		const requester = requestStation(ledger, { forkId: "f-0", path: "/api" }, registry);
-
-		const controller = new AbortController();
-		const pending = handleRequestToolCall(
-			requester,
-			{ id: "call-req-1", arguments: { target: "/worker", message: "which field?" } },
-			null,
-			controller.signal,
-		);
-
-		await Promise.resolve();
-		expect(hasPendingRequests(registry, "/worker")).toBe(true);
-
-		controller.abort();
-		const result = await pending;
-
-		expect(result.isError).toBe(true);
-		expect(result.details.code).toBe("REQUEST_INTERRUPTED");
-		expect(hasPendingRequests(registry, "/worker")).toBe(false);
-		expect(waitEdgesOf(registry, "/api")).toEqual([]);
-	});
-});
-
-describe("the root scope is addressable while it runs", () => {
-	test("a registered root runtime is woken, never refused as REQUEST_UNREACHABLE", async () => {
-		const ledger = ledgerWith("/api");
-		const registry = createForkRegistry();
-		let wakes = 0;
-		registerRuntime(registry, "/", {
-			state: "idle",
-			wake: () => {
-				wakes += 1;
-			},
-		});
-		const requester = requestStation(ledger, { forkId: "f-0", path: "/api" }, registry);
-
-		const pending = handleRequestToolCall(requester, {
-			id: "call-root-1",
-			arguments: { target: "/", message: "status?" },
-		});
-
-		expect(wakes).toBe(1);
-		let settled = false;
-		pending.then(() => {
-			settled = true;
-		});
-		await flush();
-		expect(settled).toBe(false);
-
-		markRequestDelivered(registry, "/");
-		resolveRequest(registry, "/", "root is here");
-		const result = await pending;
-		expect(result.details.result).toEqual({
-			ok: true,
-			from: "/",
-			reply: "root is here",
-		});
-	});
-});
-
-describe("the runtime parked marker counts every waiter", () => {
-	test("two concurrent joins leave two parked ids, not one overwritten string", () => {
-		const registry = createForkRegistry();
-
-		registerRuntime(registry, "/worker", { parked: "call-1#0" });
-		registerRuntime(registry, "/worker", { parked: "call-1#1" });
-
-		const entry = runtimeOf(registry, "/worker");
-		expect(entry.parked).toBeInstanceOf(Set);
-		expect(entry.parked.size).toBe(2);
-		expect(entry.parked.has("call-1#0")).toBe(true);
-		expect(entry.parked.has("call-1#1")).toBe(true);
-
-		clearRuntime(registry, "/worker");
-		expect(runtimeOf(registry, "/worker")).toBeNull();
+describe("park tool classification", () => {
+	test("classifies scope_join, wait, and ask as park and work tools as work", () => {
+		expect(opClassOf("scope_join")).toBe("park");
+		expect(opClassOf("wait")).toBe("park");
+		expect(opClassOf("ask")).toBe("park");
+		expect(opClassOf("bash")).toBe("work");
+		expect(opClassOf("read")).toBe("work");
 	});
 });
 
@@ -551,40 +433,5 @@ describe("a steer releases a script parked on a bare Promise", () => {
 		expect(host.seen.map((call) => call.name)).toEqual(["bash"]);
 		expect(body(result)).toContain("BEAT_STEERED");
 		expect(result.details.beat).toMatchObject({ decision: "steer", reason: "soft" });
-	});
-});
-
-describe("a delivered request is withdrawn when its caller aborts", () => {
-	test("the next request becomes the head instead of starving behind it", async () => {
-		const ledger = ledgerWith("/api", "/worker");
-		const registry = createForkRegistry();
-		const requester = requestStation(ledger, { forkId: "f-0", path: "/api" }, registry);
-
-		const firstController = new AbortController();
-		const first = handleRequestToolCall(
-			requester,
-			{ id: "call-req-first", arguments: { target: "/worker", message: "first" } },
-			null,
-			firstController.signal,
-		);
-		await Promise.resolve();
-		expect(currentRequest(registry, "/worker")?.message).toBe("first");
-		// The target read the request, then the caller is interrupted.
-		markRequestDelivered(registry, "/worker");
-		firstController.abort();
-		const firstResult = await first;
-		expect(firstResult.details.code).toBe("REQUEST_INTERRUPTED");
-		expect(pendingRequestCount(registry, "/worker")).toBe(0);
-
-		const second = handleRequestToolCall(requester, {
-			id: "call-req-second",
-			arguments: { target: "/worker", message: "second" },
-		});
-		expect(currentRequest(registry, "/worker")?.message).toBe("second");
-		expect(hasPendingRequests(registry, "/worker")).toBe(true);
-		expect(waitEdgesOf(registry, "/api")).toContain("/worker");
-
-		rejectPendingRequests(registry, "/worker", "test cleanup");
-		await second.catch(() => {});
 	});
 });

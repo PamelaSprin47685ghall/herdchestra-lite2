@@ -1,18 +1,38 @@
-## foreign-scope-id
+## invalid-path
 
-That scope id belongs to another owner. Use a path from `state.scopes`.
+Pass a valid scope `path` (e.g. `"worker"`, `"../api/spy"`, or `"/api/spy"`). No empty segments, trailing slash, wildcards, `..` past `/`, or `root` segment.
 
-## not-a-child
+## duplicate-scope-path
 
-This scope is not a forked scope, so that lifecycle call has nothing to act on. At root, answer the user or fork the work.
+Path `{{path}}` already exists (`{{status}}`). Every fork path must be unique; choose a fresh path instead.
 
-## request-unreachable
+## unknown-upscope
 
-`{{target}}` never started or already failed, so no turn can answer there. Ask a scope listed in `state.scopes`, or fork the work again.
+Upscope `{{upscopePath}}` does not exist. Fork only under `/` or an existing scope path shown in the directory (never under a scope created in the same batch).
 
-## invalid-scope-id
+## upscope-not-ready
 
-Use a short ASCII `scopeId` other than `root`.
+Upscope `{{upscopePath}}` has no ready context snapshot yet (still initializing or failed before producing a turn). Retry once it has a snapshot, or fork under another upscope.
+
+## cannot-abandon-root
+
+Root (`/`) cannot be abandoned.
+
+## cannot-abandon-self
+
+A scope cannot abandon itself. Call `scope_return` directly instead.
+
+## scope-already-done
+
+Scope `{{target}}` is already `done` and cannot be abandoned.
+
+## abandon-unknown-target
+
+No scope exists at `{{target}}`. Use an exact `running` scope path from the directory.
+
+## not-a-subscope
+
+This scope is Root (`/`), not a forked subscope, so that lifecycle call has nothing to act on.
 
 ## invalid-fsm
 
@@ -53,11 +73,11 @@ No scope spawner is attached; this session cannot start new scopes. Continue in 
 ## fork-context-exceeded
 
 forks[{{index}}]: {{reason}}
-The batch did not start. Reduce the calling scope's context or use a model with a larger window, then fork again.
+The batch did not start. Reduce the upscope's context or use a model with a larger window, then fork again.
 
-## no-ready-child
+## no-ready-subscope
 
-No forked scope has returned yet. Keep working, or wait for one with `scope_join`.
+No forked subscope has returned yet. Keep working, or wait for one with `scope_join`.
 
 ## join-context-exceeded
 
@@ -74,7 +94,7 @@ Pass `signed_sealed_hands_off_nothing_left_on_the_table` as exactly one of two v
 
 ## return-unreceived
 
-Root still owns unreceived work. Receive it with `scope_join` before sealing.
+Root still owns {{count}} unreceived subscope(s). Receive them with `scope_join` before sealing.
 
 ## return-rewind-unavailable
 
@@ -86,11 +106,11 @@ This scope is not registered. Use the path from the fork receipt, or fork a new 
 
 ## fork-not-running
 
-Fork {{scopeId}} is {{status}}. Use `scope_join` for a ready record; otherwise continue the work or fork a new scope.
+Subscope `{{path}}` is already `done` ({{status}}). Use `scope_join` for an unreceived record; otherwise continue or fork a new subscope.
 
 ## orphans-without-receiver
 
-No receiving scope owns this fork. Join the scopes it forked first.
+No live receiving scope owns this subscope. Join the subscopes it forked first.
 
 ## root-has-no-budget
 
@@ -106,15 +126,7 @@ This scope owns no unreceived work. This call created no receipt. Fork a new sco
 
 ## model-unknown
 
-forks[{{index}}]: model `{{selector}}` is not available. Available: {{available}}. Omit `model` to inherit the calling scope's model.
-
-## abandon-unknown-target
-
-No scope answers to `{{target}}`. Use the exact path from the fork result or `state.scopes`.
-
-## abandon-not-owned
-
-`{{target}}` belongs to another scope. A scope can abandon only a scope it forked itself.
+forks[{{index}}]: model `{{selector}}` is not available. Available: {{available}}. Omit `model` to inherit the upscope's model.
 
 ## fork-register-failed
 

@@ -9,15 +9,15 @@ import {
 	estimateJoinTokens,
 	joinAdmission,
 } from "../../scope/admission.mjs";
-import { decideAbandon } from "../../scope/abandon.mjs";
-import { allocateSiblingScopeId, childScopePath } from "../../scope/path.mjs";
+import { decideAbandon, decideAbandonRequest } from "../../scope/abandon.mjs";
+import { findScopeByPath, resolveForkPath } from "../../scope/path.mjs";
 import { normalizeBudget, validBudget } from "../../scope/turns.mjs";
 import { normalizeTargets, validTargets } from "../../scope/targets.mjs";
-import { publicScopeId, validScopeId } from "../../scope/scope-id.mjs";
 import { resolveModelSelector } from "../../scope/model-selector.mjs";
+import { modelKey } from "../models.mjs";
 import { trimText } from "../messages.mjs";
 
-export { decideAbandon };
+export { decideAbandon, decideAbandonRequest };
 
 function admission({ baseTokens, recordChars, tokensPerChar, window, reserve, margin } = {}) {
 	const projected = estimateJoinTokens({
@@ -28,7 +28,7 @@ function admission({ baseTokens, recordChars, tokensPerChar, window, reserve, ma
 	return joinAdmission({ window, projected, reserve, margin });
 }
 
-/** Can the parent's next request hold a child record of this size? */
+/** Can the caller's next request hold a subscope record of this size? */
 export function decideJoinAdmission({
 	baseTokens,
 	recordChars,
@@ -47,7 +47,7 @@ export function decideJoinAdmission({
 	});
 }
 
-/** Can the parent's next request hold a fork receipt of this size? */
+/** Can the new subscope's initial context hold its upscope context + birth receipt? */
 export function decideForkAdmission({
 	baseTokens,
 	pricedChars = null,
@@ -82,12 +82,8 @@ export function decideForkAdmission({
  * turns on success so the caller never normalizes twice.
  */
 export function validateFork(args) {
-	// A fork only creates, so it always carries the state-machine text that
-	// describes the work. An empty one is refused here, before any bracket
-	// moves.
 	const fsm = trimText(args?.fsm);
 	if (fsm === "") return { ok: false, code: "INVALID_FSM" };
-	// `budget` is the persisted field name; its values are turn counts.
 	if (!Object.hasOwn(args ?? {}, "budget") || !validBudget(args.budget)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}
@@ -99,20 +95,19 @@ export function validateFork(args) {
 	if (args.model !== undefined && args.model !== null && typeof args.model !== "string") {
 		return { ok: false, code: "INVALID_ARGUMENT" };
 	}
-	if (!validScopeId(args?.scopeId) || args.scopeId.toLowerCase() === "root") {
-		return { ok: false, code: "INVALID_SCOPE_ID" };
+	const rawPath = typeof args?.path === "string" ? args.path.trim() : "";
+	if (rawPath === "") {
+		return { ok: false, code: "INVALID_PATH" };
 	}
-	// The child's identity statement. It must open with "You are " so the
-	// spawned scope receives a role, not a task summary; the spawner injects
-	// it as the first line below the receipt marker, before any instruction.
-	// The JSON schema already requires the field at the tool edge.
+	// Quick syntax check against `/` for standalone callers; `decideRegister`
+	// resolves relative to `callerPath` again for full accuracy.
 	const profession = trimText(args?.profession);
 	if (profession === "" || !profession.startsWith("You are ")) {
 		return { ok: false, code: "INVALID_PROFESSION" };
 	}
 	return {
 		ok: true,
-		scopeId: args.scopeId,
+		path: rawPath,
 		fsm,
 		profession,
 		budget,
@@ -136,14 +131,12 @@ export function validateForkBatch(args) {
 		if (!item.ok) return { ok: false, code: item.code, index };
 		items.push(item);
 	}
-	// No size or fanout is refused, and none is rebuked: the batch always runs.
 	return { ok: true, items, warnings: [] };
 }
 
 /**
  * Which receipt a fork item sends. A fork only creates, so every item sends
- * one fresh receipt; nothing else can be priced, and no second action
- * judgement can drift from this one.
+ * one fresh receipt; nothing else can be priced.
  */
 export function forkReceiptPath(item = null) {
 	if (!item) return null;
@@ -152,99 +145,230 @@ export function forkReceiptPath(item = null) {
 }
 
 /**
- * The register decision: duplicate scope ids, model selectors and start
- * admission. The handler still registers, spawns, defers and reports.
- *
- * Items must already be validated by `validateForkBatch`. Forks are plain
- * records; the module reads their status/scope id and mutates nothing.
+ * The register decision: strict path resolution, duplicate fail-closed,
+ * upscope existence & snapshot readiness, upscope model inheritance, and
+ * upscope-based context admission.
  */
 export function decideRegister({
 	items = [],
 	forks = [],
-	parentForkId,
-	parentPath = null,
+	root = null,
+	callerPath = "/",
 	ownerId = "",
 	models = null,
 	hasSpawner = false,
 	pricedChars = [],
+	priceFor = null,
 	baseTokens = Number.POSITIVE_INFINITY,
 	tokensPerChar = 0.3,
 	window = null,
 	reserve,
 	margin,
 } = {}) {
-	// A fork only creates. Names are unique among siblings and never across the
-	// conversation: the same name under two parents is two unrelated scopes.
-	const parent =
-		parentForkId !== undefined
-			? (typeof parentForkId === "string" && parentForkId !== "root" ? parentForkId : null)
-			: (typeof ownerId === "string" && ownerId !== "" && ownerId !== "root" ? ownerId : null);
 	const records = Array.isArray(forks) ? forks.filter(Boolean) : [];
-	const parentRecord = parent === null
-		? null
-		: records.find((fork) => fork.forkId === parent);
-	const base =
-		typeof parentPath === "string" && parentPath !== ""
-			? parentPath
-			: (parentRecord?.path ?? "/");
 	const snapshot = { forks: {}, order: [] };
 	for (const record of records) {
 		if (typeof record.forkId !== "string" || record.forkId === "") continue;
 		snapshot.forks[record.forkId] = record;
 		snapshot.order.push(record.forkId);
 	}
-	const reserved = new Set();
+	const caller = typeof callerPath === "string" && callerPath.startsWith("/") ? callerPath : "/";
+	const callerForkId = typeof ownerId === "string" && ownerId !== "" && ownerId !== "root" ? ownerId : null;
+
+	// Phase 1: Resolve paths, fail-closed on invalid path, duplicate path,
+	// unknown upscope, or unready upscope snapshot.
+	const batchPaths = new Set();
 	const next = [];
 	for (let index = 0; index < items.length; index += 1) {
 		const item = items[index];
-		if (!item || typeof item.scopeId !== "string") {
-			return { ok: false, code: "INVALID_SCOPE_ID", index };
+		const rawPath = item?.path;
+		const resolved = resolveForkPath(caller, rawPath);
+		if (!resolved.ok) {
+			return { ok: false, code: "INVALID_PATH", index, path: rawPath };
 		}
-		const scopeId = allocateSiblingScopeId(snapshot, parent, item.scopeId, reserved);
-		reserved.add(scopeId);
+		const pathLower = resolved.path.toLowerCase();
+		if (batchPaths.has(pathLower)) {
+			return {
+				ok: false,
+				code: "DUPLICATE_SCOPE_PATH",
+				index,
+				path: resolved.path,
+				status: "pending",
+			};
+		}
+		const existing = findScopeByPath(snapshot, resolved.path);
+		if (existing) {
+			return {
+				ok: false,
+				code: "DUPLICATE_SCOPE_PATH",
+				index,
+				path: existing.path ?? resolved.path,
+				status: existing.status === "running" ? "running" : "done",
+			};
+		}
+		batchPaths.add(pathLower);
+
+		let upscopeId = null;
+		let upscopePath = "/";
+		let upscopeRecord = null;
+		let upscopeSnapshotLeafId = null;
+		let upscopeModel = null;
+		let upscopeThinking = null;
+		let upscopeContextTokens = null;
+		let upscopeWindow = null;
+
+		if (resolved.upscopePath === "/") {
+			upscopePath = "/";
+			upscopeId = null;
+			upscopeSnapshotLeafId = root?.safeSnapshotLeafId ?? null;
+			upscopeModel = root?.model ?? null;
+			upscopeThinking = root?.thinkingLevel ?? null;
+			upscopeContextTokens = root?.contextTokens ?? null;
+			upscopeWindow = root?.contextWindow ?? null;
+			// Non-root caller forking under `/` needs Root's closed snapshot leaf.
+			if (caller !== "/" && !upscopeSnapshotLeafId) {
+				return {
+					ok: false,
+					code: "UPSCOPE_NOT_READY",
+					index,
+					upscopePath: "/",
+				};
+			}
+		} else {
+			upscopeRecord = findScopeByPath(snapshot, resolved.upscopePath);
+			if (!upscopeRecord) {
+				return {
+					ok: false,
+					code: "UNKNOWN_UPSCOPE",
+					index,
+					upscopePath: resolved.upscopePath,
+				};
+			}
+			upscopeId = upscopeRecord.forkId;
+			upscopePath = upscopeRecord.path ?? resolved.upscopePath;
+			const isSameCaller = upscopeId === callerForkId || upscopePath.toLowerCase() === caller.toLowerCase();
+			if (!isSameCaller && !upscopeRecord.safeSnapshotLeafId) {
+				return {
+					ok: false,
+					code: "UPSCOPE_NOT_READY",
+					index,
+					upscopePath,
+				};
+			}
+			upscopeSnapshotLeafId = upscopeRecord.safeSnapshotLeafId ?? null;
+			upscopeModel = upscopeRecord.resolvedModel ?? upscopeRecord.model ?? null;
+			upscopeThinking = upscopeRecord.resolvedThinking ?? null;
+			upscopeContextTokens = upscopeRecord.snapshotContextTokens ?? null;
+			upscopeWindow = upscopeRecord.contextWindow ?? null;
+		}
+
 		const { blocked: _blocked, ...rest } = item;
 		next.push({
 			...rest,
 			action: "register",
-			scopeId,
-			path: childScopePath(base, scopeId),
-			parentForkId: parent,
+			scopeId: resolved.name,
+			path: resolved.path,
+			upscopeId,
+			upscopePath,
+			callerPath: caller,
+			upscopeSnapshotLeafId,
+			upscopeModel,
+			upscopeThinking,
+			upscopeContextTokens,
+			upscopeWindow,
+			sameCallerAsUpscope: upscopePath.toLowerCase() === caller.toLowerCase(),
 		});
 	}
+
 	if (hasSpawner !== true) {
 		return { ok: false, code: "CHILD_SPAWNER_UNAVAILABLE" };
 	}
+
+	// Phase 2: Resolve model (explicit selector, or inherit upscope's model + thinking).
 	for (let index = 0; index < next.length; index += 1) {
 		const item = next[index];
-		if (item.model == null) continue;
-		const resolved = resolveModelSelector(models, item.model);
-		if (!resolved.ok) {
-			return {
-				ok: false,
-				code: resolved.code,
-				index,
-				selector: item.model,
-				available: resolved.available,
-				availableTotal: resolved.availableTotal,
+		if (item.model != null) {
+			const resolved = resolveModelSelector(models, item.model);
+			if (!resolved.ok) {
+				return {
+					ok: false,
+					code: resolved.code,
+					index,
+					selector: item.model,
+					available: resolved.available,
+					availableTotal: resolved.availableTotal,
+				};
+			}
+			const resolvedKey = modelKey(resolved.model);
+			const thinkingLevel = resolved.thinkingLevel ?? item.upscopeThinking ?? null;
+			next[index] = {
+				...item,
+				modelOverride: resolved.model,
+				thinkingLevel,
+				resolvedModel: resolvedKey,
+				resolvedThinking: thinkingLevel,
+				resolvedWindow: resolved.model?.contextWindow ?? null,
 			};
+		} else {
+			// Omit model: inherit upscope's model + thinking level.
+			const inheritedModel = item.upscopeModel;
+			const inheritedThinking = item.upscopeThinking;
+			if (inheritedModel && models && typeof models.resolve === "function") {
+				const selector = inheritedThinking
+					? `${inheritedModel}:${inheritedThinking}`
+					: inheritedModel;
+				const resolved = resolveModelSelector(models, selector);
+				if (!resolved.ok) {
+					return {
+						ok: false,
+						code: resolved.code,
+						index,
+						selector,
+						available: resolved.available,
+						availableTotal: resolved.availableTotal,
+					};
+				}
+				const resolvedKey = modelKey(resolved.model) ?? inheritedModel;
+				const thinkingLevel = resolved.thinkingLevel ?? inheritedThinking ?? null;
+				next[index] = {
+					...item,
+					modelOverride: resolved.model,
+					thinkingLevel,
+					resolvedModel: resolvedKey,
+					resolvedThinking: thinkingLevel,
+					resolvedWindow: resolved.model?.contextWindow ?? item.upscopeWindow ?? null,
+				};
+			} else {
+				next[index] = {
+					...item,
+					modelOverride: undefined,
+					thinkingLevel: inheritedThinking ?? null,
+					resolvedModel: inheritedModel ?? null,
+					resolvedThinking: inheritedThinking ?? null,
+					resolvedWindow: item.upscopeWindow ?? null,
+				};
+			}
 		}
-		next[index] = {
-			...item,
-			modelOverride: resolved.model,
-			thinkingLevel: resolved.thinkingLevel,
-		};
 	}
+
+	// Phase 3: Context admission against upscope's context + subscope's target window.
 	for (let index = 0; index < next.length; index += 1) {
 		const item = next[index];
-		const price = pricedChars[index];
-		const chars = typeof price === "number"
-			? price
-			: (Number.isFinite(price?.fresh) ? price.fresh : 0);
-		const override = item.modelOverride?.contextWindow;
+		const priced = typeof priceFor === "function" ? priceFor(item, index) : pricedChars[index];
+		const chars = typeof priced === "number"
+			? priced
+			: (Number.isFinite(priced?.fresh) ? priced.fresh : 0);
+		const itemBaseTokens = item.sameCallerAsUpscope
+			? (Number.isFinite(item.upscopeContextTokens) ? item.upscopeContextTokens : baseTokens)
+			: (Number.isFinite(item.upscopeContextTokens) ? item.upscopeContextTokens : Number.POSITIVE_INFINITY);
 		const itemWindow =
-			Number.isFinite(override) && override > 0 ? override : window;
+			Number.isFinite(item.resolvedWindow) && item.resolvedWindow > 0
+				? item.resolvedWindow
+				: (Number.isFinite(item.upscopeWindow) && item.upscopeWindow > 0
+					? item.upscopeWindow
+					: window);
 		const verdict = decideForkAdmission({
-			baseTokens,
+			baseTokens: itemBaseTokens,
 			recordChars: chars,
 			tokensPerChar,
 			window: itemWindow,
@@ -265,7 +389,13 @@ export function decideRegister({
 				overBy: verdict.overBy,
 			};
 		}
+		next[index] = {
+			...item,
+			birthContextTokens: Number.isFinite(itemBaseTokens) ? itemBaseTokens : null,
+			contextWindow: Number.isFinite(itemWindow) && itemWindow > 0 ? itemWindow : null,
+		};
 	}
+
 	const single = next.length === 1 ? next[0] : null;
 	return {
 		ok: true,
@@ -321,6 +451,7 @@ export function decideReady({ record = null, outcome = {} } = {}) {
 		return { ok: false, code: "FORK_NOT_RUNNING", status: record.status };
 	}
 	const ok = outcome?.ok !== false;
+	const abandoned = outcome?.abandoned === true;
 	const reason =
 		typeof outcome?.reason === "string" && outcome.reason !== ""
 			? outcome.reason
@@ -331,6 +462,7 @@ export function decideReady({ record = null, outcome = {} } = {}) {
 		ok: true,
 		outcome: {
 			ok,
+			...(abandoned ? { abandoned: true } : {}),
 			...(reason === null ? {} : { reason }),
 			...(recordText === null ? {} : { record: recordText }),
 		},

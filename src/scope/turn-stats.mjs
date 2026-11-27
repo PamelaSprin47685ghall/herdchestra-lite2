@@ -166,7 +166,7 @@ export function deriveTimeBudgetSeconds({
 	budget,
 	fallbackMs = DEFAULT_TURN_MS,
 } = {}) {
-	const turns = sumTurns(budget);
+	const turns = Math.max(1, sumTurns(budget));
 	const measured = recentAverageTurnMs(samples);
 	const avg =
 		measured == null

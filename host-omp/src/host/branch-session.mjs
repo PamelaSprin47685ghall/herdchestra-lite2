@@ -31,10 +31,28 @@
 import {
 	canProxyBranchManager,
 	createBranchManager,
-	findBranchManager,
 	sharedManagerOf,
 	retainBranchManager,
 } from "./branch-manager.mjs";
+
+function isClosedSnapshotBranch(branch) {
+	if (!Array.isArray(branch) || branch.length === 0) return true;
+	let index = branch.length - 1;
+	while (index >= 0 && branch[index]?.type === "message" && branch[index]?.message?.herdSkill === true) {
+		index -= 1;
+	}
+	if (index < 0) return true;
+	const tail = branch[index];
+	if (
+		tail?.type === "message" &&
+		tail.message?.role === "assistant" &&
+		Array.isArray(tail.message.content) &&
+		tail.message.content.some((block) => block?.type === "toolCall")
+	) {
+		return false;
+	}
+	return true;
+}
 import { createBranchAgentRegistry } from "./branch-agents.mjs";
 import { createHash } from "node:crypto";
 
@@ -132,6 +150,8 @@ function compareMessagePrefix(ownerPrefix, flowMessages) {
 export const BRANCH_SESSION_REASONS = Object.freeze({
 	NO_OWNER: "NO_OWNER",
 	NO_FORK_FRAME: "NO_FORK_FRAME",
+	NO_UPSCOPE_SNAPSHOT: "NO_UPSCOPE_SNAPSHOT",
+	UPSCOPE_SNAPSHOT_UNSAFE: "UPSCOPE_SNAPSHOT_UNSAFE",
 	NO_FLOW_ID: "NO_FLOW_ID",
 	NO_SESSION_MANAGER: "NO_SESSION_MANAGER",
 	NO_ASYNC_JOB_MANAGER: "NO_ASYNC_JOB_MANAGER",
@@ -172,6 +192,8 @@ const FLOW_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const DETAIL = Object.freeze({
 	[BRANCH_SESSION_REASONS.NO_OWNER]: "The source session is absent or not an object.",
 	[BRANCH_SESSION_REASONS.NO_FORK_FRAME]: "The parent journal does not contain the assistant frame which requested this fork.",
+	[BRANCH_SESSION_REASONS.NO_UPSCOPE_SNAPSHOT]: "The upscope snapshot leaf does not exist in the shared session manager.",
+	[BRANCH_SESSION_REASONS.UPSCOPE_SNAPSHOT_UNSAFE]: "The upscope snapshot leaf contains an unclosed tool call without a tool result.",
 	[BRANCH_SESSION_REASONS.NO_FLOW_ID]:
 		"flowId must match /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/. It becomes the agent id and a local flow label.",
 	[BRANCH_SESSION_REASONS.NO_SESSION_MANAGER]:
@@ -631,72 +653,6 @@ export function deriveBranchConfig(options = {}) {
  * Returns null for anything it cannot rebuild: a failed record, a record with
  * no agent id, a manager that cannot proxy, or a factory refusal.
  */
-export async function resumeBranchSession(options = {}) {
-	const { record, owner, prepare = null } = options;
-	if (!record || typeof record !== "object" || !owner) return null;
-	if (record.outcome === "failed" || record.status === "failed") return null;
-	const agentId =
-		typeof record.agentId === "string" && record.agentId !== "" ? record.agentId : null;
-	if (!agentId) return null;
-	const derived = deriveBranchConfig({
-		...options,
-		session: owner,
-		flowId: agentId,
-		agentDisplayName: record.scopeId,
-	});
-	if (!derived.ok) return null;
-	const shared = sharedManagerOf(derived.config.sessionManager);
-	if (!canProxyBranchManager(shared)) return null;
-	const flowManager =
-		findBranchManager(shared, agentId) ??
-		createBranchManager(shared, {
-			flowId: agentId,
-			label: record.scopeId,
-			tail: typeof record.branchTail === "string" ? record.branchTail : null,
-		});
-	const factory = options.createAgentSession ?? (await loadCreateAgentSession());
-	if (typeof factory !== "function") return null;
-	let created = null;
-	try {
-		created = await factory({ ...derived.config, sessionManager: flowManager });
-	} catch {
-		return null;
-	}
-	const session = created?.session ?? null;
-	if (!session) return null;
-	try {
-		await prepare?.(session);
-	} catch {
-		// A station gap costs the reply, not the resume; the caller reports it.
-	}
-	const prompt = (text) =>
-		typeof session.prompt === "function"
-			? session.prompt(text, { synthetic: true, attribution: "agent", userInitiated: false })
-			: session.agent.prompt(text, {
-					synthetic: true,
-					attribution: "agent",
-					userInitiated: false,
-				});
-	return {
-		ok: true,
-		session,
-		prompt,
-		agentId,
-		close: async () => {
-			try {
-				await session.dispose?.();
-			} catch {
-				// The reply already landed, or it never will.
-			}
-			try {
-				await flowManager.close?.();
-			} catch {
-				// Releasing the flow is best-effort.
-			}
-		},
-	};
-}
-
 export async function createBranchSession(options = {}) {
 	const baseAgentRegistry =
 		options.agentRegistry === undefined && options.baseAgentRegistry === undefined
@@ -710,10 +666,6 @@ export async function createBranchSession(options = {}) {
 	if (!derived.ok) return derived;
 	if (options.sourceToolCallId != null) await options.session.settleInFlightMessagePersistence?.();
 
-	// A real SessionManager exposes the leaf contract, so the flow gets a proxy
-	// that writes its own branch and reference-counts seal/close. A manager
-	// without a leaf at all cannot cross-write branches; that gap is reported
-	// instead of guessed at.
 	let config = derived.config;
 	let limitations = derived.limitations;
 	let flowManager = null;
@@ -722,18 +674,28 @@ export async function createBranchSession(options = {}) {
 	const shared = sharedManagerOf(parentManager);
 	if (canProxyBranchManager(shared)) {
 		const label = derived.config.agentDisplayName;
-		const parentBranch = parentManager.getBranch();
-		const sourceIndex = options.sourceToolCallId == null ? -1 : parentBranch.findLastIndex((entry) =>
-			entry.type === "message" && entry.message?.role === "assistant" &&
-			entry.message.content?.some((block) => block.type === "toolCall" && block.id === options.sourceToolCallId),
-		);
-		if (options.sourceToolCallId != null && sourceIndex < 0) {
-			return refusal(BRANCH_SESSION_REASONS.NO_FORK_FRAME);
+		if (options.upscopeSnapshotLeafId != null) {
+			const snapId = options.upscopeSnapshotLeafId;
+			const snapBranch =
+				typeof shared.getBranch === "function" ? shared.getBranch(snapId) : null;
+			if (!Array.isArray(snapBranch) || snapBranch.length === 0 || snapBranch.at(-1)?.id !== snapId) {
+				return refusal(BRANCH_SESSION_REASONS.NO_UPSCOPE_SNAPSHOT);
+			}
+			if (!isClosedSnapshotBranch(snapBranch)) {
+				return refusal(BRANCH_SESSION_REASONS.UPSCOPE_SNAPSHOT_UNSAFE);
+			}
+			originEntryId = snapId;
+		} else {
+			const parentBranch = parentManager.getBranch();
+			const sourceIndex = options.sourceToolCallId == null ? -1 : parentBranch.findLastIndex((entry) =>
+				entry.type === "message" && entry.message?.role === "assistant" &&
+				entry.message.content?.some((block) => block.type === "toolCall" && block.id === options.sourceToolCallId),
+			);
+			if (options.sourceToolCallId != null && sourceIndex < 0) {
+				return refusal(BRANCH_SESSION_REASONS.NO_FORK_FRAME);
+			}
+			originEntryId = (sourceIndex < 0 ? parentBranch.at(-1) : parentBranch[sourceIndex - 1])?.id ?? null;
 		}
-		// The current assistant batch is still executing. Seeding the SDK at
-		// that leaf makes it treat the live parent's calls as a crashed turn.
-		// The child inherits the last complete prefix before that entire batch.
-		originEntryId = (sourceIndex < 0 ? parentBranch.at(-1) : parentBranch[sourceIndex - 1])?.id ?? null;
 		retainSessionLease(shared);
 		flowManager = createBranchManager(shared, { flowId: options.flowId, label, tail: originEntryId });
 		config = { ...derived.config, sessionManager: flowManager };

@@ -14,7 +14,35 @@
 import { releaseScopeReturnDrain } from "./branch-context.mjs";
 import { registerUserAbortListener } from "./capture.mjs";
 import { record } from "./diagnostics.mjs";
-import { CASCADE_ABORT_REASON, USER_ABORT_ENGINES_KEY, USER_ABORT_KEY } from "./process-symbols.mjs";
+import {
+	ABANDON_ABORT_REASON,
+	CASCADE_ABORT_REASON,
+	USER_ABORT_ENGINES_KEY,
+	USER_ABORT_KEY,
+} from "./process-symbols.mjs";
+
+/**
+ * Interrupt one live subscope because `scope_abandon` was called.
+ * Distinct from `USER_ABORT` and `CASCADE_ABORT_REASON`: aborts the agent's
+ * current beat and unwinds retry backoff so `spawnChildTicket` can immediately
+ * drive its final `scope_return` turn.
+ */
+export function interruptChildSession(session) {
+	if (!session) return;
+	try {
+		session?.agent?.abort?.(ABANDON_ABORT_REASON);
+	} catch (error) {
+		record("activation", error, { phase: "abandon-interrupt" });
+	}
+	try {
+		if (typeof session.abort === "function") {
+			const pending = session.abort();
+			pending?.catch?.((error) => record("activation", error, { phase: "abandon-interrupt" }));
+		}
+	} catch (error) {
+		record("activation", error, { phase: "abandon-interrupt" });
+	}
+}
 
 /**
  * Stop one live child agent. The host owns the session shape; the core only

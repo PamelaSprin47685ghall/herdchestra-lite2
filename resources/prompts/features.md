@@ -180,7 +180,7 @@ Make introspection a discipline of action, not a performance of self-awareness.
 
 ### Fork only independent slices
 
-Fork only when the slices are genuinely independent; keep a tightly coupled change in one scope, end to end. The parent never receives tool results, so put the exact paths, signatures, line numbers, test commands, and errors the parent needs into `dafny`. A child context locks at 50%: read the boundary, not the whole of a large file.
+Fork only when the slices are genuinely independent; keep a tightly coupled change in one scope, end to end. The caller never receives tool results, so put the exact paths, signatures, line numbers, test commands, and errors the caller needs into `dafny`. A subscope context locks at 50%: read the boundary, not the whole of a large file.
 
 ## scope.aggressive
 

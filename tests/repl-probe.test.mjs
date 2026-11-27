@@ -13,6 +13,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	projectCapabilities,
 	renderConsoleReceipt,
 } from "../src/station/domain/capabilities.mjs";
 import { SessionStation } from "../src/station/station.mjs";
@@ -20,16 +21,19 @@ import { PROBE_COMMAND, probeOf } from "./helpers/probe-view.mjs";
 
 function projection(overrides = {}) {
 	return {
-		mode: "CHILD",
-		tools: ["read", "scope_fork", "scope_request"],
+		mode: "SUBSCOPE",
+		tools: ["read", "scope_abandon", "scope_fork", "scope_join", "scope_return"],
 		state: {
-			mode: "CHILD",
+			mode: "SUBSCOPE",
 			scope: "/api",
 			remaining: { read: "2/3" },
 			unreceived: 0,
-			scopes: ["/", "/api"],
+			scopes_delta: {
+				"/": "done | m1 | 10k / 200k",
+				"/api": "running | m1 | 10k+ / 200k",
+			},
 		},
-		signature: "CHILD::read,scope_fork,scope_request|stop=false",
+		signature: "SUBSCOPE::read,scope_abandon,scope_fork,scope_join,scope_return|stop=false",
 		...overrides,
 	};
 }
@@ -43,11 +47,15 @@ describe("renderConsoleReceipt", () => {
 		expect(text).toContain(PROBE_COMMAND);
 		// Block YAML: the tool list is a sequence, not one flow line.
 		expect(text).toContain("api:");
-		expect(text).toContain("mode: CHILD");
+		expect(text).toContain("mode: SUBSCOPE");
 		const view = probeOf(text);
-		expect(view.api).toEqual(["read", "scope_fork", "scope_request"]);
+		expect(view.api).toEqual(["read", "scope_abandon", "scope_fork", "scope_join", "scope_return"]);
 		expect(view.scope).toBe("/api");
 		expect(view.remaining).toEqual({ read: "2/3" });
+		expect(view.scopes_delta).toEqual({
+			"/": "done | m1 | 10k / 200k",
+			"/api": "running | m1 | 10k+ / 200k",
+		});
 	});
 
 	test("shows an edge highlight only for keys that just disappeared", () => {
@@ -82,36 +90,58 @@ describe("renderConsoleReceipt", () => {
 		).not.toContain("Context Pressure");
 	});
 
-	test("renders an AWAITING_REPLY projection with the queued request", () => {
+	test("renders an ABANDONED projection with state.abandoned", () => {
 		const text = renderConsoleReceipt(
 			projection({
-				mode: "AWAITING_REPLY",
-				tools: ["scope_reply"],
+				mode: "ABANDONED",
+				tools: ["scope_return"],
 				state: {
-					mode: "AWAITING_REPLY",
+					mode: "ABANDONED",
 					scope: "/api",
-					request: { from: "/", message: "token or accessToken?" },
+					abandoned: { by: "/", reason: "taking another path" },
 					remaining: {},
 					unreceived: 0,
-					scopes: ["/", "/api"],
 				},
 			}),
 		);
 		const view = probeOf(text);
 
-		expect(view.api).toEqual(["scope_reply"]);
-		expect(view.request).toEqual({ from: "/", message: "token or accessToken?" });
+		expect(view.api).toEqual(["scope_return"]);
+		expect(view.abandoned).toEqual({ by: "/", reason: "taking another path" });
 	});
 });
 
 describe("skillReceipt envelope", () => {
-	function stubStation(overrides = {}) {
+	function defaultSnapshot(overrides = {}) {
 		return {
-			projectionFor: () => projection(),
+			isChild: true,
+			autopilot: false,
+			chinese: "on",
+			unreceived: 0,
+			canStop: false,
+			contextOverHalf: false,
+			abandoned: null,
+			remaining: { read: "2/3" },
+			selfPath: "/api",
+			scopesDelta: null,
+			_currentDir: {},
+			_dirSeq: 0,
+			hostToolNames: ["read"],
+			...overrides,
+		};
+	}
+
+	function stubStation(overrides = {}) {
+		const snapshot = overrides.snapshot ?? defaultSnapshot();
+		return {
+			capabilitySnapshot: () => snapshot,
 			lastCapKeys: [],
 			forkRegistry: () => null,
 			state: { features: { autopilot: "off", chinese: "on" }, relay: { canStop: false } },
 			forkOwnerId: () => null,
+			projectionFor(ctx) {
+				return SessionStation.prototype.projectionFor.call(this, ctx);
+			},
 			...overrides,
 		};
 	}
@@ -132,8 +162,9 @@ describe("skillReceipt envelope", () => {
 	});
 
 	test("stamps the projection's signature as the cache key", () => {
-		const message = receipt(stubStation());
-		expect(message.capSig).toBe(projection().signature);
+		const station = stubStation();
+		const message = receipt(station);
+		expect(message.capSig).toBe(projectCapabilities(station.capabilitySnapshot()).signature);
 	});
 
 	test("reports the branch flags the host folds on", () => {
@@ -152,7 +183,7 @@ describe("skillReceipt envelope", () => {
 	});
 
 	test("highlights a key withdrawn since the previous turn", () => {
-		const message = receipt(stubStation({ lastCapKeys: ["ask", "read", "scope_fork", "scope_request"] }));
+		const message = receipt(stubStation({ lastCapKeys: ["ask", "read", "scope_fork", "scope_join"] }));
 		expect(message.content[0].text).toContain("> delete api.ask\ntrue");
 	});
 });
@@ -164,38 +195,34 @@ describe("capSig distinguishes what the model can see", () => {
 		hostToolNames: ["read"],
 	};
 
-	test("is stable for an unchanged projection", async () => {
-		const { projectCapabilities } = await import("../src/station/domain/capabilities.mjs");
+	test("is stable for an unchanged projection", () => {
 		expect(projectCapabilities(base).signature).toBe(projectCapabilities({ ...base }).signature);
 	});
 
-	test("changes when a tool leaves the set", async () => {
-		const { projectCapabilities } = await import("../src/station/domain/capabilities.mjs");
+	test("changes when a tool leaves the set", () => {
 		const wide = projectCapabilities({ ...base, hostToolNames: ["read", "bash"] });
 		const narrow = projectCapabilities({ ...base, hostToolNames: ["read"] });
 		expect(wide.signature).not.toBe(narrow.signature);
 	});
 
-	test("changes when the mode changes without a tool changing", async () => {
-		const { projectCapabilities } = await import("../src/station/domain/capabilities.mjs");
+	test("changes when the mode changes without a tool changing", () => {
 		const normal = projectCapabilities(base);
 		const limited = projectCapabilities({ ...base, contextOverHalf: true });
-		expect(normal.mode).toBe("CHILD");
+		expect(normal.mode).toBe("SUBSCOPE");
 		expect(limited.mode).toBe("CONTEXT_LIMIT");
 		expect(normal.signature).not.toBe(limited.signature);
 	});
 
-	test("changes when the queued request changes", async () => {
-		const { projectCapabilities } = await import("../src/station/domain/capabilities.mjs");
+	test("changes when abandoned reason changes", () => {
 		const first = projectCapabilities({
 			...base,
-			pendingRequest: { id: "req-1", from: "/", message: "a" },
+			abandoned: { by: "/", reason: "a" },
 		});
 		const second = projectCapabilities({
 			...base,
-			pendingRequest: { id: "req-2", from: "/", message: "b" },
+			abandoned: { by: "/", reason: "b" },
 		});
-		expect(first.mode).toBe("AWAITING_REPLY");
+		expect(first.mode).toBe("ABANDONED");
 		expect(first.signature).not.toBe(second.signature);
 	});
 });

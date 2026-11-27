@@ -8,7 +8,7 @@
 import { decideAbandon } from "./abandon.mjs";
 import { isPlainObject } from "./plain.mjs";
 import { emptyTotals } from "./turn-stats.mjs";
-import { childScopePath } from "./path.mjs";
+import { subscopePath } from "./path.mjs";
 import {
   markLedgerStructDirty,
   markRecordDirty,
@@ -21,54 +21,11 @@ import { changed, copyCounts, failure, forkOf, isDepth, isNonEmptyString, put, v
 
 export { markLedgerStructDirty, markRecordDirty, touchRecord } from "./ledger-cache.mjs";
 
-
-
-/**
- * Mark one record as changed after a direct field write.
- *
- * The mailbox, the read cursor and the wake flag are written by the send path
- * in place, because they are not fork annotations. A shared snapshot only
- * copies records whose dirty mark is set, so a message that skips this call can
- * be missing from the next snapshot while the ledger still holds it.
- */
 export function touchFork(ledger, forkId) {
   if (!forkOf(ledger, forkId)) return false;
   markRecordDirty(ledger, forkId);
   return true;
 }
-
-
-
-export function annotateFork(ledger, forkId, fields = {}) {
-  const record = forkOf(ledger, forkId);
-  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  // The record owns its target list: a later amend pushes into it, and that
-  // push must not grow the array the caller handed in.
-  if (fields.targets !== undefined) {
-    record.targets = Array.isArray(fields.targets)
-      ? fields.targets.map((target) => target)
-      : fields.targets;
-    markRecordDirty(ledger, forkId);
-  }
-  if (fields.model !== undefined) {
-    record.model = fields.model;
-    markRecordDirty(ledger, forkId);
-  }
-  // A scope's address and its parent pointer are decided once, when the scope
-  // is created, and travel together: the path is derived from the parent's
-  // path, so a record with one and not the other cannot be addressed.
-  if (fields.path !== undefined) {
-    record.path = fields.path;
-    markRecordDirty(ledger, forkId);
-  }
-  if (fields.parentForkId !== undefined) {
-    record.parentForkId = fields.parentForkId;
-    markRecordDirty(ledger, forkId);
-  }
-  return { ok: true, record };
-}
-
-
 
 export const RUNNING = "running";
 
@@ -78,11 +35,23 @@ export const JOINED = "joined";
 
 export const FAILED = "failed";
 
-
+function defaultRootMeta() {
+  return {
+    model: null,
+    thinkingLevel: null,
+    contextTokens: null,
+    dirContextTokens: null,
+    contextWindow: null,
+    safeSnapshotLeafId: null,
+  };
+}
 
 export function createBracketLedger() {
   const ledger = {
-    version: 2,
+    version: 3,
+    // Monotonic directory version: bumps on register, markReady, abandon,
+    // or Root directory metadata changes.
+    dirSeq: 0,
     // Monotonic event counter shared by fork registration and join
     // completion, so an interval can compare positions from both sides.
     seq: 0,
@@ -90,6 +59,7 @@ export function createBracketLedger() {
     closedSeq: 0,
     // Receive counter. It orders the ready queue across reparenting.
     receiveSeq: 0,
+    root: defaultRootMeta(),
     forks: {},
     order: [],
     queues: {},
@@ -103,10 +73,97 @@ export function createBracketLedger() {
 }
 
 /**
- * Register one left bracket. Returns the fork record. Nothing blocks, so the
- * parent may register several forks in one beat.
+ * Update Root's metadata (`model`, `thinkingLevel`, `contextTokens`,
+ * `dirContextTokens`, `contextWindow`, `safeSnapshotLeafId`).
+ * Bumps `dirSeq` only when directory-visible fields (`model`, `thinkingLevel`,
+ * `dirContextTokens`, `contextWindow`) change.
  */
+export function updateRootMeta(ledger, fields = {}) {
+  if (!ledger || typeof ledger !== "object" || !fields || typeof fields !== "object") return false;
+  if (!isPlainObject(ledger.root)) ledger.root = defaultRootMeta();
+  const root = ledger.root;
+  let dirChanged = false;
+  let anyChanged = false;
+  const dirFields = ["model", "thinkingLevel", "dirContextTokens", "contextWindow"];
+  const allFields = [...dirFields, "contextTokens", "safeSnapshotLeafId"];
+  for (const key of allFields) {
+    if (!Object.hasOwn(fields, key) || fields[key] === undefined) continue;
+    if (Object.is(root[key], fields[key])) continue;
+    root[key] = fields[key];
+    anyChanged = true;
+    if (dirFields.includes(key)) dirChanged = true;
+  }
+  if (!anyChanged) return false;
+  if (dirChanged) {
+    ledger.dirSeq = (Number.isInteger(ledger.dirSeq) ? ledger.dirSeq : 0) + 1;
+  }
+  markLedgerStructDirty(ledger);
+  return true;
+}
 
+/**
+ * Update a fork record's snapshot/model metadata. Bumps `dirSeq` only when
+ * directory-visible fields (`resolvedModel`, `resolvedThinking`,
+ * `contextWindow`) change, or when `snapshotContextTokens` changes on a
+ * non-running record.
+ */
+export function updateRecordSnapshot(ledger, forkId, fields = {}) {
+  const record = forkOf(ledger, forkId);
+  if (!record || !fields || typeof fields !== "object") return false;
+  let dirChanged = false;
+  let anyChanged = false;
+  const keys = [
+    "safeSnapshotLeafId",
+    "snapshotContextTokens",
+    "resolvedModel",
+    "resolvedThinking",
+    "contextWindow",
+  ];
+  for (const key of keys) {
+    if (!Object.hasOwn(fields, key) || fields[key] === undefined) continue;
+    if (Object.is(record[key], fields[key])) continue;
+    record[key] = fields[key];
+    anyChanged = true;
+    if (
+      key === "resolvedModel" ||
+      key === "resolvedThinking" ||
+      key === "contextWindow" ||
+      (key === "snapshotContextTokens" && record.status !== RUNNING)
+    ) {
+      dirChanged = true;
+    }
+  }
+  if (!anyChanged) return false;
+  markRecordDirty(ledger, forkId);
+  if (dirChanged) {
+    ledger.dirSeq = (Number.isInteger(ledger.dirSeq) ? ledger.dirSeq : 0) + 1;
+    markLedgerStructDirty(ledger);
+  }
+  return true;
+}
+
+/**
+ * Mark a running fork as having a pending `scope_abandon` request.
+ * Does not change `status` (remains `running` until `scope_return` or forced close)
+ * and does not bump `dirSeq`.
+ */
+export function requestAbandon(ledger, forkId, { by = "/", reason = null } = {}) {
+  const record = forkOf(ledger, forkId);
+  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
+  if (record.status !== RUNNING) {
+    return failure("SCOPE_ALREADY_DONE", `Scope "${record.path ?? forkId}" is already done.`);
+  }
+  if (record.abandonRequested === true) {
+    return { ok: true, alreadyAbandoning: true, record };
+  }
+  record.abandonRequested = true;
+  record.abandonedBy = typeof by === "string" && by !== "" ? by : "/";
+  record.abandonReason =
+    typeof reason === "string" && reason.trim() !== "" ? reason.trim() : null;
+  markRecordDirty(ledger, forkId);
+  changed(ledger);
+  return { ok: true, alreadyAbandoning: false, record };
+}
 
 /**
  * Register one left bracket. Returns the fork record. Nothing blocks, so the
@@ -138,6 +195,31 @@ export function registerFork(ledger, spec, options = {}) {
       return failure("INVALID_TIME", "time must be a positive number of seconds.");
     }
   }
+  const upscopePath =
+    typeof s.upscopePath === "string" && s.upscopePath.startsWith("/")
+      ? s.upscopePath
+      : "/";
+  const scopeId =
+    isNonEmptyString(s.scopeId) ? s.scopeId.trim() : s.forkId;
+  const path =
+    typeof s.path === "string" && s.path.startsWith("/") && s.path !== "/"
+      ? s.path
+      : subscopePath(upscopePath, scopeId);
+  const pathLower = path.toLowerCase();
+  for (const existingId of ledger.order ?? []) {
+    const existing = forkOf(ledger, existingId);
+    if (existing?.path && existing.path.toLowerCase() === pathLower) {
+      return failure("DUPLICATE_SCOPE_PATH", `Path "${path}" is already registered.`);
+    }
+  }
+  const upscopeId =
+    typeof s.upscopeId === "string" && s.upscopeId !== "" && s.upscopeId !== "root"
+      ? s.upscopeId
+      : null;
+  const callerPath =
+    typeof s.callerPath === "string" && s.callerPath.startsWith("/")
+      ? s.callerPath
+      : "/";
   const levelKey = isNonEmptyString(s.levelKey) ? s.levelKey : "";
   const budget = copyCounts(s.budget ?? {});
   const remaining = copyCounts(budget);
@@ -146,50 +228,62 @@ export function registerFork(ledger, spec, options = {}) {
   const timeBudgetMs = typeof s.time === "number" ? Math.round(s.time * 1000) : null;
   const startedAt = Number.isFinite(s.startedAt) ? s.startedAt : null;
   ledger.seq += 1;
+  ledger.dirSeq = (Number.isInteger(ledger.dirSeq) ? ledger.dirSeq : 0) + 1;
   // The injected clock below may throw or synchronously persist before the
   // fork is inserted. The sequence has already advanced in either case, so
   // make that partial change visible to every persistence consumer now.
   markLedgerStructDirty(ledger);
+  const targets = Array.isArray(s.targets)
+    ? s.targets.map((target) => target)
+    : undefined;
   const record = {
     forkId: s.forkId,
-    scopeId: s.scopeId,
+    scopeId,
+    path,
+    upscopeId,
+    upscopePath,
     ownerId: s.ownerId,
+    callerPath,
     levelKey,
     fsm: s.fsm.trim(),
-    // The identity statement handed to the child at spawn time. A record
-    // without one is legal here only because older snapshots predate the
-    // field; every tool-created fork validates it before registration.
     profession: typeof s.profession === "string" ? s.profession.trim() : "",
     depth: s.depth,
     childDepth: s.depth + 1,
-    // The address, and the sibling it competes with for its name. A child's
-    // path is its parent's path plus its own name, so the tree is its own
-    // address space.
-    parentForkId:
-      typeof s.parentForkId === "string" && s.parentForkId !== ""
-        ? s.parentForkId
-        : s.ownerId === "root"
-          ? null
-          : s.ownerId,
-    path:
-      typeof s.path === "string" && s.path !== ""
-        ? s.path
-        : childScopePath(s.parentPath ?? "/", s.scopeId ?? s.forkId),
-    // The scope's address. It is decided once, under the parent's path, and
-    // the sibling namespace is the only uniqueness rule; `null` on a record
-    // written before addresses existed, where the name is the fallback.
-    path: isNonEmptyString(s.path) ? s.path : null,
-    parentForkId: isNonEmptyString(s.parentForkId) ? s.parentForkId : null,
+    ...(targets !== undefined ? { targets } : {}),
     // Return nudges already given. One field, because the station's in-turn
     // steer and the spawn ticket's out-of-turn prompt both spend it.
     returnNudges: 0,
     // Small self-handoff count on this scope (oath `unfinished`).
     handoffCount: 0,
-    // The child branch's leaf at the last completed turn. A stopped scope can
-    // be resumed from it: the branch persists, the session does not. `null` on
-    // a record written before the field existed, and after a failed spawn.
-    branchTail: null,
-    supersededAt: null,
+    // Graceful abandon flags.
+    abandonRequested: false,
+    abandonedBy: null,
+    abandonReason: null,
+    // Snapshot and model metadata.
+    safeSnapshotLeafId:
+      typeof s.safeSnapshotLeafId === "string" && s.safeSnapshotLeafId !== ""
+        ? s.safeSnapshotLeafId
+        : null,
+    birthContextTokens:
+      typeof s.birthContextTokens === "number" && Number.isFinite(s.birthContextTokens)
+        ? s.birthContextTokens
+        : null,
+    snapshotContextTokens:
+      typeof s.snapshotContextTokens === "number" && Number.isFinite(s.snapshotContextTokens)
+        ? s.snapshotContextTokens
+        : null,
+    contextWindow:
+      typeof s.contextWindow === "number" && Number.isFinite(s.contextWindow)
+        ? s.contextWindow
+        : null,
+    resolvedModel:
+      typeof s.resolvedModel === "string" && s.resolvedModel !== ""
+        ? s.resolvedModel
+        : null,
+    resolvedThinking:
+      typeof s.resolvedThinking === "string" && s.resolvedThinking !== ""
+        ? s.resolvedThinking
+        : null,
     openSeq: ledger.seq,
     closeSeq: null,
     closedOrder: null,
@@ -218,9 +312,6 @@ export function registerFork(ledger, spec, options = {}) {
   }
   put(ledger.forks, s.forkId, record);
   ledger.order.push(s.forkId);
-  // Registration creates a record as well as changing the ledger structure.
-  // Persistence consumers need the new id even when another consumer has
-  // already committed its own independent baseline.
   markRecordDirty(ledger, s.forkId);
   markLedgerStructDirty(ledger);
   return { ok: true, fork: record };
@@ -257,6 +348,7 @@ export function markReady(ledger, forkId, outcome = {}) {
     return failure("FORK_NOT_RUNNING", `Fork "${forkId}" is ${record.status}.`);
   }
   ledger.receiveSeq += 1;
+  ledger.dirSeq = (Number.isInteger(ledger.dirSeq) ? ledger.dirSeq : 0) + 1;
   record.status = READY;
   record.readySeq = ledger.receiveSeq;
   // Reading the supplied outcome can execute user-defined getters. They may
@@ -266,6 +358,15 @@ export function markReady(ledger, forkId, outcome = {}) {
   markRecordDirty(ledger, forkId);
   markLedgerStructDirty(ledger);
   record.outcome = outcome?.ok === false ? FAILED : "ok";
+  if (outcome?.abandoned === true) {
+    record.abandonRequested = true;
+    if (typeof outcome.abandonedBy === "string" && outcome.abandonedBy !== "") {
+      record.abandonedBy = outcome.abandonedBy;
+    }
+    if (typeof outcome.abandonReason === "string" && outcome.abandonReason !== "") {
+      record.abandonReason = outcome.abandonReason;
+    }
+  }
   // An earlier getter can itself persist and consume the mark. Mark the
   // outcome before invoking the next externally supplied getter.
   markRecordDirty(ledger, forkId);
@@ -293,31 +394,12 @@ export function markReady(ledger, forkId, outcome = {}) {
  * Drop a delivered record's body from the ledger.
  *
  * A child's record is read exactly once: the parent renders the join receipt
- * from it. After that take it has no reader — a finished scope answers a
- * `scope_request` by `scope_reply`, and the return contract is `dafny`, not a
- * second copy of the body. Keeping it meant every later ledger baseline
- * re-serialized the whole delivered transcript, so a long session's journal
- * grew with the square of its own history. Releasing it here is what keeps a
- * baseline proportional to the work still in flight.
+ * from it. After that take it has no reader — keeping it meant every later
+ * ledger baseline re-serialized the whole delivered transcript, so a long
+ * session's journal grew with the square of its own history.
  *
- * Only the body goes. `fsm`, `targets`, `budget` and the outcome stay: they
- * are what a wake and a restart still read.
- */
-
-
-/**
- * Drop a delivered record's body from the ledger.
- *
- * A child's record is read exactly once: the parent renders the join receipt
- * from it. After that take it has no reader — a finished scope answers a
- * `scope_request` by `scope_reply`, and the return contract is `dafny`, not a
- * second copy of the body. Keeping it meant every later ledger baseline
- * re-serialized the whole delivered transcript, so a long session's journal
- * grew with the square of its own history. Releasing it here is what keeps a
- * baseline proportional to the work still in flight.
- *
- * Only the body goes. `fsm`, `targets`, `budget` and the outcome stay: they
- * are what a wake and a restart still read.
+ * Only the body goes. `fsm`, `targets`, `budget`, snapshot metadata and the
+ * outcome stay for directory display and downstream spy forks.
  */
 export function releaseRecordText(ledger, forkId) {
   const record = forkOf(ledger, forkId);
@@ -357,8 +439,7 @@ export function takeReady(ledger, options = {}) {
     if (
       !record ||
       record.status !== READY ||
-      record.ownerId !== ownerId ||
-      record.supersededAt
+      record.ownerId !== ownerId
     ) {
       queue.splice(index, 1);
       // This cleanup can be the only change when the remaining candidates are
@@ -458,7 +539,8 @@ export function liveReceiverOf(ledger, ownerId) {
     if (!record) return current;
     // A record that names itself as receiver can never be taken by anyone.
     if (record.ownerId === current) return "root";
-    if (record.status === RUNNING) return current;
+    // Skip scopes that have been abandoned (they are winding down to scope_return).
+    if (record.status === RUNNING && record.abandonRequested !== true) return current;
     const next = record.ownerId;
     if (!isNonEmptyString(next)) return "root";
     current = next;
@@ -488,7 +570,7 @@ export function adoptFork(ledger, forkId, toOwnerId) {
   if (record.status === READY) removeFromQueues(ledger, forkId);
   record.reparentedFrom = record.ownerId;
   record.ownerId = toOwnerId;
-  if (record.status === READY && !record.supersededAt) queueFor(ledger, toOwnerId).push(forkId);
+  if (record.status === READY) queueFor(ledger, toOwnerId).push(forkId);
   // `reparentedFrom` and `ownerId` are record fields. Without this mark the
   // snapshot cache can answer "that record did not move" for a record whose
   // owner changed, and a reload would queue the result under the old owner —
@@ -521,7 +603,7 @@ export function rehomeReadyResults(ledger) {
   let moved = 0;
   for (const forkId of ledger.order ?? []) {
     const record = forkOf(ledger, forkId);
-    if (!record || record.status !== READY || record.supersededAt) continue;
+    if (!record || record.status !== READY) continue;
     const receiver = liveReceiverOf(ledger, record.ownerId);
     if (receiver === record.ownerId) continue;
     record.reparentedFrom = record.ownerId;
@@ -535,7 +617,7 @@ export function rehomeReadyResults(ledger) {
   ledger.queues = {};
   const ready = (ledger.order ?? [])
     .map((forkId) => forkOf(ledger, forkId))
-    .filter((record) => record && record.status === READY && !record.supersededAt)
+    .filter((record) => record && record.status === READY)
     .sort((left, right) => (left.readySeq ?? 0) - (right.readySeq ?? 0));
   for (const record of ready) queueFor(ledger, record.ownerId).push(record.forkId);
   changed(ledger);
@@ -591,7 +673,6 @@ export function reparentOrphans(ledger, fromOwnerId, toOwnerId) {
   const remaining = [];
   for (const forkId of source) {
     const record = forkOf(ledger, forkId);
-    if (record && record.status === READY && record.supersededAt) continue;
     if (record && record.status === READY) {
       record.ownerId = receiverId;
       target.push(forkId);
@@ -620,6 +701,9 @@ export function abandon(ledger, forkId, reason = null) {
       : failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
   }
   ledger.seq += 1;
+  if (record.status === RUNNING) {
+    ledger.dirSeq = (Number.isInteger(ledger.dirSeq) ? ledger.dirSeq : 0) + 1;
+  }
   record.status = FAILED;
   record.closeSeq = ledger.seq;
   record.outcome = FAILED;
@@ -751,7 +835,6 @@ export function unreceivedChildren(ledger, ownerId) {
     const record = forkOf(ledger, forkId);
     if (!record) continue;
     if (record.ownerId !== ownerId) continue;
-    if (record.supersededAt) continue;
     if (record.status !== RUNNING && record.status !== READY) continue;
     out.push(forkId);
   }
@@ -767,8 +850,7 @@ export function readyChildren(ledger, ownerId) {
     if (!record) continue;
     if (
       record.ownerId !== ownerId ||
-      record.status !== READY ||
-      record.supersededAt
+      record.status !== READY
     ) {
       continue;
     }
@@ -847,7 +929,7 @@ export function pairingProblems(ledger, queueIndex) {
     if (record.status === READY && !Number.isInteger(record.readySeq)) {
       problems.push(`ready fork "${forkId}" has no readySeq`);
     }
-    if (record.status === READY && !record.supersededAt &&
+    if (record.status === READY &&
         !(queueIndex
           ? (queueIndex.get(record.ownerId)?.has(forkId) ?? false)
           : (ledger.queues[record.ownerId] ?? []).includes(forkId))) {
@@ -899,7 +981,7 @@ export function pairingProblems(ledger, queueIndex) {
 
 
 export function statsOf(ledger) {
-  const counts = { running: 0, ready: 0, joined: 0, failed: 0, blocked: 0 };
+  const counts = { running: 0, ready: 0, joined: 0, failed: 0 };
   for (const forkId of ledger.order) {
     const record = forkOf(ledger, forkId);
     if (record && Object.hasOwn(counts, record.status)) counts[record.status] += 1;

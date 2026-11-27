@@ -1,10 +1,9 @@
 // Pure handoff and scope_return decisions for the Station.
 //
 // Owns the oath contract (`RETURN_OATH_KEY` / `RETURN_OATH_VALUE` /
-// `RETURN_OATH_UNFINISHED`), the unified
-// Root + Child `scope_return` state transition table, and the reborn prompt /
-// generation-report formatting. Pure functions only: no Station import, no host
-// import, no mutation of inputs, no I/O.
+// `RETURN_OATH_UNFINISHED`), the unified Root + Subscope `scope_return` state
+// transition table, and the reborn prompt / generation-report formatting.
+// Pure functions only: no Station import, no host import, no mutation, no I/O.
 
 import { copyRelay } from "../../relay/state.mjs";
 import { renderChildRecord } from "../../transcript/replay.mjs";
@@ -23,12 +22,7 @@ function trimString(value) {
 }
 
 /**
- * Read the required oath field strictly (never truthy coercion). Exactly one
- * of two values is accepted:
- * - `RETURN_OATH_UNFINISHED`: small handoff (`big: false`), a rewind.
- * - `RETURN_OATH_VALUE`: big handoff (`big: true`), a seal.
- * A missing field, `undefined`, `null`, `""`, `false`, or a typo is refused
- * with `INVALID_RETURN_OATH`: there is no default path.
+ * Read the required oath field strictly (never truthy coercion).
  */
 export function parseReturnOath(args) {
 	const oath = args && typeof args === "object" ? args[RETURN_OATH_KEY] : undefined;
@@ -38,17 +32,11 @@ export function parseReturnOath(args) {
 }
 
 /**
- * Unified `scope_return` decision across Root and Child scopes.
+ * Unified `scope_return` decision across Root and Subscope.
  *
- * Pure: validates arguments, batch exclusivity, scope state, unreceived
- * children, and Root rewind capability before any state mutates.
- *
- * Returns one of:
- * - `{ ok: false, code, ... }`
- * - `{ ok: true, kind: "rewind", scope: "child", dafny, stopLoop: true }`
- * - `{ ok: true, kind: "deliver", scope: "child", dafny, receiverId, orphans, stopLoop: true }`
- * - `{ ok: true, kind: "rewind", scope: "root", big, dafny, relay, pendingRewind, stopLoop: true }`
- * - `{ ok: true, kind: "promote", scope: "root", dafny, relay, stopLoop: false }`
+ * When a non-root subscope has `record.abandonRequested === true`:
+ * - Any oath (missing, invalid, `unfinished`, or seal) is accepted and NEVER rewinds.
+ * - Immediately delivers to `receiverId` with `abandoned: true`.
  */
 export function decideScopeReturn({
 	isRoot = false,
@@ -64,7 +52,9 @@ export function decideScopeReturn({
 	args = {},
 	callId = "",
 } = {}) {
-	const oath = parseReturnOath(args);
+	const isAbandoned = !isRoot && record?.abandonRequested === true;
+
+	const oath = isAbandoned ? { ok: true, big: true } : parseReturnOath(args);
 	if (!oath.ok) return { ok: false, code: oath.code };
 
 	const dafny = trimString(args?.dafny);
@@ -74,7 +64,7 @@ export function decideScopeReturn({
 		return { ok: false, code: "MIXED_RETURN_TOOL_CALLS" };
 	}
 
-	// Child scope (depth >= 1)
+	// Subscope (depth >= 1)
 	if (!isRoot) {
 		if (typeof identityForkId !== "string" || identityForkId === "") {
 			return { ok: false, code: "NOT_A_CHILD" };
@@ -89,7 +79,7 @@ export function decideScopeReturn({
 				status: record.status,
 			};
 		}
-		if (!oath.big) {
+		if (!isAbandoned && !oath.big) {
 			return {
 				ok: true,
 				kind: "rewind",
@@ -107,6 +97,7 @@ export function decideScopeReturn({
 			kind: "deliver",
 			scope: "child",
 			big: true,
+			abandoned: isAbandoned,
 			dafny,
 			receiverId,
 			orphans: Array.isArray(orphans) ? orphans : [],
@@ -136,8 +127,6 @@ export function decideScopeReturn({
 			stopLoop: false,
 		};
 	}
-	// Review off: the first seal is the review. Promote instead of
-	// spending a compaction rewind on a second look.
 	if (oath.big && review === "off") {
 		return {
 			ok: true,
@@ -182,13 +171,6 @@ export function decideScopeReturn({
 	};
 }
 
-/**
- * Render the current generation's assistant text + tool calls (with args),
- * excluding amended beats and appending the trimmed `dafny`.
- *
- * Shared by Child final return, Child rewind, and Root rewind so tool calls
- * always travel into the next generation or calling scope automatically.
- */
 export function formatGenerationReport(messages, start = 0, dafny = "") {
 	const body = renderChildRecord(Array.isArray(messages) ? messages : [], { start });
 	const closing = trimString(dafny);
@@ -196,15 +178,6 @@ export function formatGenerationReport(messages, start = 0, dafny = "") {
 	return body === "" ? closing : `${body}\n\n${closing}`;
 }
 
-/**
- * Render the reborn handoff prompt/summary shared by Root and Child rewinds.
- *
- * - For Child: `birth` is the original birth `spec.receipt`; the result is sent
- *   as one single `user` message directly off `originEntryId`.
- * - For Root: `birth` is omitted (user prompts and steers are restored as real
- *   verbatim `user` messages right after the compaction boundary); the result
- *   is stored as the compaction summary.
- */
 export function formatRebornPrompt({
 	birth = "",
 	report = "",
@@ -224,15 +197,10 @@ export function formatRebornPrompt({
 	return sections.join("\n\n---\n\n");
 }
 
-/** The neutral resume cue delivered to a reborn Root after compaction commits. */
 export function rebornStartPrompt() {
 	return relayDoc()["reborn.start"];
 }
 
-/**
- * Pure check for resetting Root's promotion streak when new work starts
- * (a new real user prompt/steer or a newly opened fork).
- */
 export function resetRootPromotion(relay) {
 	const current = copyRelay(relay);
 	if (current.bigStreak === 0 && current.canStop === false) return { changed: false, relay: current };

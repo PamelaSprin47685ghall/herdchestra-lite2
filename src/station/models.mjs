@@ -83,6 +83,7 @@ export function observeActualModel(station, ctx) {
 	// the scope would keep the verdict of a limit it no longer runs under until
 	// its next measured response.
 	station.usage.refreshContextNudge?.();
+	station.noteDirectoryModel?.(ctx, live);
 	if (state.modelRecovery || station.modelSwitchInFlight || station.pendingModelSwitch) return;
 	const spec = liveSelector(ctx, key, host);
 	if (state.baseModelKey === key && (spec === key || state.baseModelSpec === spec)) return;

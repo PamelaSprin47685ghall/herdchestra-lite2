@@ -66,7 +66,8 @@ export function levelKeyOf(station) {
 }
 
 const REFUSAL_KEY = {
-  INVALID_SCOPE_ID: "invalid-scope-id",
+  INVALID_PATH: "invalid-path",
+  INVALID_SCOPE_ID: "invalid-path",
   INVALID_FSM: "invalid-fsm",
   INVALID_PROFESSION: "invalid-profession",
   INVALID_BUDGET: "invalid-budget",
@@ -177,6 +178,9 @@ function joinReceiptChars(station, record) {
     forkId: publicScopeId(record),
     record: recordTextOf(station, record),
     failed: record.outcome === "failed" || outcome?.failed === true,
+    abandoned: record.abandonRequested === true || outcome?.abandoned === true,
+    abandonedBy: record.abandonedBy ?? outcome?.abandonedBy ?? null,
+    abandonReason: record.abandonReason ?? outcome?.abandonReason ?? null,
     reason: record.reason ?? outcome?.reason ?? null,
     remaining,
   }).length;
@@ -250,18 +254,13 @@ function childRecordStart(messages, fork) {
   const source = Array.isArray(messages) ? messages : [];
   const forkId = fork && typeof fork.forkId === "string" ? fork.forkId : "";
   if (forkId !== "") {
-    // A receipt names the scope by its path; older receipts name the bare
-    // scope id, and a restored transcript still has to cut at the right line.
     const names = [fork.path, fork.scopeId, forkId].filter(
       (name) => typeof name === "string" && name !== "",
     );
     for (let index = source.length - 1; index >= 0; index -= 1) {
       const text = textOfUser(source[index]).trimStart();
       for (const name of names) {
-        if (
-          text.startsWith(scopeReceiptMarker(name)) ||
-          text.startsWith(`You are the child of fork ${name},`)
-        ) {
+        if (text.startsWith(scopeReceiptMarker(name))) {
           return index;
         }
       }
@@ -277,19 +276,35 @@ function childRecordStart(messages, fork) {
   return 0;
 }
 
-/** The receipt the child reads at its own start. */
+/** The receipt the subscope reads at its own start. */
 function childReceiptText(spec) {
-  return [
-    render(S["fork.child-status"], {
-      marker: scopeReceiptMarker(spec.scopeId ?? spec.forkId),
+  const path = spec.path ?? spec.scopeId ?? spec.forkId;
+  const upscopePath = spec.upscopePath ?? "/";
+  const callerPath = spec.callerPath ?? "/";
+  const lines = [
+    render(S["fork.subscope-status"], {
+      marker: scopeReceiptMarker(path),
       depth: spec.childDepth,
+      upscopePath,
+      callerPath,
       fsm: spec.fsm,
       remaining: budgetText(spec.budget),
       targets: targetsText(spec.targets),
     }),
-    S["fork.child-return"],
-    S["fork.child-routing"],
-  ].join("\n");
+  ];
+  if (callerPath.toLowerCase() !== upscopePath.toLowerCase()) {
+    lines.push(
+      render(S["fork.subscope-cross-caller"], {
+        upscopePath,
+        callerPath,
+      }),
+    );
+  }
+  lines.push(
+    render(S["fork.subscope-return"], { callerPath }),
+    S["fork.subscope-routing"],
+  );
+  return lines.join("\n");
 }
 
 

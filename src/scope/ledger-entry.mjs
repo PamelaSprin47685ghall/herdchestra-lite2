@@ -211,9 +211,11 @@ export function planLedgerEntry(state, previousBrackets = null) {
       head: structDirty
         ? {
             version: next.version,
+            dirSeq: next.dirSeq ?? 0,
             seq: next.seq,
             closedSeq: next.closedSeq,
             receiveSeq: next.receiveSeq,
+            root: next.root,
             totals: next.totals,
           }
         : null,
@@ -234,9 +236,11 @@ export function planLedgerEntry(state, previousBrackets = null) {
 // session's fork count on every write that touches it. They travel as edits.
 const LEDGER_HEAD_FIELDS = [
   "version",
+  "dirSeq",
   "seq",
   "closedSeq",
   "receiveSeq",
+  "root",
   "totals",
 ];
 

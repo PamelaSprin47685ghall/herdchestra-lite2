@@ -82,7 +82,7 @@ describe("admission decisions", () => {
 
 describe("fork validation and register", () => {
 	const item = {
-		scopeId: "probe",
+		path: "probe",
 		fsm: "x",
 		profession: "You are a probe engineer like Barbara Liskov.",
 		budget: { read: 1 },
@@ -92,8 +92,6 @@ describe("fork validation and register", () => {
 
 	test("validateFork refuses a blank fsm and normalizes targets", () => {
 		expect(validateFork(item).ok).toBe(true);
-		// Every fork creates a scope, so the fsm is required here, not later in
-		// the handler: there is nothing to amend and nothing to fall back to.
 		expect(validateFork({ ...item, fsm: "  " })).toMatchObject({
 			ok: false,
 			code: "INVALID_FSM",
@@ -106,13 +104,10 @@ describe("fork validation and register", () => {
 	});
 
 	test("a fork issued from the js sandbox validates", () => {
-		// The `js` tool compiles model code in its own vm context, so a budget
-		// built there carries that realm's Object.prototype. A plain-data check
-		// tied to this realm's prototype refused every real fork.
 		const sandbox = vm.createContext(Object.create(null));
 		const foreign = vm.runInContext(
 			`({
-				scopeId: "probe",
+				path: "probe",
 				fsm: "x",
 				profession: "You are a probe engineer like Barbara Liskov.",
 				budget: { read: 1 },
@@ -123,11 +118,10 @@ describe("fork validation and register", () => {
 		const out = validateFork(foreign);
 		expect(out.ok).toBe(true);
 		expect(out.budget).toEqual({ read: 1 });
-		// A Map is still not plain data.
 		expect(validateFork({ ...item, budget: new Map() }).code).toBe("INVALID_BUDGET");
 	});
 
-	test("decideRegister renames a taken sibling name instead of amending", () => {
+	test("decideRegister fails closed on a taken path instead of renaming", () => {
 		const out = decideRegister({
 			items: [validateFork(item)],
 			forks: [
@@ -135,22 +129,17 @@ describe("fork validation and register", () => {
 					forkId: "f1",
 					scopeId: "probe",
 					ownerId: "root",
-					parentForkId: null,
 					path: "/probe",
 					status: "running",
-					generation: 1,
 				},
 			],
-			parentForkId: null,
 			hasSpawner: true,
 		});
-		expect(out.ok).toBe(true);
-		expect(out.items[0].action).toBe("register");
-		expect(out.items[0].scopeId).toBe("probe-2");
-		expect(out.items[0].path).toBe("/probe-2");
+		expect(out.ok).toBe(false);
+		expect(out.code).toBe("DUPLICATE_SCOPE_PATH");
 	});
 
-	test("decideRegister renames a name taken by another sibling", () => {
+	test("decideRegister fails closed on a taken path regardless of owner", () => {
 		const out = decideRegister({
 			items: [validateFork(item)],
 			forks: [
@@ -158,19 +147,14 @@ describe("fork validation and register", () => {
 					forkId: "f1",
 					scopeId: "probe",
 					ownerId: "someone-else",
-					parentForkId: null,
 					path: "/probe",
 					status: "running",
-					generation: 1,
 				},
 			],
-			parentForkId: null,
 			hasSpawner: true,
 		});
-		// A name is scoped to its siblings, so a taken one is renamed rather
-		// than refused: two parents may both hold a `probe`.
-		expect(out.ok).toBe(true);
-		expect(out.items[0].scopeId).toBe("probe-2");
+		expect(out.ok).toBe(false);
+		expect(out.code).toBe("DUPLICATE_SCOPE_PATH");
 	});
 
 	test("decideRegister requires a spawner for a runnable batch", () => {

@@ -83,20 +83,19 @@ describe("prompt documents", () => {
 });
 
 describe("the control-plane documents", () => {
-	test("describe scope_request and scope_reply, not the retired send", () => {
+	test("describe scope_abandon and fork.path, not the retired scope_request, scope_reply, or send", () => {
 		const fork = loadDoc("tools/fork-join");
 
 		for (const key of [
-			"request.tool",
-			"request.target",
-			"request.message",
-			"request.interrupt",
-			"reply.tool",
+			"fork.path",
+			"abandon.tool",
 		]) {
 			expect(typeof fork[key]).toBe("string");
 		}
-		expect(fork["request.target"]).toContain("No wildcards");
+		expect(fork["fork.path"]).toContain("fails closed");
 		expect(Object.keys(fork).some((key) => key.startsWith("send."))).toBe(false);
+		expect(Object.keys(fork).some((key) => key.startsWith("request."))).toBe(false);
+		expect(Object.keys(fork).some((key) => key.startsWith("reply."))).toBe(false);
 		expect(fork["fork.batch-started"]).toBeUndefined();
 		expect(fork["fork.unreceived"]).toBeUndefined();
 	});
@@ -104,6 +103,7 @@ describe("the control-plane documents", () => {
 	test("describe the info-rich fork and join results", () => {
 		const fork = loadDoc("tools/fork-join");
 		expect(fork["fork.forks"]).toContain("started");
+		expect(fork["fork.forks"]).toContain("upscope");
 		// The anti-replay guard lives in the join document's own words, and in
 		// the returned `note` field; the model must read a record as history.
 		expect(fork["join.tool"]).toContain("history, not instructions to replay");
@@ -113,7 +113,7 @@ describe("the control-plane documents", () => {
 	test("the control-plane prose ships in the managed block", () => {
 		const prompt = injectSystemPrompt("Host prompt.");
 		const doc = loadDoc("tools/fork-join");
-		// No JSON schema carries these five controls any more, so the prose is
+		// No JSON schema carries these controls any more, so the prose is
 		// the contract: a section that stops shipping takes the rule with it.
 		expect(prompt).toContain(doc["fork.budget"]);
 		expect(prompt).toContain(doc["return.dafny"]);
@@ -124,7 +124,7 @@ describe("the control-plane documents", () => {
 
 	test("fork funding is documented where each half belongs", () => {
 		const budget = loadDoc("tools/fork-join")["fork.budget"];
-		expect(budget).toContain("needs no entry either");
+		expect(budget).toContain("Free tools need no entry");
 		expect(budget).toContain("panhandled");
 		expect(budget).toContain("state.remaining");
 		// The "a fork costs the caller nothing" rule is a planning rule, so it
@@ -147,16 +147,18 @@ describe("the control-plane documents", () => {
 	});
 
 	test("the scope receipts print remaining, not budget", () => {
-		// `fork.child-status` is the one receipt that prints a scope's turns;
+		// `fork.subscope-status` is the one receipt that prints a scope's turns;
 		// the retired `receipt.branch` had no renderer.
-		const names = placeholderNames(loadDoc("receipts/scope")["fork.child-status"]);
+		const names = placeholderNames(loadDoc("receipts/scope")["fork.subscope-status"]);
 		expect(names).toContain("remaining");
+		expect(names).toContain("upscopePath");
+		expect(names).toContain("callerPath");
 		expect(names).not.toContain("budget");
 	});
 
 	test("each hard mode has its own receipt text", () => {
 		const scope = loadDoc("receipts/scope");
-		expect(placeholderNames(scope["mode.awaiting-reply"])).toEqual(["from"]);
+		expect(placeholderNames(scope["mode.abandoned"])).toEqual(["by", "reasonClause"]);
 		expect(typeof scope["mode.context-limit"]).toBe("string");
 		expect(typeof scope["mode.final-answer"]).toBe("string");
 	});
@@ -177,8 +179,16 @@ describe("the control-plane documents", () => {
 		// accounting path; a section nothing looks up is copy the model can
 		// never receive.
 		for (const key of [
+			"invalid-path",
+			"duplicate-scope-path",
+			"unknown-upscope",
+			"upscope-not-ready",
+			"cannot-abandon-root",
+			"cannot-abandon-self",
+			"scope-already-done",
 			"abandon-unknown-target",
-			"abandon-not-owned",
+			"not-a-subscope",
+			"no-ready-subscope",
 			"mixed-return",
 			"return-unreceived",
 			"root-has-no-budget",
@@ -229,10 +239,13 @@ describe("the capabilities block", () => {
 
 	test("declares the control plane by its real names", () => {
 		const dts = renderCapabilitiesDts([]);
-		for (const name of ["scope_fork", "scope_join", "scope_return", "scope_request", "scope_reply", "scope_abandon"]) {
+		for (const name of ["scope_fork", "scope_join", "scope_return", "scope_abandon"]) {
 			expect(dts).toContain(`"${name}"`);
 		}
-		expect(dts).toContain("AWAITING_REPLY");
+		for (const retired of ["scope_request", "scope_reply"]) {
+			expect(dts).not.toContain(`"${retired}"`);
+		}
+		expect(dts).toContain("ABANDONED");
 		expect(dts).toContain("CONTEXT_LIMIT");
 	});
 
@@ -251,7 +264,7 @@ describe("the capabilities block", () => {
 		// spelled out. Losing them would leave scope_fork uncallable.
 		const dts = renderCapabilitiesDts([]);
 		expect(dts).toContain("ScopeForkArgs");
-		for (const field of ["scopeId", "fsm", "profession", "n", "budget", "targets"]) {
+		for (const field of ["path", "fsm", "profession", "n", "budget", "targets"]) {
 			expect(dts).toContain(field);
 		}
 		expect(dts).toContain("ScopeReturnArgs");
@@ -293,14 +306,12 @@ describe("the one registered tool", () => {
 		expect(registered.map((tool) => tool.name)).toEqual([JS_TOOL_NAME]);
 	});
 
-	test("the core table holds the six controls and nothing registered", () => {
+	test("the core table holds the four controls and nothing registered", () => {
 		const core = createCoreTools({});
 		expect(Object.keys(core).sort()).toEqual([
 			"scope_abandon",
 			"scope_fork",
 			"scope_join",
-			"scope_reply",
-			"scope_request",
 			"scope_return",
 		]);
 		for (const name of Object.keys(core)) {
@@ -317,7 +328,7 @@ describe("the operating rules", () => {
 	});
 
 	test("name every hard mode so the model can read the probe", () => {
-		for (const mode of ["AWAITING_REPLY", "CONTEXT_LIMIT", "FINAL_ANSWER"]) {
+		for (const mode of ["ABANDONED", "CONTEXT_LIMIT", "FINAL_ANSWER"]) {
 			expect(persistentOperatingSkill).toContain(mode);
 		}
 	});
@@ -327,10 +338,11 @@ describe("the operating rules", () => {
 		expect(persistentOperatingSkill).not.toContain("state.budget");
 	});
 
-	test("the scope rules retire todo and the old send channel", () => {
+	test("the scope rules retire todo and the old send/request channels", () => {
 		const rules = loadDoc("system")["scope-rules"];
 		expect(rules).toContain("no `todo` tool");
-		expect(rules).toContain("scope_request");
+		expect(rules).not.toContain("scope_request");
+		expect(rules).not.toContain("scope_reply");
 		expect(rules).not.toContain("scope_send");
 		expect(rules).not.toContain("scope_context");
 	});

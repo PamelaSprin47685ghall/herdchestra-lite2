@@ -114,14 +114,14 @@ export function handleReturnCall(station, call, options = {}) {
       return errorResult("ROOT_REWIND_UNAVAILABLE", E["return-rewind-unavailable"]);
     }
     if (decision.code === "NOT_A_CHILD") {
-      return errorResult("NOT_A_CHILD", E["not-a-child"]);
+      return errorResult("NOT_A_CHILD", E["not-a-subscope"]);
     }
     if (decision.code === "UNKNOWN_FORK") {
       return errorResult("UNKNOWN_FORK", E["unknown-fork"]);
     }
     if (decision.code === "FORK_NOT_RUNNING") {
       return errorResult("FORK_NOT_RUNNING", render(E["fork-not-running"], {
-        scopeId: publicScopeId(record),
+        path: publicScopeId(record),
         status: decision.status,
       }));
     }
@@ -231,6 +231,7 @@ export function handleReturnCall(station, call, options = {}) {
   if (!adopted.ok) return errorResult(adopted.code, adopted.reason);
 
   let renderedRecord = null;
+  const isAbandoned = decision.abandoned === true;
   if (station.setChildOutcome) {
     const messages = messagesOf(station);
     renderedRecord = formatGenerationReport(
@@ -241,6 +242,9 @@ export function handleReturnCall(station, call, options = {}) {
     station.setChildOutcome(selfForkId, {
       record: renderedRecord,
       failed: false,
+      abandoned: isAbandoned,
+      abandonedBy: record.abandonedBy ?? null,
+      abandonReason: record.abandonReason ?? null,
       reason: null,
     });
   }
@@ -248,14 +252,16 @@ export function handleReturnCall(station, call, options = {}) {
   const readyDecision = decideReady({
     record,
     outcome:
-      renderedRecord === null ? { ok: true } : { ok: true, record: renderedRecord },
+      renderedRecord === null
+        ? { ok: true, abandoned: isAbandoned }
+        : { ok: true, abandoned: isAbandoned, record: renderedRecord },
   });
   if (!readyDecision.ok) {
     return errorResult(
       readyDecision.code,
       readyDecision.code === "FORK_NOT_RUNNING"
         ? render(E["fork-not-running"], {
-            scopeId: publicScopeId(record),
+            path: publicScopeId(record),
             status: readyDecision.status,
           })
         : E["unknown-fork"],
@@ -294,6 +300,7 @@ export function handleReturnCall(station, call, options = {}) {
     forkId: selfForkId,
     scopeId: publicScopeId(record),
     returned: true,
+    ...(isAbandoned ? { abandoned: true } : {}),
     reparented: decision.orphans,
     receiver: decision.receiverId,
     receiverText,
@@ -303,6 +310,7 @@ export function handleReturnCall(station, call, options = {}) {
       ok: true,
       scope: publicScopeId(record),
       sealed: true,
+      ...(isAbandoned ? { abandoned: true } : {}),
       receiver: receiverText,
       reparented: decision.orphans.map((id) => publicScopeId(forkOf(ledger, id))),
       persisted,

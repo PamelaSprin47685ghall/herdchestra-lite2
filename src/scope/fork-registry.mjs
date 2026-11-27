@@ -1,12 +1,11 @@
 // Session-wide fork registry: one ledger per conversation, child outcomes,
-// and the waits that make scope_join and scope_return block.
+// live interrupt hooks, and the waits that make scope_join block.
 //
 // The station is per agent, so nothing about a fork tree may live on it. This
 // module is the holder the wiring injects as the four ports. It holds no host
 // objects: a ledger is plain data, and every wait is a plain Promise.
 
-import { forkOf, markReady, takeReady, subscribeLedger, unreceivedChildren, openChildren } from "./forkjoin.mjs";
-import { emptyTotals } from "./turn-stats.mjs";
+import { createBracketLedger, forkOf, markReady, takeReady, subscribeLedger, unreceivedChildren, openChildren } from "./forkjoin.mjs";
 import { normalizeTargets, validTargets } from "./targets.mjs";
 
 function failure(code, reason) {
@@ -34,38 +33,35 @@ export function createForkRegistry({ conversationKeyOf: keyOf = conversationKeyO
     ledgers: new WeakMap(),
     ledgerKeyed: new Map(),
     outcomes: new Map(),
-    // A child is assembled after its fork is registered, so its station exists
-    // later than its identity. The table is written before the spawn and read
-    // when that station is built; a child that never appears leaves an entry
-    // behind, which is harmless and visible in statsOf().
     identities: new Map(),
-    // Which child agent belongs to which fork. The host reports an agent id on
-    // the context, and that id is the only stable handle a child station has
-    // when it looks for its own fork.
     agentForks: new Map(),
     waiters: new Set(),
-    requests: new Map(),
-    waitFor: new Map(),
-    waitEdgeRefs: new Map(),
-    requestRuntime: new Map(),
-    requestSeq: 0,
+    // Live interrupt hooks keyed by forkId (registered while a child session is active).
+    liveInterrupts: new Map(),
   };
 }
 
 /**
- * Record who a child is. Called before the spawn, so the child's station can
- * find its identity as soon as the host builds it.
+ * Record who a subscope is. Called before the spawn, so the subscope's station
+ * can find its identity as soon as the host builds it.
  */
 export function setIdentity(registry, forkId, identity) {
   if (typeof forkId !== "string" || forkId === "") return false;
   if (!identity || typeof identity !== "object") return false;
   registry.identities.set(forkId, {
     forkId,
+    callerId:
+      typeof identity.callerId === "string"
+        ? identity.callerId
+        : (typeof identity.parentOwnerId === "string" ? identity.parentOwnerId : null),
     parentOwnerId:
-      typeof identity.parentOwnerId === "string" ? identity.parentOwnerId : null,
+      typeof identity.callerId === "string"
+        ? identity.callerId
+        : (typeof identity.parentOwnerId === "string" ? identity.parentOwnerId : null),
+    path: typeof identity.path === "string" ? identity.path : null,
+    upscopePath: typeof identity.upscopePath === "string" ? identity.upscopePath : null,
+    callerPath: typeof identity.callerPath === "string" ? identity.callerPath : null,
     ownScopeId: typeof identity.ownScopeId === "string" ? identity.ownScopeId : null,
-    // The child's own scope needs the same shape the parent declared. These
-    // are data, not decisions: the station opens the scope when it reads them.
     fsm: typeof identity.fsm === "string" ? identity.fsm : null,
     budget:
       identity.budget && typeof identity.budget === "object" ? { ...identity.budget } : null,
@@ -74,14 +70,7 @@ export function setIdentity(registry, forkId, identity) {
       ? normalizeTargets(identity.targets)
       : null,
     childDepth: Number.isInteger(identity.childDepth) ? identity.childDepth : null,
-    // The bracket ledger is per conversation, not per agent. A child's tool
-    // context may expose a different manager object, so the ledger must travel
-    // with the identity; deriving it again from the child context can create a
-    // second empty ledger and turn scope_return into UNKNOWN_FORK.
     display: identity.display ?? null,
-    // A holder is live: the interactive UI may arrive after this identity is
-    // recorded. Keep the holder itself so a late display reaches the child
-    // station without rewriting the identity.
     displayHolder:
       identity.displayHolder &&
       typeof identity.displayHolder === "object" &&
@@ -90,8 +79,6 @@ export function setIdentity(registry, forkId, identity) {
         : null,
     ledger:
       identity.ledger && typeof identity.ledger === "object" ? identity.ledger : null,
-    // A capability, not data: the root branch's persist function, so a child
-    // writes its return into the branch a reload actually restores.
     persistRoot:
       typeof identity.persistRoot === "function" ? identity.persistRoot : null,
   });
@@ -106,23 +93,19 @@ export function identityOf(registry, forkId) {
   return registry.identities.get(forkId) ?? null;
 }
 
-/** Resolve a child identity from the agent id the host reports on a context. */
+/** Resolve a subscope identity from the agent id the host reports on a context. */
 export function identityForAgent(registry, agentId) {
   if (typeof agentId !== "string" || agentId === "") return null;
   const forkId = registry.agentForks.get(agentId);
   return forkId ? identityOf(registry, forkId) : null;
 }
 
-/**
- * Attach the host's agent id to a fork that was already registered. The id
- * only exists after the child session is built, while the fork itself exists
- * before it, so identity is bound in two steps.
- */
 export function bindAgent(registry, forkId, agentId) {
   if (typeof forkId !== "string" || forkId === "") return false;
   if (typeof agentId !== "string" || agentId === "") return false;
   const identity = registry.identities.get(forkId) ?? {
     forkId,
+    callerId: null,
     parentOwnerId: null,
     ownScopeId: null,
   };
@@ -141,14 +124,30 @@ export function clearIdentity(registry, forkId) {
   return true;
 }
 
-/**
- * The conversation key for one fork tree, derived the same way everywhere.
- *
- * A session id string survives the branch manager proxy: the proxy answers
- * `getSessionId()` with the shared session id, so a parent and its child land
- * on the same ledger. Without an id, the manager object is the best available
- * identity and stays stable for that conversation.
- */
+export function registerLiveInterrupt(registry, forkId, interruptFn) {
+  if (!registry || typeof forkId !== "string" || forkId === "") return false;
+  if (!(registry.liveInterrupts instanceof Map)) registry.liveInterrupts = new Map();
+  if (typeof interruptFn === "function") {
+    registry.liveInterrupts.set(forkId, interruptFn);
+  } else {
+    registry.liveInterrupts.delete(forkId);
+  }
+  return true;
+}
+
+export function unregisterLiveInterrupt(registry, forkId) {
+  if (!registry || !(registry.liveInterrupts instanceof Map)) return false;
+  return registry.liveInterrupts.delete(forkId);
+}
+
+export function interruptFork(registry, forkId) {
+  if (!registry || !(registry.liveInterrupts instanceof Map)) return false;
+  const fn = registry.liveInterrupts.get(forkId);
+  if (typeof fn !== "function") return false;
+  fn();
+  return true;
+}
+
 export function conversationKeyOf(manager) {
   const value =
     typeof manager?.getSessionId === "function" ? manager.getSessionId() : null;
@@ -157,10 +156,6 @@ export function conversationKeyOf(manager) {
     : (manager ?? null);
 }
 
-/**
- * Whether a station belongs to the current context's session. The session id
- * survives a branch manager proxy, so compare it when the manager object differs.
- */
 export function sameManager(station, token) {
   const key = token ?? null;
   if (!key || !station?.manager) return false;
@@ -174,17 +169,12 @@ export function sameManager(station, token) {
   }
 }
 
-/**
- * The ledger for one conversation. `key` is any object or string; a missing
- * key falls back to a single shared ledger, which keeps a one-branch test
- * honest without inventing a second tree.
- */
 export function ledgerFor(registry, key = null) {
   const objectKey = key !== null && typeof key === "object";
   if (objectKey) {
     let ledger = registry.ledgers.get(key);
     if (!ledger) {
-      ledger = createLedger();
+      ledger = createBracketLedger();
       registry.ledgers.set(key, ledger);
     }
     return ledger;
@@ -192,31 +182,12 @@ export function ledgerFor(registry, key = null) {
   const name = typeof key === "string" && key !== "" ? key : "";
   let ledger = registry.ledgerKeyed.get(name);
   if (!ledger) {
-    ledger = createLedger();
+    ledger = createBracketLedger();
     registry.ledgerKeyed.set(name, ledger);
   }
   return ledger;
 }
 
-function createLedger() {
-  return {
-    version: 2,
-    seq: 0,
-    closedSeq: 0,
-    receiveSeq: 0,
-    forks: {},
-    order: [],
-    queues: {},
-    levels: {},
-    totals: emptyTotals(),
-  };
-}
-
-/**
- * Bind a ledger to a conversation key. The station owns its ledger in the
- * persisted state; the registry is only the runtime index. Adopting keeps
- * `ledgerFor()` and `forkLedgerPort()` naming the same object.
- */
 export function adoptLedger(registry, key, ledger) {
   if (!registry || !ledger || typeof ledger !== "object") return false;
   if (key !== null && typeof key === "object") {
@@ -233,6 +204,9 @@ export function setOutcome(registry, forkId, outcome) {
   registry.outcomes.set(forkId, {
     record: typeof value.record === "string" ? value.record : "",
     failed: value.failed === true,
+    abandoned: value.abandoned === true,
+    abandonedBy: typeof value.abandonedBy === "string" ? value.abandonedBy : null,
+    abandonReason: typeof value.abandonReason === "string" ? value.abandonReason : null,
     reason: typeof value.reason === "string" ? value.reason : null,
   });
   return true;
@@ -288,9 +262,10 @@ async function park(registry, signal) {
 }
 
 /**
- * Parent side: take the first returned child, parking until one arrives or
- * the signal aborts. A wake with no ready child simply parks again, so a
- * spurious wake costs no work.
+ * Caller side: take the first returned subscope, parking until one arrives or
+ * the signal aborts. Always checks `signal?.aborted` BEFORE `takeReady` so a
+ * beat interrupted by abandon/user steer never consumes a ready result into
+ * JOINED and drops it.
  */
 export async function waitForReady(registry, ledger, options = {}) {
   subscribeLedger(ledger, registry.wake ??= () => notifyWaiters(registry));
@@ -300,21 +275,17 @@ export async function waitForReady(registry, ledger, options = {}) {
   const canTake = typeof options.canTake === "function" ? options.canTake : null;
   const admit = typeof options.admit === "function" ? options.admit : null;
   for (;;) {
-    // The caller's admission may go stale while it waits. Checking before
-    // every take makes a refusal leave the queue exactly as it found it.
+    if (signal?.aborted) {
+      return failure("JOIN_INTERRUPTED", "The join was interrupted; the forked scopes keep running.");
+    }
     const guard = canTake ? canTake() : null;
     if (guard && guard.ok === false) return failure(guard.code, guard.reason);
     const taken = takeReady(ledger, { ownerId, levelKey, admit });
     if (taken.ok) return taken;
-    // Capacity is not a race: a ready record that cannot fit will not become
-    // deliverable by waiting for another event. Answer now and keep it ready.
     if (taken.code === "NO_ADMISSIBLE_CHILD") {
       return failure("JOIN_CONTEXT_EXCEEDED", taken.reason, {
         blocked: taken.blocked,
       });
-    }
-    if (signal?.aborted) {
-      return failure("JOIN_INTERRUPTED", "The join was interrupted; the forked scopes keep running.");
     }
     if (unreceivedChildren(ledger, ownerId).length === 0) {
       return failure("NO_UNRECEIVED_WORK", "No unreceived result remains.");
@@ -329,68 +300,19 @@ export async function waitForReady(registry, ledger, options = {}) {
   }
 }
 
-/**
- * Child side: mark this branch ready, then park until a parent takes it. The
- * mark happens before the wait, so a parent that arrives later still finds
- * the record in its queue.
- */
-export async function waitForJoin(registry, ledger, forkId, options = {}) {
-  subscribeLedger(ledger, registry.wake ??= () => notifyWaiters(registry));
-  const signal = options.signal ?? null;
-  const outcome = options.outcome ?? null;
-  const record = forkOf(ledger, forkId);
-  if (!record) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-  if (record.status === "running") {
-    const marked = markReady(ledger, forkId, {
-      ok: outcome?.failed !== true,
-      reason: outcome?.reason ?? null,
-      record: outcome?.record,
-    });
-    if (!marked.ok) return failure(marked.code, marked.reason);
-    notifyWaiters(registry);
-  }
-  for (;;) {
-    const current = forkOf(ledger, forkId);
-    if (!current) return failure("UNKNOWN_FORK", `Unknown fork "${forkId}".`);
-		if (current.status === "joined") return { ok: true, fork: current };
-		// A reused scope supersedes its ready record and no join will take it.
-		// The child must stop instead of waiting for a take that reuse cancelled.
-		if (current.supersededAt) {
-			return { ok: true, superseded: true, fork: current };
-		}
-		// A failed bracket will never be taken. Waiting on it would hang the
-		// child for the life of the session, so the failure ends the wait.
-		if (current.status === "failed") {
-			return failure(
-				"RETURN_REJECTED",
-				`Fork "${forkId}" was abandoned before a receiver took it.`,
-			);
-		}
-		if (signal?.aborted) {
-      return failure("RETURN_INTERRUPTED", "The return was interrupted; the bracket stays open.");
-    }
-    const woke = await park(registry, signal);
-    if (woke?.ok === false) {
-      return failure("RETURN_INTERRUPTED", "The return was interrupted; the bracket stays open.");
-    }
-  }
-}
-
 /** Signal that a fork is ready, for callers that mark without waiting. */
 export function pulse(registry, ledger, forkId, outcome = null) {
   let marked = { ok: true };
   if (forkId) {
     marked = markReady(ledger, forkId, {
       ok: outcome?.failed !== true,
+      abandoned: outcome?.abandoned === true,
+      abandonedBy: outcome?.abandonedBy ?? null,
+      abandonReason: outcome?.abandonReason ?? null,
       reason: outcome?.reason ?? null,
       record: outcome?.record,
     });
   }
-  // Waking is not conditional on this mark succeeding. A child that already
-  // froze its record at scope_return makes markReady fail with ALREADY_READY,
-  // and returning there left the parent parked forever while the record sat
-  // ready. Waiters re-check their own condition, so a wake that changes
-  // nothing costs one loop iteration and never loses a record.
   notifyWaiters(registry);
   return marked;
 }

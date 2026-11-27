@@ -10,7 +10,6 @@ import {
 import { childReturnNudge, takeReturnNudge } from "../scope/return-nudge.mjs";
 import { abandonDescendants } from "../scope/forkjoin.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
-import { clearRuntime, rejectPendingRequests } from "../scope/request-queue.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
 import { mergeFeatures, parseHerdCommand } from "../features/herd/features.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
@@ -95,6 +94,7 @@ function observeHostBoundary(station, messages) {
 	if (!boundaryKey || boundaryKey === station.hostBoundaryKey) return;
 	station.hostBoundaryKey = boundaryKey;
 	truncateForHostBoundary(station.state);
+	station.resetDirectoryBaseline?.();
 	station.resetUsageWatermark();
 	station.persist();
 }
@@ -129,6 +129,7 @@ function prepareRequest(station, ctx, previous, history) {
 		syncRootUserPrompts(station, live);
 	}
 	station.observeActualModel(ctx);
+	station.noteSnapshotLeaf?.(ctx);
 	const restore = station.tickets?.restoreScopedModel;
 	const req = restore && station.state.modelRecovery && station.takePendingModelSwitch(ctx);
 	const receipt = (message) =>
@@ -189,12 +190,6 @@ export function cancelTree(station, rootOwnerId = "root", reason = CANCELLED_BY_
 	}
 	const registry = forkRegistryOf(station);
 	if (registry) {
-		for (const forkId of abandonedIds) {
-			const path = forkOf(ledger, forkId)?.path;
-			if (typeof path !== "string" || path === "") continue;
-			clearRuntime(registry, path);
-			rejectPendingRequests(registry, path, reason);
-		}
 		// A join parked anywhere in this tree wakes now: its child is gone, so
 		// waiting for a return that will never come is a deadlock.
 		notifyWaiters(registry);
@@ -273,26 +268,35 @@ function onSessionStop(station, ctx, evidence = null) {
 	}
 	const projection = station.projectionFor(ctx);
 	const unreceived = projection.state?.unreceived ?? 0;
+	const ledger = station.forkLedgerPort?.() ?? null;
+	const ownerId = ownerIdOf(station);
 	// A hard mode has exactly one legal move. Stopping without it is a missed
 	// turn, so the steer names that move and nothing else.
-	if (projection.mode === "AWAITING_REPLY" || projection.mode === "CONTEXT_LIMIT") {
+	if (projection.mode === "ABANDONED") {
+		if (ownerId !== null && ledger) {
+			const self = forkOf(ledger, ownerId);
+			if (!self || self.status !== RUNNING || !takeReturnNudge(self)) {
+				return undefined;
+			}
+		}
 		return continueFeedback(
-			stopNudge(projection.mode, {
-				unreceived,
-				from: projection.state?.request?.from,
+			stopNudge("ABANDONED", {
+				abandoned: projection.state?.abandoned,
 			}),
 		);
 	}
+	if (projection.mode === "CONTEXT_LIMIT") {
+		return continueFeedback(
+			stopNudge(projection.mode, { unreceived }),
+		);
+	}
 	if (projection.mode === "FINAL_ANSWER") return undefined;
-	// Unreceived children (running or ready) outrank every other stop rule,
-	// for both Root (even with autopilot off) and child scopes.
+	// Unreceived subscopes (running or ready) outrank every other stop rule,
+	// for both Root (even with autopilot off) and subscope scopes.
 	if (unreceived > 0) {
 		return continueFeedback(insideScopeNudge(unreceived));
 	}
-	const ledger =
-		station.forkLedgerPort?.() ?? null;
-	const ownerId = ownerIdOf(station);
-	// Child scope natural stop backstop: nudge to call `scope_return` while
+	// Subscope natural stop backstop: nudge to call `scope_return` while
 	// the bracket is still RUNNING and its shared allowance remains.
 	if (ownerId !== null && ledger) {
 		const self = forkOf(ledger, ownerId);
@@ -315,6 +319,7 @@ function onSessionSwitch(station, event, ctx) {
 	const reason = event?.reason ?? event?.handoffReason;
 	if (reason !== "handoff" && event?.handoff !== true) return;
 	truncateForHostBoundary(station.state);
+	station.resetDirectoryBaseline?.();
 	station.resetUsageWatermark();
 	station.persist();
 }
@@ -324,6 +329,7 @@ function onSessionCompact(station, ctx) {
 	clearPendingRootRewind(station);
 	truncateForHostBoundary(station.state);
 	station.hostBoundaryKey = cachedHostBoundaryKey(station, station.contextMessages()) ?? station.hostBoundaryKey;
+	station.resetDirectoryBaseline?.();
 	station.resetUsageWatermark();
 	station.persist();
 	const restore = station.tickets?.restoreScopedModel;

@@ -12,8 +12,6 @@ import {
 	abandonTicket,
 	forkTicket,
 	joinTicket,
-	replyTicket,
-	requestTicket,
 	returnTicket,
 } from "./tickets.mjs";
 import { errorResult } from "./results.mjs";
@@ -52,10 +50,6 @@ export function createCoreTools({ tickets = {} } = {}) {
 			joinTicket(station, toolCallId, args, ctx, signal, tickets, frameId),
 		scope_return: (station, toolCallId, args, ctx, signal, frameId) =>
 			returnTicket(station, toolCallId, args, ctx, signal, tickets, frameId),
-		scope_request: (station, toolCallId, args, ctx, signal) =>
-			requestTicket(station, toolCallId, args, ctx, signal, tickets),
-		scope_reply: (station, toolCallId, args, ctx, signal) =>
-			replyTicket(station, toolCallId, args, ctx, signal, tickets),
 		scope_abandon: (station, toolCallId, args, ctx) =>
 			abandonTicket(station, toolCallId, args, ctx, tickets),
 	});

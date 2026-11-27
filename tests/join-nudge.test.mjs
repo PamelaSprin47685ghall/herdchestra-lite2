@@ -45,7 +45,7 @@ describe("nudgeDecision", () => {
 				ledger: ledgerWith(status),
 			});
 			expect(decision.kind).toBe("steer");
-			expect(decision.text).toContain("1 unreceived result(s) from forked scopes");
+			expect(decision.text).toContain("1 unreceived result(s) from forked subscopes");
 			expect(decision.text).toContain("scope_join");
 		}
 	});
@@ -74,19 +74,13 @@ describe("nudgeDecision", () => {
 		expect(decision.kind).toBe("steer");
 	});
 
-	test("all joined, a superseded result, no ledger, or a tool-call beat earns none", () => {
+	test("all joined, no ledger, or a tool-call beat earns none", () => {
 		expect(
 			nudgeDecision({ hasToolCalls: false, ledger: createBracketLedger() }),
 		).toEqual({ kind: "none" });
 		expect(nudgeDecision({ hasToolCalls: false })).toEqual({ kind: "none" });
 		expect(
 			nudgeDecision({ hasToolCalls: true, ledger: ledgerWith("running") }),
-		).toEqual({ kind: "none" });
-
-		const superseded = ledgerWith("ready");
-		superseded.forks.fork_a.supersededAt = 1;
-		expect(
-			nudgeDecision({ hasToolCalls: false, ledger: superseded }),
 		).toEqual({ kind: "none" });
 	});
 });

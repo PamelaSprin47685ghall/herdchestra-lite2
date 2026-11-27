@@ -2,18 +2,14 @@
 //
 // Plain synchronous function. The bracket ledger arrives through a port and the
 // child spawner arrives through another, so a station that has neither refuses
-// instead of inventing one. Child agents are assembled by the host wiring, not
-// here. The join, return, and abandon handlers live in their own files; the
-// exported names below keep the split invisible to callers.
+// instead of inventing one.
 
 import {
-  annotateFork,
   forkOf,
   markReady,
   registerFork,
   unreceivedChildren,
 } from "../scope/forkjoin.mjs";
-import { allocateSiblingScopeId, childScopePath } from "../scope/path.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
 import { createClockOn } from "../scope/clock.mjs";
 import { deriveTimeBudgetSeconds, modelSamples } from "../scope/turn-stats.mjs";
@@ -39,8 +35,8 @@ import {
 const E = loadDoc("errors");
 
 /**
- * Open one child scope. Never blocks: the parent keeps its depth, its model,
- * and its own work. Several forks may share one assistant message.
+ * Open one or more subscopes. Never blocks: the caller keeps its depth, its
+ * model, and its own work.
  */
 export function handleForkCall(station, call, options = {}) {
   const args = parseArgs(call);
@@ -59,69 +55,77 @@ export function handleForkCall(station, call, options = {}) {
   const depth = depthOf(station);
   const spawner =
     typeof station.childSpawnPort === "function" ? station.childSpawnPort() : null;
-  // The address a child is born under: the caller's own path, and the caller's
-  // fork id scopes the sibling namespace. The root has neither, so it sits at
-  // `/` and owns the first level of names.
-  const parentForkId = identityOf(station)?.forkId ?? null;
-  const parentRecord = parentForkId === null ? null : forkOf(ledger, parentForkId);
-  const parentPath = parentRecord?.path ?? "/";
-  // Pricing mirrors the send loop: one number per receipt-sending path, and
-  // zero for a path that sends nothing. The domain picks the number with the
-  // same action it resolves, so every fork is priced by the text its child
-  // actually reads. A price taken from a different record than the one sent is
-  // a defect, not an approximation.
+  const callerForkId = identityOf(station)?.forkId ?? null;
+  const callerRecord = callerForkId === null ? null : forkOf(ledger, callerForkId);
+  const callerPath = callerRecord?.path ?? "/";
+
   const identityCharsOf = (item) => {
     const profession = typeof item.profession === "string" ? item.profession.trim() : "";
     return profession === "" ? 0 : profession.length + 1;
   };
-  // Every fork creates, so the child's own start receipt is the only text this
-  // call sends. The revive and generation keys stay zero: nothing spends them,
-  // and admission must never price a receipt that no path will deliver.
-  // Every name is allocated once, before anything is priced. The price must be
-  // the length of the receipt that will actually be sent, and that receipt
-  // names the final path; pricing a different name would under-count by the
-  // prefix and by any rename suffix, admitting a receipt that does not fit.
-  const allocations = [];
-  {
-    const taken = new Set();
-    for (const item of batch.items) {
-      const scopeId = allocateSiblingScopeId(ledger, parentForkId, item.scopeId, taken);
-      taken.add(scopeId);
-      allocations.push({ scopeId, path: childScopePath(parentPath, scopeId) });
-    }
-  }
-  const pricedChars = batch.items.map((item, index) => {
-    const path = allocations[index].path;
+
+  const priceFor = (item) => {
     const fresh =
       childReceiptText({
-        scopeId: path,
+        path: item.path,
+        upscopePath: item.upscopePath,
+        callerPath: item.callerPath,
         childDepth: depth + 1,
         fsm: item.fsm,
         budget: item.budget,
         targets: item.targets,
       }).length + identityCharsOf(item);
     return { fresh, revive: 0, generation: 0 };
-  });
+  };
+
   const decision = decideRegister({
     items: batch.items,
     forks: ledger.order.map((id) => forkOf(ledger, id)),
+    root: ledger.root ?? null,
     ownerId: ownerIdOf(station),
-    parentForkId: identityOf(station)?.forkId ?? null,
-    parentPath: parentPath,
+    callerPath,
     models: options.models ?? station.host?.model?.query?.(options.ctx) ?? null,
     hasSpawner: typeof spawner === "function",
-    pricedChars,
+    priceFor,
     baseTokens: measuredBase(station),
     tokensPerChar: densityOf(station),
     window: windowOf(station),
     reserve: station.forkReservePort?.(),
     margin: station.forkMarginPort?.(),
   });
+
   if (!decision.ok) {
-    if (decision.code === "FOREIGN_SCOPE_ID") {
-      return errorResult(decision.code, render(E["foreign-scope-id"] || "That scope id belongs to another owner.", {
-        scopeId: decision.scopeId,
-      }));
+    if (decision.code === "INVALID_PATH") {
+      const where = decision.index >= 0 ? ` (forks[${decision.index}])` : "";
+      return errorResult(
+        decision.code,
+        `${E["invalid-path"] ?? "Pass a valid scope `path`."}${where}`,
+        { index: decision.index, path: decision.path },
+      );
+    }
+    if (decision.code === "DUPLICATE_SCOPE_PATH") {
+      return errorResult(
+        decision.code,
+        render(E["duplicate-scope-path"], {
+          path: decision.path,
+          status: decision.status ?? "existing",
+        }),
+        { index: decision.index, path: decision.path, status: decision.status },
+      );
+    }
+    if (decision.code === "UNKNOWN_UPSCOPE") {
+      return errorResult(
+        decision.code,
+        render(E["unknown-upscope"], { upscopePath: decision.upscopePath }),
+        { index: decision.index, upscopePath: decision.upscopePath },
+      );
+    }
+    if (decision.code === "UPSCOPE_NOT_READY") {
+      return errorResult(
+        decision.code,
+        render(E["upscope-not-ready"], { upscopePath: decision.upscopePath }),
+        { index: decision.index, upscopePath: decision.upscopePath },
+      );
     }
     if (decision.code === "CHILD_SPAWNER_UNAVAILABLE") {
       return errorResult(decision.code, E["child-spawner-unavailable"]);
@@ -160,26 +164,8 @@ export function handleForkCall(station, call, options = {}) {
     });
   }
 
-  const blankFsm = decision.items.find(
-    (item) => item.action === "create" && item.fsm === "",
-  );
-  if (blankFsm) {
-    return errorResult(
-      "MISSING_FSM",
-      render(E["missing-fsm"] || "A new scope needs an fsm.", { scopeId: blankFsm.scopeId }),
-      { scopeId: blankFsm.scopeId },
-    );
-  }
-
-  // The tool schema requires `profession` for model calls. Internal callers
-  // (tests, programmatic spawns) may omit it; an empty identity is legal and
-  // is simply not rendered into the child receipt.
-
-  const parentOwnerId = ownerIdOf(station);
+  const callerOwnerId = ownerIdOf(station);
   const clock = typeof station.clockPort === "function" ? station.clockPort() : createClockOn();
-  // A model switch updates baseModelKey immediately; turnModelKey only moves
-  // after the next request finishes. Prefer the live selection so a fork made
-  // right after switching cannot borrow the previous model's speed.
   const turnModelKey = station.state?.baseModelKey ?? station.turnModelKey;
   const timeOf = (budget) =>
     deriveTimeBudgetSeconds({
@@ -191,13 +177,12 @@ export function handleForkCall(station, call, options = {}) {
   const failed = [];
   const pending = [];
 
-  const nextForkId = (index, generation) => {
+  const nextForkId = (index) => {
     const base = decision.items.length === 1 ? baseId : `${baseId}:${index}`;
     if (!Object.hasOwn(ledger.forks, base)) return base;
-    return `${base}:g${generation}`;
+    return `${base}:${ledger.seq + index + 1}`;
   };
 
-  /** Insert the child's identity statement directly under the receipt marker. */
   function withProfession(receipt, profession) {
     if (typeof profession !== "string" || profession.trim() === "") return receipt;
     const lines = receipt.split("\n");
@@ -205,124 +190,102 @@ export function handleForkCall(station, call, options = {}) {
     return lines.join("\n");
   }
 
-  const specOf = (fork, item, fsm) => ({
+  const specOf = (fork, item) => ({
     forkId: fork.forkId,
+    ownScopeId: fork.scopeId,
     scopeId: fork.scopeId,
-    // The child's address, so its own station can name itself to the parent
-    // and to any sibling without a second lookup.
-    path: fork.path ?? null,
-    sourceToolCallId: frameOf(call),
+    path: fork.path,
+    upscopeId: fork.upscopeId,
+    upscopePath: fork.upscopePath,
+    callerId: callerOwnerId,
+    callerPath: fork.callerPath,
+    parentOwnerId: callerOwnerId,
+    parentDepth: depth,
     childDepth: fork.childDepth,
-    fsm,
+    sourceToolCallId: item.sameCallerAsUpscope ? frameOf(call) : null,
+    upscopeSnapshotLeafId: item.sameCallerAsUpscope ? null : item.upscopeSnapshotLeafId,
+    fsm: fork.fsm,
     profession: item.profession ?? fork.profession ?? "",
     budget: fork.budget,
     time: fork.timeBudgetMs == null ? null : fork.timeBudgetMs / 1000,
     targets: fork.targets,
-    model: fork.model,
+    model: fork.resolvedModel,
     modelOverride: item.modelOverride,
     thinkingLevel: item.thinkingLevel,
-    parentOwnerId,
-    parentDepth: depth,
   });
-
-  const queueChild = (fork, item, fsm, receipt, kind = "created") => {
-    const spec = specOf(fork, item, fsm);
-    spec.receipt = withProfession(receipt, spec.profession);
-    pending.push({
-      forkId: fork.forkId,
-      // The path is what every receipt shows: it is the address, and the name
-      // is only its last segment.
-      scopeId: fork.path ?? fork.scopeId,
-      fsm,
-      childDepth: fork.childDepth,
-      kind,
-      spec,
-    });
-  };
-
-  const noteFailure = (forkId, item, reason) => {
-    failed.push({
-      forkId,
-      scopeId: item.scopeId,
-      fsm: item.fsm,
-      reason,
-    });
-  };
 
   for (let index = 0; index < decision.items.length; index += 1) {
     const item = decision.items[index];
-
-    // The name and its address were fixed before pricing, so the receipt the
-    // child reads is the exact text admission measured.
-    const { path } = allocations[index];
-    const scopeId = allocations[index].scopeId;
-    const forkId = nextForkId(index, 1);
+    const forkId = nextForkId(index);
     const registered = registerFork(ledger, {
       forkId,
-      scopeId,
-      ownerId: parentOwnerId,
+      scopeId: item.scopeId,
+      path: item.path,
+      upscopeId: item.upscopeId,
+      upscopePath: item.upscopePath,
+      ownerId: callerOwnerId,
+      callerPath: item.callerPath,
       levelKey: levelKeyOf(station),
       fsm: item.fsm,
+      profession: item.profession,
       depth,
       budget: item.budget,
       time: timeOf(item.budget),
       startedAt: Date.now(),
+      targets: item.targets,
+      birthContextTokens: item.birthContextTokens,
+      contextWindow: item.contextWindow,
+      resolvedModel: item.resolvedModel,
+      resolvedThinking: item.resolvedThinking,
     }, { clock });
     if (!registered.ok) {
-      noteFailure(forkId, item, render(E["fork-register-failed"], { code: registered.code }));
+      failed.push({
+        forkId,
+        path: item.path,
+        fsm: item.fsm,
+        reason: render(E["fork-register-failed"], { code: registered.code }),
+      });
       continue;
     }
     const fork = registered.fork;
-    // `registerFork` is the only place a budget is born, and it copies the
-    // input into both `budget` and `remaining`. The remaining fields go
-    // through the ledger's annotate entry, which is also what wakes waiters:
-    // a bare field write would skip the change notification.
-    const created = annotateFork(ledger, fork.forkId, {
-      targets: item.targets,
-      model: item.model,
-      path,
-      parentForkId,
-    });
-    if (!created.ok) {
-      station.noteError?.("fork", new Error(created.reason ?? created.code), {
-        forkId,
-        phase: "fork",
-      });
-    }
-    queueChild(fork, item, item.fsm, childReceiptText({
-      scopeId: path,
-      childDepth: fork.childDepth,
+    const spec = specOf(fork, item);
+    spec.receipt = withProfession(
+      childReceiptText({
+        path: fork.path,
+        upscopePath: fork.upscopePath,
+        callerPath: fork.callerPath,
+        childDepth: fork.childDepth,
+        fsm: item.fsm,
+        budget: fork.budget,
+        targets: fork.targets,
+      }),
+      spec.profession,
+    );
+    pending.push({
+      forkId: fork.forkId,
+      path: fork.path,
+      upscope: fork.upscopePath,
       fsm: item.fsm,
-      budget: fork.budget,
-      targets: fork.targets,
-    }));
-
-    // One item, one scope. Nothing here reuses or extends an existing record:
-    // a later message is a `scope_request`, not a second fork of the same name.
+      childDepth: fork.childDepth,
+      spec,
+    });
   }
 
-  // Register the whole batch before any child starts. A spawner that throws,
-  // and a child that inspects the ledger from its first synchronous beat, both
-  // see a complete batch: no later fork can be left unregistered by an earlier
-  // start.
   for (const entry of pending) {
     try {
       spawner(entry.spec);
-      if (entry.kind === "created") {
-        started.push({
-          forkId: entry.forkId,
-          scopeId: entry.scopeId,
-          fsm: entry.fsm,
-          childDepth: entry.childDepth,
-        });
-      }
+      started.push({
+        forkId: entry.forkId,
+        path: entry.path,
+        upscope: entry.upscope,
+        fsm: entry.fsm,
+        childDepth: entry.childDepth,
+      });
     } catch (error) {
       const reason = String(error?.message ?? error);
-      // The bracket stays registered as running so the parent can still see
-      // that this fork exists; it is reported as failed to start.
       failed.push({
         forkId: entry.forkId,
-        scopeId: entry.scopeId,
+        path: entry.path,
         fsm: entry.fsm,
         reason,
       });
@@ -330,16 +293,11 @@ export function handleForkCall(station, call, options = {}) {
     }
   }
 
-  // Opening a new fork on Root starts new work, so any prior promotion
-  // (`canStop`) or first seal review streak is cleared synchronously.
-  if (started.length > 0 && parentOwnerId === "root" && station.state?.relay) {
+  if (started.length > 0 && callerOwnerId === "root" && station.state?.relay) {
     const reset = resetRootPromotion(station.state.relay);
     if (reset.changed) station.state.relay = reset.relay;
   }
 
-  // Plain summaries only. The model reads `details.result`; the prose receipt
-  // templates retired with the mailbox, and restating the object in markdown
-  // would spend the reader's attention on a second copy.
   const sections = [];
   if (started.length > 0) {
     sections.push(
@@ -347,7 +305,7 @@ export function handleForkCall(station, call, options = {}) {
         `Started (${started.length}) at depth ${depth}:`,
         ...started.map(
           (entry) =>
-            `- ${publicScopeId(forkOf(ledger, entry.forkId))} (depth ${entry.childDepth}): ${entry.fsm}`,
+            `- ${publicScopeId(forkOf(ledger, entry.forkId))} (upscope ${entry.upscope}, depth ${entry.childDepth}): ${entry.fsm}`,
         ),
       ].join("\n"),
     );
@@ -356,28 +314,26 @@ export function handleForkCall(station, call, options = {}) {
     sections.push(
       [
         `Failed to start (${failed.length}):`,
-        ...failed.map((entry) => `- ${entry.scopeId}: ${entry.fsm} — ${entry.reason}`),
+        ...failed.map((entry) => `- ${entry.path}: ${entry.fsm} — ${entry.reason}`),
       ].join("\n"),
     );
   }
-  // Keep every unreceived scope visible without repeating its assignment.
-  const unreceived = unreceivedChildren(ledger, parentOwnerId)
+  const unreceived = unreceivedChildren(ledger, callerOwnerId)
     .map((id) => publicScopeId(forkOf(ledger, id)));
   if (unreceived.length > 0) {
     sections.push(
       `Still unreceived: ${unreceived.join(", ")}. Join them with scope_join before returning.`,
     );
   }
-  // The model reads the object, not the prose: `details.result` is the
-  // info-rich channel the js runtime unwraps. `content` stays a short human
-  // summary for the TUI and for legacy readers.
+
   return textResult(sections.join("\n\n"), {
     started: started.map((entry) => entry.forkId),
     failed: failed.map((entry) => entry.forkId),
     result: {
       ok: failed.length === 0,
       started: started.map((entry) => ({
-        path: entry.scopeId,
+        path: entry.path,
+        upscope: entry.upscope,
         depth: entry.childDepth,
         fsm: entry.fsm,
       })),
@@ -390,8 +346,6 @@ export function handleForkCall(station, call, options = {}) {
   });
 }
 
-// The handlers split by family; the public control surface keeps every name so
-// callers (tickets, execute, tests) never learn the split.
 export {
   admitJoin,
   childReceiptText,

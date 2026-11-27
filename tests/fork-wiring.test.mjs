@@ -806,7 +806,7 @@ describe("spawnChildTicket directly", () => {
       }),
     });
     expect(result.ok).toBe(true);
-    expect(calls).toEqual(["attach:Scope 1:function", "detach:Scope 1"]);
+    expect(calls).toEqual(["attach:/disp:function", "detach:/disp"]);
   });
 
   test("reads a host that keeps the child messages on the session", async () => {

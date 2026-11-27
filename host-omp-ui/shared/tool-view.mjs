@@ -116,7 +116,7 @@ export function describeScopeCall(name, args, output) {
     const forks = Array.isArray(spec.forks) ? spec.forks : [];
     const requested = forks.map((fork) => {
       const entry = fork ?? {};
-      const id = String(entry.scopeId ?? entry.name ?? "?");
+      const id = String(entry.path ?? entry.scopeId ?? entry.name ?? "?");
       const fsm = String(entry.fsm ?? "").slice(0, 80);
       return fsm ? `${id} — ${fsm}` : id;
     });
@@ -126,6 +126,18 @@ export function describeScopeCall(name, args, output) {
       title: described || `scope_fork (${forks.length})`,
       agent: "scope_fork",
       prompt: requested.join("\n"),
+      result: output,
+    };
+  }
+
+  if (name === "scope_abandon") {
+    const target = String(spec.target ?? "");
+    const reason = typeof spec.reason === "string" && spec.reason !== "" ? ` (${spec.reason})` : "";
+    return {
+      kind: "task",
+      title: `scope_abandon ${target || "?"}`,
+      agent: "scope_abandon",
+      prompt: `${target || "?"}${reason}`,
       result: output,
     };
   }

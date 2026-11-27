@@ -194,7 +194,6 @@ export async function jsTicket(
 	const state = projection?.state ?? {};
 	const dispatch = host?.dispatchInnerTool;
 	const beat = createBeat({ signal });
-	const rootBeat = station.beginRootBeat?.(ctx, toolCallId) ?? null;
 
 	const calls = [];
 	const outputs = [];
@@ -330,7 +329,6 @@ export async function jsTicket(
 		}
 	} finally {
 		beat.dispose();
-		station.endRootBeat?.(rootBeat, toolCallId);
 		// Reconcile exactly once, whatever happened above. The station owns the
 		// accounting; an accounting failure is a bug in the station, not in the
 		// model's script, so it is reported sideways instead of masking the

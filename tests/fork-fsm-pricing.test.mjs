@@ -37,7 +37,7 @@ function stationFor(ledger, options = {}) {
 
 function item(overrides = {}) {
   return {
-    scopeId: "f1",
+    path: "f1",
     fsm: "audit one seam",
     // Every fork creates a scope, so every field is required: the identity
     // statement, and the declared size of the work.

@@ -14,7 +14,7 @@ import {
 } from "../host/adapter.mjs";
 import { appendHistoryMessage } from "../host/hack-context.mjs";
 import { sessionFor, setAgentMessages } from "../host/capture.mjs";
-import { abortChildSession, registerProcessUserAbortEngine } from "../host/user-abort.mjs";
+import { abortChildSession, interruptChildSession, registerProcessUserAbortEngine } from "../host/user-abort.mjs";
 import { createToolGateway, installToolConfiscation } from "../host/tool-confiscation.mjs";
 import { charsToTokens, createEmptyCatalog, preparseModelSpec } from "../host/pricing.mjs";
 import { entryUsage, totalInput, usageSnapshot } from "../host/usage.mjs";
@@ -150,6 +150,7 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 				stationFor: (childCtx) => engine.station(childCtx),
 				refresh: attachStation,
 				abortChild: abortChildSession,
+				interruptChild: interruptChildSession,
 			});
 		} catch (error) {
 			record("activation", error, { phase: "station-binding" });

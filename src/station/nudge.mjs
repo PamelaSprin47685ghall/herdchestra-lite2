@@ -12,17 +12,14 @@ import { insideScopeNudge, rootReturnNudge, stopNudge } from "./texts.mjs";
 /**
  * The steer this assistant message earns, in priority order.
  *
- * 1. A hard mode names the one move that remains: `AWAITING_REPLY` needs
- *    `scope_reply`, `CONTEXT_LIMIT` needs `scope_return`. `FINAL_ANSWER` never
- *    steers — the only move left is the final answer itself.
- * 2. Unreceived children outrank every other process nudge.
- * 3. A running child scope must exit through `scope_return` while its shared
+ * 1. `FINAL_ANSWER` never steers.
+ * 2. `ABANDONED` outranks `CONTEXT_LIMIT` and `unreceived`; charges the
+ *    shared return-nudge allowance so a stuck abandoned scope still terminates.
+ * 3. `CONTEXT_LIMIT` needs `scope_return`.
+ * 4. Unreceived subscopes outrank normal return nudges.
+ * 5. A running subscope must exit through `scope_return` while its shared
  *    return-nudge allowance has room.
- * 4. Root under autopilot must call `scope_return` until `canStop` is true.
- *
- * The decision does not charge the allowance itself. A steer the host refuses
- * to accept was never delivered, so it must not cost the child a retry; the
- * caller charges only after delivery succeeds.
+ * 6. Root under autopilot must call `scope_return` until `canStop` is true.
  *
  * @returns {{ kind: "none" } | { kind: "steer", text: string, charge?: "return" }}
  */
@@ -33,12 +30,25 @@ export function nudgeDecision({
 	mode = null,
 	unreceived = 0,
 	relay = null,
-	from = null,
+	abandoned = null,
 } = {}) {
 	if (hasToolCalls) return { kind: "none" };
 	if (mode === "FINAL_ANSWER") return { kind: "none" };
-	if (mode === "AWAITING_REPLY" || mode === "CONTEXT_LIMIT") {
-		return { kind: "steer", text: stopNudge(mode, { unreceived, from }) };
+	if (mode === "ABANDONED") {
+		if (ownerId !== null && ledger) {
+			const record = forkOf(ledger, ownerId);
+			if (!record || record.status !== RUNNING) return { kind: "none" };
+			if (returnNudgesOf(record) >= MAX_RETURN_NUDGES) return { kind: "none" };
+			return {
+				kind: "steer",
+				text: stopNudge("ABANDONED", { abandoned }),
+				charge: "return",
+			};
+		}
+		return { kind: "steer", text: stopNudge("ABANDONED", { abandoned }) };
+	}
+	if (mode === "CONTEXT_LIMIT") {
+		return { kind: "steer", text: stopNudge(mode, { unreceived }) };
 	}
 	const open =
 		unreceived > 0

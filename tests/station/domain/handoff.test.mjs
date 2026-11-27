@@ -92,6 +92,7 @@ describe("decideScopeReturn", () => {
 			kind: "deliver",
 			scope: "child",
 			big: true,
+			abandoned: false,
 			dafny: "verified fix",
 			receiverId: "root",
 			orphans: ["c2"],

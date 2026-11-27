@@ -8,11 +8,15 @@ export function validScopeId(value) {
 }
 
 export function scopeTitle(id) {
+	if (typeof id !== "string" || id === "") return "";
+	if (id.startsWith("/")) return id;
 	return id.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[-_ ]+/).map((word) =>
 		word.charAt(0).toUpperCase() + word.slice(1),
 	).join(" ");
 }
 
 export function publicScopeId(record) {
-	return record?.scopeId ?? (Number.isInteger(record?.openSeq) ? `scope-${record.openSeq}` : "scope");
+	if (typeof record?.path === "string" && record.path !== "") return record.path;
+	if (typeof record?.scopeId === "string" && record.scopeId !== "") return `/${record.scopeId}`;
+	return Number.isInteger(record?.openSeq) ? `/scope-${record.openSeq}` : "/scope";
 }

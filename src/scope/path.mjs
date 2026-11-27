@@ -1,24 +1,23 @@
 // Scope paths: the address space of a conversation.
 //
-// Root is `/` and lives outside every scope. A child's path is its parent's
-// path plus `/<scopeId>`, so the tree the ledger already records in
-// `parentForkId` is its own address space: sibling uniqueness plus the parent
-// chain, never a global name table. This module is pure. It reads a ledger
-// snapshot and returns an address, with no station, no clock, and no I/O.
-//
-// There is no wildcard engine. `scope_request` takes one exact path; a script that
-// wants several scopes maps over `state.scopes` itself, which is ordinary
-// JavaScript and needs no address language here.
+// Root is `/` and lives outside every scope. Any scope path is `/<seg1>/.../<segN>`
+// where each segment satisfies SCOPE_ID_PATTERN and is never `root` (case-insensitive).
+// Upscope is the path parent; caller (`ownerId`) is tracked orthogonally on the record.
+// This module is pure: it reads a ledger snapshot and returns addresses, with no
+// station, no clock, and no I/O.
 
-/** `"/api"` + `"auth"` -> `"/api/auth"`; the root is spelled `/`. */
-export function childScopePath(parentPath, scopeId) {
-  const parent = typeof parentPath === "string" ? parentPath.trim() : "";
-  const name = typeof scopeId === "string" ? scopeId.trim() : "";
-  const base = parent === "" || parent === "/"
-    ? ""
-    : `/${parent.replace(/^\/+/, "").replace(/\/+$/, "")}`;
-  if (name === "") return base === "" ? "/" : base;
-  return `${base}/${name}`;
+import { validScopeId } from "./scope-id.mjs";
+
+/** `"/api"` + `"spy"` -> `"/api/spy"`; `""` or `"/"` + `"api"` -> `"/api"`. */
+export function subscopePath(upscopePath, name) {
+  const upscope = typeof upscopePath === "string" ? upscopePath.trim() : "";
+  const seg = typeof name === "string" ? name.trim() : "";
+  const base =
+    upscope === "" || upscope === "/"
+      ? ""
+      : `/${upscope.replace(/^\/+/, "").replace(/\/+$/, "")}`;
+  if (seg === "") return base === "" ? "/" : base;
+  return `${base}/${seg}`;
 }
 
 function splitSegments(value) {
@@ -26,36 +25,80 @@ function splitSegments(value) {
   return value.split("/").filter((segment) => segment !== "");
 }
 
-/** A target shaped like a pattern is refused by callers, never resolved here. */
+/** A target shaped like a pattern is always refused (fail-closed). */
 export function looksLikePattern(rawTarget) {
   return typeof rawTarget === "string" && /[*?[]/.test(rawTarget);
 }
 
 /**
- * Resolve one target against the caller's path.
- *
- * `.` is the caller, `..` is its parent (clamped at the root), a bare name is
- * a child, and a leading `/` starts at the root. `isGlob` only reports that
- * the target carries `*`, `?` or `[`: the address is still normalized, so a
- * caller can name the pattern it refused in its error message.
+ * Split a canonical scope path (e.g. `"/api/spy"`) into `{ upscopePath, name }`.
+ * Returns null for `"/"` or invalid paths.
  */
-export function normalizeScopePath(cwdPath = "/", rawTarget = "") {
-  const target = typeof rawTarget === "string" ? rawTarget.trim() : "";
-  if (target === "") return { ok: false, code: "INVALID_SCOPE_TARGET" };
-  const isGlob = looksLikePattern(target);
-  const segments = target.startsWith("/") ? [] : splitSegments(cwdPath);
-  for (const segment of target.split("/")) {
-    if (segment === "" || segment === ".") continue;
+export function splitScopePath(path) {
+  if (typeof path !== "string" || !path.startsWith("/") || path === "/") return null;
+  const segments = path.slice(1).split("/");
+  if (segments.some((s) => s === "")) return null;
+  const name = segments[segments.length - 1];
+  const upscopePath = segments.length === 1 ? "/" : `/${segments.slice(0, -1).join("/")}`;
+  return { upscopePath, name };
+}
+
+/**
+ * Strictly resolve one target path against `cwdPath`.
+ *
+ * Fail-closed rules:
+ * - Empty string, non-string, wildcards (`*?[`): refused.
+ * - Trailing slash (except `"/"` itself) or empty segment (`//`): refused.
+ * - `..` climbing past `"/"`: refused (no silent clamping).
+ * - Any segment that is not `"."` or `".."` must satisfy `validScopeId` and must
+ *   not equal `"root"` (case-insensitive).
+ * - If `allowRoot === false` (e.g. `scope_fork`), resolving to `"/"` is refused.
+ */
+export function normalizeScopePath(cwdPath = "/", rawTarget = "", { allowRoot = true } = {}) {
+  if (typeof rawTarget !== "string") return { ok: false, code: "INVALID_PATH" };
+  const target = rawTarget.trim();
+  if (target === "") return { ok: false, code: "INVALID_PATH" };
+  if (looksLikePattern(target)) return { ok: false, code: "INVALID_PATH", isGlob: true };
+  if (target === "/") {
+    if (!allowRoot) return { ok: false, code: "INVALID_PATH" };
+    return { ok: true, path: "/", isGlob: false };
+  }
+  if (target.endsWith("/")) return { ok: false, code: "INVALID_PATH" };
+
+  const isAbs = target.startsWith("/");
+  const rawParts = (isAbs ? target.slice(1) : target).split("/");
+  // Empty segment (`//` or leading `//`) is refused.
+  if (rawParts.some((seg) => seg === "")) return { ok: false, code: "INVALID_PATH" };
+
+  const segments = isAbs ? [] : splitSegments(cwdPath);
+  for (const segment of rawParts) {
+    if (segment === ".") continue;
     if (segment === "..") {
-      if (segments.length > 0) segments.pop();
+      if (segments.length === 0) return { ok: false, code: "INVALID_PATH" };
+      segments.pop();
       continue;
+    }
+    if (!validScopeId(segment) || segment.toLowerCase() === "root") {
+      return { ok: false, code: "INVALID_PATH" };
     }
     segments.push(segment);
   }
+  const path = segments.length === 0 ? "/" : `/${segments.join("/")}`;
+  if (path === "/" && !allowRoot) return { ok: false, code: "INVALID_PATH" };
+  return { ok: true, path, isGlob: false };
+}
+
+/** Resolve a `scope_fork` path strictly (`/` is refused; returns `{ ok, path, upscopePath, name }`). */
+export function resolveForkPath(cwdPath = "/", rawTarget = "") {
+  const norm = normalizeScopePath(cwdPath, rawTarget, { allowRoot: false });
+  if (!norm.ok) return norm;
+  const parts = splitScopePath(norm.path);
+  if (!parts) return { ok: false, code: "INVALID_PATH" };
   return {
     ok: true,
-    path: segments.length === 0 ? "/" : `/${segments.join("/")}`,
-    isGlob,
+    path: norm.path,
+    upscopePath: parts.upscopePath,
+    name: parts.name,
   };
 }
 
@@ -70,50 +113,7 @@ function recordsOf(ledger) {
   return out;
 }
 
-function siblingOwnerOf(record) {
-  if (!record) return null;
-  if (record.parentForkId !== undefined) {
-    return typeof record.parentForkId === "string" && record.parentForkId !== ""
-      ? record.parentForkId
-      : null;
-  }
-  return typeof record.ownerId === "string" && record.ownerId !== "root"
-    ? record.ownerId
-    : null;
-}
-
-/**
- * The lowest free sibling name. A finished scope keeps its name while it can
- * still be asked a question or joined, so the taken set covers every record of
- * that parent, not only the running ones.
- */
-export function allocateSiblingScopeId(
-  ledger,
-  parentForkId,
-  requestedScopeId,
-  reservedInBatch = new Set(),
-) {
-  const requested = typeof requestedScopeId === "string" ? requestedScopeId.trim() : "";
-  if (requested === "") return requested;
-  const parent =
-    typeof parentForkId === "string" && parentForkId !== "root" ? parentForkId : null;
-  const taken = new Set();
-  for (const record of recordsOf(ledger)) {
-    if (siblingOwnerOf(record) !== parent) continue;
-    if (typeof record.scopeId !== "string" || record.scopeId === "") continue;
-    taken.add(record.scopeId.toLowerCase());
-  }
-  for (const name of reservedInBatch ?? []) {
-    if (typeof name === "string" && name !== "") taken.add(name.toLowerCase());
-  }
-  if (!taken.has(requested.toLowerCase())) return requested;
-  for (let suffix = 2; ; suffix += 1) {
-    const candidate = `${requested}-${suffix}`;
-    if (!taken.has(candidate.toLowerCase())) return candidate;
-  }
-}
-
-/** The record's address, falling back to its name for older snapshots. */
+/** The record's canonical path, falling back to `/<scopeId>` for minimal test fixtures. */
 export function scopePathOf(record) {
   if (!record || typeof record !== "object") return null;
   if (typeof record.path === "string" && record.path !== "") return record.path;
@@ -125,9 +125,8 @@ export function scopePathOf(record) {
 }
 
 /**
- * One record by address, in any status. A finished scope is still addressable:
- * `scope_request` wakes it for one reply turn, and `scope_join` takes its ready
- * record. Case-insensitive, matching the sibling namespace's own rule.
+ * Find one record by path (in any status, case-insensitive).
+ * Never returns a record for `"/"` (root has no fork record).
  */
 export function findScopeByPath(ledger, path) {
   if (!ledger || typeof ledger !== "object") return null;
@@ -151,39 +150,4 @@ export function forkIdsUnderPath(ledger, path) {
     if (address === base || address.startsWith(prefix)) ids.push(record.forkId);
   }
   return ids;
-}
-
-/** Active means it is running work right now. */
-export function isScopeActive(record) {
-  return Boolean(record && record.status === "running");
-}
-
-/** Every running path, the root first, then lexicographic order. */
-export function listActiveScopePaths(ledger) {
-  const paths = new Set(["/"]);
-  for (const record of recordsOf(ledger)) {
-    if (!isScopeActive(record)) continue;
-    const path = scopePathOf(record);
-    if (path !== null) paths.add(path);
-  }
-  return [...paths].sort();
-}
-
-/**
- * Every address a `scope_request` can still reach: running, returned, and
- * joined scopes keep a live agent that answers one reply turn. A failed or
- * abandoned record cannot answer, so it is not offered as a target.
- */
-export function listAddressableScopePaths(ledger) {
-  const paths = new Set(["/"]);
-  for (const record of recordsOf(ledger)) {
-    if (record.status === "failed") continue;
-    // A record whose outcome failed never produced a session that answers: a
-    // spawn the host refused, or a child that died before returning. Offering
-    // the address would park every `scope_request` sent there forever.
-    if (record.outcome === "failed") continue;
-    const path = scopePathOf(record);
-    if (path !== null) paths.add(path);
-  }
-  return [...paths].sort();
 }

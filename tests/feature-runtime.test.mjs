@@ -170,11 +170,11 @@ describe("prompt assembly", () => {
 	test("scope adaptive and aggressive are alternatives", () => {
 		const adaptive = prompt({ ...allOff(), scope: "adaptive" });
 		const aggressive = prompt({ ...allOff(), scope: "aggressive" });
-		expect(adaptive).toContain("parent never receives tool results");
+		expect(adaptive).toContain("caller never receives tool results");
 		expect(adaptive).not.toContain("sqrt(n)");
 		expect(aggressive).toContain("sqrt(n)");
 		expect(aggressive).toContain("manager, not a labourer");
-		expect(aggressive).not.toContain("parent never receives tool results");
+		expect(aggressive).not.toContain("caller never receives tool results");
 	});
 
 	test("workspace full adds the meta skills to the personal profile", () => {

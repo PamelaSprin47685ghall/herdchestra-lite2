@@ -185,7 +185,7 @@ function expect(condition, message) {
 
 await check("registers exactly one tool, js, and nothing retired", async () => {
 	expect(host.tools.has("js"), "js is not registered");
-	for (const name of ["scope_fork", "scope_join", "scope_return", "scope_request", "scope_reply", "scope_send", "scope_ask", "scope_context", "pin", "amend", "todo", "scope"]) {
+	for (const name of ["scope_fork", "scope_join", "scope_return", "scope_abandon", "scope_request", "scope_reply", "scope_send", "scope_ask", "scope_context", "pin", "amend", "todo", "scope"]) {
 		expect(!host.tools.has(name), `${name} should not be registered as a tool`);
 	}
 });
@@ -197,7 +197,7 @@ await check("scope_fork refuses without a child spawner", async () => {
 			spec: {
 				forks: [
 					{
-						scopeId: "probe",
+						path: "probe",
 						fsm: "probe",
 						profession: "You are a probe engineer.",
 						n: 1,

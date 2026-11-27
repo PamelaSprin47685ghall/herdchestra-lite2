@@ -108,7 +108,7 @@ describe("a station with no display at attach time", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(attachedChildren).toHaveLength(1);
-		expect(attachedChildren[0].label).toMatch(/Scope/);
+		expect(attachedChildren[0].label).toBe("/child");
 		expect(attachedChildren[0].child).toBeTruthy();
 	});
 });

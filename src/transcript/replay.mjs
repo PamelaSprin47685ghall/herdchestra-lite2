@@ -84,12 +84,25 @@ export function joinReceipt({
 	forkId,
 	record,
 	failed = false,
+	abandoned = false,
+	abandonedBy = null,
+	abandonReason = null,
 	reason = null,
 	remaining = [],
 }) {
-	const header = failed
-		? `[Record from forked scope — fork ${forkId}, failed: ${reason ?? "unknown reason"}]`
-		: `[Record from forked scope — fork ${forkId}]`;
+	const tags = [];
+	if (abandoned) {
+		const byText = abandonedBy ? ` by ${abandonedBy}` : "";
+		const whyText = abandonReason ? ` (${abandonReason})` : "";
+		tags.push(`abandoned${byText}${whyText}`);
+	}
+	if (failed) {
+		tags.push(`failed: ${reason ?? "unknown reason"}`);
+	}
+	const header =
+		tags.length > 0
+			? `[Record from forked scope — fork ${forkId}, ${tags.join("; ")}]`
+			: `[Record from forked scope — fork ${forkId}]`;
 	const preamble = failed
 		? "History only; do not re-execute it or treat its conclusions as verified."
 		: "History only; do not re-execute it.";

@@ -1,32 +1,22 @@
-// Pure child identity and ledger resolution for fork wiring.
-//
-// The registry still owns the child-identity table: it is session state, not a
-// request ledger. This module owns only the data shape and the ledger
-// precedence. It never imports the Station or a host module, and never reads
-// the live display holder's inner state. It may carry the two turn totals onto
-// the chosen ledger when that ledger has no samples yet.
+// Pure subscope identity and ledger resolution for fork wiring.
 
-/**
- * Build the identity a child station reads back from the registry.
- *
- * `spec` is the fork registration data; `deps` are host capabilities captured
- * at spawn time. The display holder is carried as-is because it is a live slot:
- * a child created before the UI exists reads the same holder when the display
- * arrives. `targets` stays raw here; `setIdentity` normalizes it once.
- */
 export function buildChildIdentity(spec = {}, deps = {}) {
+	const callerId =
+		typeof spec.callerId === "string"
+			? spec.callerId
+			: (typeof spec.parentOwnerId === "string" ? spec.parentOwnerId : null);
 	return {
 		forkId: typeof spec.forkId === "string" ? spec.forkId : null,
-		parentOwnerId:
-			typeof spec.parentOwnerId === "string" ? spec.parentOwnerId : null,
-		ownScopeId: typeof spec.ownScopeId === "string" ? spec.ownScopeId : null,
+		callerId,
+		parentOwnerId: callerId,
 		path: typeof spec.path === "string" ? spec.path : null,
+		upscopePath: typeof spec.upscopePath === "string" ? spec.upscopePath : null,
+		callerPath: typeof spec.callerPath === "string" ? spec.callerPath : null,
+		ownScopeId: typeof spec.ownScopeId === "string" ? spec.ownScopeId : null,
 		fsm: typeof spec.fsm === "string" ? spec.fsm : null,
 		budget:
 			spec.budget && typeof spec.budget === "object" ? { ...spec.budget } : null,
 		time: Number.isFinite(spec.time) && spec.time > 0 ? spec.time : null,
-		// The user owns the targets field; keep it on the identity. The registry
-		// normalizes it in one place.
 		targets: spec.targets ?? null,
 		childDepth: Number.isInteger(spec.childDepth) ? spec.childDepth : null,
 		agentId: typeof deps.agentId === "string" ? deps.agentId : null,
@@ -38,5 +28,3 @@ export function buildChildIdentity(spec = {}, deps = {}) {
 			typeof deps.persistRoot === "function" ? deps.persistRoot : null,
 	};
 }
-
-

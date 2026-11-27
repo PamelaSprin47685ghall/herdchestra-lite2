@@ -31,18 +31,21 @@ import {
 	beginRequest,
 	createTurnClock,
 	createUsageLedger,
+	diffDirectory,
 	finishRequest,
 	isFreeCall,
 	markLedgerStructDirty,
 	planLedgerEntry,
 	planStateEntry,
+	projectDirectory,
 	serializeState,
 	serializeStateCore,
 	splitState,
 	forkOf,
 	unreceivedChildren,
+	updateRecordSnapshot,
+	updateRootMeta,
 } from "../scope/index.mjs";
-import { listAddressableScopePaths } from "../scope/path.mjs";
 import { takeReturnNudge } from "../scope/return-nudge.mjs";
 import { recordTurnSample } from "../scope/turn-stats.mjs";
 import {
@@ -65,20 +68,11 @@ import { PORT_NAMES } from "../core/ports/registry.mjs";
 import { mergeFeatures } from "../features/herd/features.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 import {
-	REQUEST_INTERRUPT_REASON,
-	currentRequest,
-	markRequestDelivered,
-	pendingRequestCount,
-	registerRuntime,
-	runtimeOf,
-	runtimeTable,
-} from "../scope/request-queue.mjs";
-import {
 	forkRemaining,
 	projectCapabilities,
 	renderConsoleReceipt,
 } from "./domain/capabilities.mjs";
-import { handleReplyToolCall, handleRequestToolCall } from "./request-controls.mjs";
+import { closedLeafId } from "./domain/snapshot-leaf.mjs";
 import {
 	executeAbandon,
 	executeFork,
@@ -316,10 +310,14 @@ export class SessionStation {
 		this.childOutcomePort = () => null;
 		this.setChildOutcome = null;
 		this.abortChildrenPort = () => 0;
+		this.interruptScopePort = () => false;
 		this.persistLedger = () => this.persist?.();
 		this.forkReports = new Map();
 		this.selfForkId = null;
-		this.parentOwnerId = null;
+		this.lastSeenDir = new Map();
+		this.pendingDirSeen = null;
+		this.lastDirSeq = -1;
+		this.lastPendingDirSeq = -1;
 		// Request windows are process-local. A reload keeps the two totals on the
 		// ledger and starts the next request from an empty clock.
 		this.turnClock = createTurnClock();
@@ -417,6 +415,108 @@ export class SessionStation {
 	onUsageMessage(message, ctx) {
 		this.finishRequestSample(Date.now(), message);
 		this.usage.onMessage(message, ctx);
+		this.noteDirectoryUsage(message);
+		if (
+			message?.role === "assistant" &&
+			message.stopReason !== "aborted" &&
+			message.stopReason !== "error" &&
+			this.pendingDirSeen instanceof Map
+		) {
+			this.lastSeenDir = this.pendingDirSeen;
+			this.pendingDirSeen = null;
+			this.lastDirSeq = this.lastPendingDirSeq;
+		}
+	}
+
+	measuredOccupancy() {
+		const input = this.usage?.lastTotalInput;
+		const output = this.usage?.lastOutputTokens;
+		if (!Number.isFinite(input)) return null;
+		return input + (Number.isFinite(output) ? output : 0);
+	}
+
+	noteDirectoryModel(ctx, live) {
+		const ledger = this.forkLedgerPort();
+		if (!ledger) return;
+		const key = modelKey(live);
+		const thinkingLevel = this.host?.model?.thinkingOf?.(ctx) ?? null;
+		const window = this.contextWindowTokens();
+		const ownerId = this.forkOwnerId();
+		if (ownerId === null) {
+			updateRootMeta(ledger, {
+				...(key ? { model: key } : {}),
+				thinkingLevel,
+				...(Number.isFinite(window) && window > 0 ? { contextWindow: window } : {}),
+			});
+		} else {
+			updateRecordSnapshot(ledger, ownerId, {
+				...(key ? { resolvedModel: key } : {}),
+				resolvedThinking: thinkingLevel,
+				...(Number.isFinite(window) && window > 0 ? { contextWindow: window } : {}),
+			});
+		}
+	}
+
+	noteDirectoryUsage(_message) {
+		const ledger = this.forkLedgerPort();
+		if (!ledger) return;
+		const occupancy = this.measuredOccupancy();
+		if (!Number.isFinite(occupancy)) return;
+		const ownerId = this.forkOwnerId();
+		if (ownerId === null) {
+			const baseline = this.usage?.baselineTokens;
+			updateRootMeta(ledger, {
+				contextTokens: occupancy,
+				...(ledger.root?.dirContextTokens == null && Number.isFinite(baseline)
+					? { dirContextTokens: baseline }
+					: {}),
+			});
+		} else {
+			updateRecordSnapshot(ledger, ownerId, {
+				snapshotContextTokens: occupancy,
+			});
+		}
+	}
+
+	noteSnapshotLeaf(_ctx) {
+		const ledger = this.forkLedgerPort();
+		if (!ledger) return;
+		let leafId = null;
+		const branch = this.manager?.getBranch?.();
+		if (Array.isArray(branch)) {
+			leafId = closedLeafId(branch);
+		} else if (typeof this.manager?.getLeafId === "function") {
+			leafId = this.manager.getLeafId() ?? null;
+		}
+		this.noteSnapshotMeta(leafId, this.measuredOccupancy());
+	}
+
+	noteSnapshotMeta(leafId, occupancy = null) {
+		const ledger = this.forkLedgerPort();
+		if (!ledger) return;
+		const ownerId = this.forkOwnerId();
+		if (ownerId === null) {
+			updateRootMeta(ledger, {
+				...(typeof leafId === "string" && leafId !== "" ? { safeSnapshotLeafId: leafId } : {}),
+				...(Number.isFinite(occupancy) ? { contextTokens: occupancy } : {}),
+			});
+		} else {
+			updateRecordSnapshot(ledger, ownerId, {
+				...(typeof leafId === "string" && leafId !== "" ? { safeSnapshotLeafId: leafId } : {}),
+				...(Number.isFinite(occupancy) ? { snapshotContextTokens: occupancy } : {}),
+			});
+		}
+	}
+
+	resetDirectoryBaseline() {
+		this.lastSeenDir = new Map();
+		this.pendingDirSeen = null;
+		this.lastDirSeq = -1;
+		this.lastPendingDirSeq = -1;
+		if (this.forkOwnerId() === null) {
+			const ledger = this.forkLedgerPort();
+			if (ledger) updateRootMeta(ledger, { dirContextTokens: null });
+		}
 	}
 
 	/**
@@ -664,6 +764,25 @@ export class SessionStation {
 
 	// -- js capability projection (sync) ---------------------------------------
 
+	directoryDelta(ledger) {
+		if (!ledger || typeof ledger !== "object") {
+			const rootOnly = projectDirectory(null);
+			const scopesDelta = diffDirectory(this.lastSeenDir, rootOnly);
+			return { scopesDelta, currentDir: rootOnly, dirSeq: 0 };
+		}
+		const dirSeq = Number.isInteger(ledger.dirSeq) ? ledger.dirSeq : 0;
+		if (
+			this.lastDirSeq === dirSeq &&
+			this.lastSeenDir.size > 0 &&
+			this.pendingDirSeen === null
+		) {
+			return { scopesDelta: null, currentDir: this.lastSeenDir, dirSeq };
+		}
+		const currentDir = projectDirectory(ledger);
+		const scopesDelta = diffDirectory(this.lastSeenDir, currentDir);
+		return { scopesDelta, currentDir, dirSeq };
+	}
+
 	/**
 	 * The raw point-in-time facts a projection needs. One gatherer for the
 	 * probe, the cache signature and the vm binding, so the three cannot drift.
@@ -674,8 +793,14 @@ export class SessionStation {
 		const record = this.branchRecord();
 		const isChild = ownerId !== null;
 		const selfPath = record?.path ?? (isChild ? `/${ownerId}` : "/");
-		const registry = this.forkRegistry();
-		const pendingRequest = registry ? currentRequest(registry, selfPath) : null;
+		const abandoned =
+			isChild && record?.abandonRequested === true
+				? {
+						by: record.abandonedBy ?? "/",
+						...(record.abandonReason ? { reason: record.abandonReason } : {}),
+					}
+				: null;
+		const { scopesDelta, currentDir, dirSeq } = this.directoryDelta(ledger);
 		const specs = (() => {
 			try {
 				return typeof this.host?.tools?.listSpecs === "function"
@@ -689,9 +814,6 @@ export class SessionStation {
 		for (const spec of Array.isArray(specs) ? specs : []) {
 			if (typeof spec?.name === "string" && spec.name !== "") hostToolNames.push(spec.name);
 		}
-		// A projection always needs a mode, even when a station carries no clock
-		// port: the nudge path reads only the mode, and `remaining` is the one
-		// field that needs time. A missing clock must not fail the projection.
 		let clock = null;
 		try {
 			clock = typeof this.clockPort === "function" ? (this.clockPort() ?? null) : null;
@@ -705,22 +827,19 @@ export class SessionStation {
 			unreceived: ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0,
 			canStop: this.state?.relay?.canStop === true,
 			contextOverHalf: this.contextNudgeArmed(),
-			pendingRequest:
-				pendingRequest && typeof pendingRequest === "object" ? pendingRequest : null,
+			abandoned,
 			remaining: clock ? forkRemaining(record, Date.now(), clock) : null,
 			selfPath,
-			// `state.scopes` is the model's address book for `scope_request`
-			// fanout, so it lists every scope that can still answer — not only
-			// the ones currently running.
-			activePaths: ledger ? listAddressableScopePaths(ledger) : ["/"],
+			scopesDelta,
+			_currentDir: currentDir,
+			_dirSeq: dirSeq,
 			hostToolNames,
 		};
 	}
 
 	/**
-	 * The path this scope answers to. Root is `/`; a child reads its own fork
-	 * record first, because the path is the address every other scope already
-	 * knows it by.
+	 * The path this scope answers to. Root is `/`; a subscope reads its own fork
+	 * record first.
 	 */
 	selfScopePath() {
 		const ownerId = this.forkOwnerId();
@@ -738,135 +857,12 @@ export class SessionStation {
 		return this.forkWaitPort?.()?.registry ?? this.forkWiring?.registry ?? null;
 	}
 
-	/**
-	 * The cross-scope delivery table, shared by every station through the one
-	 * fork registry. A request must reach a target another station owns, so the
-	 * table cannot live on a single station.
-	 */
-	get requestRuntime() {
-		const registry = this.forkRegistry();
-		if (!registry || typeof registry !== "object") return null;
-		return runtimeTable(registry);
-	}
-
-	// -- scope_request / scope_reply (sync translation) ------------------------
-
-	/**
-	 * Register the root's idle delivery hook. The host wiring owns the wake
-	 * verb (one prompt turn); the station owns the table merge and refuses to
-	 * stomp a live beat. A child gets its runtime entry from the spawn ticket.
-	 */
-	noteRootRuntime(wake) {
-		const registry = this.forkRegistry();
-		if (!registry || typeof wake !== "function") return false;
-		// An unbound child station also reports "/"; the identity is the proof
-		// that this is the conversation root and not a child before its fork
-		// record is attached.
-		if (this.forkOwnerId() !== null) {
-			return false;
-		}
-		if (this.selfScopePath() !== "/") return false;
-		const current = runtimeOf(registry, "/");
-		if (current?.state === "running") return false;
-		registerRuntime(registry, "/", { state: "idle", wake });
-		return true;
-	}
-
-	/**
-	 * Mark a running root js beat. Concurrent beats stay tracked by id so the
-	 * root reports idle only when the last beat leaves.
-	 */
-	beginRootBeat(ctx, toolCallId) {
-		const registry = this.forkRegistry();
-		if (
-			!registry ||
-			(this.forkOwnerId() !== null) ||
-			this.selfScopePath() !== "/"
-		) {
-			return null;
-		}
-		try {
-			const beatId = `${toolCallId}#${Date.now()}#${Math.random().toString(36).slice(2)}`;
-			const current = runtimeOf(registry, "/");
-			const beats = current?.beats instanceof Set ? new Set(current.beats) : new Set();
-			beats.add(beatId);
-			registerRuntime(registry, "/", {
-				state: "running",
-				beats,
-				interrupt: () => {
-					try {
-						this.host?.session?.abort?.(ctx, REQUEST_INTERRUPT_REASON);
-					} catch (error) {
-						this.noteError?.("tickets", error, {
-							kind: "js",
-							phase: "root-interrupt",
-							toolCallId,
-						});
-					}
-				},
-			});
-			return beatId;
-		} catch (error) {
-			this.noteError?.("tickets", error, {
-				kind: "js",
-				phase: "root-runtime",
-				toolCallId,
-			});
-			return null;
-		}
-	}
-
-	/**
-	 * Release one root beat. When the last beat leaves, report idle and wake the
-	 * root once if a peer request is waiting in the queue.
-	 */
-	endRootBeat(beatId, toolCallId = null) {
-		const registry = this.forkRegistry();
-		if (!registry || !beatId) return;
-		try {
-			const current = runtimeOf(registry, "/");
-			const beats = current?.beats instanceof Set ? new Set(current.beats) : new Set();
-			beats.delete(beatId);
-			if (beats.size > 0) {
-				registerRuntime(registry, "/", { state: "running", beats });
-				return;
-			}
-			registerRuntime(registry, "/", { state: "idle", interrupt: null, beats: null });
-			if (pendingRequestCount(registry, "/") > 0) {
-				const idle = runtimeOf(registry, "/");
-				if (typeof idle?.wake === "function") idle.wake();
-			}
-		} catch (error) {
-			this.noteError?.("tickets", error, {
-				kind: "js",
-				phase: "root-runtime",
-				toolCallId,
-			});
-		}
-	}
-
-	/** One `scope_request` call: resolve, queue, deliver, then park. */
-	handleScopeRequest({ toolCallId, params, ctx, signal = null }) {
-		return handleRequestToolCall(
-			this,
-			{ id: toolCallId, name: "scope_request", arguments: params },
-			ctx,
-			signal,
-		);
-	}
-
-	/** One `scope_reply(text)` call: answer the delivered queue head. */
-	handleScopeReply({ toolCallId, params, ctx }) {
-		return handleReplyToolCall(
-			this,
-			{ id: toolCallId, name: "scope_reply", arguments: params },
-			ctx,
-		);
-	}
-
 	/** The frozen projection for this beat. */
 	projectionFor(ctx) {
-		return projectCapabilities(this.capabilitySnapshot(ctx));
+		const snapshot = this.capabilitySnapshot(ctx);
+		const projection = projectCapabilities(snapshot);
+		this._lastDirMeta = { currentDir: snapshot._currentDir, dirSeq: snapshot._dirSeq };
+		return projection;
 	}
 
 	/** The cache signature only; no side effects. */
@@ -1006,7 +1002,7 @@ export class SessionStation {
 			mode: projection.mode,
 			unreceived: projection.state?.unreceived ?? 0,
 			relay: this.state?.relay ?? null,
-			from: projection.state?.request?.from ?? null,
+			abandoned: projection.state?.abandoned ?? null,
 		});
 		if (decision.kind === "none") return;
 		// A steer the host refuses was never delivered, so it must not spend the
@@ -1115,15 +1111,10 @@ export class SessionStation {
 		const previous = Array.isArray(this.lastCapKeys) ? this.lastCapKeys : [];
 		const removedKeys = previous.filter((key) => !projection.tools.includes(key));
 		this.lastCapKeys = projection.tools.slice();
-		// The receipt is where the question becomes visible to the model, so the
-		// delivery marker is written here and nowhere else: a projection computed
-		// for the cache signature must never consume a delivery.
-		// `forkRegistry()` is a class method and always answers; a second path
-		// here only hid which one owned the table.
-		const registry = this.forkRegistry();
-		if (projection.state?.request && registry) {
-			markRequestDelivered(registry, projection.state.scope);
-		}
+		// Record the in-flight directory snapshot; `lastSeenDir` only advances
+		// once an assistant reply arrives, so retries keep identical deltas.
+		this.pendingDirSeen = this._lastDirMeta?.currentDir ?? null;
+		this.lastPendingDirSeq = this._lastDirMeta?.dirSeq ?? -1;
 		const text = renderConsoleReceipt(projection, {
 			removedKeys,
 			chinese: this.state?.features?.chinese ?? "on",

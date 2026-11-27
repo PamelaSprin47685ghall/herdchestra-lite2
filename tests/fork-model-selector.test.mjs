@@ -57,7 +57,7 @@ function forkOne(station, ctx, overrides = {}) {
       arguments: {
         forks: [
           {
-            scopeId: "parser",
+            path: "parser",
             fsm: "read the parser",
             profession: "You are a careful parser reader like Ada Lovelace.",
             budget: { read: 1 },
@@ -153,7 +153,7 @@ describe("selector resolution", () => {
 });
 
 describe("scope_fork passes the resolved model to the spawn spec", () => {
-  test("carries the host object and the level, and keeps the raw selector", () => {
+  test("carries the host object and the level, and records the resolved model", () => {
     const ledger = createBracketLedger();
     const spawned = [];
     const out = forkOne(stationWith(ledger, spawned), { models: hostModels() }, { model: "acme/deep:high" });
@@ -161,8 +161,9 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
     expect(spawned).toHaveLength(1);
     expect(spawned[0].modelOverride).toBe(MODELS[0]);
     expect(spawned[0].thinkingLevel).toBe("high");
-    expect(spawned[0].model).toBe("acme/deep:high");
-    expect(forkOf(ledger, "fork-call").model).toBe("acme/deep:high");
+    expect(spawned[0].model).toBe("acme/deep");
+    expect(forkOf(ledger, "fork-call").resolvedModel).toBe("acme/deep");
+    expect(forkOf(ledger, "fork-call").resolvedThinking).toBe("high");
   });
 
   test("omits the override when no model is requested", () => {
@@ -171,7 +172,7 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
     const out = forkOne(stationWith(ledger, spawned), { models: hostModels() });
     expect(out.isError).toBeUndefined();
     expect(spawned[0].modelOverride).toBeUndefined();
-    expect(spawned[0].thinkingLevel).toBeUndefined();
+    expect(spawned[0].thinkingLevel).toBeNull();
   });
 
   test("refuses an unknown selector before registering the bracket", () => {
@@ -196,8 +197,8 @@ describe("scope_fork passes the resolved model to the spawn spec", () => {
         id: "fork-batch",
         arguments: {
           forks: [
-            { scopeId: "one", fsm: "first", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
-            { scopeId: "two", fsm: "second", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
+            { path: "one", fsm: "first", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["one.mjs"], model: "acme/deep" },
+            { path: "two", fsm: "second", profession: "You are a careful reader like Ada Lovelace.", budget: { read: 1 }, targets: ["two.mjs"], model: "gamma/absent" },
           ],
         },
       },

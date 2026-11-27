@@ -27,7 +27,7 @@ const REASON = "cancelled by the parent scope";
 function fork(ledger, forkId, ownerId) {
 	const result = registerFork(ledger, {
 		forkId,
-		scopeId: forkId,
+		path: `/${forkId}`,
 		ownerId,
 		fsm: "one state",
 		depth: ownerId === "root" ? 0 : 1,
@@ -151,81 +151,6 @@ describe("abort cascade", () => {
 		}
 		expect(forkOf(ledger, "joined").status).toBe("joined");
 		expect([...aborts].sort()).toEqual(["child", "grandchild"]);
-	});
-
-	test("onUserAbort aborts an idle child as well as running children", async () => {
-		const spawns = [];
-		const wiring = createForkWiring(
-			{},
-			{
-				spawn: (spec, ports) => {
-					spawns.push({ spec, ports });
-					return Promise.resolve({ ok: true, failed: false, reason: null });
-				},
-			},
-		);
-		const root = Object.create(SessionStation.prototype);
-		root.state = { features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
-		root.manager = null;
-		root.persist = () => {};
-		const rootPorts = attachBaseForkPorts(root, wiring, { conversationKey: "wake-tree" });
-		bindHostForkPorts(root, wiring, { createSession: async () => ({ ok: false }) });
-		const ledger = rootPorts.ledger;
-		fork(ledger, "child", "root");
-
-		root.childSpawnPort()({ forkId: "child", receipt: "work", fsm: "one state" });
-		const childPorts = spawns.at(-1).ports;
-		const aborts = [];
-		childPorts.registerIdle("child", {
-			prompt: () => {},
-			drain: async () => false,
-			abort: () => aborts.push("child"),
-		});
-		forkOf(ledger, "child").status = "ready";
-
-		root.onUserAbort({});
-
-		expect(aborts).toEqual(["child"]);
-		expect(forkOf(ledger, "child").status).toBe("failed");
-	});
-
-	test("onUserAbort aborts a joined child without altering its joined status", () => {
-		const spawns = [];
-		const wiring = createForkWiring(
-			{},
-			{
-				spawn: (spec, ports) => {
-					spawns.push({ spec, ports });
-					return Promise.resolve({ ok: true, failed: false, reason: null });
-				},
-			},
-		);
-		const root = Object.create(SessionStation.prototype);
-		root.state = { features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
-		root.manager = null;
-		root.persist = () => {};
-		const rootPorts = attachBaseForkPorts(root, wiring, { conversationKey: "wake-joined-tree" });
-		bindHostForkPorts(root, wiring, { createSession: async () => ({ ok: false }) });
-		const ledger = rootPorts.ledger;
-		fork(ledger, "child", "root");
-
-		root.childSpawnPort()({ forkId: "child", receipt: "work", fsm: "one state" });
-		const childPorts = spawns.at(-1).ports;
-		const aborts = [];
-		childPorts.registerIdle("child", {
-			prompt: () => {},
-			drain: async () => false,
-			abort: () => aborts.push("child"),
-		});
-		forkOf(ledger, "child").status = "joined";
-
-		root.onUserAbort({});
-
-		expect(aborts).toEqual(["child"]);
-		expect(forkOf(ledger, "child").status).toBe("joined");
-		// Second Esc is a no-op.
-		root.onUserAbort({});
-		expect(aborts).toEqual(["child"]);
 	});
 
 	test("native AgentSession.prototype.abort with Interrupted by user cascades synchronously before unwind, while internal and steer-redirect aborts do not", async () => {

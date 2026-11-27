@@ -9,10 +9,8 @@ import { isPlainObject } from "./plain.mjs";
 const VERSION = 2;
 
 const CONTROL_TOOLS = new Set([
-  "scope_request",
   "scope_fork",
   "scope_join",
-  "scope_reply",
   "scope_return",
   "scope_abandon",
   "wait",

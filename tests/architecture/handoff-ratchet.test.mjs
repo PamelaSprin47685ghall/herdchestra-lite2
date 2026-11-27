@@ -41,9 +41,6 @@ describe("handoff ratchet", () => {
 	});
 
 	test("the return decision has no woken-forward branch", () => {
-		// A woken scope is answered through `scope_request`/`scope_reply`; the
-		// old "forward dafny to the parent" path would now mean a second reply
-		// for the same turn, so it must stay deleted.
 		expect(domain).not.toMatch(/kind:\s*"forward"/);
 		expect(domain).not.toMatch(/\bwoken\b/);
 	});

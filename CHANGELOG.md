@@ -49,6 +49,17 @@ binding.
 `HERD_DISABLE_<PORT>=1` is refused when the port has no `off`
 implementation, instead of returning an illegal `off`.
 
+### Fixed — js interrupt behavior decided from in-flight ops
+
+A `js` call is one beat, and its interrupt decision now reads the in-flight
+operation type instead of the tool name or the script text. `scope_join`,
+`scope_request`, `wait`, and `ask` are waits; every other call is work. A
+steering message aborts only waits and lets the script finish; an explicit
+abort aborts every operation. After a steer, a new wait throws
+`BEAT_NO_MORE_WAITS` and a new work call throws `BEAT_STEERED`. An interrupted
+beat closes once, records the abandoned operations, and refuses later `api`
+calls without dispatching or billing them.
+
 ## [6.0.0] — 2026-11-27
 
 ### Changed — the language reminder prints as an output comment

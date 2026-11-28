@@ -10,14 +10,16 @@ Herdchestra Lite 2 gives an agent session parallel work that returns to the scop
 
 Every scope path segment is `<role>.<name>`, and the role of the last segment decides what that scope may do. Root `/` is a `manager`. Privilege narrows monotonically - `manager > devops > editor > inspector` - and a scope may fork or abandon only its own role or a narrower one; the path is the only place the role is set.
 
-| Role | Host tools | Concurrency |
+| Role | Host tools | Reported capacity |
 |---|---|---|
-| `manager` | none: plans, forks, joins, answers | unlimited |
-| `devops` | every host tool, including `bash`, builds, and tests | at most one `running` globally |
-| `editor` | reads and edits, without `bash`, `shell`, `eval`, `python`, `task`, or `manage_skill` | unlimited |
-| `inspector` | read-only: `read`, `grep`, `glob`, `find`, `ast_grep`, `web_search` | unlimited |
+| `manager` | none: plans, forks, joins, answers | 3 |
+| `devops` | every host tool, including `bash`, builds, and tests | 1, enforced globally |
+| `editor` | reads and edits, without `bash`, `shell`, `eval`, `python`, `task`, or `manage_skill` | 10 |
+| `inspector` | read-only: `read`, `grep`, `glob`, `find`, `ast_grep`, `web_search` | 10 |
 
 Every role sees the same one `js` tool and the same system prompt, so chaining roles along one path with the same model reuses the provider prompt prefix cache: an `inspector` explores and turns `done`, then an `editor` forked under it edits without reading the same files again. `state.role` reports the current scope's role in every REPL probe.
+
+Only the single running `devops` is an admission gate. The other numbers feed `state.scopes_summary`, which a `manager` probe prints when `state.scopes_delta` appears: reported capacity minus the scopes now `running` per role, with `+` marking the lower bound and zero-idle roles omitted. Root counts as one running manager.
 
 
 Every `path` names one new subscope; a bare name (`"worker"`) is relative to the caller (`state.scope`), while a relative or absolute path (`"../api/spy"` or `"/api/spy"`) places the subscope under any existing upscope (`running` or `done`, including `/`). Duplicate paths fail closed (`DUPLICATE_SCOPE_PATH`), and no automatic `-2/-3` renaming occurs.

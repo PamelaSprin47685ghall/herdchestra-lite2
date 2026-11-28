@@ -6,6 +6,16 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [10.1.0] — 2026-11-28
+
+### Added
+
+- `state.scopes_summary`: a `manager` probe with a fresh `scopes_delta` reports
+  idle hands by role — `ROLE_CAPACITY` (3 managers, 1 devops, 10 editors, 10
+  inspectors) minus the scopes now `running` — and names the next action. Root
+  counts as one running manager, zero-idle roles are omitted, and the line is a
+  nudge, not an admission gate.
+
 ## [10.0.0] — 2026-11-28
 
 ### Changed

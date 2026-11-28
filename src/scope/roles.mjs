@@ -17,6 +17,18 @@ export const ROLES = Object.freeze([
 	ROLE_INSPECTOR,
 ]);
 
+/**
+ * Counts the probe's idle-hands summary reports per role. Root counts as one
+ * running manager. These are reporting numbers, not admission gates: a scope
+ * beyond capacity is not refused, it is simply no longer counted as free.
+ */
+export const ROLE_CAPACITY = Object.freeze({
+	[ROLE_MANAGER]: 3,
+	[ROLE_DEVOPS]: 1,
+	[ROLE_EDITOR]: 10,
+	[ROLE_INSPECTOR]: 10,
+});
+
 /** Smaller rank means more privilege. */
 export const ROLE_RANK = Object.freeze({
 	[ROLE_MANAGER]: 0,

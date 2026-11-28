@@ -171,6 +171,22 @@ import { createPersistenceAnchor } from "./persistence-anchor.mjs";
 import { nudgeDecision } from "./nudge.mjs";
 import { mergeHost, shapeHost } from "../core/host-shape.mjs";
 
+/**
+ * Running scopes per role, read from the fork ledger. Root is one running
+ * manager and has no fork record. Only the probe's idle-hands summary reads
+ * this; it is not an admission gate.
+ */
+function runningCountsByRole(ledger) {
+	const counts = { manager: 1, devops: 0, editor: 0, inspector: 0 };
+	for (const forkId of Array.isArray(ledger?.order) ? ledger.order : []) {
+		const record = forkOf(ledger, forkId);
+		if (!record || record.status !== "running") continue;
+		const role = record.role ?? roleOfPath(record.path);
+		if (Object.hasOwn(counts, role)) counts[role] += 1;
+	}
+	return counts;
+}
+
 export class SessionStation {
 	constructor(manager, host, tickets, stationRegistry, pricingCatalog) {
 		this.manager = manager;
@@ -837,6 +853,7 @@ export class SessionStation {
 					}
 				: null;
 		const { scopesDelta, currentDir, dirSeq } = this.directoryDelta(ledger);
+		const runningByRole = runningCountsByRole(ledger);
 		const specs = (() => {
 			try {
 				return typeof this.host?.tools?.listSpecs === "function"
@@ -865,9 +882,10 @@ export class SessionStation {
 			contextOverHalf: this.contextNudgeArmed(),
 			abandoned,
 			remaining: clock ? forkRemaining(record, Date.now(), clock) : null,
-  		selfPath,
-  		role: selfPath === "/" ? "manager" : (record?.role ?? roleOfPath(selfPath)),
-  		scopesDelta,
+			selfPath,
+			role: selfPath === "/" ? "manager" : (record?.role ?? roleOfPath(selfPath)),
+			scopesDelta,
+			runningByRole,
 			_currentDir: currentDir,
 			_dirSeq: dirSeq,
 			hostToolNames,

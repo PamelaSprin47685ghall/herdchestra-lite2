@@ -223,6 +223,24 @@ test("the root receipt reports unreceived work until the root joins it", () => {
 	expect(probeOf(receipt()).unreceived).toBe(0);
 });
 
+test("a manager probe counts root and running forks before printing the nudge", () => {
+	const station = createTestStation(SessionStation, null, {}, {}, null, null);
+	const ledger = createBracketLedger();
+	station.forkLedgerPort = () => ledger;
+	station.forkOwnerId = () => null;
+	expect(registerFork(ledger, {
+		forkId: "worker-1",
+		scopeId: "inspector.worker-1",
+		path: "/inspector.worker-1",
+		ownerId: "root",
+		fsm: "inspect the sample",
+		depth: 0,
+	}).ok).toBe(true);
+	const view = probeOf(station.skillReceipt({ agent: { kind: "main" } }).content[0].text);
+	expect(view.scopes_summary).toContain("2+ managers, 9+ inspectors");
+	expect(view.scopes_summary).toContain("22+ paid-for hands");
+});
+
 function relayRequest({ features = {}, keepHook = false } = {}) {
 	const ctx = { agent: { id: "Main", kind: "main" } };
 	const first = { role: "user", content: "Finish the work." };

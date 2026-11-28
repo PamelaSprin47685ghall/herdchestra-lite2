@@ -9,13 +9,14 @@
 
 import { describe, expect, test } from "bun:test";
 
-import {
-	BASE_TOOLS,
-	EXCLUDED_HOST_TOOLS,
-	forkRemaining,
-	projectCapabilities,
-	renderConsoleReceipt,
-} from "../src/station/domain/capabilities.mjs";
+  import {
+  	BASE_TOOLS,
+  	EXCLUDED_HOST_TOOLS,
+  	forkRemaining,
+  	projectCapabilities,
+  	renderConsoleReceipt,
+  } from "../src/station/domain/capabilities.mjs";
+  import { ROLE_CAPACITY } from "../src/scope/roles.mjs";
 
 const SUBSCOPE = {
 	isChild: true,
@@ -271,9 +272,80 @@ describe("forkRemaining", () => {
 		expect(forkRemaining({ remaining: { read: 1 }, budget: {} }, 0)).toEqual({});
 	});
 
-	test("excluded host tools stay excluded from every child set", () => {
-		for (const name of ["ask", "todo", "wait", "js"]) {
-			expect(EXCLUDED_HOST_TOOLS.has(name)).toBe(true);
-		}
-	});
-});
+  	test("excluded host tools stay excluded from every child set", () => {
+  		for (const name of ["ask", "todo", "wait", "js"]) {
+  			expect(EXCLUDED_HOST_TOOLS.has(name)).toBe(true);
+  		}
+  	});
+  });
+
+  describe("scopes_summary", () => {
+  	const rootBase = {
+  		isChild: false,
+  		role: "manager",
+  		scopesDelta: { "/": "running | m1 | 10k+ / 200k" },
+  	};
+
+  	test("pins the hardcoded capacity", () => {
+  		expect(ROLE_CAPACITY).toEqual({
+  			manager: 3,
+  			devops: 1,
+  			editor: 10,
+  			inspector: 10,
+  		});
+  	});
+
+  	test("a manager with a fresh delta prints the idle-hands nudge", () => {
+  		const state = projectCapabilities({
+  			...rootBase,
+  			runningByRole: { manager: 1, devops: 0, editor: 0, inspector: 0 },
+  		}).state;
+  		expect(state.scopes_summary).toBe(
+  			"2+ managers, 10+ inspectors, 10+ editors and 1 devops are on the clock with nothing to do. 23+ paid-for hands sit idle while you work alone; parallel capacity burns, and nobody will assign them work for you. You are the bottleneck; every hour you serialize is a choice. Give them the next slices now, before your successor inherits a roster of spectators.",
+  		);
+  	});
+
+  	test("omits a role with no idle hands and drops the whole line when every role is full", () => {
+  		const oneFree = projectCapabilities({
+  			...rootBase,
+  			runningByRole: { manager: 3, devops: 0, editor: 10, inspector: 10 },
+  		}).state;
+  		expect(oneFree.scopes_summary).toBe(
+  			"1 devops is on the clock with nothing to do. 1+ paid-for hands sit idle while you work alone; parallel capacity burns, and nobody will assign them work for you. You are the bottleneck; every hour you serialize is a choice. Give them the next slices now, before your successor inherits a roster of spectators.",
+  		);
+
+  		const full = projectCapabilities({
+  			...rootBase,
+  			runningByRole: { manager: 3, devops: 1, editor: 10, inspector: 10 },
+  		}).state;
+  		expect(full.scopes_summary).toBeUndefined();
+  	});
+
+  	test("only a manager probe with a delta gets it", () => {
+  		const child = projectCapabilities({
+  			...rootBase,
+  			isChild: true,
+  			role: "inspector",
+  			selfPath: "/inspector.a",
+  			runningByRole: { manager: 1, devops: 0, editor: 0, inspector: 0 },
+  		}).state;
+  		expect(child.scopes_summary).toBeUndefined();
+
+  		const noDelta = projectCapabilities({
+  			...rootBase,
+  			scopesDelta: null,
+  			runningByRole: { manager: 1, devops: 0, editor: 0, inspector: 0 },
+  		}).state;
+  		expect(noDelta.scopes_summary).toBeUndefined();
+  	});
+
+  	test("clamps an over-capacity role to zero instead of going negative", () => {
+  		const state = projectCapabilities({
+  			...rootBase,
+  			runningByRole: { manager: 1, devops: 5, editor: 0, inspector: 0 },
+  		}).state;
+  		expect(state.scopes_summary).toContain("2+ managers, 10+ inspectors and 10+ editors are on the clock");
+  		expect(state.scopes_summary).not.toContain("devops");
+  		expect(state.scopes_summary).toContain("22+ paid-for hands");
+  	});
+  });

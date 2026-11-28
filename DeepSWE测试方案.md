@@ -1,204 +1,132 @@
-# DeepSWE 测试方案
+这次只有 **3 个两态变量**（$2 \times 2 \times 2 = 8$ 种全部组合），**直接上完整 $2^3$ 全析因设计（8 组）**是最优解：
+* **比上批 9.0.0 更便宜**（上批跑了 12 组 672 题次、花 $364.64；这批完整全析因只要 **8 组 448 题次**，预计 ~$240–$275）；
+* **零混叠**：不仅把 `scope`、`chinese`、`workspace` 三个主效应的样本量拉到 **224 对 224**（比上批 L9 的 168 更大、区间更窄），还能直接测出全部 **3 个双因子交互项**（顺便彻底解开上批 F0 比 L9 预测高出 7.1 个百分点的悬案）；
+* **不需要额外补确认轮**：8 组覆盖了全部角落，胜出组合直接就是实测分，没有筛选偏差。
 
-## 0. 目的与非目标
+下面是一份可直接冻结执行的 **`10.3.0` DeepSWE 测试方案**。
 
-本方案只回答一个问题：在**同一份代码、同一模型、同一评测环境**下，`/herd` 的每个提示词特征对 DeepSWE 通过率是正收益、零收益还是负收益。
+---
 
-非目标：
+# Herdchestra 10.3.0 DeepSWE 测试方案（$2^3$ 全析因）
 
-- 不写只对 DeepSWE 生效的隐藏提示词，不维护“跑分版”和“日常版”两套互相隐瞒缺陷的文本。
-- 不先验判断“该不该跑红灯”“该不该 clean break”。所有结论来自实测边际效应。
-- 不在 Full-113 上反复调参。Full-113 只做最终确认。
+## 一、目的与锁定条件
 
-评测时提示词开关全部通过启动环境变量设置；headless 容器里不需要执行 `/herd`。
+### 1. 本轮锁定（沿用 9.0.0 L9 已确认结论）
+* `HERD_TESTING=off`
+* `HERD_CONSTITUTION=full`
+* `HERD_FRAMING=off`
+* 启动首条消息统一使用 `/herd-goal <任务指令>`（进入 `ROOT_AUTOPILOT` 目标模式，无持久 autopilot 开关）
 
-## 1. 固定控制
+### 2. 本轮考察的 3 个两态变量
+| 变量 | 环境变量 | 档位 `-1` | 档位 `+1` | 代码侧实质差异（10.3.0） |
+|---|---|---|---|---|
+| **S (`scope`)** | `HERD_SCOPE` | `adaptive` | `hard` | `adaptive` 仅 4 句按耦合拆包 + 明确提醒把路径/签名/报错写入 `dafny`；`hard` 注入正交拆分 + `at least sqrt(n)` + CPS 交棒不回传事实 + **`state.scopes_summary` 空闲人手催促**（仅 `scope=hard` 触发） |
+| **C (`chinese`)** | `HERD_CHINESE` | `off` | `on` | 是否在 system prompt 与每轮 REPL probe 尾部强压简体中文思考与回答 |
+| **W (`workspace`)** | `HERD_WORKSPACE` | `off` | `personal` | 是否注入非 CS 硕士详述、费孝通/迪拉德文风、`<95%` 规则（goal 模式下取默认并记残差）、`Obey AGENTS.md` 以及 `.agent/skills/` 设计与手工验收记录（**明确不测 `full` 元技能**） |
 
-每一轮必须锁定并记录：
+> **版本漂移提醒（9.0.0 → 10.3.0）**：`10.0.0` 移除了 `scope_fork` / `scope_abandon` 结果里的请求回显，`10.3.0` 新增了 `coerceComplex` 容错解析并把默认 `scope` 改成了 `hard`。因此 **8 组全部必须显式传齐 6 个 `HERD_*` 环境变量**，且组内结论严格只在 `10.3.0` 同提交内对比。
 
-| 项目 | 要求 |
+---
+
+## 二、固定控制与运行纪律（修复上批 2 个流程卡点）
+
+| 控制项 | 规定 |
 |---|---|
-| 代码版本 | 同一 git commit；记录 hash |
-| 模型 | 同一 provider/model/thinking 档位 |
-| 任务集 | Dev-30 或 Full-113，题号固定 |
-| 单题超时 | 固定值 |
-| 镜像/依赖 | 同一镜像与 lockfile |
-| 评分 | 官方隐藏 verifier；不读 test.patch |
-| 并发 | 固定并发数；避免资源竞争改变超时 |
-| 重试 | 默认不重试；失败题保留 |
-| 记录 | 每题 JSONL + 汇总表；保存环境变量 |
+| 代码版本 | 锁定 `10.3.0` 同一 git commit（冻结进 `manifest.json`）；跑前先过 `bun run lint`、`bun test tests`、`bun run smoke:relay` |
+| 宿主与模型 | 严格沿用上批同一 `omp 19.2.1`、同一 `openai-codex/gpt-6.1-terra`（`medium`）、同一 DeepSWE v1.1 快照与官方独立评分器 |
+| 数据集 | 阶段 1 复用**同一套 Dev-28（28 题 × 2 轮 = 56 题次/组）**，便于跨版本核对；不删掉全过/全挂题 |
+| 锚点复用 | 若 `omp 19.2.1`、模型与快照均未变化，**原生 OMP `M0`（26/56 = 46.4%）直接复用上批数据，不重复花钱**；若上述任一变化，则补跑 `M0` |
+| **评分器超时口径（预先写死）** | 官方评分器 1,800 秒超时**直接计 0 分**（保留 `verifier_exception` 与 `official_reward=null` 供审计），**不再因单题评分超时中断整批队列**；仅在容器崩溃、凭据失效、Git 基线异常或出现 ≥3 例非 `gql` 评分异常时停机 |
+| **工具计数口径** | 从第一天起按根/子会话调用 ID 去重，并展开 `js` 的 `innerCalls` 统计外层调用、测试/构建命令与拒绝码 |
 
-## 2. 数据集与指标
+---
 
-### 2.1 Dev-30
+## 三、阶段 1：Dev-28 完整 $2^3$ 实验矩阵（分 2 个正交半块执行）
 
-从 DeepSWE 113 题按语言分层抽取 30 题：TypeScript、Go、Python、JavaScript、Rust 各 6 题。用于阶段 1 和阶段 2 的筛选，避免每轮都跑全量。
+把 8 组拆成**两个互补的正交半块（Block 1 + Block 2）**：
+* **同时跑完两块 = 完整 8 组全析因（无混叠、主效应与双因子交互项全解析）**；
+* **如果中途想看半程成绩**：先跑完 Block 1（4 组、约 $120–$140），它本身就是一个平衡的 $2^{3-1}$ 正交筛选，且已经包含上批 L9 的预测冠军 `E1`（`C_pred`）；若出现单边大雪崩（例如某档暴跌 >10 个百分点）可当场止损，否则无缝补跑 Block 2 拼齐完整 $2^3$。
 
-### 2.2 Full-113
+> 每组均固定：`HERD_TESTING=off HERD_CONSTITUTION=full HERD_FRAMING=off`
 
-最终只在全量 113 题上跑 3 个点：原版 omp `M0`、最佳纯机制内核 `K*`、最终组合 `C*`。
+| 编号 | 批次 | `HERD_SCOPE` | `HERD_CHINESE` | `HERD_WORKSPACE` | 特殊对照意义 |
+|---|---|---|---|---|---|
+| **E1** | Block 1 | `adaptive` | `off` | `off` | **9.0.0 L9 预测冠军 `C_pred`**（直接验 63.7% 预测，兼作 `10.3.0` 基线） |
+| **E2** | Block 1 | `adaptive` | `on` | `personal` | `adaptive` + 中文 + 个人交互约定 |
+| **E3** | Block 1 | `hard` | `off` | `personal` | `hard`（CPS）+ 英文 + `.agent/` 设计记录（验 CPS × 设计记录协同） |
+| **E4** | Block 1 | `hard` | `on` | `off` | `hard` + 中文 + 纯净仓库 |
+| **E5** | Block 2 | `hard` | `off` | `off` | 与 `E1` 单挑：**纯 `hard` 对 `adaptive`** |
+| **E6** | Block 2 | `hard` | `on` | `personal` | `10.3.0` 新默认近似版（关掉 `testing`/`framing`/元技能后的全开版） |
+| **E7** | Block 2 | `adaptive` | `off` | `personal` | 与 `E1` 单挑：**纯 `workspace=personal` 对 `off`** |
+| **E8** | Block 2 | `adaptive` | `on` | `off` | 与 `E1` 单挑：**纯 `chinese=on` 对 `off`** |
 
-### 2.3 指标
-
-| 指标 | 定义 | 用途 |
-|---|---|---|
-| pass/total | 官方 verifier 通过题数 / 总题数 | 主指标 |
-| zero-change | 最终 diff 为空或仅注释的题数 | 定位提前停机/不行动 |
-| early-stop | 未完成工具链就自然停止的题数 | 定位 goal 模式/ask |
-| never-tested | 从未运行编译、类型检查或相关测试的题数 | 定位 testing 特征 |
-| timeout | 超时题数 | 定位 context/fork 开销 |
-| steps | 每题平均模型步数与工具调用数 | 定位并行与自省成本 |
-| context-limit | 触发 `CONTEXT_LIMIT` 的次数 | 定位读文件策略与 fork 粒度 |
-| forks | 平均 `scope_fork` 次数 | 定位 scope 策略 |
-| tokens | 输入/输出 token | 成本与上下文税 |
-
-主指标用配对比较：同一题在不同配置下的通过/失败。不要只比总数。
-
-## 3. 阶段 1：锚定上下界
-
-所有评测配置都在启动后用 `/herd-goal <任务指令>` 进入 goal 模式（等价于过去的 autopilot on 并敲入指令），交付后自动退出；没有持久 `HERD_AUTOPILOT` 开关。`M0` 是原版 omp，不加载本插件。
-
-| 组 | 配置 | 回答的问题 |
-|---|---|---|
-| `M0` | 原版 omp，无插件 | 目标基准线 |
-| `K0` | goal 模式, `chinese=off, testing=off, constitution=off, framing=off, scope=off, workspace=off` | 纯机制（js + scope_*）相对原版是正、零还是负 |
-| `F0` | goal 模式, `chinese=on, testing=lean, constitution=full, framing=full, scope=aggressive, workspace=full` | 当前全量默认的基线 |
-
-`K0` 的机制内核包含 root 的 `scope_return` 单次 seal 协议：`oath` 即封印并交还最终答案，`unfinished` 即 rewind，与普通 `manager` scope 完全一致，没有二次 rewind 或 review 轮。
-
-闸门：
-
-1. 若 `K0` 显著低于 `M0`，先查机制，不要继续调提示词：`js` 报错、Root 无普通工具、`CONTEXT_LIMIT` 50% 锁定、`renderChildRecord` 剥离 `toolResult`、fork/join 摩擦。
-2. 若 `K0` 接近或超过 `M0`，进入阶段 2，并固定 `K* = K0`。
-
-## 4. 阶段 2：L9(3^4) 正交筛选
-
-固定：goal 模式（`/herd-goal`）、`chinese=off`、`workspace=off`。
-
-四个三态因子：`testing`、`constitution`、`framing`、`scope`。用 `L9(3^4)`，每行只跑 Dev-30 一次；9 轮可并发。
-
-| Run | testing | constitution | framing | scope |
-|---:|---|---|---|---|
-| 1 | off | off | off | off |
-| 2 | off | core | plan | adaptive |
-| 3 | off | full | full | aggressive |
-| 4 | no-red | off | plan | aggressive |
-| 5 | no-red | core | full | off |
-| 6 | no-red | full | off | adaptive |
-| 7 | lean | off | full | adaptive |
-| 8 | lean | core | off | aggressive |
-| 9 | lean | full | plan | off |
-
-任意两列的全部 3×3 组合恰好各出现一次，因此每个档位的边际均值不受其他三个因子影响。
-
-### 4.1 边际均值
-
-对因子 `f` 的档位 `v`：
-
-```
-mean(f=v) = average(pass_rate of the 3 rows where f=v)
-delta(f=v) = mean(f=v) - mean(all 9 rows)
-```
-
-报告每个因子的三个 `mean` 与 `delta`，并附 `never-tested`、`early-stop`、`context-limit` 的边际率。
-
-### 4.2 加性预测与 1 轮确认
-
-每个因子取边际均值最高的档位，拼成 `C_pred`：
-
-```
-predicted(C_pred) = overall_mean + sum_f (mean(f=best_f) - overall_mean)
-```
-
-实跑 1 轮 `C_pred`：
-
-- 实测接近预测：加性成立，锁定 `C_pred`。
-- 实测明显低于预测：存在负交互。只对边际变动最大的两个因子补一个 2×2（其余固定为最佳档位），不要回到全网格。
-
-### 4.3 噪声带内的配对复跑
-
-若两个档位只差 1–2 题，不要重跑整套 30 题。只取两者结果不同（一过一挂）的分歧题子集，复跑 k=2–3 次，用配对 McNemar 检验判断差异是否稳定。通过率差值在 ±1 题内按“无结论”处理。
-
-## 5. 阶段 3：Full-113 终审
-
-只跑 3 个点：
-
-| 组 | 配置 |
-|---|---|
-| `M0` | 原版 omp |
-| `K*` | 阶段 1 胜出的纯机制内核 |
-| `C*` | 阶段 2 胜出的组合 |
-
-每个点跑 1 次全量；若预算允许，关键点跑 2 次取均值。Full-113 的结果只用于拍板，不用于继续搜索。若 `C*` 与 `K*` 差距小于 4 题，视为噪声，优先选择提示词更少、行为更简单的配置。
-
-## 6. 环境变量示例
-
-`K0`：
-
+**环境变量模板（以 `E5` 为例）：**
 ```sh
-HERD_CHINESE=off \
 HERD_TESTING=off \
-HERD_CONSTITUTION=off \
-HERD_FRAMING=off \
-HERD_SCOPE=off \
-HERD_WORKSPACE=off \
-<deep-swe-runner>
-```
-
-`L9 Run 5`（`testing=no-red, constitution=core, framing=full, scope=off`）：
-
-```sh
-HERD_CHINESE=off \
-HERD_TESTING=no-red \
-HERD_CONSTITUTION=core \
-HERD_FRAMING=full \
-HERD_SCOPE=off \
-HERD_WORKSPACE=off \
-<deep-swe-runner>
-```
-
-`F0`：
-
-```sh
-HERD_CHINESE=on \
-HERD_TESTING=lean \
 HERD_CONSTITUTION=full \
-HERD_FRAMING=full \
-HERD_SCOPE=aggressive \
-HERD_WORKSPACE=full \
+HERD_FRAMING=off \
+HERD_SCOPE=hard \
+HERD_CHINESE=off \
+HERD_WORKSPACE=off \
 <deep-swe-runner>
 ```
 
-`HERD_HERD=off` 只用于确认命令被禁用，不用于评测。goal 模式没有环境变量入口：评测启动后的第一条消息必须是 `/herd-goal <任务指令>`；若 runner 无法注入斜杠命令，则这一维度不可评测，不要伪造 `HERD_AUTOPILOT`。开关也可用 `HERD_DISABLE_<NAME>=1` 表达 `=off`；`HERD_CHINESE_REMINDER` 是 `HERD_CHINESE` 的旧别名。
+---
 
-## 7. 结果记录模板
+## 四、除了通过率，必须顺手抓取的 5 项机制指标
 
-每轮一行：
+为了不只看到“谁高几分”，还能知道**为什么高、为什么贵**，每轮从 JSONL 自动抽这 5 组副指标：
 
-| run | commit | model | tasks | pass | zero-change | early-stop | never-tested | timeout | context-limit | forks | tokens | notes |
-|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+1. **成本与时效**：全会话总估价（含子会话）、每满分摊销成本、单题求解均值/中位耗时、平均模型轮次、每轮输入 token（含缓存命中率）。
+2. **`scope=hard` 行为验真（重点）**：
+   * 平均 `scope_fork` 次数及**四角色占比**（`manager` / `inspector` / `editor` / `devops`）；
+   * **跨 upscope 交棒占比**（`upscopePath !== callerPath`，验证模型是真的在用 CPS 交棒，还是只在平铺瞎拆）；
+   * `state.scopes_summary` 实际触发次数；
+   * `scope_fork` 各类拒绝计数（`DUPLICATE_SCOPE_PATH`、`UNKNOWN_UPSCOPE`、`ROLE_ESCALATION`、`DEVOPS_ALREADY_RUNNING`、`INVALID_EDITOR_TARGETS`）——专门核对 `10.0.0` 去掉控制结果回显后有没有增加路径出错率。
+3. **`workspace=personal` 副作用检查（重点）**：
+   * 是否在目标仓库写入了 `.agent/` 文件（题次数），以及失败题里有没有因此触发仓库脏工作树/目录测试失败；
+   * 平均输出 token 数（量化“非 CS 硕士详述 + 费孝通文风”的输出通胀）。
+4. **`10.3.0` 容错与稳定性**：`js` `SyntaxError` / `JS_UNCAUGHT` 次数、空补丁数、`CONTEXT_LIMIT` 次数、求解超时数、未检出测试/构建命令题次数。
+5. **失败画像**：按新功能用例失败 / 既有回归失败 / 两类都挂拆分，与上批 `M0`、`F0` 同口径对比。
 
-每轮另存：
+---
 
-- 环境变量全集；
-- 每题 pass/fail、步数、耗时、token；
-- 失败题的错误类别（编译、类型、测试、超时、上下文、未改动）；
-- 与上一轮的配对分歧题列表。
+## 五、统计口径与事先锁定的拍板规则
 
-## 8. 解释与防过拟合
+### 1. 主效应与交互效应计算（全部 8 组跑完，共 448 题次）
+全部统计以**28 道整题（每题绑两轮）为配对抽样单元**，4,000 次 bootstrap（种子 `612`）给 95% 置信区间，并补按题精确置换检验 p 值：
 
-- Dev-30 的单轮通过率标准误约 `sqrt(0.25/30) ≈ 9.1%`，约 3 题；不要把 1–2 题的差异当结论。
-- Full-113 的采样噪声通常在 ±3–4 题；最终判断用配对差异与置信区间。
-- 先跑 `M0/K0/F0`，再跑 `L9`；不要因为某一轮“看起来好”就提前锁定。
-- 所有配置只通过 `HERD_*` 环境变量表达；不要为评测新增代码分支或隐藏提示词。
-- 如果某个特征在 `K0` 上为负，但在 `C*` 组合中为正，记录交互，不把它单独设为默认。
-- 最终默认值取“Full-113 上不劣于 `K*` 且对真实长程任务更稳”的配置；个人交互偏好（`chinese`、`workspace`）默认可以保持日常值，但必须能一键切到评测预设。
+* **3 个主效应（每档合并 4 组，224 题次 对 224 题次）**：
+  * $\Delta_{\text{scope}} = \text{均分}(E3,E4,E5,E6) - \text{均分}(E1,E2,E7,E8)$
+  * $\Delta_{\text{chinese}} = \text{均分}(E2,E4,E6,E8) - \text{均分}(E1,E3,E5,E7)$
+  * $\Delta_{\text{workspace}} = \text{均分}(E2,E3,E6,E7) - \text{均分}(E1,E4,E5,E8)$
+* **3 个双因子交互效应（直接看变量之间有没有互相打架或互相托底）**：
+  * `scope × workspace`：检验 `hard` 的 CPS 交棒是不是依赖 `workspace=personal` 的 `.agent/` 设计记录；
+  * `scope × chinese`：检验 `hard` 的英文 `omp grandpa rules` 内部通信是否与 `chinese=on` 冲突；
+  * `chinese × workspace`：检验两者联合能否复现上批 `F0` 高出预期 7.1 个百分点的现象。
 
-## 9. 判定标准
+### 2. 拍板规则（跑前写死，拒绝事后找补）
+1. **明显胜出**：某档主效应的 95% 区间全程在零的同一侧（或点估计领先 $\ge 4$ 个百分点且无反向交互），直接入选。
+2. **噪声带平局的简约原则**：若某因子两档主效应差值 $< 2$ 个百分点且无显著交互，优先选**更省钱、更快、不污染外部仓库**的档位：
+   * `workspace` 平局 → 选 `off`（不向陌生仓库写 `.agent/`）；
+   * `scope` 平局 → 选每满分摊销更低、或求解耗时明显更短的那档；
+   * `chinese` 平局 → 评测与英文长程任务默认 `off`，日常中文交互可按需开 `on`。
+3. **存在强交互时**：不看单个主效应，直接从 8 组里选综合通过率与性价比最优的组合（若第 1、2 名只差 $\le 2$ 个题次，把两者一起送进阶段 2 终审，不在 Dev-28 上过度微调）。
 
-一个特征档位只有在以下条件同时成立时才进入默认组合：
+---
 
-1. Dev-30 边际效应为正，或至少不在噪声带内为负；
-2. Full-113 配对差异不劣于 `K*`；
-3. 没有显著增加 `zero-change`、`never-tested` 或 `timeout`；
-4. 在真实长程任务中可解释、可维护，不是只对榜单有效的特调。
+## 六、阶段 2：Full-113 全量终审（最终定默认值的唯一依据）
+
+Dev-28 跑完锁定胜出组合 `C*` 后，在 **Full-113（113 题 × 1 轮；预算允许可跑 2 轮）** 只跑 **3 个点**（若 `adaptive` 与 `hard` 在 Dev-28 紧咬在 2 题内，则补第 4 个点做终极对决）：
+
+| 组别 | 配置 | 作用 |
+|---|---|---|
+| **`M0`** | 原生 OMP 19.2.1（无插件） | 全量基准线 |
+| **`K0`** | `10.3.0` 纯机制（6 开关全 `off`） | 全量机制基线 |
+| **`C*`** | `10.3.0` Dev-28 胜出组合 | 候选新默认配置 |
+| **`C2`** *(可选)* | 仅当 `adaptive` 与 `hard` 在 Dev-28 差距 $\le 2$ 题次时加跑 | 在 113 题上终极裁决 `adaptive` vs `hard` 的分/钱/时三角 |
+
+**最终合入默认值的门槛**：
+* `C*` 在 Full-113 上需稳定领先 `M0` 且不劣于 `K0`；
+* 若 `C*` 与次优档差距在 Full-113 上 $< 3$ 题，按**每满分摊销成本更低、求解更快、无 `.agent/` 仓库污染**者胜出；
+* `chinese` 若对英文题无正收益，仅作个人日常偏好开关，不靠硬编码绑死在长程默认里。

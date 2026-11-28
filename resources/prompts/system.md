@@ -35,7 +35,6 @@ Root (`/`) is outside all scopes: it plans, forks, joins, and answers, and the f
   - `running | <model> | <base>+ / <window>` — a running scope; `<base>+` is its upscope snapshot context at launch.
   - `done | <model> | <ctx> / <window>` — a finished scope with frozen context `<ctx>`.
   - Forking a subscope under a path inherits that upscope's last-turn context snapshot. Using the same `<model>` as that upscope reuses its provider prompt prefix cache and saves input cost; omitting `model` inherits that upscope's model automatically.
-- `state.scopes_summary` (a `manager` scope, only when `scopes_delta` appears this turn) reports the idle hands left by role: fixed capacity (3 managers, 1 devops, 10 editors, 10 inspectors) minus the scopes now `running`, with `+` marking a lower bound. A role with no idle hands is omitted. Treat it as a nudge to fork independent work, not as a cap on what you may start.
 
 ### Run scopes
 

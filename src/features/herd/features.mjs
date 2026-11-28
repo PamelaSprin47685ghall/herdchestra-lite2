@@ -53,11 +53,12 @@ export const FEATURES = Object.freeze({
 		},
 	}),
 	scope: freezeFeature({
-		states: ["off", "adaptive", "aggressive"],
+		states: ["off", "adaptive", "aggressive", "hard"],
 		fallback: "aggressive",
 		sections: {
 			adaptive: ["scope.adaptive"],
 			aggressive: ["scope.aggressive"],
+			hard: ["scope.hard"],
 		},
 	}),
 	workspace: freezeFeature({

@@ -877,6 +877,7 @@ export class SessionStation {
 			isChild,
 			autopilot: this.state?.relay?.goal === true,
 			chinese: this.state?.features?.chinese ?? "on",
+			featureScope: this.state?.features?.scope ?? "aggressive",
 			unreceived: ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0,
 			canStop: this.state?.relay?.canStop === true,
 			contextOverHalf: this.contextNudgeArmed(),

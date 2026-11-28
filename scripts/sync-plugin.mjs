@@ -105,6 +105,8 @@ const FINGERPRINTS = [
   { file: "resources/prompts/system.md", needle: "scope_send", min: 0, max: 0 },
   { file: "resources/prompts/features.md", needle: "testing.no-red", min: 1 },
   { file: "resources/prompts/features.md", needle: "scope.aggressive", min: 1 },
+  { file: "resources/prompts/features.md", needle: "scope.hard", min: 1 },
+  { file: "src/station/domain/capabilities.mjs", needle: 'featureScope === "hard"', min: 1 },
   { file: "src/features/herd/features.mjs", needle: "META_SKILLS_SENTINEL", min: 1 },
   { file: "resources/prompts/errors.md", needle: "duplicate-scope-path", min: 1 },
 ];

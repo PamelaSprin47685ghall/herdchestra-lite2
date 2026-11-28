@@ -62,6 +62,14 @@ describe("the feature table", () => {
 		);
 	});
 
+	test("scope hard is an alternative state with only its own section", () => {
+		expect(FEATURES.scope.states).toEqual(["off", "adaptive", "aggressive", "hard"]);
+		const keys = featureSections({ ...defaultFeatures(), scope: "hard" });
+		expect(keys).toContain("scope.hard");
+		expect(keys).not.toContain("scope.adaptive");
+		expect(keys).not.toContain("scope.aggressive");
+	});
+
 	test("normalizeFeatures falls back per key and lowercases valid states", () => {
 		expect(normalizeFeatures({ testing: "NO-RED", scope: "bogus" })).toMatchObject({
 			testing: "no-red",
@@ -108,6 +116,12 @@ describe("environment parsing", () => {
 		expect(parsed.ok).toBe(true);
 		expect(parsed.values).toEqual(defaultFeatures());
 		expect(parsed.explicit).toEqual({});
+	});
+
+	test("HERD_SCOPE=hard is accepted", () => {
+		const parsed = parseFeatureEnv({ HERD_SCOPE: "hard" });
+		expect(parsed.ok).toBe(true);
+		expect(parsed.explicit).toEqual({ scope: "hard" });
 	});
 
 	test("canonical names, legacy Chinese names, and generic disable flags all resolve", () => {

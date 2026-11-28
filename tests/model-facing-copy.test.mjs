@@ -236,10 +236,15 @@ test("a manager probe counts root and running forks before printing the nudge", 
 		fsm: "inspect the sample",
 		depth: 0,
 	}).ok).toBe(true);
+	station.state.features.scope = "hard";
 	const view = probeOf(station.skillReceipt({ agent: { kind: "main" } }).content[0].text);
 	expect(view.scopes_summary).toContain("2+ managers, 9+ inspectors");
 	expect(view.scopes_summary).toContain("22+ paid-for hands");
-});
+
+	station.state.features.scope = "aggressive";
+	const quiet = probeOf(station.skillReceipt({ agent: { kind: "main" } }).content[0].text);
+	expect(quiet.scopes_summary).toBeUndefined();
+  });
 
 function relayRequest({ features = {}, keepHook = false } = {}) {
 	const ctx = { agent: { id: "Main", kind: "main" } };

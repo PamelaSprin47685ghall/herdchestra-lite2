@@ -280,11 +280,12 @@ describe("forkRemaining", () => {
   });
 
   describe("scopes_summary", () => {
-  	const rootBase = {
-  		isChild: false,
-  		role: "manager",
-  		scopesDelta: { "/": "running | m1 | 10k+ / 200k" },
-  	};
+	    const rootBase = {
+	    	isChild: false,
+	    	role: "manager",
+	    	featureScope: "hard",
+	    	scopesDelta: { "/": "running | m1 | 10k+ / 200k" },
+	    };
 
   	test("pins the hardcoded capacity", () => {
   		expect(ROLE_CAPACITY).toEqual({
@@ -336,8 +337,20 @@ describe("forkRemaining", () => {
   			scopesDelta: null,
   			runningByRole: { manager: 1, devops: 0, editor: 0, inspector: 0 },
   		}).state;
-  		expect(noDelta.scopes_summary).toBeUndefined();
-  	});
+	    	expect(noDelta.scopes_summary).toBeUndefined();
+	    	});
+
+	    	test("a non-hard scope leaves the nudge absent", () => {
+	    		const runningByRole = { manager: 1, devops: 0, editor: 0, inspector: 0 };
+	    		for (const featureScope of ["aggressive", "adaptive"]) {
+	    			const state = projectCapabilities({ ...rootBase, featureScope, runningByRole }).state;
+	    			expect(state.scopes_summary).toBeUndefined();
+	    		}
+	    		const withoutScope = { ...rootBase };
+	    		delete withoutScope.featureScope;
+	    		const omitted = projectCapabilities({ ...withoutScope, runningByRole }).state;
+	    		expect(omitted.scopes_summary).toBeUndefined();
+	    	});
 
   	test("clamps an over-capacity role to zero instead of going negative", () => {
   		const state = projectCapabilities({

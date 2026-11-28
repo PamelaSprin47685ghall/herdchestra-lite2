@@ -202,6 +202,22 @@ Ask for results, not for a chronicle: side effects are all you need. Do not rest
 
 For internal communication between scopes, use the omp grandpa rules to save tokens.
 
+## scope.hard
+
+### Team
+
+The team works across scopes: split the work along orthogonal seams and delegate as much as possible. You can summon 3+ `manager.<name>` for full-featured subscopes, 10+ `inspector` for search and research, and 10+ `editor` with `targets` for parallel edits—but only one `devops` for shell access.
+
+Do not wait on unrelated tasks, artificial waves, or phase boundaries. Missing information is no reason to serialize work, so long as everything can eventually converge—waiting to know everything first surrenders concurrency you never get back. Assume everything is parallelizable and independent until explicitly proven otherwise. Never let a slow peer scope hold a ready successor hostage. For a large task of size `n`, break it into at least `sqrt(n)` fine-grained scopes.
+
+Side effects are all you need. Prefer continuation-passing (CPS) multitasking, where tasks are handed forward rather than facts sent back: hauling facts upstream pays a round-trip in coordination and attention, whereas passing the continuation drives the task straight to its side effect.
+
+Between scopes, communicate under the omp grandpa rules to save tokens.
+
+### The idle-hands summary
+
+`state.scopes_summary` (a `manager` scope, only when `scopes_delta` appears this turn) reports the idle hands left by role: fixed capacity (3 managers, 1 devops, 10 editors, 10 inspectors) minus the scopes now `running`, with `+` marking a lower bound. A role with no idle hands is omitted. Treat it as a nudge to fork independent work, not as a cap on what you may start.
+
 ## workspace.personal
 
 ### Repository conventions

@@ -246,7 +246,7 @@ interface ScopeState {
 	unreceived: number;
 	/** Global directory delta since your previous turn (overwrite semantics per path): "running | model | base+ / window" or "done | model | ctx / window". Omitted when unchanged. */
 	scopes_delta?: Record<string, string>;
-	/** Manager only, when scopes_delta appears: idle capacity by role, phrased as a nudge. Omitted when no role is free. */
+	/** Manager only when the active scope feature is hard: idle capacity by role, phrased as a nudge. Omitted otherwise. */
 	scopes_summary?: string;
 	/** Present only in ABANDONED mode. */
 	abandoned?: { by: string; reason?: string };

@@ -37,9 +37,10 @@ function joinRoleList(parts) {
  *
  * Capacity is fixed per role; `runningByRole` counts the scopes now running,
  * root included. A role at or over capacity is dropped, and the whole line
- * disappears when every role is full. `+` marks a count as a lower bound;
- * `devops` is a single slot and takes no `+`.
- */
+	 * disappears when every role is full. `+` marks a count as a lower bound;
+	 * `devops` is a single slot and takes no `+`. The projection mints the line
+	 * only for a manager whose active `scope` feature is `hard`.
+	 */
 function idleHandsSummary(runningByRole) {
 	if (!runningByRole || typeof runningByRole !== "object") return null;
 	const roles = [
@@ -95,6 +96,7 @@ export function projectCapabilities({
 	selfPath = "/",
 	scopesDelta = null,
 	runningByRole = null,
+	featureScope = "aggressive",
 	hostToolNames = [],
 	chinese = "on",
 } = {}) {
@@ -138,7 +140,9 @@ export function projectCapabilities({
 	const hasDelta =
 		scopesDelta && typeof scopesDelta === "object" && Object.keys(scopesDelta).length > 0;
 	const summary =
-		hasDelta && role === ROLE_MANAGER ? idleHandsSummary(runningByRole) : null;
+		hasDelta && role === ROLE_MANAGER && featureScope === "hard"
+			? idleHandsSummary(runningByRole)
+			: null;
 
 	const state = {
 		mode,

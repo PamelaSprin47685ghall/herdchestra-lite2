@@ -174,6 +174,14 @@ describe("prompt assembly", () => {
 		expect(aggressive).toContain("sqrt(n)");
 		expect(aggressive).toContain("managers, not labourers");
 		expect(aggressive).not.toContain("caller never receives tool results");
+
+		const hard = prompt({ ...allOff(), scope: "hard" });
+		expect(hard).toContain("orthogonal seams");
+		expect(hard).toContain("state.scopes_summary");
+		expect(hard).not.toContain("caller never receives tool results");
+		expect(hard).not.toContain("managers, not labourers");
+		expect(adaptive).not.toContain("state.scopes_summary");
+		expect(aggressive).not.toContain("state.scopes_summary");
 	});
 
 	test("workspace full adds the meta skills to the personal profile", () => {

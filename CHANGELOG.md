@@ -6,6 +6,22 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [10.2.0] — 2026-11-28
+
+### Added
+
+- `scope = hard`: an orthogonal-seams / continuation-passing delegation policy.
+  It summons `manager`, `inspector`, and `editor` scopes in parallel, splits a
+  task of size `n` into at least `sqrt(n)` scopes, and hands work forward
+  instead of hauling facts back.
+
+### Changed
+
+- `state.scopes_summary` is now minted only when the active `scope` feature is
+  `hard`; every other value leaves the field absent. Its prose moved from the
+  persistent rules into the `scope.hard` section, so a manager that cannot see
+  the field is not told about it.
+
 ## [10.1.0] — 2026-11-28
 
 ### Added

@@ -6,6 +6,14 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [10.3.1] — 2026-11-28
+
+### Fixed
+
+- The relay smoke checks root promotion in the scope result and accepts the optional stop flag.
+- The write-lock test resolves symlinked temporary directories before comparing lock keys.
+- The UI build record distinguishes the tracked web source directory from its generated distribution.
+
 ## [10.3.0] — 2026-11-28
 
 ### Added

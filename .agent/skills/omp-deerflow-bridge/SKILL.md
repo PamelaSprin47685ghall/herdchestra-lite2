@@ -169,7 +169,7 @@ host-omp-ui/
 
 ## 已知残余与升级关注点
 
-- 构建 Web 产物：`cd host-omp-ui && bun run build:web`（即 `bun web/scripts/build.mjs`），输出 `host-omp-ui/web/dist/` 并随插件 `files` 发布；复制安装不会现场构建。
+- 构建 Web 产物：`cd host-omp-ui && bun run build:web`（即 `bun web/scripts/build.mjs`），在 `host-omp-ui/web/` 下生成 `dist/`，由插件的 `files` 一并发布；复制安装不会现场构建。
 - `../deer-flow/frontend/node_modules` 首次构建前需执行 `pnpm install --frozen-lockfile`；`host-omp-ui/web` 首次需 `bun run install:safe`（不修改上游源码与 lockfile）。
 - 若 `Bun.build` 打包 `@streamdown/code` / `shiki` / `@streamdown/mermaid` 遇到 WASM 或动态加载兼容问题，`web/shims/streamdown.ts` 提供优雅降级路径（保留完整 Markdown/GFM/高亮代码体验）。
 - 扩展自定义 `ctx.ui.custom()` 若未实现 `describe(cx)`，Web 通过右侧/停靠 TUI Surface 视窗以 `ui/terminal` ANSI 渲染 + `surface.keys` 透传完整交互。

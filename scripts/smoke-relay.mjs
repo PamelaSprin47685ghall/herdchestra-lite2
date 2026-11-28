@@ -257,7 +257,7 @@ await check("root small handoff rewinds via agent_end ticket preserving verbatim
   await check("root seal promotes on the first oath without a rewind", async () => {
   	const sealed = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "verified nothing left", ...OATH } });
   	expect(!sealed.isError, `seal failed: ${sealed.text}`);
-  	expect(sealed.details?.promoted === true && sealed.details?.stopLoop === false, "expected promotion without stopLoop");
+  	expect(sealed.details?.result?.promoted === true && (sealed.details.stopLoop ?? false) === false, "expected promotion without stopLoop");
   	expect(station.state.relay.canStop === true, "expected canStop true");
   	expect(station.state.relay.pendingRewind === null, "a seal must not queue a rewind");
 

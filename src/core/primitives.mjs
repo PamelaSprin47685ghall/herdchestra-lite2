@@ -37,6 +37,21 @@ function isNonEmptyString(value) {
 	return typeof value === "string" && value.trim() !== "";
 }
 
+// Complex tool arguments may arrive as a live value or as serialized JSON.
+// Prefer the live JS object/array, decode only a JSON-looking string, and
+// leave every other string alone so a literal payload is never guessed.
+function coerceComplex(value) {
+	if (typeof value !== "string") return value;
+	const text = value.trim();
+	if (text === "" || (text[0] !== "{" && text[0] !== "[")) return value;
+	try {
+		const parsed = JSON.parse(text);
+		return parsed !== null && typeof parsed === "object" ? parsed : value;
+	} catch {
+		return value;
+	}
+}
+
 // -- Result constructors ----------------------------------------------------
 
 // A refused decision. `details` is omitted from the object when the caller did
@@ -121,6 +136,7 @@ export {
 	isPlainObject,
 	isLocalPlainObject,
 	isNonEmptyString,
+	coerceComplex,
 	failure,
 	put,
 	copyCounts,

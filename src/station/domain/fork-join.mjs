@@ -11,6 +11,7 @@ import {
 } from "../../scope/admission.mjs";
 import { decideAbandon, decideAbandonRequest } from "../../scope/abandon.mjs";
 import { findScopeByPath, resolveForkPath } from "../../scope/path.mjs";
+import { coerceComplex, isPlainObject } from "../../core/primitives.mjs";
 import { normalizeBudget, validBudget } from "../../scope/turns.mjs";
 import { normalizeTargets, validTargets } from "../../scope/targets.mjs";
 import {
@@ -92,35 +93,39 @@ export function decideForkAdmission({
  * turns on success so the caller never normalizes twice.
  */
 export function validateFork(args) {
-	const fsm = trimText(args?.fsm);
+	const input = coerceComplex(args);
+	const item = isPlainObject(input) ? input : {};
+	const fsm = trimText(item.fsm);
 	if (fsm === "") return { ok: false, code: "INVALID_FSM" };
 	// A budget is optional: a manager holds no host tool, and a pure-reasoning
 	// inspector may need none. The role check happens in `decideRegister`, once
 	// the path names the role.
+	const budgetRaw = coerceComplex(item.budget);
 	const hasBudget =
-		Object.hasOwn(args ?? {}, "budget") && args.budget !== undefined && args.budget !== null;
-	if (hasBudget && !validBudget(args.budget)) {
+		Object.hasOwn(item, "budget") && budgetRaw !== undefined && budgetRaw !== null;
+	if (hasBudget && !validBudget(budgetRaw)) {
 		return { ok: false, code: "INVALID_BUDGET" };
 	}
-	const budget = hasBudget ? normalizeBudget(args.budget) : {};
+	const budget = hasBudget ? normalizeBudget(budgetRaw) : {};
 	if (hasBudget && !validBudget(budget)) return { ok: false, code: "INVALID_BUDGET" };
 	// Targets are optional too; `editor` must supply concrete files, checked
 	// once the role is known.
-	const hasTargets = args?.targets !== undefined && args.targets !== null;
-	if (hasTargets && !validTargets(args.targets)) {
+	const targetsRaw = coerceComplex(item.targets);
+	const hasTargets = targetsRaw !== undefined && targetsRaw !== null;
+	if (hasTargets && !validTargets(targetsRaw)) {
 		return { ok: false, code: "INVALID_TARGETS" };
 	}
-	if (args.model !== undefined && args.model !== null && typeof args.model !== "string") {
+	if (item.model !== undefined && item.model !== null && typeof item.model !== "string") {
 		return { ok: false, code: "INVALID_ARGUMENT" };
 	}
-	const rawPath = typeof args?.path === "string" ? args.path.trim() : "";
+	const rawPath = typeof item.path === "string" ? item.path.trim() : "";
 	if (rawPath === "") {
 		return { ok: false, code: "INVALID_PATH" };
 	}
   	// Syntax only: an empty path is refused here. Whether the path resolves, and
   	// against which upscope, is `decideRegister`'s question, because only it
   	// knows `callerPath`.
-	const profession = trimText(args?.profession);
+	const profession = trimText(item.profession);
 	if (profession === "" || !profession.startsWith("You are ")) {
 		return { ok: false, code: "INVALID_PROFESSION" };
 	}
@@ -130,10 +135,10 @@ export function validateFork(args) {
 		fsm,
 		profession,
 		budget,
-		targets: hasTargets ? normalizeTargets(args.targets) : [],
+		targets: hasTargets ? normalizeTargets(targetsRaw) : [],
 		// The caller's own turn estimate; a manager's empty budget uses it.
-		n: Number.isInteger(args?.n) && args.n > 0 ? args.n : 0,
-		model: typeof args.model === "string" ? args.model.trim() : null,
+		n: Number.isInteger(item.n) && item.n > 0 ? item.n : 0,
+		model: typeof item.model === "string" ? item.model.trim() : null,
 	};
 }
 
@@ -143,12 +148,13 @@ export function validateFork(args) {
  * owns.
  */
 export function validateForkBatch(args) {
-	if (!Array.isArray(args?.forks) || args.forks.length === 0) {
+	const batch = Array.isArray(args) ? args : coerceComplex(args?.forks);
+	if (!Array.isArray(batch) || batch.length === 0) {
 		return { ok: false, code: "INVALID_FORKS", index: -1 };
 	}
 	const items = [];
-	for (let index = 0; index < args.forks.length; index += 1) {
-		const item = validateFork(args.forks[index]);
+	for (let index = 0; index < batch.length; index += 1) {
+		const item = validateFork(batch[index]);
 		if (!item.ok) return { ok: false, code: item.code, index };
 		items.push(item);
 	}

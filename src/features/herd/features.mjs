@@ -54,7 +54,7 @@ export const FEATURES = Object.freeze({
 	}),
 	scope: freezeFeature({
 		states: ["off", "adaptive", "aggressive", "hard"],
-		fallback: "aggressive",
+		fallback: "hard",
 		sections: {
 			adaptive: ["scope.adaptive"],
 			aggressive: ["scope.aggressive"],

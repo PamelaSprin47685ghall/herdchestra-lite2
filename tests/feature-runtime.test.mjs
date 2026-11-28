@@ -80,7 +80,7 @@ describe("persistence", () => {
 		stored.features.scope = "nope";
 		const restored = deserializeState(stored);
 		expect(restored.features.testing).toBe("lean");
-		expect(restored.features.scope).toBe("aggressive");
+		expect(restored.features.scope).toBe("hard");
 	});
 });
 
@@ -130,7 +130,7 @@ describe("prompt assembly", () => {
 			"Bayesian",
 			"three gates",
 			"sqrt(n)",
-			"managers, not labourers",
+			"orthogonal seams",
 			"Fei Xiaotong",
 			"<inlined-skill",
 		]) {

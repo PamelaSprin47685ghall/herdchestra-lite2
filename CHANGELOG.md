@@ -6,6 +6,24 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [10.3.0] — 2026-11-28
+
+### Added
+
+- Tolerant complex arguments: `js.inputs` and the `scope_fork` fields `forks`,
+  `forks[].budget`, and `forks[].targets` now accept a JS object/array or a
+  JSON-encoded object/array as a fallback; a string that is not JSON stays a
+  string.
+
+### Changed
+
+- The `js` tool's `inputs` schema now advertises `object`, `array`, or `string`
+  (object first). The contract remains an object; bare strings are discouraged
+  because a JSON-looking string is decoded and its intent is ambiguous.
+- The default `scope` is now `hard` (was `aggressive`), so a manager receives
+  `state.scopes_summary` by default; `off`, `adaptive`, and `aggressive` remain
+  selectable.
+
 ## [10.2.0] — 2026-11-28
 
 ### Added

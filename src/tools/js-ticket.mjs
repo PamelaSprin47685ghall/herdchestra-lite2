@@ -46,6 +46,7 @@
 
 import vm from "node:vm";
 import { renderYamlView } from "../format/yaml-view.mjs";
+import { coerceComplex } from "../core/primitives.mjs";
 import { errorResult, textResult } from "./results.mjs";
 import { JS_INTERRUPTED, JS_STEERED, createBeat } from "./beat.mjs";
 
@@ -289,7 +290,8 @@ export async function jsTicket(
 	const script = (async () => {
 		try {
 			const compiled = compileAsync(sandbox, params?.code);
-			const value = await compiled(api, state, params?.inputs ?? {});
+			const inputs = coerceComplex(params?.inputs ?? {});
+			const value = await compiled(api, state, inputs);
 			return { ok: true, value };
 		} catch (error) {
 			return { ok: false, error };

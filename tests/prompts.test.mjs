@@ -296,7 +296,7 @@ describe("the one registered tool", () => {
 		expect(parameters.required).toEqual(["code"]);
 		expect(parameters.properties.code.type).toBe("string");
 		expect(parameters.properties.code.minLength).toBe(1);
-		expect(parameters.properties.inputs.type).toBe("object");
+		expect(parameters.properties.inputs.type).toEqual(["object", "array", "string"]);
 		expect(parameters.required).not.toContain("inputs");
 	});
 

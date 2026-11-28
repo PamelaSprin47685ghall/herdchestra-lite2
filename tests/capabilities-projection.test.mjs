@@ -349,7 +349,7 @@ describe("forkRemaining", () => {
 	    		const withoutScope = { ...rootBase };
 	    		delete withoutScope.featureScope;
 	    		const omitted = projectCapabilities({ ...withoutScope, runningByRole }).state;
-	    		expect(omitted.scopes_summary).toBeUndefined();
+			    expect(omitted.scopes_summary).toContain("2+ managers");
 	    	});
 
   	test("clamps an over-capacity role to zero instead of going negative", () => {

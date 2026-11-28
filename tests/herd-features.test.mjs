@@ -39,7 +39,7 @@ describe("the feature table", () => {
 			testing: "lean",
 			constitution: "full",
 			framing: "full",
-			scope: "aggressive",
+			scope: "hard",
 			workspace: "full",
 		});
 	});
@@ -53,7 +53,7 @@ describe("the feature table", () => {
 			"constitution.full",
 			"framing.plan",
 			"framing.full",
-			"scope.aggressive",
+			"scope.hard",
 			"workspace.personal",
 			META_SKILLS_SENTINEL,
 		]);
@@ -73,7 +73,7 @@ describe("the feature table", () => {
 	test("normalizeFeatures falls back per key and lowercases valid states", () => {
 		expect(normalizeFeatures({ testing: "NO-RED", scope: "bogus" })).toMatchObject({
 			testing: "no-red",
-			scope: "aggressive",
+			scope: "hard",
 			workspace: "full",
 		});
 	});

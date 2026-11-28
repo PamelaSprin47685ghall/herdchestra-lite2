@@ -96,7 +96,7 @@ export function projectCapabilities({
 	selfPath = "/",
 	scopesDelta = null,
 	runningByRole = null,
-	featureScope = "aggressive",
+	featureScope = "hard",
 	hostToolNames = [],
 	chinese = "on",
 } = {}) {

@@ -12,6 +12,7 @@ import {
 	decideRegister,
 	decideReturn,
 	validateFork,
+	validateForkBatch,
 } from "../../../src/station/domain/fork-join.mjs";
 
 const WINDOW = 100_000;
@@ -101,6 +102,24 @@ describe("fork validation and register", () => {
 		expect(
 			validateFork({ ...item, targets: [" src/parser.mjs ", "src/cache.mjs"] }).targets,
 		).toEqual(["src/parser.mjs", "src/cache.mjs"]);
+	});
+
+	test("JSON-encoded complex fields are coerced before validation", () => {
+		expect(validateForkBatch({ forks: JSON.stringify([item]) }).ok).toBe(true);
+		expect(validateForkBatch([item]).ok).toBe(true);
+		expect(validateForkBatch({ forks: [JSON.stringify(item)] }).ok).toBe(true);
+		expect(validateFork({ ...item, budget: '{"read":1}' }).budget).toEqual({ read: 1 });
+		expect(validateFork({ ...item, targets: '["src/parser.mjs"]' }).targets).toEqual([
+			"src/parser.mjs",
+		]);
+	});
+
+	test("coercion leaves genuine type errors intact", () => {
+		expect(validateForkBatch({ forks: 42 }).code).toBe("INVALID_FORKS");
+		expect(validateForkBatch({ forks: '{"path":"x"}' }).code).toBe("INVALID_FORKS");
+		expect(validateFork({ ...item, budget: [1] }).code).toBe("INVALID_BUDGET");
+		expect(validateFork({ ...item, budget: "not json" }).code).toBe("INVALID_BUDGET");
+		expect(validateFork({ ...item, targets: '{"a":1}' }).code).toBe("INVALID_TARGETS");
 	});
 
 	test("a fork issued from the js sandbox validates", () => {

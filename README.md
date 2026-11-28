@@ -183,7 +183,7 @@ omp plugin link .
 | `testing` | `off` / `no-red` / `lean` | `lean` | 静态优先、聚焦验证、未跑检查的交接 |
 | `constitution` | `off` / `core` / `full` | `full` | 工作纪律、边界与诚实报告 |
 | `framing` | `off` / `plan` / `full` | `full` | 目标、模型、残差与决策 |
-| `scope` | `off` / `adaptive` / `aggressive` / `hard` | `aggressive` | 何时分叉、如何并行；`hard` 启用 `state.scopes_summary` |
+| `scope` | `off` / `adaptive` / `aggressive` / `hard` | `hard` | 何时分叉、如何并行；`hard` 启用 `state.scopes_summary` |
 | `workspace` | `off` / `personal` / `full` | `full` | 仓库约定、设计记录与元技能 |
 
 同一组名字也是环境变量：`HERD_CHINESE`、`HERD_TESTING`、`HERD_CONSTITUTION`、`HERD_FRAMING`、`HERD_SCOPE`、`HERD_WORKSPACE`。优先级是显式环境变量 > 持久化状态 > 默认值。`HERD_HERD=off` 会关闭 `/herd` 与 `/herd-goal`。

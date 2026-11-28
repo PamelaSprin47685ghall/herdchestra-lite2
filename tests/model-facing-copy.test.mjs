@@ -51,7 +51,7 @@ test("one scope-and-relay section serves root and child, manual and autopilot", 
 	expect(baseText).toContain("/herd-goal");
 	expect(baseText).toContain("exactly one tool: `js`");
 	expect(baseText).toContain("At root, join every subscope you forked before sealing");
-	expect(baseText).toContain("Split into about `sqrt(n)` scopes");
+	expect(baseText).toContain("orthogonal seams");
 	expect(baseText).not.toContain("sqrt(2n)");
 
 	// The managed block never varies with the request: a forked scope inherits
@@ -236,7 +236,6 @@ test("a manager probe counts root and running forks before printing the nudge", 
 		fsm: "inspect the sample",
 		depth: 0,
 	}).ok).toBe(true);
-	station.state.features.scope = "hard";
 	const view = probeOf(station.skillReceipt({ agent: { kind: "main" } }).content[0].text);
 	expect(view.scopes_summary).toContain("2+ managers, 9+ inspectors");
 	expect(view.scopes_summary).toContain("22+ paid-for hands");

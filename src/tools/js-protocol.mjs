@@ -17,10 +17,11 @@ export const jsParameters = Object.freeze({
 	required: ["code"],
 	properties: {
 		inputs: {
-			type: "object",
+			type: ["object", "array", "string"],
 			additionalProperties: true,
 			description:
-				"MANDATORY payload bay for every non-trivial text value: file bodies (`write` `content`), diffs/patches (`edit` `old_string`/`new_string`), `scope_return` `dafny`, `scope_fork` `fsm`, `ask` `html`, heredocs, or ANY string with two lines, quotes, backticks, or `${`. Write `inputs` BEFORE `code` every time (`inputs: { body: \"...\" }` -> `inputs.body`). Values here cross ONE JSON layer only — never parsed as JS source, never double-escaped, arriving verbatim as a runtime object. Skipping `inputs` because you think \"I will escape this string carefully inside `code`\" is the #1 self-inflicted `SyntaxError` failure mode: nothing executes, the burned turn stays on the ledger forever, and you re-emit the whole payload anyway. Omit `inputs` ONLY when `code` contains nothing longer than short paths or identifiers.",
+				"Always pass an object; pass an array only when the payload is genuinely a list. Never pass a bare string: a bare string is ambiguous between a literal value and serialized JSON, and a JSON-looking string will be decoded, so the runtime would have to guess. A JSON-encoded object or array is accepted only as a fallback; wrap string payloads in an object, e.g. { text: '...' }. " +
+				"MANDATORY payload bay for every non-trivial text value: file bodies (`write` `content`), diffs/patches (`edit` `old_string`/`new_string`), `scope_return` `dafny`, `scope_fork` `fsm`, `ask` `html`, heredocs, or ANY string with two lines, quotes, backticks, or `${`. Write `inputs` BEFORE `code` every time (`inputs: { body: \"...\" }` -> `inputs.body`). Values here cross ONE JSON layer only — never parsed as JS source, never double-escaped; an object arrives verbatim as a runtime object. Skipping `inputs` because you think \"I will escape this string carefully inside `code`\" is the #1 self-inflicted `SyntaxError` failure mode: nothing executes, the burned turn stays on the ledger forever, and you re-emit the whole payload anyway. Omit `inputs` ONLY when `code` contains nothing longer than short paths or identifiers.",
 		},
 		code: {
 			type: "string",

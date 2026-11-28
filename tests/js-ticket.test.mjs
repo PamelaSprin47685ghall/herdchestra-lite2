@@ -319,3 +319,40 @@ describe("helpers", () => {
 		expect(formatReplValue("", ["ignored"])).toBe("");
 	});
 });
+
+describe("complex inputs are coerced once", () => {
+	test("a JSON-string object arrives as an object", async () => {
+		const type = await run("return typeof inputs", { inputs: '{"one":1}' });
+		expect(body(type.result)).toBe("object");
+		const value = await run("return inputs.one", { inputs: '{"one":1}' });
+		expect(body(value.result)).toBe("1");
+	});
+
+	test("a JSON-string array arrives as an array", async () => {
+		const array = await run("return Array.isArray(inputs)", { inputs: "[1,2]" });
+		expect(body(array.result)).toBe("true");
+		const first = await run("return inputs[0]", { inputs: "[1,2]" });
+		expect(body(first.result)).toBe("1");
+	});
+
+	test("a bare string stays a string", async () => {
+		const type = await run("return typeof inputs", { inputs: "not json" });
+		expect(body(type.result)).toBe("string");
+		const value = await run("return inputs", { inputs: "not json" });
+		expect(body(value.result)).toBe("not json");
+	});
+
+	test("a JS array stays an array", async () => {
+		const array = await run("return Array.isArray(inputs)", { inputs: [1, 2] });
+		expect(body(array.result)).toBe("true");
+		const first = await run("return inputs[0]", { inputs: [1, 2] });
+		expect(body(first.result)).toBe("1");
+	});
+
+	test("a nested JSON-looking string stays a string", async () => {
+		const type = await run("return typeof inputs.body", { inputs: { body: '{"x":1}' } });
+		expect(body(type.result)).toBe("string");
+		const value = await run("return inputs.body", { inputs: { body: '{"x":1}' } });
+		expect(body(value.result)).toBe('{"x":1}');
+	});
+});

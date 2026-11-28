@@ -1,32 +1,38 @@
 #!/usr/bin/env bun
 /**
- * Install the plugin into the host's plugin directory.
+ * FOR DEV ONLY: publish this working tree to the ~/public sync drive, then
+ * point this workstation's plugin path at the published copy.
  *
- * Three install shapes, and the script refuses to blur them:
+ * `~/public` is the shared drive described in ~/public/topo/index.html: write
+ * once on this workstation, and every machine reads its own local copy. No
+ * per-host scp, no vendor copy per machine.
  *
- * - **link** (`omp plugins link`): the installed path is a symlink at this
- *   working tree. The tree *is* the plugin, so the script prints the mode and
- *   writes nothing.
- * - **installed copy** (`omp plugins install <url>`): a real directory the host
- *   owns. It was installed and resolved by the host's own package manager, so
- *   the script treats it as read-only and says so.
- * - **vendor target**: a real directory this script was asked to fill. Only an
- *   explicit request selects it, because writing into a directory the host
- *   installed is how a sync once overwrote the repository's own package.json.
- *   The host package imports `herdchestra-lite2` by package name, so a vendor
- *   target gets two roots: the host package at the target root, and the core
- *   package under the target's `node_modules/`.
+ * Paths are hardcoded for development on this workstation:
  *
- *   bun run sync:plugin                      report the mode; write only for a vendor target
- *   bun scripts/sync-plugin.mjs --vendor     install/refresh a copy, then verify
- *   bun scripts/sync-plugin.mjs --check      report mode and drift, change nothing
- *   HERDCHESTRA_PLUGIN_DIR=/path bun run sync:plugin
- *   HERDCHESTRA_SYNC=vendor bun run sync:plugin
+ *   source   this repository
+ *   publish  /home/kunweiz/public/herdchestra-lite2
+ *   install  /home/kunweiz/.omp/plugins/node_modules/herdchestra-lite2
+ *            (a symlink at the publish directory)
  *
- * Exit code is 0 only when the install is inspectable and consistent: a link is
- * in sync by construction, an installed copy is not this script's to police,
- * and a vendor target must match the tree after the copy. A link whose core
- * dependency does not resolve is not runnable, so it is not in sync either.
+ * The host loads the install path, so the publish directory is the live
+ * plugin. This script never writes through a symlink into the repository:
+ * the publish path must be a real directory that is neither inside this tree
+ * nor an ancestor of it, and the install path must be a symlink (a real
+ * directory there is a host-owned install and is refused, not replaced).
+ *
+ *   bun run sync:dev            publish, ensure the link, verify fingerprints
+ *   bun run sync:dev -- --check report drift and link state; write nothing
+ *
+ * The published tree carries the two extension packages and nothing else; the
+ * tests, scripts, and .git stay out. Both extension packages import the core
+ * by the package name `herdchestra-lite2`, so the publish carries relative
+ * links that resolve that name from either package root:
+ *
+ *   node_modules/herdchestra-lite2        -> ..
+ *   host-omp/node_modules/herdchestra-lite2 -> ../..
+ *
+ * Relative links keep the sync drive usable on every machine, whatever the
+ * home directory is named there.
  */
 import {
   copyFileSync,
@@ -36,114 +42,95 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmdirSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
-const HOST_ROOT = join(ROOT, "host-omp");
-const TARGET = resolve(
-  process.env.HERDCHESTRA_PLUGIN_DIR ??
-    join(homedir(), ".omp/plugins/node_modules/herdchestra-host-omp"),
-);
-const CORE_INSTALL = "node_modules/herdchestra-lite2";
+const PUBLISH_DIR = "/home/kunweiz/public/herdchestra-lite2";
+const LINK_PATH = "/home/kunweiz/.omp/plugins/node_modules/herdchestra-lite2";
+const checkOnly = process.argv.includes("--check");
 
 /**
- * One install unit: files copied from `source` into `TARGET/<dest>`, plus the
- * package.json to sanitize there, plus the directories to prune.
- *
- * The core must own `resources/`: prompts resolve relative to
- * `src/prompts/index.mjs`, two levels up, and the meta skills live under
- * `resources/skills/` so the core can inline them when workspace=full. The
- * host package is the extension entry, so it owns the root
- * `package.json`. Skills are no longer a host asset; a stale plugin-root
- * `skills/` from an older vendor copy is removed below.
+ * One publish unit: directories and files copied from `source` to
+ * `PUBLISH_DIR/dest`, plus the package.json sanitized at that dest.
+ * `requiredDirs` fail the publish when absent (a build was not run).
  */
 const UNITS = [
   {
     name: "core",
     source: ROOT,
-    dest: CORE_INSTALL,
+    dest: "",
     dirs: ["src", "resources"],
+    files: ["README.md"],
     stripPackageKeys: ["devDependencies", "scripts", "repository", "keywords"],
   },
   {
     name: "host",
-    source: HOST_ROOT,
-    dest: "",
+    source: join(ROOT, "host-omp"),
+    dest: "host-omp",
     dirs: ["src"],
-    stripPackageKeys: ["dependencies", "repository", "keywords"],
+    files: ["README.md"],
+    stripPackageKeys: ["repository", "keywords"],
+  },
+  {
+    name: "ui",
+    source: join(ROOT, "host-omp-ui"),
+    dest: "host-omp-ui",
+    dirs: ["src", "shared", "assets", "web/dist"],
+    requiredDirs: ["web/dist"],
+    stripPackageKeys: ["repository", "keywords", "scripts"],
   },
 ];
 
-const FINGERPRINTS = [
-  { root: CORE_INSTALL, file: "src/station/domain/handoff.mjs", needle: "signed_sealed_hands_off_nothing_left_on_the_table", min: 1 },
-  // The scope protocol is reachable only through the single `js` tool: every
-  // capability, fork/join/return included, is a method on the `api` object the
-  // js ticket builds. So the catalog registers one tool, and these needles pin
-  // that surface plus the two modules it rests on.
-  //
-  // Two entries for the catalog, because two facts matter and either can rot
-  // alone: the name is literally `js` (the model sees that string), and the
-  // registered tool is built from that constant rather than a hard-coded one.
-  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: 'JS_TOOL_NAME = "js"', min: 1 },
-  { root: CORE_INSTALL, file: "src/tools/catalog.mjs", needle: "name: JS_TOOL_NAME", min: 1 },
-  { root: CORE_INSTALL, file: "src/tools/js-ticket.mjs", needle: "AsyncFunction", min: 1 },
-  { root: CORE_INSTALL, file: "src/station/domain/capabilities.mjs", needle: "projectCapabilities", min: 1 },
-  // These two prompts are inlined into the system prompt, so a retired tool name
-  // there teaches the model a call that no longer exists while the code is fine.
-  // Pin the live vocabulary and forbid the retired names (`max: 0`).
-  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_abandon", min: 1 },
-  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_request", min: 0, max: 0 },
-  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_ask", min: 0, max: 0 },
-  { root: CORE_INSTALL, file: "resources/prompts/system.md", needle: "scope_send", min: 0, max: 0 },
-  { root: CORE_INSTALL, file: "resources/prompts/features.md", needle: "testing.no-red", min: 1 },
-  { root: CORE_INSTALL, file: "resources/prompts/features.md", needle: "scope.aggressive", min: 1 },
-  { root: CORE_INSTALL, file: "src/features/herd/features.mjs", needle: "META_SKILLS_SENTINEL", min: 1 },
-  { root: CORE_INSTALL, file: "resources/prompts/errors.md", needle: "duplicate-scope-path", min: 1 },
+/** Relative package-name links inside the publish directory. */
+const LINKS = [
+  { path: "node_modules/herdchestra-lite2", target: ".." },
+  { path: "host-omp/node_modules/herdchestra-lite2", target: "../.." },
 ];
 
-/**
- * Facts about the working tree itself, which no install target carries.
+/** Facts the published build must carry. Any miss means stale code shipped. */
+const FINGERPRINTS = [
+  { file: "src/station/domain/handoff.mjs", needle: "signed_sealed_hands_off_nothing_left_on_the_table", min: 1 },
+  { file: "src/tools/catalog.mjs", needle: 'JS_TOOL_NAME = "js"', min: 1 },
+  { file: "src/tools/catalog.mjs", needle: "name: JS_TOOL_NAME", min: 1 },
+  { file: "src/tools/js-ticket.mjs", needle: "AsyncFunction", min: 1 },
+  { file: "src/station/domain/capabilities.mjs", needle: "projectCapabilities", min: 1 },
+  { file: "resources/prompts/system.md", needle: "scope_abandon", min: 1 },
+  { file: "resources/prompts/system.md", needle: "scope_request", min: 0, max: 0 },
+  { file: "resources/prompts/system.md", needle: "scope_ask", min: 0, max: 0 },
+  { file: "resources/prompts/system.md", needle: "scope_send", min: 0, max: 0 },
+  { file: "resources/prompts/features.md", needle: "testing.no-red", min: 1 },
+  { file: "resources/prompts/features.md", needle: "scope.aggressive", min: 1 },
+  { file: "src/features/herd/features.mjs", needle: "META_SKILLS_SENTINEL", min: 1 },
+  { file: "resources/prompts/errors.md", needle: "duplicate-scope-path", min: 1 },
+];
 
- * The `js` result echo is written once, by the core, and stripped twice: the
- * transcript renderer and the web client each keep their own copy of the prefix,
- * in a package the vendor copy does not include. Drift is silent — the renderer
- * shows the echo line as output — so pin all three literals here, and check them
- * in every install shape.
- */
+/** Facts about the working tree itself, which a published copy cannot carry. */
 const TREE_FINGERPRINTS = [
   { file: "src/tools/js-ticket.mjs", needle: "> await AsyncFunction(", min: 1 },
   { file: "host-omp-ui/shared/tool-view.mjs", needle: "> await AsyncFunction(", min: 1 },
 ];
-const checkOnly = process.argv.includes("--check");
-const vendorRequested =
-  process.argv.includes("--vendor") || process.env.HERDCHESTRA_SYNC === "vendor";
 
 function filesUnder(base, dir) {
-  const abs = dir === "." ? base : join(base, dir);
+  const abs = join(base, dir);
   const found = [];
   for (const entry of readdirSync(abs, { withFileTypes: true })) {
-    const rel = dir === "." ? entry.name : join(dir, entry.name);
+    const rel = join(dir, entry.name);
     if (entry.isDirectory()) found.push(...filesUnder(base, rel));
     else if (entry.isFile()) found.push(rel);
-    else console.warn(`sync-plugin: skipping unsupported entry ${rel}`);
+    else console.warn(`sync-dev: skipping unsupported entry ${rel}`);
   }
   return found;
 }
 
-function sourcePathOf(unit, rel) {
-  return join(unit.source, rel);
-}
+const sourcePathOf = (unit, rel) => join(unit.source, rel);
+const destPathOf = (unit, rel) => join(PUBLISH_DIR, unit.dest, rel);
 
-function destPathOf(unit, rel) {
-  return join(TARGET, unit.dest, rel);
-}
-
-/** The sanitized package.json the target must carry, or null when unmanaged. */
+/** The sanitized package.json the publish must carry, or null when unmanaged. */
 function expectedPackageJson(unit) {
   if (!unit.stripPackageKeys) return null;
   const source = JSON.parse(readFileSync(join(unit.source, "package.json"), "utf8"));
@@ -159,19 +146,29 @@ function identical(src, dest) {
   }
 }
 
-/**
- * Every file the target is missing or has stale: `{ unit, rel, content? }`.
- * A `content` entry is written verbatim; otherwise the file is copied.
- */
+/** Every file the publish is missing or has stale: `{ unit, rel, content? }`. */
 function collectDrift() {
   const drift = [];
   for (const unit of UNITS) {
-    for (const rel of unit.dirs.flatMap((dir) => filesUnder(unit.source, dir))) {
+    for (const dir of unit.dirs) {
+      const abs = join(unit.source, dir);
+      if (!existsSync(abs)) {
+        if ((unit.requiredDirs ?? []).includes(dir)) {
+          throw new Error(`missing ${abs}; run: cd host-omp-ui && bun run build:web`);
+        }
+        continue;
+      }
+      for (const rel of filesUnder(unit.source, dir)) {
+        if (!identical(sourcePathOf(unit, rel), destPathOf(unit, rel))) drift.push({ unit, rel });
+      }
+    }
+    for (const rel of unit.files ?? []) {
+      if (!existsSync(sourcePathOf(unit, rel))) continue;
       if (!identical(sourcePathOf(unit, rel), destPathOf(unit, rel))) drift.push({ unit, rel });
     }
     const expected = expectedPackageJson(unit);
     if (expected === null) continue;
-    const dest = join(TARGET, unit.dest, "package.json");
+    const dest = join(PUBLISH_DIR, unit.dest, "package.json");
     if (!existsSync(dest) || readFileSync(dest, "utf8") !== expected) {
       drift.push({ unit, rel: "package.json", content: expected });
     }
@@ -179,35 +176,15 @@ function collectDrift() {
   return drift;
 }
 
-/**
- * Directories an older vendor copy shipped where the current install no longer
- * does: the plugin-root `skills/`, and the nested core `skills/` an older core
- * copy carried. The current core keeps skills under `resources/skills/`.
- */
-const LEGACY = ["skills", `${CORE_INSTALL}/skills`];
-
-function legacyLeftovers() {
-  const targetReal = realpathSync(TARGET);
-  return LEGACY.filter((rel) => {
-    const path = join(TARGET, rel);
-    if (!existsSync(path)) return false;
-    // Never follow a nested symlink out of the target: a development copy may
-    // link `node_modules/herdchestra-lite2` at this working tree.
-    const real = realpathSync(dirname(path));
-    return real === targetReal || real.startsWith(`${targetReal}${sep}`);
-  });
-}
-
-/** Files the target carries that the source no longer ships. */
+/** Files the publish carries that the source no longer ships. */
 function extraUnder() {
   const extra = [];
   for (const unit of UNITS) {
     for (const dir of unit.dirs) {
-      const destBase = join(TARGET, unit.dest, dir);
+      const destBase = join(PUBLISH_DIR, unit.dest, dir);
       if (!existsSync(destBase)) continue;
-      for (const rel of filesUnder(destBase, ".")) {
-        const sourceRel = dir === "." ? rel : join(dir, rel);
-        if (!existsSync(sourcePathOf(unit, sourceRel))) extra.push({ unit, rel: sourceRel });
+      for (const rel of filesUnder(join(PUBLISH_DIR, unit.dest), dir)) {
+        if (!existsSync(sourcePathOf(unit, rel))) extra.push({ unit, rel });
       }
     }
   }
@@ -225,134 +202,157 @@ function copyAll(drift) {
   }
 }
 
-function pruneAll(extra) {
-  for (const { unit, rel } of extra) rmSync(destPathOf(unit, rel), { force: true });
-  const dirs = [...new Set(extra.map(({ unit, rel }) => join(unit.dest, dirname(rel))))].sort(
-    (a, b) => b.length - a.length,
-  );
-  for (const start of dirs) {
-    let current = start;
-    for (;;) {
-      // Stop at a unit root; never remove the unit's own directory.
-      if (UNITS.some((unit) => unit.dest === current)) break;
-      try {
-        rmdirSync(join(TARGET, current));
-      } catch {
-        break;
-      }
-      const parent = dirname(current);
-      if (parent === current || parent === ".") break;
-      current = parent;
+/** Directories an older vendor copy shipped; never follow a symlink out. */
+const LEGACY = ["skills"];
+
+function legacyLeftovers() {
+  return LEGACY.filter((rel) => {
+    const path = join(PUBLISH_DIR, rel);
+    try {
+      return lstatSync(path).isDirectory() && !lstatSync(path).isSymbolicLink();
+    } catch {
+      return false;
     }
-  }
+  });
 }
 
 function problemsFor(base, entries) {
-  return entries.map(({ root = "", file, needle, min, max = Number.POSITIVE_INFINITY }) => {
-    const path = join(base, root, file);
-    const hits = existsSync(path) ? readFileSync(path, "utf8").split(needle).length - 1 : 0;
-    if (hits >= min && hits <= max) return null;
-    const wanted = max === Number.POSITIVE_INFINITY ? `at least ${min}` : `${min}-${max}`;
-    return `${join(root, file)} carries "${needle}" ${hits} time(s); needs ${wanted}`;
-  }).filter(Boolean);
+  return entries
+    .map(({ root = "", file, needle, min, max = Number.POSITIVE_INFINITY }) => {
+      const path = join(base, root, file);
+      const hits = existsSync(path) ? readFileSync(path, "utf8").split(needle).length - 1 : 0;
+      if (hits >= min && hits <= max) return null;
+      const wanted = max === Number.POSITIVE_INFINITY ? `at least ${min}` : `${min}-${max}`;
+      return `${join(root, file)} carries "${needle}" ${hits} time(s); needs ${wanted}`;
+    })
+    .filter(Boolean);
 }
 
-const fingerprintProblems = () => problemsFor(TARGET, FINGERPRINTS);
-const treeFingerprintProblems = () => problemsFor(ROOT, TREE_FINGERPRINTS);
-
 /**
- * The install comes in two shapes, and the sync owns only one of them.
- *
- * `omp plugin link` symlinks `TARGET` at this working tree: the tree is the
- * plugin, so there is nothing to copy, nothing to fingerprint, and no file the
- * sync may touch. Writing through that link is exactly what once rewrote the
- * repository's own `package.json`; this guard makes that impossible.
- *
- * A real directory is a copy install, and the sync owns its contents.
+ * The publish path must be a real directory that is neither this repository
+ * nor an ancestor/descendant of it. Writing through a symlink is exactly how
+ * a sync once rewrote the repository's own package.json, so it is refused.
  */
-function classifyTarget() {
+function publishProblems({ allowMissing }) {
   let stats;
   try {
-    stats = lstatSync(TARGET);
+    stats = lstatSync(PUBLISH_DIR);
   } catch {
-    return { kind: "absent" };
+    return allowMissing ? [] : [`no publish directory at ${PUBLISH_DIR}`];
   }
-  if (!stats.isSymbolicLink()) return { kind: "copy" };
-  const real = realpathSync(TARGET);
-  return real === ROOT || real.startsWith(`${ROOT}${sep}`)
-    ? { kind: "link", real }
-    : { kind: "foreign-link", real };
+  if (stats.isSymbolicLink()) return [`${PUBLISH_DIR} is a symlink; publish to a real directory`];
+  if (!stats.isDirectory()) return [`${PUBLISH_DIR} is not a directory`];
+  const real = realpathSync(PUBLISH_DIR);
+  const rootReal = realpathSync(ROOT);
+  if (real === rootReal) return ["the publish directory resolves to this repository"];
+  if (real.startsWith(`${rootReal}${sep}`)) return ["the publish directory is inside this repository"];
+  if (rootReal.startsWith(`${real}${sep}`)) return ["this repository is inside the publish directory"];
+  return [];
 }
 
-const target = classifyTarget();
-
-/**
- * A link install copies nothing, but it only runs when the core resolves from
- * the host entry: `herdchestra-host-omp` imports `herdchestra-lite2` by name,
- * and `bun install` in the host package is what materializes that link. A
- * linked tree without it fails at extension load, which is not "in sync".
- */
-function coreLinkProblem(hostReal) {
-  const path = join(hostReal, CORE_INSTALL);
+/** The install path must be a symlink at the publish directory. */
+function linkProblems() {
+  let stats;
+  try {
+    stats = lstatSync(LINK_PATH);
+  } catch {
+    return [`no install at ${LINK_PATH}`];
+  }
+  if (!stats.isSymbolicLink()) {
+    return [`${LINK_PATH} is a real directory; move it aside first (host-owned install)`];
+  }
   let real;
   try {
-    real = realpathSync(path);
+    real = realpathSync(LINK_PATH);
   } catch {
-    return `no core package at ${path}`;
+    return [`${LINK_PATH} is a dangling symlink`];
   }
-  return real === ROOT ? null : `core package at ${path} resolves to ${real}, not ${ROOT}`;
+  const wanted = realpathSync(PUBLISH_DIR);
+  return real === wanted ? [] : [`${LINK_PATH} points to ${real}, not ${wanted}`];
 }
 
-if (target.kind === "link") {
-  console.log(`sync-plugin: link install -> ${target.real}`);
-  const problem = coreLinkProblem(target.real);
-  if (problem) {
-    console.error(`sync-plugin: ${problem}`);
-    console.error(`a linked install still resolves its core dependency: cd ${target.real} && bun install`);
+function ensureLinks() {
+  for (const { path: rel, target } of LINKS) {
+    const path = join(PUBLISH_DIR, rel);
+    mkdirSync(dirname(path), { recursive: true });
+    try {
+      const current = lstatSync(path);
+      if (current.isSymbolicLink()) unlinkSync(path);
+      else if (current.isDirectory()) {
+        throw new Error(`${path} is a real directory; remove it before publishing`);
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    symlinkSync(target, path, "dir");
+  }
+}
+
+function linkPublishDir() {
+  const parent = dirname(LINK_PATH);
+  if (!existsSync(parent)) {
+    throw new Error(`no plugin directory at ${parent}; start omp once to create it`);
+  }
+  let stats;
+  try {
+    stats = lstatSync(LINK_PATH);
+  } catch {
+    stats = null;
+  }
+  if (stats && !stats.isSymbolicLink()) {
+    throw new Error(`${LINK_PATH} is a real directory; move it aside first, then rerun`);
+  }
+  if (stats) unlinkSync(LINK_PATH);
+  symlinkSync(PUBLISH_DIR, LINK_PATH, "dir");
+  console.log(`linked ${LINK_PATH} -> ${PUBLISH_DIR}`);
+}
+
+// ---- run ------------------------------------------------------------------
+
+console.log("sync-dev: FOR DEV ONLY — publishes to the ~/public sync drive");
+console.log(`  source   ${ROOT}`);
+console.log(`  publish  ${PUBLISH_DIR}`);
+console.log(`  install  ${LINK_PATH}`);
+
+const publishDirsMissing = !existsSync(PUBLISH_DIR);
+
+if (checkOnly) {
+  const problems = [
+    ...publishProblems({ allowMissing: true }),
+    ...linkProblems(),
+    ...problemsFor(PUBLISH_DIR, FINGERPRINTS),
+    ...problemsFor(ROOT, TREE_FINGERPRINTS),
+  ];
+  if (publishDirsMissing) {
+    console.log(`publish directory missing: ${PUBLISH_DIR}`);
     process.exit(1);
   }
-  console.log("the working tree is the plugin; nothing to copy");
-  const treeProblems = treeFingerprintProblems();
-  for (const line of treeProblems) console.error(`  stale  ${line}`);
-  if (checkOnly && treeProblems.length === 0) console.log("in sync (link install); tree fingerprints ok");
-  process.exit(treeProblems.length === 0 ? 0 : 1);
+  const drift = collectDrift();
+  const extra = extraUnder();
+  const legacy = legacyLeftovers();
+  for (const { unit, rel } of drift) console.log(`  drift  ${join(unit.dest, rel)}`);
+  for (const { unit, rel } of extra) console.log(`  extra  ${join(unit.dest, rel)}`);
+  for (const rel of legacy) console.log(`  legacy ${rel}/`);
+  for (const line of problems) console.log(`  stale  ${line}`);
+  const clean = drift.length === 0 && extra.length === 0 && legacy.length === 0 && problems.length === 0;
+  console.log(clean ? "in sync; fingerprints ok" : "drift detected");
+  process.exit(clean ? 0 : 1);
 }
 
-if (target.kind === "foreign-link") {
-  console.error(`sync-plugin: ${TARGET} links to ${target.real}, outside this repository`);
-  console.error("That link is not this script's to replace; point it at host-omp/ or remove it.");
+if (publishDirsMissing) {
+  if (!existsSync(dirname(PUBLISH_DIR))) {
+    console.error(`sync-dev: no sync drive at ${dirname(PUBLISH_DIR)}`);
+    process.exit(1);
+  }
+  mkdirSync(PUBLISH_DIR, { recursive: true });
+  console.log(`created publish directory: ${PUBLISH_DIR}`);
+}
+
+for (const line of publishProblems({ allowMissing: false })) {
+  console.error(`sync-dev: ${line}`);
   process.exit(1);
 }
 
-if (!existsSync(TARGET)) {
-  if (!vendorRequested) {
-    console.error(`sync-plugin: no installed plugin at ${TARGET}`);
-    console.error("Install it first: omp plugins install <url>, or omp plugins link from host-omp/.");
-    console.error("To fill a directory by hand, pass --vendor.");
-    process.exit(1);
-  }
-  // A fresh checkout has no host package yet: this package is private and is
-  // not in a registry, so the vendor request is the install. Create the target
-  // only when the host's plugin directory exists; a typo'd
-  // HERDCHESTRA_PLUGIN_DIR must still fail instead of materializing a plugin
-  // tree the host never scans.
-  if (!existsSync(dirname(TARGET))) {
-    console.error(`sync-plugin: no plugin directory at ${dirname(TARGET)}`);
-    console.error("Set HERDCHESTRA_PLUGIN_DIR to the host's plugin directory.");
-    process.exit(1);
-  }
-  mkdirSync(TARGET, { recursive: true });
-  console.log(`vendor target created: ${TARGET}`);
-}
-
-if (!vendorRequested) {
-  console.log(`sync-plugin: installed copy at ${TARGET}`);
-  console.log("the host owns this directory; pass --vendor to fill it from this tree");
-  if (checkOnly) console.log("not a vendor target; nothing to check");
-  process.exit(0);
-}
-
-console.log(`sync-plugin: ${ROOT} -> ${TARGET}`);
 const drift = collectDrift();
 const extra = extraUnder();
 const legacy = legacyLeftovers();
@@ -361,43 +361,30 @@ for (const { unit, rel } of drift) console.log(`  drift  ${join(unit.dest, rel)}
 for (const { unit, rel } of extra) console.log(`  extra  ${join(unit.dest, rel)}`);
 for (const rel of legacy) console.log(`  legacy ${rel}/`);
 
-if (checkOnly) {
-  const problems = [...fingerprintProblems(), ...treeFingerprintProblems()];
-  for (const line of problems) console.log(`  stale  ${line}`);
-  if (drift.length === 0 && extra.length === 0 && legacy.length === 0 && problems.length === 0) {
-    console.log("in sync; fingerprints ok");
-  }
-  process.exit(
-    drift.length === 0 && extra.length === 0 && legacy.length === 0 && problems.length === 0 ? 0 : 1,
-  );
-}
-
-if (extra.length > 0) {
-  pruneAll(extra);
-  console.log(`pruned ${extra.length} file(s)`);
-}
-
+for (const { unit, rel } of extra) rmSync(destPathOf(unit, rel), { force: true });
+if (extra.length > 0) console.log(`pruned ${extra.length} file(s)`);
 for (const rel of legacy) {
-  rmSync(join(TARGET, rel), { recursive: true, force: true });
+  rmSync(join(PUBLISH_DIR, rel), { recursive: true, force: true });
   console.log(`removed legacy ${rel}/`);
 }
 
-if (drift.length > 0) {
-  copyAll(drift);
-  console.log(`copied ${drift.length} file(s)`);
-}
+copyAll(drift);
+if (drift.length > 0) console.log(`copied ${drift.length} file(s)`);
+else console.log("already in sync: 0 file(s) copied");
+
+ensureLinks();
+linkPublishDir();
 
 const remaining = collectDrift();
 if (remaining.length > 0) {
-  console.error(`sync-plugin: ${remaining.length} file(s) still differ after copy`);
+  console.error(`sync-dev: ${remaining.length} file(s) still differ after copy`);
   for (const { unit, rel } of remaining) console.error(`  diff  ${join(unit.dest, rel)}`);
   process.exit(1);
 }
-if (drift.length === 0) console.log("already in sync: 0 file(s) copied");
 
-const problems = [...fingerprintProblems(), ...treeFingerprintProblems()];
+const problems = [...problemsFor(PUBLISH_DIR, FINGERPRINTS), ...problemsFor(ROOT, TREE_FINGERPRINTS)];
 if (problems.length > 0) {
-  console.error("sync-plugin: installed build is missing current code");
+  console.error("sync-dev: published build is missing current code");
   for (const line of problems) console.error(`  stale  ${line}`);
   process.exit(1);
 }

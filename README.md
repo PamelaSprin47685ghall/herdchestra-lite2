@@ -1,240 +1,241 @@
-# Herdchestra Lite 2
+# Herdchestra
 
-Herdchestra 是基于 DeerFlow 的集成工作台：内核与视觉素材来自 DeerFlow，产品层由 Herdchestra 独立开发。
+**把一个 AI 会话，变成一支有预算、有分工、有交付记录的团队。**
 
-Herdchestra is an integration workbench built on DeerFlow: the kernel and visual assets come from DeerFlow, while the product layer is independently developed by Herdchestra.
+版本 10.1.0 · 宿主 omp 19.2+ · Bun 1.4.4+ · 源码可见，EULA 授权
 
-Herdchestra Lite 2 gives an agent session parallel work that returns to the scope that asked for it. A parent calls `scope_fork` with one item per child; each child works in its own scope with its own budget, time and model, then takes the `scope_return` oath to submit its record. The parent calls `scope_join` to receive one finished child as a tool receipt. The parent keeps its own model, context and message line; it never becomes the child and the child never becomes the parent.
+Herdchestra 是 omp 的多 scope 编排插件：把一次会话拆成一棵带角色、预算和独立上下文的工作树。
 
-## Roles: the name is the privilege
+---
 
-Every scope path segment is `<role>.<name>`, and the role of the last segment decides what that scope may do. Root `/` is a `manager`. Privilege narrows monotonically - `manager > devops > editor > inspector` - and a scope may fork or abandon only its own role or a narrower one; the path is the only place the role is set.
+## 一段对话，装不下真正的工作
 
-| Role | Host tools | Reported capacity |
-|---|---|---|
-| `manager` | none: plans, forks, joins, answers | 3 |
-| `devops` | every host tool, including `bash`, builds, and tests | 1, enforced globally |
-| `editor` | reads and edits, without `bash`, `shell`, `eval`, `python`, `task`, or `manage_skill` | 10 |
-| `inspector` | read-only: `read`, `grep`, `glob`, `find`, `ast_grep`, `web_search` | 10 |
+今天的大多数 AI 编程会话仍是一条单线程：读文件、改代码、跑测试、写总结，全部挤在同一条上下文里。任务一长，问题随之而来。
 
-Every role sees the same one `js` tool and the same system prompt, so chaining roles along one path with the same model reuses the provider prompt prefix cache: an `inspector` explores and turns `done`, then an `editor` forked under it edits without reading the same files again. `state.role` reports the current scope's role in every REPL probe.
+- **串行**：审查、构建、修改本可同时进行，却只能排队。
+- **污染**：子任务的探索过程灌进父会话，真正重要的结论被淹没。
+- **失控**：没有回合上限，也没有墙钟；一个跑偏的探索能烧掉整晚。
+- **越权**：只读的审查者也能改文件、跑命令，边界靠自觉。
+- **失忆**：上下文一满就压缩，交接靠一段模糊的摘要。
 
-Only the single running `devops` is an admission gate. The other numbers feed `state.scopes_summary`, which a `manager` probe prints when `state.scopes_delta` appears: reported capacity minus the scopes now `running` per role, with `+` marking the lower bound and zero-idle roles omitted. Root counts as one running manager.
+Herdchestra 给 omp 会话加上的不是"又一个子代理"，而是一套**工作 scope**：每个 scope 有独立上下文、独立模型、独立预算、独立时钟和明确角色；父会话只收到一份可审计的交接单。
 
+## 一个父会话，多个工作 scope
 
-Every `path` names one new subscope; a bare name (`"worker"`) is relative to the caller (`state.scope`), while a relative or absolute path (`"../api/spy"` or `"/api/spy"`) places the subscope under any existing upscope (`running` or `done`, including `/`). Duplicate paths fail closed (`DUPLICATE_SCOPE_PATH`), and no automatic `-2/-3` renaming occurs.
-
-A scope's context is inherited from its `upscope` (its path parent's last closed turn snapshot), while its `scope_return` delivers to its `caller` (`ownerId`). To inspect or build on any `running` or `done` scope without disturbing it, fork a spy subscope under its path (e.g. `path: "/api/spy"`): it inherits `/api`'s context snapshot and prefix cache, and delivers `scope_return` directly back to you. Omitting `model` inherits the upscope's model and thinking level. The probe prints `state.scopes_delta` (only when changed) with overwrite semantics per path (`running | <model> | <base>+ / <window>` or `done | <model> | <ctx> / <window>`), including Root `/`.
-
-## Fork, join and return
-
-`scope_fork({ forks: [...] })` starts one new subscope per item. Each item carries `path`, `fsm`, `profession`, `n`, and an optional `model`; a blank `fsm` or `profession` rejects the item. `budget` and `targets` are optional: a `manager` passes `{}` or nothing, an `inspector` may fund only its read-only tools, an `editor` may not fund `bash`, `eval`, `python`, `task`, or `manage_skill`, and only an `editor` must name concrete file paths in `targets`. The wall clock is not a model field: the system derives it as the session's mean LLM-request duration times `max(1, sum of turns || n)` (one minute per turn until a request has been measured, and never less than one second). The clock covers tool execution too: a bash or test run spends wall time without spending turns, so an I/O-heavy scope can reach its deadline first — an over-deadline call still returns its result and is recorded in the panhandle count, so the clock is a receipt, not a fence; size the turns for the time the work needs. One invalid item rejects the whole call before any child starts; an array may hold several items, and one assistant message may hold several `scope_fork` calls. A scope is sized by the work in hand, not by a table: budget about `sqrt(2n)` turns, where `n` is that scope's share of the work counted in ideal turns. Two, because a worker's real work runs back and forth — about two turns for every ideal one. Fork as much as the work allows — a wide batch costs one call — and say so inside every item: a child that finds independent work forks again in turn. Nothing else is capped: no turn total, no items per call, no tree depth. A scope that is too small wastes one fork; a scope that is too large puts the whole job on one context, and no receipt can repay that.
-
-`scope_join({})` receives one eligible child result. In a message with other calls, place it last: its result is a whole working record and reads best after the other results. `scope_return` runs alone in its script. The record holds what the child's assistant said, in order, with one line per tool call written as `name(key="value", ...)`: assistant text lines and `js(code="…")`, `read(path="a.mjs:1-20")`, `edit(path="b.mjs")`, `bash(command="ls -la")` lines, joined by newlines. A string argument is quoted, any other value is compact JSON, and no argument is truncated or filtered. Tool results, thinking blocks, and user broadcasts are absent. `scope_join` has no time limit: while it waits, the parent's wall clock stops and the wait is added back to its deadline. A child that will not return is closed with `scope_abandon({ target })` instead of being waited on. `scope_return` answers in the same beat: the record is sealed and queued for the parent's next join, and nothing is left parked, so a finished scope's session stays alive and idle. A manager's time budget does not include the people it hired; turns and time stay independent.
-
-Call `scope_return` alone in its script, always with non-empty `dafny`. The oath field is required: `signed_sealed_hands_off_nothing_left_on_the_table: "unfinished"` rewinds the context and continues the same scope; a child keeps its birth instructions and latest report. The new report replaces the old one, so carry forward evidence and unresolved work that still matter. To publish a child's record, pass `"a_ferocious_audacious_master_would_change_nothing"`; the child seal appends the trimmed `dafny` to the record. At root the same oath carries the same weight: `unfinished` rewinds, and the seal value permits the final answer. Any unreceived children transfer to the receiving scope and keep their identities and turns. An unsealed child that stops is nudged to return.
-
-A scope's budget and wall clock come from the `scope_fork` item that created it. The parent's budget never funds a child and never shrinks when a child starts. The root has no budget and no wall clock, so it cannot run ordinary tools: it plans, forks, joins and answers, and the work runs in a child. Free control tools (`scope_fork`, `scope_join`, `scope_return`, `scope_abandon`, `wait`, and `ask` in manual mode) stay available at the root; a `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) spends no turn wherever it is bound, and the root binds neither, because the active policy sections are already in its system prompt. Turns are a ledger, not a fence. When a scope's turns for a tool are spent, the call still runs and the receipt records that the call was panhandled; the scope's panhandle count travels with its record, so the caller reads it at `scope_join`. Panhandling buys the call and nothing else: it is the receipt saying in public that the scope sized itself wrong, and a scope that panhandles its way to a checkpoint has told its caller it could not plan. The root is the one exception, because it is outside every scope and holds no budget to overrun. `scope_return` belongs to every manager: at root it ends the session's work, and in a forked scope it submits the record to its caller.
-
-The root (`Root`) keeps its native transcript and input stream. Descendants at every depth appear in the main transcript as labelled message and tool components; full records arrive through `scope_join`. Root and descendants compete equally for one streaming slot: the first stream holds it through completion, and an overlapping stream appears as a single block after it ends. The native working row displays `[Busy: X, Idle: Y]` and the path to the latest requesting scope, omitting `Root`. Each fork item supplies a short `scopeId` such as `oh-my-pie`, displayed as `Oh My Pie`. Only explicit tool prompts and approvals can use the root UI. An accepted child oath ends the child loop at the tool-result boundary, without an extra model request or an interruption message.
-
-Depth is not a policy. A child reads the same rule its parent read — fork when the work splits, budget the turns the rule above derives from `n` — so a larger job becomes a deeper tree rather than a fatter scope, and the tree stops where the work stops. What each extra layer costs is context: the record compresses to prose once more, and every ancestor's plan rides in the child's prefix. A child's birth receipt states its place as `depth X` and attaches no default and no recommendation. A single-child relay layer buys nothing; ask first whether the leaves are cut too fine. Never serialize ten independent closures into repeated root waves to keep the tree shallow: that spends the root's attention on records instead of giving them one subtree.
-
-The control tools exist in every supported configuration. There is no `scope` tool, no `begin`/`end` argument, no alias and no fallback: a configuration that cannot support fork/join/request refuses the call instead of registering the retired tool.
-
-## Redirecting or stopping a running scope (`scope_abandon`)
-
-`scope_abandon({ target, reason? })` interrupts any single `running` scope at exact path `target` (never `/` or yourself) and forces its next turn into `ABANDONED` mode where only `scope_return` is bound. It stays `running` briefly while writing its final `dafny`, then turns `done` without rewinding (any oath value is accepted); it does not cascade to other scopes. Pass `reason` so the target knows what to preserve in `dafny` and its caller knows why it was stopped. To redirect a running scope mid-flight, abandon it, wait for it to turn `done`, and fork a new subscope under its path (e.g. `"/api/v2"`).
-
-## Running from source
-
-The repository holds three packages. `herdchestra-host-omp` in `host-omp/` is the plugin: it declares the host extension entry and carries the host wiring. Its only dependency, `herdchestra-lite2` at the repository root, is the host-agnostic engine — ledgers, stations, tickets, prompts — and imports nothing from the host. Install once with `cd host-omp && bun install`; the core then resolves through `host-omp/node_modules/herdchestra-lite2`.
-
-`herdchestra-host-omp-ui` in `host-omp-ui/` is the second plugin and the standalone web bridge: one loopback manager that lists the machine's `omp` sessions and reuses DeerFlow's UI components. It does not depend on `herdchestra-host-omp`, and the two plugins never import each other. Build its static assets with `cd host-omp-ui && bun run build:web`; the TUI plus browser acceptance loop is `.agent/skills/manual-acceptance/web-tui.md`.
-
-The boundary is one function in each direction. The core exports exactly `createEngine`; the host imports exactly that. The host hands `createEngine` its facts (five frozen groups: `session`, `model`, `accounting`, `fork`, `report`) and its verbs (the eight `tickets` capabilities), and receives one engine carrying the stations, the ready-to-register tool catalog, the scope read model, the text renderer, the resolved ports, and the fork wiring. Port assembly, the fork wiring, and the five tool bindings stay inside the core; the host never builds a table or an `execute`. The contract is code (`HOST_CONTRACT`, `TICKET_CONTRACT`, `ENGINE_ONLY_HOST_KEYS` in `src/engine.mjs`), and `tests/architecture/core-host-free.test.mjs` fails when a core file reaches outside it, when the core gains a second export, or when the host imports anything but `createEngine`.
-
-The host loads the installed plugin at `~/.omp/plugins/node_modules/herdchestra-host-omp`. Three shapes are possible, and only one of them belongs to `sync:plugin`:
-
-```sh
-omp plugin link host-omp              # dev: the working tree IS the install
-omp plugin install <git-url>          # host-owned copy, resolved by the host
-bun run sync:plugin                    # report the shape; write only for a vendor target
-bun scripts/sync-plugin.mjs --vendor   # fill a real directory from this tree
-bun scripts/sync-plugin.mjs --check    # report drift without copying
-bun run smoke:relay                    # check relay behavior in this working tree
+```mermaid
+flowchart LR
+  R["根会话 / manager<br/>保留自己的模型、上下文、消息线"] --> A["inspector.risk<br/>只读审查 · 12 回合"]
+  R --> B["devops.gate<br/>构建与测试 · bash 24 回合"]
+  R --> C["editor.patch<br/>限定文件 · 8 回合"]
+  A -.->|scope_return 交接单| R
+  B -.->|scope_return 交接单| R
+  C -.->|scope_return 交接单| R
 ```
 
-With `omp plugin link`, `~/.omp/plugins/node_modules/herdchestra-host-omp` is a symlink at `host-omp/`, so every edit here is live after a restart — no sync step. `sync:plugin` detects that shape, prints `link install` and writes nothing; it also refuses to touch a link that points outside this repository. The three meta skills live in the core's `resources/skills/`; the feature policy sections live in `resources/prompts/features.md`. Both are composed into the managed system-prompt block only when enabled; the host package ships no `skills/` directory.
+父会话调用 `scope_fork` 一次开出多个子 scope，然后继续做自己的事；每个子 scope 在自己的上下文里工作，结束时用 `scope_return` 提交一份报告；父会话用 `scope_join` 逐个接收。**父不会变成子，子也不会变成父。**
 
-With `omp plugin install <git-url>`, the host installs and resolves a copy under its own plugin directory. That directory is the host's, not this tree's, so `sync:plugin` classifies it as `installed copy` and writes nothing; refresh it by installing again. A `--vendor` run is the separate case: only an explicit `--vendor` (or `HERDCHESTRA_SYNC=vendor`) lets the script write a real directory — the host package at the target root, and the core under the target's `node_modules/herdchestra-lite2` (including `resources/skills/` and `resources/prompts/features.md`). In that mode an edit here does not reach a running session until you sync again. `sync:plugin` never writes through a link, so it can no longer rewrite this repository's own `package.json`.
+这不是线程库，也不是消息总线。它是会话内的一棵工作树：身份就是路径，结果就是记录。
 
-Restart the session afterwards; modules load at process start.
+## 核心能力
 
-Tests stay in the repository root and cover all three packages: `bun test tests` runs the core domain, both host wirings, and the architecture ratchets that hold the boundaries. `bun run smoke:relay` tests the working tree against a fake host. It checks fork/join registration and refusals, along with return and rewind behavior. It does not test the installed copy.
+### 并行是默认值，不是优化项
 
-## Skills and policy sections
+一次 `scope_fork` 接收一个数组，数组里每一项就是一个独立 scope。审查、构建、改文件、查资料可以同时开始，互不等待。探针按角色报告空闲人手：**3 个 manager（含根）、1 个 devops、10 个 editor、10 个 inspector**。这是报告口径，不是硬上限；真正的准入约束是同一时刻只允许 1 个 devops 在跑。
 
-The system prompt is mechanism plus feature policy. Mechanism lives in `resources/prompts/system.md` and `resources/prompts/tools/fork-join.md`; policy lives in `resources/prompts/features.md` as `## <feature>.<state>` sections. `src/prompts/inject.mjs` composes the managed block in `FEATURES` order.
+### 角色即权限，路径即身份
 
-Only three meta skills remain under `resources/skills/<name>/SKILL.md`; they are inlined only when `workspace=full`:
+每个 scope 路径都写成 `<角色>.<名字>`，例如 `inspector.risk`、`devops.gate`。角色只能收窄，不能越级：
 
-| Skill | Question |
-|---|---|
-| `polish` | How: preserve claims, causal links, and voice while improving expression |
-| `prompt-craft` | Where model-facing text lives and how to write it |
-| `skill-authoring` | How to split, name, and maintain a skill |
+| 角色 | 能做什么 | 不能做什么 |
+|---|---|---|
+| `manager` | 规划、分叉、汇合、回答 | 直接读写文件、跑命令 |
+| `devops` | 全部宿主工具：shell、构建、测试、读写 | 同时只能有一个在跑 |
+| `editor` | 读文件、改文件 | 不能执行命令、不能开子任务 |
+| `inspector` | 只读检索、审查、联网查证 | 不能写、不能执行 |
 
-The former `constitution`, `decision-framing`, and `tdd-crowdsource` skills are now the `constitution.*`, `framing.*`, and `testing.*` policy sections. `workspace=personal` carries the human-facing repository conventions; `workspace=full` adds the three meta skills.
+想让审查者"只看不改"，不必在提示词里反复叮嘱；把它 fork 成 `inspector`，它手里根本没有写工具。
 
-The inlined meta skills are authoritative when enabled: apply `prompt-craft` before changing model-facing text, `skill-authoring` before creating or splitting a skill, and `polish` before polishing an existing text. The `framing.*` and `testing.*` sections carry decision and verification policy. Keep design artifacts as skills under `.agent/skills/<name>/SKILL.md`.
+### 每个 scope 有自己的模型、预算与时钟
 
-Model-facing text lives in `resources/prompts/` as Markdown documents with `## section` blocks. Code loads them through `src/prompts/index.mjs`; no prompt, tool description, parameter description, receipt, or model-facing error is duplicated in source.
+- **模型**：每个 fork 项可以指定模型（provider/model 或别名，可带思考级别）；省略则继承父 scope 的模型与思考级别，并复用同一段 prompt 前缀缓存，不为每个子任务重新预填充。
+- **预算**：按工具分别给回合数，例如 `{ bash: 24, read: 8 }`。一个回合就是一次模型请求；超支的调用仍会执行，但会记进 `panhandled` 账本，让"预算"成为可核对的承诺。
+- **时钟**：系统按会话的平均请求耗时与回合数推算墙钟，工具执行也计入其中。父会话在 `scope_join` 等待时，自己的时钟暂停。
 
-## Scope targets
+### 中途接管，而不是推倒重来
 
-Every fork item declares `targets`, a non-empty array of natural-language descriptions of what it expects to create, read, update, or delete. An item may name a file path, a part of the source, a behavior, or a goal; any human language is valid, and a path is only one kind of target. For example, `["fix any defect you find", "the parts of the source that involve caching"]` is valid. The field is required: a missing, empty, blank, or non-string entry rejects the whole batch.
+发现一个 scope 跑偏了，用 `scope_abandon` 打断它；它会进入只能交报告的 `ABANDONED` 模式，交出当前发现后结束。要改方向，在同一路径下重新 fork：新 scope 继承原位置的上下文快照与缓存，不必从零开始读同一批文件。
 
-`targets` is a declaration, not an enforcement boundary. The system never audits a tool call against the list; a scope that turns out to need another target may still touch it. The required list is the mistake-proofing: a scope that can name no output is not a separate scope, so think again before forking one. A refused batch changes no state, and no flow starts.
+### 上下文是预算，不是垃圾桶
 
-## Feature switches
+- 子 scope 继承父级的上下文快照；同一模型、同一前缀，缓存继续命中。
+- 一个 scope 的上下文超过上下文窗口的一半，就只剩"交报告"这一条路，避免在临界点上烧双倍价钱。
+- `unfinished` 回卷保留最新报告和原始任务指令，而不是整段探索过程。
+- 会话状态只追加、按回合写增量：实测 400 回合的会话，持久化写入量是逐回合全量快照的 **4.5%**。长会话不会越跑越慢、越存越大。
 
-Every switch uses one grammar, and the same names work as environment variables. `/herd` prints every value; `/herd <feature>` prints the current value and allowed states; `/herd <feature> <state>` sets and persists; `/herd <feature> <state> <text...>` also sends `<text>` as one plain user message. Only the user can set a switch; no model turn can enter or leave one.
+### 交付的是记录，不是另一段聊天
 
-`/herd-goal <instruction>` is not a switch and holds no state of its own. It starts one goal session at the root in `ROOT_AUTOPILOT` mode — `ask` is not bound and a natural stop is redirected to `scope_return` — and sends `<instruction>` as one plain user message. The mode ends by itself when the sealed final answer is delivered, so the next turn is ordinary manual mode again. An interrupted turn (Esc) keeps goal mode on, so the next message continues the goal; a bare `/herd-goal` turns it off immediately.
+子 scope 必须带着一份 `dafny` 报告结束：结论、证据、未决项、下一步。父会话收到的就是这份记录，而不是几千行工具输出。记录进不了父上下文时，`scope_join` 会拒绝接收并保留子 scope 的结果，不会静默截断，也不会伪造成功。
 
-| Feature | States | Default | Effect |
-|---|---|---|---|
-| `chinese` | `off` / `on` | `on` | Adds the Chinese thinking/reply requirement to the system prompt and the per-turn probe. |
-| `testing` | `off` / `no-red` / `lean` | `lean` | `no-red`: skip running Red. `lean`: adds static-first verification, focused checks, and unrun-check handoff. |
-| `constitution` | `off` / `core` / `full` | `full` | `core`: ledger, Chesterton's fence, poka-yoke, anti-Goodhart, candor. `full`: adds style, clean break, read-the-whole, courage. |
-| `framing` | `off` / `plan` / `full` | `full` | `plan`: goal, Bayesian model, residual, asymmetric bet. `full`: adds the three introspection gates. |
-| `scope` | `off` / `adaptive` / `aggressive` | `aggressive` | `adaptive`: fork independent slices, put exact facts in `dafny`, watch the 50% context lock. `aggressive`: adds `sqrt(n)`, manager-not-labourer, and always-parallel guidance. |
-| `workspace` | `off` / `personal` / `full` | `full` | `personal`: repository conventions, human-facing prose, ask-below-95%, design records. `full`: adds the three meta skills. |
+### 全程可视
 
-`off` means no policy text for that feature: the model falls back to the host's defaults. The defaults above reproduce the 6.0 prompt, except that the three retired skills now live in `features.md`.
+TUI 里，每个子 scope 的消息和工具调用都带路径标签。Web 控制台里，工具结果按类型渲染：终端保留 ANSI 颜色，编辑显示 diff，`js` 调用展开成脚本与逐次内部调用。
 
-The canonical environment variable is `HERD_<FEATURE>` — `HERD_CHINESE`, `HERD_TESTING`, `HERD_CONSTITUTION`, `HERD_FRAMING`, `HERD_SCOPE`, `HERD_WORKSPACE`. Precedence is explicit environment > persisted state > fallback. `HERD_DISABLE_<FEATURE>=1` maps to `off` when `off` is valid. Legacy `HERD_CHINESE_REMINDER=on|off` and `HERD_DISABLE_CHINESE_REMINDER=1` map to `chinese`; the canonical variable wins. `HERD_HERD=off` disables `/herd` itself.
+需要浏览器时，可选的 **Web 控制台**把本机的 omp 会话列成一张表：选中即接管，支持附件、追问与中断；历史会话可在原工作目录重新拉起（依赖 tmux）。控制台只绑定回环地址，URL 与令牌就是凭据。
 
-`ask` is bound only at the root in manual mode; `/herd-goal` withholds it for that goal session.
+### 目标模式：说完目标，跑到盖章
 
-## Rewind
+```text
+/herd-goal 把 README 重写成商业介绍，补全安装步骤，并跑完链接与命令检查
+```
 
-A rewind keeps the latest return report, plus the birth instructions in a child. The report is where durable findings live now, so write it as the record a later turn needs; read the documents it names in full rather than relying on grep excerpts.
+根会话进入 `ROOT_AUTOPILOT`：不中途提问，自然停止会被引导回 `scope_return`，直到交出盖章答案。Esc 打断后目标模式仍在，下一条消息继续；裸 `/herd-goal` 立即关闭。
 
-## Context pressure
+## 快速开始
 
-A scope is asked to return when it outgrows half of its own headroom. The
-midpoint is `(window - baseline) / 2 + baseline`, where the baseline is the
-input the provider reported for the scope's first request and the window is the
-model's input limit. When the occupancy the last response ended at is strictly
-above that midpoint, the scope's projection collapses to `CONTEXT_LIMIT`: only
-`scope_return` is bound, and the probe carries one `> // Context Pressure:` line
-that weighs the record against another turn. Below the midpoint the ordinary
-capability set returns, so a scope settles rather than reads the same sentence
-every turn.
+### 前置
 
-The mode and the probe never touch the system prompt: both are rebuilt for
-every request and are not part of the cached prefix, so arming and disarming
-costs the provider nothing. `injectSystemPrompt` is byte-identical to what it
-produced before this feature.
+- [omp](https://github.com/can1357/oh-my-pi) 19.2 或更新版本
+- Bun 1.4.4 或更新版本
+- 可访问本仓库的 Git 凭据（私有仓库需要）
+- Web 控制台需要 tmux；桌面托盘另需对应桌面运行时（Linux 已验证，macOS/Windows 托盘尚未验证）
 
-Every unknown refuses to arm: no measured baseline, no measured occupancy, or
-no known window means no nudge. A scope born at or past its window arms at
-once, since it has no room left to grow into. A rewind re-baselines at the new
-birth; a fold keeps the baseline and simply reclaims room.
+```bash
+omp --version
+bun --version
+```
 
-## Root return
+### 安装
 
-At root, an `unfinished` return uses compaction to rewind and continue. Root keeps verbatim user prompts and steers as actual messages, plus the new `dafny` report. Do not repeat those user messages in the report. The old report is replaced, not appended: carry forward any evidence a later turn still needs.
+一条命令同时注册 TUI 插件与 Web 桥接（Web 静态资源需另行构建，见下文）：
 
-Root must receive all outstanding children with `scope_join` before sealing. The oath then works exactly as it does in a subscope: `unfinished` rewinds through compaction, and the seal value ends the work — `canStop` flips on, the next turn binds no tools (`FINAL_ANSWER`), and root writes the final answer. Opening a new fork or receiving a new user message clears `canStop`. There is no review round and no oath streak. A natural stop is not a rewind or an oath. A goal session started by `/herd-goal` ends automatically once the sealed final answer is delivered.
+```bash
+omp plugin install https://github.com/PamelaSprin47685ghall/herdchestra-lite2
+```
 
-## Diagnostics
+重启会话，然后确认：
 
-Failures the extension once swallowed now land in a 64-entry ring: `herd-diag`
-prints it, and the status line carries `⚠ N` while records remain.
+```bash
+omp plugin list          # 应显示 herdchestra-lite2@10.1.0
+```
 
-On the first `session_start` of a session, a host seam that failed to install
-(the `activateVibeTools` method or the `extensionRunner` getter) raises a
-visible error naming it, so folding and the relay never degrade in silence.
+在会话里输入 `/herd`，会打印六个策略开关的当前值。TUI 能力此时已经可用。
 
-Session state is append-only. Each turn appends a delta against the previous
-snapshot under the host's `parentId` tree, with a checkpoint every 64 writes;
-`restore` replays back to the nearest checkpoint and still reads the older
-full-snapshot entries. A measured 400-turn session writes 4.5% of what
-per-turn snapshots would write.
+### 第一个并行任务
 
-### Request history
-
-Each managed model request gets one persistent Skill receipt. The extension
-uses `agent.addBeforeModelCallHook` to place it in the live tool loop before
-the host clones messages for context extensions. It also commits the same
-receipt to Agent history and the session journal. These histories have
-separate arrays; retries reuse the committed receipt and its original clock.
-
-The host defers new user and queued input events until after request
-preparation. A Skill therefore goes after committed history and before any
-pending inputs. The host still owns those inputs and commits them once.
-Flows install this preparation before `agent.continue()`, which skips the
-ordinary `before_agent_start` event. Read-only task agents keep their existing
-policy and receive no Skill receipts.
-
-`herd-diag` includes the current station's latest provider payload report.
-The report records hashes and message counts, without storing prompts or
-credentials. It distinguishes a preserved prefix, a changed namespace,
-an intentional history rewrite, changed cache settings, and an unexpected
-prefix change. Incremental payloads and unsupported provider formats are
-marked explicitly and cannot establish a complete prefix comparison.
-
-The observation point is `before_provider_request`. Later extension handlers
-and transport code can still change the request. These reports and the
-construction checks do not measure provider cache hits; cache usage still
-comes from the provider's reported token usage.
-
-## Host smoke
-
-`bun scripts/smoke-omp.mjs` loads the real host `AgentSession` from a local
-checkout (`OMP_HOST`, default `~/Desktop/vibe/oh-my-pi`) and checks the two
-prototype seams this extension patches, the five registered tools, the host
-events it binds, and the append-only state log.
-
-A checkout whose native addon is older than its source may import and then
-fail on a symbol the newer source calls. Both smoke scripts read the addon's
-stamped build version and, when `~/.omp/natives/<version>` already holds a
-matching prebuilt addon, borrow it and re-run in a child process. CI sets
-`OMP_SMOKE_BORROW=0` and `OMP_SMOKE_STRICT=1`, builds the native addon from
-the latest host source, and treats missing host capabilities as failures.
-
-`bun scripts/smoke-context.mjs` uses the same `OMP_HOST`. It runs the real
-Agent loop and ExtensionRunner with the host's mock model, for both `prompt()`
-and `continue()`. Each run executes four tools and five model requests. It
-checks message order, stable prior prefixes, separate history arrays, and
-the absence of per-call markers on committed Skills. It makes no API calls
-and always fails if the host or its dependencies cannot load.
-
-CI checks out the host's default branch (`latest`) and pins Bun `1.4.4`. A
-host upgrade should pass both smoke scripts before use; the native cache is
-keyed by the resolved host commit, so a new host rebuilds it instead of
-reusing an older addon.
-
-## Model selection
-
-Set a fork item's `model` to a host `/switch` selector to use a different model for that child:
+不需要手写调度代码。直接用自然语言提出目标，模型会在内部开出 scope。一次典型的 fork 长这样：
 
 ```js
-scope_fork({ forks: [{
-  path: "review-results",
-  fsm: "states: locate the replay module, read it, record each finding; transition: a finding with no file:line and severity sends the read back; parallel: none",
-  profession: "You are a careful reviewer like Barbara Liskov. ",
-  budget: { read: 3 },
-  targets: ["src/transcript/replay.mjs"],
-  model: "@smol",
-}] })
+await api.scope_fork({
+  forks: [
+    {
+      path: "inspector.risk",
+      fsm: "states: 枚举改动面 → 逐条核对失败路径 → 记录 file:line 与严重度; transition: 证据不足时退回读取; parallel: 审查与复现两条线并行",
+      profession: "You are a security reviewer in the tradition of Dan Kaminsky: evidence first, no unproven claim.",
+      n: 12,
+      targets: ["src", "host-omp/src"],
+    },
+    {
+      path: "devops.gate",
+      fsm: "states: 跑 lint 与测试 → 归类失败 → 单文件复现; transition: 3 次未复现则缩小输入; parallel: 无",
+      profession: "You are a build engineer who reports only what actually ran.",
+      n: 10,
+      budget: { bash: 24, read: 8 },
+    },
+  ],
+});
 ```
 
-Omit `model` or use `null` to inherit the model of the parent that opens the fork, or the session model at the root. The fork resolves and records the child's model once; it never changes the parent's model, and a join never adopts the child's model. The parent's model changes only through an explicit user switch. The host handles model resolution, credentials, and thinking level. Role and alias names such as `default` and `task` resolve before any model-name match; a fuzzy match only estimates the context window and price and never becomes the model a verification expects. If the switch fails, the tool reports the failure and records the model the host is actually using.
+两项同时开始。父会话继续处理自己的部分，随后逐个接收：
 
-Scope admission is its own check. `scope_fork` does not check whether the child record will fit; `scope_join` estimates the parent's context size before accepting a record. A context-size refusal leaves the child record ready and unchanged. There is no receipt folding: a record is already a digest, so nothing is archived or shortened.
+```js
+const record = await api.scope_join();
+```
 
-Third-party notices: see THIRD_PARTY_NOTICES.
+### Web 控制台（可选）
+
+Web 静态资源不在 Git 仓库中，需要本地构建一次。构建依赖 DeerFlow 前端子模块：
+
+```bash
+git submodule update --init --recursive
+(cd host-omp-ui/web && bun run install:safe)
+(cd host-omp-ui && bun run build:web)
+(cd host-omp && bun install)
+omp plugin link .
+```
+
+重启会话后输入 `/web`，会显示本地 URL。若之前已用 `omp plugin install` 装过同一插件，先用 `omp plugin uninstall herdchestra-lite2` 移除，避免同一插件出现两份。
+
+### 常用命令
+
+| 命令 | 作用 |
+|---|---|
+| `/herd` | 打印全部策略开关的当前值 |
+| `/herd <feature> <state>` | 切换并持久化一个开关，例如 `/herd scope adaptive` |
+| `/herd-goal <instruction>` | 启动一次目标会话；裸命令关闭目标模式 |
+| `/herd-diag` | 打印最近 64 条宿主诊断 |
+| `/web` | 显示本地 Web 控制台 URL 与连接状态 |
+
+六个策略开关决定注入模型的规则文本，与宿主的默认行为解耦：
+
+| 开关 | 取值 | 默认 | 影响 |
+|---|---|---|---|
+| `chinese` | `off` / `on` | `on` | 中文思考与回复要求 |
+| `testing` | `off` / `no-red` / `lean` | `lean` | 静态优先、聚焦验证、未跑检查的交接 |
+| `constitution` | `off` / `core` / `full` | `full` | 工作纪律、边界与诚实报告 |
+| `framing` | `off` / `plan` / `full` | `full` | 目标、模型、残差与决策 |
+| `scope` | `off` / `adaptive` / `aggressive` | `aggressive` | 何时分叉、如何并行 |
+| `workspace` | `off` / `personal` / `full` | `full` | 仓库约定、设计记录与元技能 |
+
+同一组名字也是环境变量：`HERD_CHINESE`、`HERD_TESTING`、`HERD_CONSTITUTION`、`HERD_FRAMING`、`HERD_SCOPE`、`HERD_WORKSPACE`。优先级是显式环境变量 > 持久化状态 > 默认值。`HERD_HERD=off` 会关闭 `/herd` 与 `/herd-goal`。
+
+## 适合谁，不适合谁
+
+**适合**
+
+- 用 omp 做长任务，希望调查、修改、验证同时推进的个人与团队。
+- 需要给不同任务不同模型与预算，并事后核对每个 scope 用了多少回合、多少工具预算的团队。
+- 要把"只读审查""可写补丁""可执行验证"变成硬边界，而不是提示词约定的组织。
+- 长会话用户：希望上下文、磁盘和等待时间不随会话长度失控。
+
+**不适合**
+
+- 非 omp 宿主。Herdchestra 是 omp 插件，不是独立运行时。
+- 需要开源再分发或二次销售的场景；许可是 EULA，不是 OSI 许可证。
+- 跨机器分布式调度。scope 树位于本机单个进程内。
+- 拖拽式可视化编排。这里的工作流由自然语言、角色与工具调用驱动。
+
+## 质量与可靠性
+
+仓库里有 **230 个测试文件**，覆盖核心域、两个宿主接线和架构棘轮：
+
+```bash
+bun test tests        # 核心 + 两个宿主插件 + 架构边界
+bun run lint
+bun run smoke:relay   # 对假宿主验证 fork/join 注册、拒绝、回卷
+```
+
+宿主冒烟测试直接加载真实的 `AgentSession`，分别验证扩展接缝与真实 Agent 循环下的消息顺序、前缀稳定性、独立历史数组：
+
+```bash
+OMP_HOST=~/path/to/oh-my-pi bun scripts/smoke-omp.mjs
+OMP_HOST=~/path/to/oh-my-pi bun scripts/smoke-context.mjs
+```
+
+CI 固定 Bun 1.4.4，跟踪 omp 官方仓库的最新提交，从宿主源码构建原生模块并把缺失能力视为失败。宿主升级后，先让两条冒烟测试通过，再投入使用。
+
+运行时失败会进入 64 条环形诊断，状态栏显示 `⚠ N`；`/herd-diag` 打印详情。会话状态按追加日志写入，最多每 64 次状态写入落一个检查点，恢复时从最近检查点重放，不重写整段历史。
+
+## 许可与第三方声明
+
+Herdchestra 采用[最终用户许可协议](LICENSE)：允许内部个人或商业使用；禁止再分发、转售、反向工程，或用于开发竞争产品。**源码可见，但不是开源软件。**
+
+产品复用了 DeerFlow 的 MIT 许可 UI 组件与品牌素材，第三方声明见 [NOTICE](NOTICE) 与 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)。本项目是独立二次开发，与 DeerFlow 项目及其作者无隶属、赞助或背书关系。
+
+## 面向开发者
+
+仓库包含三个包：核心 `herdchestra-lite2`（与宿主无关的引擎）、`host-omp`（omp 接线与插件入口）、`host-omp-ui`（独立的 Web 桥接）。核心对宿主的公开 API 只有一个 `createEngine`，宿主也只导入这一个值；边界由 `tests/architecture/` 下的棘轮与 ESLint 规则静态守住。
+
+- 变更记录：[CHANGELOG.md](CHANGELOG.md)
+- 宿主接线说明：[host-omp/README.md](host-omp/README.md)
+- Web 桥接说明：[host-omp-ui/web/README.md](host-omp-ui/web/README.md)
+- 设计记录：[.agent/skills/scope-orchestration/SKILL.md](.agent/skills/scope-orchestration/SKILL.md)

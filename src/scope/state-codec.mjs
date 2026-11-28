@@ -198,6 +198,8 @@ function serializeStateWith(state, serializeBrackets, _includeAmends = true, sha
     brackets: serializeBrackets(state.brackets),
     epoch:
       Number.isInteger(state.epoch) && state.epoch >= 0 ? state.epoch : 0,
+    contextBaselineTokens: validContextBaselineTokens(state.contextBaselineTokens),
+    hostBoundaryKey: validHostBoundaryKey(state.hostBoundaryKey),
     features: copyFeatures(state.features),
     relay: copyRelay(state.relay),
     baseModelSpec:
@@ -216,6 +218,34 @@ function serializeStateWith(state, serializeBrackets, _includeAmends = true, sha
 
 
 
+
+// -- Birth baseline and host boundary --------------------------------------
+//
+// Both persist with the state so a reload restores what the session was born
+// with. The nudge midpoint is `(window - birth) / 2 + birth`, so
+// re-baselining on reload would ratchet the threshold up on every restart.
+
+const LEGACY_HOST_BOUNDARY = Symbol("herd.legacyHostBoundaryUnknown");
+
+function validContextBaselineTokens(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function validHostBoundaryKey(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * True for a state restored from a snapshot written before the boundary key
+ * was persisted. Its first observation adopts the transcript's current
+ * boundary silently instead of replaying it as a move. The marker is
+ * non-enumerable, so it never reaches a serialized state.
+ */
+export function hasLegacyUnknownHostBoundary(state) {
+  return Boolean(state && state[LEGACY_HOST_BOUNDARY] === true);
+}
 
 function validModelCaches(value) {
   if (value === undefined) return true;
@@ -298,16 +328,36 @@ export function deserializeState(input) {
     // A tree whose queues and levels do not pair is not partially loadable, so
     // it is dropped whole.
     if (!restoredBrackets.ok) return createState();
+    // A snapshot written before the birth baseline was persisted kept the
+    // same number in the root directory meta, so a reload migrates from
+    // there. An explicit `null` is a real reset and must win over that older
+    // copy; migration only runs when this snapshot lacks the property.
+    const hasPersistedBaseline = Object.hasOwn(data, "contextBaselineTokens");
+    const contextBaselineTokens = hasPersistedBaseline
+      ? validContextBaselineTokens(data.contextBaselineTokens)
+      : validContextBaselineTokens(
+          restoredBrackets.ledger && restoredBrackets.ledger.root
+            ? restoredBrackets.ledger.root.dirContextTokens
+            : null,
+        );
+    // A snapshot written before the boundary key was persisted cannot say
+    // which boundary the previous process already absorbed.
+    const hasPersistedBoundary = Object.hasOwn(data, "hostBoundaryKey");
+    const hostBoundaryKey = hasPersistedBoundary
+      ? validHostBoundaryKey(data.hostBoundaryKey)
+      : null;
     const storedFeatures = isPlainObject(data.features) ? data.features : null;
     // The retired `autopilot` feature is dropped on purpose: a goal session
     // is per-command, so a restored session never starts inside one.
     const features = normalizeFeatures(storedFeatures ?? {});
-    return {
+    const restored = {
       version: VERSION,
       startedAt: Number.isFinite(data.startedAt) ? data.startedAt : Date.now(),
       seq: Number.isInteger(data.seq) && data.seq >= 0 ? data.seq : 0,
       epoch:
         Number.isInteger(data.epoch) && data.epoch >= 0 ? data.epoch : 0,
+      contextBaselineTokens,
+      hostBoundaryKey,
       brackets: restoredBrackets.ledger,
       features,
       relay: data.version === VERSION ? copyRelay(data.relay) : createRelay(),
@@ -320,6 +370,14 @@ export function deserializeState(input) {
       modelRecovery: copyModelRecovery(data.modelRecovery),
       modelCaches: copyModelCaches(data.modelCaches),
     };
+    if (!hasPersistedBoundary) {
+      Object.defineProperty(restored, LEGACY_HOST_BOUNDARY, {
+        value: true,
+        enumerable: false,
+        configurable: true,
+      });
+    }
+    return restored;
   } catch {
     return createState();
   }

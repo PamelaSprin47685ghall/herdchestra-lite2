@@ -269,6 +269,13 @@ function extendsMessages(previous, next) {
 	return previous.every((hash, index) => hash === next[index]);
 }
 
+/** A finite, non-negative token count, or null when the value is not usable. */
+function validBaselineTokens(value) {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0
+		? value
+		: null;
+}
+
 /**
  * Build one ledger.
  *
@@ -356,9 +363,12 @@ export function createUsageLedger(options) {
 		// The occupancy this scope's first measured request carried. It is the
 		// only honest reading of "the context the scope was born with": a fork
 		// mints its own session, so its first response's input *is* the birth
-		// context, and no estimate is involved. `null` until a provider reports
-		// usage, which is what keeps an unmeasured scope from arming a nudge.
-		baselineTokens: null,
+		// context, and no estimate is involved. It mirrors
+		// `state.contextBaselineTokens`, which is where the birth persists across
+		// a process restart or a session resume: the transcript survives those
+		// events, so the birth must too. `null` until a provider reports usage,
+		// which is what keeps an unmeasured scope from arming a nudge.
+		baselineTokens: validBaselineTokens(state?.contextBaselineTokens),
 		// Whether the *next* request should carry the return nudge. Recomputed
 		// after every measured response and after every watermark change, so a
 		// scope that folds or rewinds below its midpoint is left alone again.
@@ -437,8 +447,22 @@ export function createUsageLedger(options) {
 			ledger.lastTotalInput = tIn;
 			ledger.lastUsageModelKey = modelKeyOf(latest.entry?.message);
 			ledger.lastOutputTokens = latest.snap.output;
-			// Receipt projection owns baselines now; a restored branch reads its
-			// usage snapshot and derives them from the live request.
+			// The birth baseline lives on the persisted state, not on this in-memory
+			// ledger: a process restart or a session resume rebuilds the ledger while
+			// the transcript stays the same. Re-read it here so a reload keeps the
+			// birth the scope was born with; only a genuine rewind, compact or
+			// handoff may replace it.
+			if (ledger.baselineTokens === null) {
+				const restoredBaseline = validBaselineTokens(
+					state?.contextBaselineTokens,
+				);
+				if (restoredBaseline !== null) ledger.baselineTokens = restoredBaseline;
+			}
+			// The restored occupancy is the last measured request, so the arming
+			// flag is recomputed now instead of waiting for the next response: a
+			// scope that was already past its midpoint re-enters CONTEXT_LIMIT on
+			// the reload itself.
+			refreshContextNudge();
 		} catch (error) {
 			// A host without a branch keeps the null baseline. The loss is
 			// recorded because every later scope baseline then starts from the
@@ -477,11 +501,18 @@ export function createUsageLedger(options) {
 			ledger.lastUsageModelKey = key;
 			ledger.lastTotalInput = tIn;
 			ledger.lastOutputTokens = snap.output;
-			// The first measured request is this scope's birth context. A scope
-			// that lost its ledger and reloaded re-baselines here on its first
-			// response, which is the only honest reading of a session the host
-			// rebuilt without the scope's own history.
-			if (ledger.baselineTokens === null) ledger.baselineTokens = tIn;
+			// The first measured request is this scope's birth context. Only a
+			// genuine birth, or a birth after a real rewind, compact or handoff,
+			// reaches this branch: a restart or resume restores the persisted
+			// baseline instead of re-deriving it from the context it reloaded. Both
+			// copies move together so the birth survives the next restart, and the
+			// `persist()` below writes it in the same turn it was measured.
+			if (ledger.baselineTokens === null) {
+				ledger.baselineTokens = tIn;
+				if (state && typeof state === "object") {
+					state.contextBaselineTokens = tIn;
+				}
+			}
 			refreshContextNudge();
 			if (key) {
 				const messages = contextMessages();
@@ -680,8 +711,12 @@ export function createUsageLedger(options) {
 		// A rewind or a reborn scope starts a new birth: the old baseline
 		// measured a context that no longer exists, so the next measured
 		// request becomes the baseline and the nudge is disarmed until it
-		// crosses its own midpoint.
+		// crosses its own midpoint. The persisted copy clears in the same step,
+		// so a restart after the reset cannot resurrect the birth it replaced.
 		ledger.baselineTokens = null;
+		if (state && typeof state === "object") {
+			state.contextBaselineTokens = null;
+		}
 		ledger.contextNudge = false;
 		ledger.contextRevision += 1;
 		ledger.sentContext = null;

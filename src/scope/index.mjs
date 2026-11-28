@@ -91,6 +91,7 @@ export {
   serializeStateShared,
   serializeStateCore,
   deserializeState,
+  hasLegacyUnknownHostBoundary,
 } from "./state-codec.mjs";
 export {
   diffState,

@@ -41,8 +41,9 @@
 	serializeState,
 	serializeStateCore,
 	splitState,
-	forkOf,
-	unreceivedChildren,
+  	forkOf,
+  	hasLegacyUnknownHostBoundary,
+  	unreceivedChildren,
 	updateRecordSnapshot,
 	updateRootMeta,
 } from "../scope/index.mjs";
@@ -72,9 +73,10 @@ import {
 	clearContextCache as forgetContextCache,
 	clearScan,
 	contextForLeaf,
-	createHostBoundary,
-	observeHostBoundary,
-} from "./domain/host-boundary.mjs";
+  	createHostBoundary,
+  	observeHostBoundary,
+  	syncHostBoundary,
+  } from "./domain/host-boundary.mjs";
 import {
 	createDirectoryBaseline,
 	directoryDelta as computeDirectoryDelta,
@@ -234,7 +236,7 @@ export class SessionStation {
 		this.lastError = null;
 		// One boundary cache: the keyed scan and the per-leaf projection. The
 		// kernel owns the fields; the station owns when they are read and dropped.
-		this.boundary = createHostBoundary();
+  		this.boundary = this.newHostBoundary();
 		this.agentPolicy = null;
 		// Rewind and model-switch facts: one value with total transitions, so the
 		// double-dispatch guard, the child-rewind permission and the queued switch
@@ -536,15 +538,19 @@ export class SessionStation {
 		const occupancy = this.measuredOccupancy();
 		if (!Number.isFinite(occupancy)) return;
 		const ownerId = this.forkOwnerId();
-		if (ownerId === null) {
-			const baseline = this.usage?.baselineTokens;
-			updateRootMeta(ledger, {
-				contextTokens: occupancy,
-				...(ledger.root?.dirContextTokens == null && Number.isFinite(baseline)
-					? { dirContextTokens: baseline }
-					: {}),
-			});
-		} else {
+  		if (ownerId === null) {
+  			const baseline = this.usage?.baselineTokens;
+  			const seededDirBaseline =
+  				ledger.root?.dirContextTokens == null && Number.isFinite(baseline);
+  			updateRootMeta(ledger, {
+  				contextTokens: occupancy,
+  				...(seededDirBaseline ? { dirContextTokens: baseline } : {}),
+  			});
+  			// The usage ledger persists before this write, so the directory copy of
+  			// the birth needs its own flush: a process that exits after its first
+  			// response must still restore that birth instead of re-measuring one.
+  			if (seededDirBaseline) this.persist();
+  		} else {
 			updateRecordSnapshot(ledger, ownerId, {
 				snapshotContextTokens: occupancy,
 			});
@@ -1307,10 +1313,24 @@ export class SessionStation {
 	 * the constructor, so reading the value through an accessor keeps every
 	 * transition total on a real station and on such a double alike.
 	 */
-	boundaryState() {
-		if (!this.boundary) this.boundary = createHostBoundary();
-		return this.boundary;
-	}
+  	boundaryState() {
+  		if (!this.boundary) this.boundary = this.newHostBoundary();
+  		return this.boundary;
+  	}
+
+  	/**
+  	 * The boundary cache seeded from the persisted key.
+  	 *
+  	 * A snapshot written before the key was persisted cannot say which handoff
+  	 * it already absorbed, so the first observation adopts the transcript's key
+  	 * instead of moving to it.
+  	 */
+  	newHostBoundary() {
+  		const state = this.state ?? null;
+  		return createHostBoundary(state?.hostBoundaryKey ?? null, {
+  			adoptFirst: state ? hasLegacyUnknownHostBoundary(state) : false,
+  		});
+  	}
 
 	/** The printed-tree baseline, created on first use. */
 	baselineState() {
@@ -1329,21 +1349,28 @@ export class SessionStation {
 	 * reset the directory and usage caches, and persist. The station owns the
 	 * fields; a gate only translates the event.
 	 */
-	noteHostBoundary(messages) {
-		const moved = observeHostBoundary(this.boundaryState(), messages);
-		if (moved.changed !== true) return false;
-		truncateForHostBoundary(this.state);
-		this.resetDirectoryBaseline();
-		this.resetUsageWatermark();
-		this.persist();
-		return true;
-	}
+  	noteHostBoundary(messages) {
+  		const moved = observeHostBoundary(this.boundaryState(), messages);
+  		if (moved.adopted === true) {
+  			this.state.hostBoundaryKey = moved.key;
+  			this.persist();
+  			return false;
+  		}
+  		if (moved.changed !== true) return false;
+  		this.state.hostBoundaryKey = moved.key;
+  		truncateForHostBoundary(this.state);
+  		this.resetDirectoryBaseline();
+  		this.resetUsageWatermark();
+  		this.persist();
+  		return true;
+  	}
 
-	/** Accept the live transcript as the boundary after a host compact. */
-	markHostBoundaryCurrent(messages) {
-		const moved = observeHostBoundary(this.boundaryState(), messages);
-		return moved.key ?? null;
-	}
+  	/** Accept the live transcript as the boundary after a host compact. */
+  	markHostBoundaryCurrent(messages) {
+  		const key = syncHostBoundary(this.boundaryState(), messages);
+  		this.state.hostBoundaryKey = key;
+  		return key;
+  	}
 
 	syncRootUserPrompts(messages = null) {
 		return syncRootUserPrompts(this, messages);

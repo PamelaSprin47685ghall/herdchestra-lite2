@@ -48,7 +48,10 @@ The owner of each input is fixed:
   request. A fork's first request is the first request of its own session, so
   this is the birth context without an estimate. `resetWatermark()` clears it,
   which is why a rewind or a reborn scope re-baselines; a fold (`rebase`) keeps
-  it, because a fold changes the context, not the birth.
+  it, because a fold changes the context, not the birth. A process restart or a
+  session resume keeps it too: it persists as `state.contextBaselineTokens` and
+  is restored with the branch, so killing the process cannot ratchet the
+  midpoint up and let a scope escape `CONTEXT_LIMIT` by restarting.
 - **Occupancy** — `lastTotalInput + lastOutputTokens`: where the last response
   ended. Pending messages are excluded on purpose; the contract arms on what
   the last request returned.

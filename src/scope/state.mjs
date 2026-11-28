@@ -35,6 +35,14 @@ export function createState() {
     startedAt: Date.now(),
     seq: 0,
     epoch: 0,
+    // The input the provider reported for this scope's first measured
+    // request. A reload restores it, so a process restart keeps the birth
+    // context that only a real rewind or a new scope replaces. `null` until
+    // the first measurement, and again after a reset.
+    contextBaselineTokens: null,
+    // The transcript boundary this scope already absorbed. A reload compares
+    // against it instead of replaying the same handoff as a new boundary.
+    hostBoundaryKey: null,
     // The bracket tree itself: fork ids, owners, budgets, ready order and the
     // frozen record of every child that returned. It is persisted with the
     // state because a reload must be able to close or explain every bracket.
@@ -66,7 +74,10 @@ export function createFlowState(base) {
   const shared = new Set(["features", "relay", "brackets"]);
   // A child starts its own receive chain: the parent's receipts belong to the
   // parent's level and must not be folded twice from a child's projection.
-  const local = new Set(["receipts"]);
+  // A child is born into its own context: the parent's birth baseline and
+  // host boundary describe the parent's transcript, not the child's, so the
+  // child starts empty instead of inheriting them.
+  const local = new Set(["receipts", "contextBaselineTokens", "hostBoundaryKey"]);
   for (const key of Object.keys(base)) {
     if (local.has(key)) continue;
     if (shared.has(key)) {

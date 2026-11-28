@@ -6,6 +6,23 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [10.3.2] — 2026-11-28
+
+### Fixed
+
+- The birth context survives a process restart or a session resume. It persists
+  as `state.contextBaselineTokens`, so a reload restores the baseline the scope
+  was born with instead of re-measuring it against the context it reloaded; a
+  restart can no longer raise the `CONTEXT_LIMIT` midpoint. A snapshot written
+  before the field existed migrates from `brackets.root.dirContextTokens`, and an
+  explicit `null` still wins over that older copy.
+- An absorbed host boundary is not replayed as a fresh handoff after a reload.
+  The boundary key persists as `state.hostBoundaryKey`; a pre-fix snapshot adopts
+  the transcript's boundary silently on its first observation, and a compact
+  clears the key so a later handoff still lands.
+- The first measured turn persists the root directory baseline in the same turn,
+  so a process that exits right after its first response restores it.
+
 ## [10.3.1] — 2026-11-28
 
 ### Fixed

@@ -29,12 +29,14 @@ import { handleForkCall, handleJoinCall, handleReturnCall } from "../src/station
 import { executeReturn } from "../src/station/execute.mjs";
 import {
 	RETURN_OATH_KEY,
-	RETURN_OATH_UNFINISHED,
+	RETURN_OATH_BREAK,
+	RETURN_OATH_CONTINUE,
 	RETURN_OATH_VALUE,
 } from "../src/station/domain/handoff.mjs";
 
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
-const UNFINISHED = { [RETURN_OATH_KEY]: RETURN_OATH_UNFINISHED };
+const CONTINUE = { [RETURN_OATH_KEY]: RETURN_OATH_CONTINUE };
+const BREAK = { [RETURN_OATH_KEY]: RETURN_OATH_BREAK };
 const AGENT_REGISTRY = { kind: "agentRegistry" };
 
 function sharedManager() {
@@ -242,13 +244,13 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 
 									const retCall = {
 										role: "assistant",
-										content: [{ type: "toolCall", id: "ret-1", name: "scope_return", arguments: { dafny: "gen1 distilled summary", ...UNFINISHED } }],
+										content: [{ type: "toolCall", id: "ret-1", name: "scope_return", arguments: { dafny: "gen1 distilled summary", ...CONTINUE } }],
 										timestamp: 13,
 									};
 									config.sessionManager.appendMessage(retCall);
 									session.agent.state.messages.push(retCall);
 
-									const res = executeReturn(childStation, "ret-1", { dafny: "gen1 distilled summary", ...UNFINISHED }, {});
+									const res = executeReturn(childStation, "ret-1", { dafny: "gen1 distilled summary", ...CONTINUE }, {});
 									expect(res.isError).toBeUndefined();
 									expect(res.details.result.rewind).toBe(true);
 									expect(res.details.stopLoop).toBe(true);
@@ -272,7 +274,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 									};
 									config.sessionManager.appendMessage(work2);
 									session.agent.state.messages.push(work2);
-									const res2 = executeReturn(childStation, "ret-2", { dafny: "gen2 distilled summary", ...UNFINISHED }, {});
+									const res2 = executeReturn(childStation, "ret-2", { dafny: "gen2 distilled summary", ...CONTINUE }, {});
 									expect(res2.details.result.rewind).toBe(true);
 									expect(record.handoffCount).toBe(2);
 									return;
@@ -332,6 +334,10 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 		expect(record.handoffCount).toBe(2);
 		// Anti-Goodhart: panhandle count survived all rewinds!
 		expect(record.panhandleTotal).toBe(1);
+		// A rewind re-baselines context only. The fork keeps the budget it was
+		// born with instead of re-minting a fresh account.
+		expect(record.budget).toEqual({ read: 1 });
+		expect(record.remaining).toEqual({ read: 1 });
 		// Child rewinds stay isolated on child branch; note that parent.persist()
 		// in this test shares `shared` directly because parent is Root, whereas
 		// child BranchManager appends without changing shared's leaf! Verify leaf
@@ -447,7 +453,7 @@ describe("mixed tool-call batch refusal and stopAfterScopeReturn", () => {
 		// Small handoff is allowed even with unreceived children!
 		const small = handleReturnCall(root, {
 			id: "r-small-1",
-			arguments: { dafny: "compacting root while child runs", ...UNFINISHED },
+			arguments: { dafny: "compacting root while child runs", ...CONTINUE },
 		});
 		expect(small.isError).toBeUndefined();
 		expect(small.details.rewind).toBe(true);
@@ -509,5 +515,148 @@ describe("mixed tool-call batch refusal and stopAfterScopeReturn", () => {
 			},
 		});
 		expect(root.state.relay.canStop).toBe(false);
+	});
+});
+
+describe("degraded delivery: break", () => {
+	test("root break rewinds instead of sealing and the reborn context carries the downgrade verdict", () => {
+		const shared = sharedManager();
+		shared.appendMessage({ role: "user", content: "initial request" });
+		const root = createTestStation(SessionStation, shared, {}, {}, null, null);
+		const ledger = root.brackets;
+		root.forkLedgerPort = () => ledger;
+		root.forkIdentityPort = () => null;
+		root.forkOwnerId = () => null;
+		root.state.relay.goal = true;
+
+		const broke = handleReturnCall(root, {
+			id: "r-break",
+			arguments: { dafny: "half the fixtures never ran; the caller must finish them", ...BREAK },
+		});
+		expect(broke.isError).toBeUndefined();
+		expect(broke.details.rewind).toBe(true);
+		expect(broke.details.stopLoop).toBe(true);
+		expect(broke.details.result.downgraded).toBe(true);
+		expect(broke.details.result.sealed).toBeUndefined();
+		expect(root.state.relay.canStop).toBe(false);
+		expect(root.state.relay.generation).toBe(1);
+
+		expect(root.commitRootRewind({})).toBe(true);
+
+		const branch = shared.getBranch();
+		const compactAt = branch.findLastIndex((entry) => entry.type === "compaction");
+		const compaction = branch[compactAt];
+		expect(compaction.summary).toContain("上一任选择了降级交付，用户不满意，请你做到满级交付为止。");
+		// The verdict rides inside the compaction summary, so the real user
+		// prompts keep both their count and their identity.
+		const userEntries = branch.filter(
+			(entry) => entry.type === "message" && entry.message?.attribution === "user",
+		);
+		expect(userEntries).toHaveLength(1);
+		expect(userEntries[0].message.content[0].text).toBe("initial request");
+		expect(compaction.firstKeptEntryId).toBe(userEntries[0].id);
+	});
+
+	test("child break seals through the deliver path and the caller receives the shortfall", async () => {
+		const wiring = createForkWiring();
+		const shared = sharedManager();
+		shared.appendMessage({ role: "user", content: "root prompt" });
+		shared.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "fork-break", name: "scope_fork", arguments: {} }],
+		});
+
+		const SHORTFALL = "only the reader is patched; the writer and its tests are untouched";
+		const parent = createTestStation(SessionStation, shared, {}, {}, null, null);
+		const attached = attachForkPorts(parent, wiring, {
+			conversationKey: "session:rewind-session-1",
+			ownerSession: ownerSession(),
+			prepareChild: (session) => {
+				const identity = identityForAgent(wiring.registry, session.agent.id);
+				const childStation = createTestStation(
+					SessionStation,
+					session.sessionManager,
+					{},
+					{},
+					null,
+					null,
+				);
+				childStation.host.session.setMessages = (_ctx, messages) => {
+					session.agent.state.messages = messages.slice();
+					return true;
+				};
+				attachForkPorts(childStation, wiring, {
+					conversationKey: "session:rewind-session-1",
+					identity,
+				});
+				session._childStation = childStation;
+				return { ok: true, station: childStation, ctx: { session } };
+			},
+			createSession: (spec) =>
+				createBranchSession({
+					session: spec.ownerSession,
+					sessionManager: spec.manager ?? spec.sessionManager,
+					flowId: spec.agentId,
+					sourceToolCallId: spec.sourceToolCallId,
+					agentDisplayName: "Worker",
+					agentRegistry: AGENT_REGISTRY,
+					async createAgentSession(config) {
+						const messages = config.sessionManager.buildSessionContext().messages;
+						const prompts = [];
+						const session = {
+							sessionManager: config.sessionManager,
+							prompts,
+							agent: {
+								id: config.agentId,
+								state: { messages, stopReason: "stop" },
+								abort() {},
+							},
+							async prompt(text) {
+								prompts.push(text);
+								const childStation = session._childStation;
+								const res = executeReturn(
+									childStation,
+									"ret-break",
+									{ dafny: SHORTFALL, ...BREAK },
+									{},
+								);
+								expect(res.isError).toBeUndefined();
+								expect(res.details.result.sealed).toBe(true);
+								expect(res.details.result.degraded).toBe(true);
+								expect(res.details.stopLoop).toBe(true);
+							},
+						};
+						return { session };
+					},
+				}),
+		});
+
+		const forkOut = handleForkCall(parent, {
+			id: "fork-break",
+			arguments: {
+				forks: [
+					{
+						path: "/inspector.breaker",
+						fsm: "patch the reader only",
+						profession: "You are a careful engineer.",
+						n: 1,
+						budget: { read: 1 },
+						targets: ["src/a.mjs"],
+					},
+				],
+			},
+		});
+		expect(forkOut.isError).toBeUndefined();
+
+		const taken = await waitForReady(wiring.registry, attached.ledger, {
+			ownerId: "root",
+			levelKey: forkOf(attached.ledger, "fork-break").levelKey,
+		});
+		expect(taken.ok).toBe(true);
+
+		const outcome = outcomeOf(wiring.registry, "fork-break");
+		expect(outcome.failed).toBe(false);
+		expect(outcome.record).toContain(SHORTFALL);
+
 	});
 });

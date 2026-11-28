@@ -1,10 +1,15 @@
 // Relay state: creation, copying, and validation. Pure data. No I/O.
 //
 // Root handoff is unified with `scope_return` and matches a subscope:
-// - A small handoff (oath `unfinished`) rewinds Root to its user prompts +
-//   report and increments `generation`; `canStop` stays false.
-// - A seal handoff sets `canStop = true`, so Root writes the final user-facing
+// - `continue` rewinds Root to its user prompts + report and increments
+//   `generation`; `canStop` stays false.
+// - `break` rewinds Root the same way and marks the pending rewind `downgraded`,
+//   so the reborn turn says the previous generation delivered below standard.
+// - The seal value sets `canStop = true`, so Root writes the final user-facing
 //   answer without another rewind.
+//
+// A rewind refunds nothing: `pendingRewind` carries a report, a generation, and
+// at most the degraded marker. Budgets and clocks never live here.
 //
 // `isPlainObject` here is the strict predicate: a relay value this process built
 // must carry this realm's `Object.prototype`, so a value that crossed a realm is
@@ -28,6 +33,7 @@ function copyPendingRewind(value) {
 	return {
 		report: value.report,
 		generation: value.generation,
+		...(value.downgraded === true ? { downgraded: true } : {}),
 		...(typeof value.id === "string" && value.id !== "" ? { id: value.id } : {}),
 	};
 }
@@ -38,6 +44,7 @@ function isValidPendingRewind(value) {
 	if (typeof value.report !== "string") return false;
 	if (!nonNegativeInteger(value.generation)) return false;
 	if (value.id !== undefined && typeof value.id !== "string") return false;
+	if (value.downgraded !== undefined && typeof value.downgraded !== "boolean") return false;
 	return true;
 }
 
@@ -47,6 +54,9 @@ export function createRelay() {
 		canStop: false,
 		// One-shot goal session: set by `/herd-goal`, cleared on sealed delivery.
 		goal: false,
+		// Official goal fallback: set with `goal` when `/herd-goal` also enters
+		// omp's built-in goal mode, cleared when that official goal settles.
+		goalFallback: false,
 		// Verbatim user-authored prompts and steers, oldest first. Preserved
 		// across Root rewinds and reloads so the reborn Root always starts from
 		// the complete user requirement record.
@@ -61,6 +71,7 @@ export function copyRelay(relay) {
 		generation: nonNegativeInteger(source.generation) ? source.generation : 0,
 		canStop: source.canStop === true,
 		goal: source.goal === true,
+		goalFallback: source.goalFallback === true,
 		userPrompts: Array.isArray(source.userPrompts)
 			? source.userPrompts.filter(
 					(text) => typeof text === "string" && text.trim() !== "",
@@ -75,6 +86,9 @@ export function isValidRelay(value) {
 	if (!nonNegativeInteger(value.generation)) return false;
 	if (typeof value.canStop !== "boolean") return false;
 	if (value.goal !== undefined && typeof value.goal !== "boolean") return false;
+	if (value.goalFallback !== undefined && typeof value.goalFallback !== "boolean") {
+		return false;
+	}
 	if (value.userPrompts !== undefined) {
 		if (!Array.isArray(value.userPrompts)) return false;
 		for (const text of value.userPrompts) {

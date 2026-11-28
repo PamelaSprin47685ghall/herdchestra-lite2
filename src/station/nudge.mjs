@@ -65,7 +65,12 @@ export function nudgeDecision({
 		if (returnNudgesOf(record) >= MAX_RETURN_NUDGES) return { kind: "none" };
 		return { kind: "steer", text: childReturnNudge(), charge: "return" };
 	}
-	if (mode === "ROOT_AUTOPILOT" && relay?.canStop !== true && !relay?.pendingRewind) {
+	if (
+		mode === "ROOT_AUTOPILOT" &&
+		relay?.canStop !== true &&
+		relay?.goalFallback !== true &&
+		!relay?.pendingRewind
+	) {
 		return { kind: "steer", text: rootReturnNudge() };
 	}
 	return { kind: "none" };

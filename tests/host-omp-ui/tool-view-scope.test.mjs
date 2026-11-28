@@ -91,4 +91,36 @@ test("the web mapper gives the scope control plane cards, not JSON", async () =>
 	);
 	expect(seal.kind).toBe("task");
 	if (seal.kind === "task") expect(seal.prompt).toBe("seal");
+
+	const cont = describeTool(
+		tool(
+			"scope_return",
+			{ dafny: "more to do", signed_sealed_hands_off_nothing_left_on_the_table: "continue" },
+			"Rewound.",
+		),
+	);
+	expect(cont.kind).toBe("task");
+	if (cont.kind === "task") expect(cont.prompt).toBe("continue");
+
+	const degraded = describeTool(
+		tool(
+			"scope_return",
+			{ dafny: "stopping short", signed_sealed_hands_off_nothing_left_on_the_table: "break" },
+			"Sealed.",
+		),
+	);
+	expect(degraded.kind).toBe("task");
+	if (degraded.kind === "task") expect(degraded.prompt).toBe("break");
+
+	const resume = describeTool(
+		tool("scope_return", { dafny: "keep going", signed_sealed_hands_off_nothing_left_on_the_table: "continue" }, "rewound"),
+	);
+	expect(resume.kind).toBe("task");
+	if (resume.kind === "task") expect(resume.prompt).toBe("continue");
+
+	const broke = describeTool(
+		tool("scope_return", { dafny: "stopping short", signed_sealed_hands_off_nothing_left_on_the_table: "break" }, "sealed"),
+	);
+	expect(broke.kind).toBe("task");
+	if (broke.kind === "task") expect(broke.prompt).toBe("break");
 });

@@ -6,7 +6,8 @@ import { describe, expect, test } from "bun:test";
 import { createRelay } from "../../../src/relay/index.mjs";
 import {
 	RETURN_OATH_KEY,
-	RETURN_OATH_UNFINISHED,
+	RETURN_OATH_BREAK,
+	RETURN_OATH_CONTINUE,
 	RETURN_OATH_VALUE,
 	decideScopeReturn,
 	formatGenerationReport,
@@ -17,11 +18,17 @@ import {
 } from "../../../src/station/domain/handoff.mjs";
 
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
-const UNFINISHED = { [RETURN_OATH_KEY]: RETURN_OATH_UNFINISHED };
+const CONTINUE = { [RETURN_OATH_KEY]: RETURN_OATH_CONTINUE };
+const BREAK = { [RETURN_OATH_KEY]: RETURN_OATH_BREAK };
 
 describe("parseReturnOath", () => {
-	test("unfinished is the small handoff; an omitted oath is refused", () => {
-		expect(parseReturnOath(UNFINISHED)).toEqual({ ok: true, big: false });
+	test("continue is the small handoff, break is a degraded delivery, and a legacy value is refused", () => {
+		expect(parseReturnOath(CONTINUE)).toEqual({ ok: true, mode: "continue", big: false });
+		expect(parseReturnOath(BREAK)).toEqual({ ok: true, mode: "break", big: false });
+		expect(parseReturnOath({ [RETURN_OATH_KEY]: "unfinished" })).toEqual({
+			ok: false,
+			code: "INVALID_RETURN_OATH",
+		});
 		expect(parseReturnOath({})).toEqual({ ok: false, code: "INVALID_RETURN_OATH" });
 		expect(parseReturnOath({ [RETURN_OATH_KEY]: undefined })).toEqual({
 			ok: false,
@@ -30,11 +37,11 @@ describe("parseReturnOath", () => {
 	});
 
 	test("exact singleton oath value is a big handoff", () => {
-		expect(parseReturnOath(OATH)).toEqual({ ok: true, big: true });
+		expect(parseReturnOath(OATH)).toEqual({ ok: true, mode: "seal", big: true });
 	});
 
 	test("any non-matching value is strictly refused (never coerced)", () => {
-		for (const bad of [false, true, null, "", " ", "a_master_would_change_nothing", 1, {}]) {
+		for (const bad of [false, true, null, "", " ", "unfinished", "a_master_would_change_nothing", 1, {}]) {
 			expect(parseReturnOath({ [RETURN_OATH_KEY]: bad })).toEqual({
 				ok: false,
 				code: "INVALID_RETURN_OATH",
@@ -51,22 +58,22 @@ describe("decideScopeReturn", () => {
 			decideScopeReturn({ isRoot: true, args: { dafny: "ok", [RETURN_OATH_KEY]: false } }),
 		).toEqual({ ok: false, code: "INVALID_RETURN_OATH" });
 		expect(
-			decideScopeReturn({ isRoot: true, args: { dafny: "   ", ...UNFINISHED } }),
+			decideScopeReturn({ isRoot: true, args: { dafny: "   ", ...CONTINUE } }),
 		).toEqual({ ok: false, code: "MISSING_DAFNY" });
 		expect(
-			decideScopeReturn({ isRoot: true, mixedToolCalls: true, args: { dafny: "ok", ...UNFINISHED } }),
+			decideScopeReturn({ isRoot: true, mixedToolCalls: true, args: { dafny: "ok", ...CONTINUE } }),
 		).toEqual({ ok: false, code: "MIXED_RETURN_TOOL_CALLS" });
 		expect(
 			decideScopeReturn({ isRoot: false, identityForkId: "f1", record: childRecord, mixedToolCalls: true, args: { dafny: "ok", ...OATH } }),
 		).toEqual({ ok: false, code: "MIXED_RETURN_TOOL_CALLS" });
 	});
 
-	test("child small handoff (unfinished oath) rewinds and stops the loop", () => {
+	test("child small handoff (continue oath) rewinds and stops the loop", () => {
 		const decision = decideScopeReturn({
 			isRoot: false,
 			identityForkId: "f1",
 			record: childRecord,
-			args: { dafny: "discovered cache mismatch; next try patching", ...UNFINISHED },
+			args: { dafny: "discovered cache mismatch; next try patching", ...CONTINUE },
 		});
 		expect(decision).toEqual({
 			ok: true,
@@ -92,6 +99,7 @@ describe("decideScopeReturn", () => {
 			kind: "deliver",
 			scope: "child",
 			big: true,
+			degraded: false,
 			abandoned: false,
 			dafny: "verified fix",
 			receiverId: "root",
@@ -100,14 +108,14 @@ describe("decideScopeReturn", () => {
 		});
 	});
 
-	test("root unfinished handoff rewinds and increments generation", () => {
+	test("root continue handoff rewinds and increments generation", () => {
 		const before = Object.freeze({ ...createRelay(), generation: 2, canStop: false });
 		const decision = decideScopeReturn({
 			isRoot: true,
 			relay: before,
 			canRewindRoot: true,
 			unreceived: 2, // allowed for small handoff
-			args: { dafny: "still need to inspect tests", ...UNFINISHED },
+			args: { dafny: "still need to inspect tests", ...CONTINUE },
 			callId: "c-small",
 		});
 		expect(decision.ok).toBe(true);
@@ -162,11 +170,99 @@ describe("decideScopeReturn", () => {
 			isRoot: true,
 			relay: createRelay(),
 			canRewindRoot: false,
-			args: { dafny: "report", ...UNFINISHED },
+			args: { dafny: "report", ...CONTINUE },
 		});
 		expect(decision).toEqual({ ok: false, code: "ROOT_REWIND_UNAVAILABLE" });
 	});
 });
+
+describe("degraded delivery: break", () => {
+	const childRecord = Object.freeze({ forkId: "f1", status: "running", ownerId: "root", woken: false });
+
+	test("child break seals through the deliver path and flags the shortfall", () => {
+		const decision = decideScopeReturn({
+			isRoot: false,
+			identityForkId: "f1",
+			record: childRecord,
+			receiverId: "root",
+			args: { dafny: "half the tests never ran; the caller must finish them", ...BREAK },
+		});
+		expect(decision).toEqual({
+			ok: true,
+			kind: "deliver",
+			scope: "child",
+			big: false,
+			degraded: true,
+			abandoned: false,
+			dafny: "half the tests never ran; the caller must finish them",
+			receiverId: "root",
+			orphans: [],
+			stopLoop: true,
+		});
+	});
+
+	test("root break rewinds with a downgraded generation even while children are unreceived", () => {
+		const before = Object.freeze({ ...createRelay(), generation: 2, canStop: false });
+		const decision = decideScopeReturn({
+			isRoot: true,
+			relay: before,
+			canRewindRoot: true,
+			unreceived: 2,
+			args: { dafny: "shipping a partial answer", ...BREAK },
+			callId: "c-break",
+		});
+		expect(decision.ok).toBe(true);
+		expect(decision.kind).toBe("rewind");
+		expect(decision.downgraded).toBe(true);
+		expect(decision.big).toBe(false);
+		expect(decision.stopLoop).toBe(true);
+		expect(decision.relay.canStop).toBe(false);
+		expect(decision.pendingRewind).toEqual({
+			report: "",
+			generation: 3,
+			downgraded: true,
+			id: "c-break",
+		});
+		expect(before.generation).toBe(2);
+	});
+
+	test("root continue keeps the clean pending shape without a downgraded flag", () => {
+		const decision = decideScopeReturn({
+			isRoot: true,
+			relay: createRelay(),
+			canRewindRoot: true,
+			args: { dafny: "more work", ...CONTINUE },
+			callId: "c-continue",
+		});
+		expect(decision.downgraded).toBe(false);
+		expect(decision.pendingRewind).toEqual({ report: "", generation: 1, id: "c-continue" });
+	});
+
+	test("root break still refuses when the host cannot rewind", () => {
+		expect(
+			decideScopeReturn({
+				isRoot: true,
+				relay: createRelay(),
+				canRewindRoot: false,
+				args: { dafny: "partial", ...BREAK },
+			}),
+		).toEqual({ ok: false, code: "ROOT_REWIND_UNAVAILABLE" });
+	});
+
+	test("the reborn prompt appends the downgrade verdict last, and only for a root break", () => {
+		const standard = formatRebornPrompt({ birth: "You are now in the scope /api,", report: "still patching" });
+		expect(standard).not.toContain("上一任选择了降级交付");
+		const degraded = formatRebornPrompt({
+			birth: "You are now in the scope /api,",
+			report: "still patching",
+			downgraded: true,
+		});
+		expect(degraded.endsWith("上一任选择了降级交付，用户不满意，请你做到满级交付为止。")).toBe(true);
+		expect(degraded).toContain("Continue the work");
+		expect(degraded.startsWith("You are now in the scope /api,")).toBe(true);
+	});
+});
+
 
 describe("formatting helpers", () => {
 	test("formatGenerationReport includes assistant text, tool calls with args, skips amended beats, and appends dafny", () => {

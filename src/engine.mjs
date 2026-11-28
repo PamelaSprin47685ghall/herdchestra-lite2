@@ -155,4 +155,7 @@ export const TICKET_CONTRACT = Object.freeze([
 	"applyPendingModelSwitch",
 	"canSteer",
 	"canPrompt",
+	// The official goal mirror: one verb owns the host `/goal` enter/drop and
+	// commits the herd session only after the host accepted the objective.
+	"goalSession",
 ]);

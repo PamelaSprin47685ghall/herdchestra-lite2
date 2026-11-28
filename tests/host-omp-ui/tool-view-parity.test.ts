@@ -93,5 +93,25 @@ describe("the scope control plane", () => {
     if (seal.kind !== "task") throw new Error(`expected task, got ${seal.kind}`);
     expect(seal.title).toBe("scope_return");
     expect(seal.prompt).toBe("seal");
+
+    const resume = describeTool(
+      execution(
+        "scope_return",
+        { dafny: "keep going", signed_sealed_hands_off_nothing_left_on_the_table: "continue" },
+        "Rewound.",
+      ),
+    );
+    if (resume.kind !== "task") throw new Error(`expected task, got ${resume.kind}`);
+    expect(resume.prompt).toBe("continue");
+
+    const broke = describeTool(
+      execution(
+        "scope_return",
+        { dafny: "stopping short", signed_sealed_hands_off_nothing_left_on_the_table: "break" },
+        "Sealed.",
+      ),
+    );
+    if (broke.kind !== "task") throw new Error(`expected task, got ${broke.kind}`);
+    expect(broke.prompt).toBe("break");
   });
 });

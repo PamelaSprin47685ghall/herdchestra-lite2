@@ -67,6 +67,7 @@ describe("relay state persistence", () => {
 			generation: 2,
 			canStop: false,
 			goal: false,
+			goalFallback: false,
 			userPrompts: [FIRST, SECOND],
 			pendingRewind: { report: "work so far", generation: 2, id: "call-1" },
 		};
@@ -75,6 +76,28 @@ describe("relay state persistence", () => {
 		expect(isValidRelay(state.relay)).toBe(true);
 		expect(isValidRelay({ ...createRelay(), userPrompts: [1] })).toBe(false);
 		expect(isValidRelay({ ...createRelay(), pendingRewind: { report: 123 } })).toBe(false);
+	});
+
+	test("carries the degraded marker of a root break through persistence", () => {
+		// A root `break` rewinds like `continue`, but the successor must learn
+		// that the predecessor settled for less. The marker survives a reload,
+		// because a lost marker would silently upgrade a degraded rewind.
+		const state = createState();
+		state.relay = {
+			...createRelay(),
+			pendingRewind: { report: "degraded work", generation: 3, downgraded: true, id: "call-9" },
+		};
+		const restored = deserializeState(serializeState(state));
+		expect(restored.relay.pendingRewind).toEqual({
+			report: "degraded work",
+			generation: 3,
+			downgraded: true,
+			id: "call-9",
+		});
+		expect(isValidRelay(state.relay)).toBe(true);
+		expect(
+			isValidRelay({ ...createRelay(), pendingRewind: { report: "x", generation: 1, downgraded: "yes" } }),
+		).toBe(false);
 	});
 });
 
@@ -243,6 +266,29 @@ describe("commitRootRewind", () => {
 		const rebuilt = manager.buildSessionContext().messages;
 		expect(rebuilt).toHaveLength(1);
 		expect(rebuilt[0].role).toBe("compactionSummary");
+	});
+
+	test("a degraded root break stamps the dissatisfaction notice into the summary", () => {
+		const { station, manager, entries } = rewindHarness([{ role: "user", content: FIRST }]);
+		station.state.relay.pendingRewind = { report: "Gen 1 report", generation: 1, downgraded: true };
+		const before = entries.length;
+		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
+
+		const rebuilt = manager.buildSessionContext().messages;
+		// The notice rides in the compaction summary, never as a synthetic user
+		// message: the user's own words must stay the only user turns.
+		expect(rebuilt[0].summary).toContain("上一任选择了降级交付，用户不满意，请你做到满级交付为止。");
+		expect(rebuilt[0].summary).toContain("Gen 1 report");
+		expect(rebuilt.slice(1).map((m) => m.content[0].text)).toEqual([FIRST]);
+		expect(entries.slice(before).map((entry) => entry.type)).toEqual(["message", "compaction"]);
+	});
+
+	test("a standard rewind carries no dissatisfaction notice", () => {
+		const { station, manager } = rewindHarness([{ role: "user", content: FIRST }]);
+		station.state.relay.pendingRewind = { report: "Gen 1 report", generation: 1 };
+		expect(commitRootRewind(station, {}, { pending: station.state.relay.pendingRewind })).toBe(true);
+
+		expect(manager.buildSessionContext().messages[0].summary).not.toContain("上一任选择了降级交付");
 	});
 
 	test("syncRootUserPrompts resets canStop when a new real user prompt arrives", () => {

@@ -12,9 +12,8 @@ import { abandonDescendants } from "../scope/ledger-brackets.mjs";
 import { notifyWaiters } from "../scope/fork-registry.mjs";
 import { injectSystemPrompt } from "../prompts/inject.mjs";
 import { mergeFeatures, parseGoalCommand, parseHerdCommand } from "../features/herd/features.mjs";
-import { createRelay } from "../relay/state.mjs";
 import { READ_ONLY_SUBAGENT } from "../core/policy.mjs";
-import { continueFeedback } from "../tools/results.mjs";
+import { blockFeedback, continueFeedback } from "../tools/results.mjs";
 import { forkRegistryOf } from "./ports-contract.mjs";
 import {
 	clearPendingRootRewind,
@@ -199,8 +198,18 @@ function onAgentEnd(station, ctx, event = null) {
 	// has yielded and the root rewind handoff must proceed.
 	if (event?.willContinue === true && event?.awaitingAsyncWork !== true) return undefined;
 	if (ownerIdOf(station) !== null) return undefined;
-	const plan = pendingRootRewindPlan(station);
-	if (!plan) return undefined;
+  	const plan = pendingRootRewindPlan(station);
+  	if (!plan) {
+  		// No rewind owns this beat: record the official fallback's activity so a
+  		// silent continuation releases the herd session instead of parking it.
+  		if (
+  			event?.aborted !== true &&
+  			(event?.willContinue !== true || event?.awaitingAsyncWork === true)
+  		) {
+  			station.noteFallbackAgentEnd?.(event?.messages);
+  		}
+  		return undefined;
+  	}
 	// Prevent double-dispatch if two agent_end notifications arrive before the
 	// ticket commits and clears `pendingRewind`.
 	if (station.isRootRewindBusy(plan)) return undefined;
@@ -232,8 +241,19 @@ function onSessionStop(station, ctx, evidence = null) {
 	if (ownerIdOf(station) === null && station.state?.relay?.pendingRewind) {
 		return undefined;
 	}
-	const projection = station.projectionFor(ctx);
-	const unreceived = projection.state?.unreceived ?? 0;
+  	const projection = station.projectionFor(ctx);
+  	const unreceived = projection.state?.unreceived ?? 0;
+  	// The host may report the official goal's own facts with the stop; otherwise
+  	// the mirror this station keeps is the answer.
+  	const officialActive =
+  		typeof evidence?.officialGoalActive === "boolean"
+  			? evidence.officialGoalActive
+  			: station.officialGoalActive === true;
+  	const continuationPrompt =
+  		typeof evidence?.officialContinuationPrompt === "string" &&
+  		evidence.officialContinuationPrompt.trim() !== ""
+  			? evidence.officialContinuationPrompt
+  			: null;
 	const ledger = station.forkLedgerPort?.() ?? null;
 	const ownerId = ownerIdOf(station);
 	// A hard mode has exactly one legal move. Stopping without it is a missed
@@ -256,11 +276,24 @@ function onSessionStop(station, ctx, evidence = null) {
 			stopNudge(projection.mode, { unreceived }),
 		);
 	}
-	if (projection.mode === "FINAL_ANSWER") {
-		// Delivery seals a one-shot goal session: the next turn starts manual.
-		station.endGoalSession?.();
-		return undefined;
-	}
+  	if (projection.mode === "FINAL_ANSWER") {
+  		// The herd seal ended. When the official goal is still active, hand the
+  		// work to it instead of parking a tool-less FINAL_ANSWER turn: herd clears
+  		// `canStop` and stops steering until the official goal finishes.
+  		if (station.state?.relay?.goal === true && officialActive === true) {
+  			if (continuationPrompt !== null) {
+  				const cursor = Array.isArray(evidence?.messages)
+  					? evidence.messages.length
+  					: 0;
+  				station.enterGoalFallback({ selfDriven: true, messageCursor: cursor });
+  				return blockFeedback(continuationPrompt);
+  			}
+  			station.enterGoalFallback({ selfDriven: false });
+  			return undefined;
+  		}
+  		station.endGoalSession?.();
+  		return undefined;
+  	}
 	// Unreceived subscopes (running or ready) outrank every other stop rule,
 	// for both Root (even outside a goal session) and subscope scopes.
 	if (unreceived > 0) {
@@ -278,14 +311,34 @@ function onSessionStop(station, ctx, evidence = null) {
 	// Root natural stop: allowed outside a goal session, or after a sealed
 	// `scope_return` (`canStop === true`). Otherwise nudge to call
 	// `scope_return`.
-	if (station.state?.relay?.goal !== true) return undefined;
-	if (station.state?.relay?.canStop === true) return undefined;
-	return continueFeedback(rootReturnNudge());
+  	if (station.state?.relay?.goal !== true) return undefined;
+  	// Phase 2 belongs to the official goal: the herd return nudge would pull a
+  	// goal continuation into `scope_return` and fight the fallback engine.
+  	if (station.state?.relay?.goalFallback === true) {
+  		// A self-driven fallback blocks the stop itself, extending the work past
+  		// omp's own continuation cap; an empty or repeated beat releases the
+  		// session inside `stepSelfDrivenFallbackStop`.
+  		if (station.selfDrivenFallback === true) {
+  			const nextPrompt = station.stepSelfDrivenFallbackStop({
+  				officialGoalActive: officialActive,
+  				continuationPrompt,
+  				messages: evidence?.messages,
+  			});
+  			return nextPrompt ? blockFeedback(nextPrompt) : undefined;
+  		}
+  		return undefined;
+  	}
+  	if (station.state?.relay?.canStop === true) return undefined;
+  	return continueFeedback(rootReturnNudge());
 }
 
-function onSessionSwitch(station, event, ctx) {
-	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return;
-	clearPendingRootRewind(station);
+  function onSessionSwitch(station, event, ctx) {
+  	if (station.policy(ctx) === READ_ONLY_SUBAGENT) return;
+  	clearPendingRootRewind(station);
+  	// The destination session restores its own modes; this process's mirror is
+  	// stale until the host reports the new state.
+  	station.resetGoalFallbackState?.();
+  	station.syncOfficialGoalState(null, false);
 	const reason = event?.reason ?? event?.handoffReason;
 	if (reason !== "handoff" && event?.handoff !== true) return;
 	truncateForHostBoundary(station.state);
@@ -365,37 +418,51 @@ function onHerdCommand(station, args) {
  * by the sealed delivery. Every state change lands before the tail dispatch, so
  * the ticket's synchronous prefix never sees a half-updated relay.
  */
-function onGoalCommand(station, args) {
-	if (station.portTable?.herd !== "on") {
-		return {
-			ok: false,
-			code: "HERD_UNAVAILABLE",
-			message: "/herd-goal is disabled by HERD_HERD=off",
-		};
+  function onGoalCommand(station, args, ctx = null) {
+  	if (station.portTable?.herd !== "on") {
+  		return {
+  			ok: false,
+  			code: "HERD_UNAVAILABLE",
+  			message: "/herd-goal is disabled by HERD_HERD=off",
+  		};
+  	}
+  	const parsed = parseGoalCommand(args);
+  	if (parsed.kind === "off") {
+  		const relay = station.state?.relay;
+  		const open = relay?.goal === true || relay?.goalFallback === true;
+  		if (!open) {
+  			return { ok: true, kind: "off", goal: false, message: "goal mode is already off" };
+  		}
+  		const epoch = station.nextGoalEpoch();
+  		station.syncOfficialGoalState(null, false);
+  		station.endGoalSession();
+		// Tail position: the host ticket drops the official goal, if it exists.
+		const offTicket = station.goalSessionTicketOrNull?.() ?? null;
+		if (offTicket) return offTicket(ctx, { kind: "off", epoch });
+		return { ok: true, kind: "off", goal: false, message: "goal mode off" };
+  	}
+	const goalTicket = station.goalSessionTicketOrNull?.() ?? null;
+	if (goalTicket) {
+		// Nothing is committed until the official `/goal` accepted the objective.
+		// The ticket calls `commitGoalSession` with the epoch handed out here.
+		const epoch = station.nextGoalEpoch();
+		return goalTicket(ctx, { kind: "goal", text: parsed.text, epoch });
 	}
-	const parsed = parseGoalCommand(args);
-	if (parsed.kind === "off") {
-		if (station.state?.relay?.goal === true) {
-			station.state.relay.goal = false;
-			station.persist();
-			return { ok: true, kind: "off", goal: false, message: "goal mode off" };
-		}
-		return { ok: true, kind: "off", goal: false, message: "goal mode is already off" };
-	}
-	if (!station.state.relay || typeof station.state.relay !== "object") {
-		station.state.relay = createRelay();
-	}
-	station.state.relay.goal = true;
-	station.state.relay.canStop = false;
-	station.persist();
-	station.deliverUserMessage(parsed.text);
-	return {
-		ok: true,
-		kind: "goal",
-		text: parsed.text,
-		message: "goal started (auto-exits on delivery)",
-	};
-}
+  	// A harness without the host ticket keeps the historical plain-message path.
+  	station.syncOfficialGoalState(null, false);
+  	const relay = station.ensureGoalRelay();
+  	relay.goal = true;
+  	relay.canStop = false;
+  	relay.goalFallback = false;
+  	station.persist();
+  	station.deliverUserMessage(parsed.text);
+  	return {
+  		ok: true,
+  		kind: "goal",
+  		text: parsed.text,
+  		message: "goal started (auto-exits on delivery)",
+  	};
+  }
 
 export {
 	onAssistantMessage,

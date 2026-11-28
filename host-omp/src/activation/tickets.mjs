@@ -2,6 +2,7 @@
 
 import {
 	applyPendingModelSwitch,
+	goalSessionTicket,
 	rewindRootTicket,
 	restoreScopedModelTicket,
 	sendSteerTicket,
@@ -27,12 +28,16 @@ function detach(start) {
 	}
 }
 
-export function buildTickets(pi) {
+export function buildTickets(pi, stationOf = null) {
+	const stationFor = typeof stationOf === "function" ? stationOf : () => null;
 	return Object.freeze({
 		steer: (text) => detach(() => sendSteerTicket(pi, text)),
 		canSteer: typeof pi?.sendUserMessage === "function",
 		prompt: (text) => detach(() => sendUserMessageTicket(pi, text)),
 		canPrompt: typeof pi?.sendUserMessage === "function",
+		// Returned, not detached: `onGoalCommand` hands this promise back to the
+		// command handler, which awaits the official goal's verdict.
+		goalSession: (ctx, spec) => goalSessionTicket(pi, ctx, spec, stationFor(ctx)),
 		restoreScopedModel: restoreScopedModelTicket,
 		rewindRoot: (station, ctx, plan) => rewindRootTicket(pi, station, ctx, plan),
 		applyPendingModelSwitch: (station, ctx, result) =>

@@ -139,7 +139,7 @@ export function wireExtension(pi, pricingCatalog, diagnosis = null, env = proces
 				refreshStation: refreshStationUI,
 			}),
 		},
-		tickets: buildTickets(pi),
+		tickets: buildTickets(pi, (ctx) => engine?.station?.(ctx) ?? null),
 		env,
 		pricingCatalog,
 	});

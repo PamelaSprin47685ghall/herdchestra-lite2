@@ -34,7 +34,11 @@ const messagesOf = (station) =>
  * Close or rewind the current scope through `scope_return`.
  *
  * Unified across Root (depth 0) and Child (depth >= 1):
- * - Oath `unfinished` -> small handoff rewind (`stopLoop: true`) back to birth.
+ * - Oath `continue` -> rewind (`stopLoop: true`) back to birth. A rewind replays
+ *   context and the latest report; spent turns, budget, and clock stay spent.
+ * - Oath `break` -> degraded delivery. Child seals and delivers to parent
+ *   (`stopLoop: true`) and reports `degraded: true`; Root rewinds (`stopLoop:
+ *   true`) and marks `downgraded: true`, because a downgrade cannot seal Root.
  * - Oath `a_ferocious_audacious_master_would_change_nothing` -> Child seals and
  *   delivers to parent (`stopLoop: true`); Root promotes without a rewind
  *   (`stopLoop: false`) and writes the final answer.
@@ -154,6 +158,7 @@ export function handleReturnCall(station, call, options = {}) {
       result: {
         big: decision.big,
         generation: pendingRewind.generation,
+        ...(pendingRewind.downgraded === true ? { downgraded: true } : {}),
       },
     });
   }
@@ -236,6 +241,7 @@ export function handleReturnCall(station, call, options = {}) {
     result: {
       scope: publicScopeId(record),
       sealed: true,
+      ...(decision.degraded === true ? { degraded: true } : {}),
       ...(isAbandoned ? { abandoned: true } : {}),
       receiver: receiverText,
       reparented: decision.orphans.map((id) => publicScopeId(forkOf(ledger, id))),

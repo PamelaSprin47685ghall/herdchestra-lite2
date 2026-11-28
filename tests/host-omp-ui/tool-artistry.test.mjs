@@ -263,6 +263,44 @@ test("scope_return tells a rewind from a seal and names the scope", async () => 
 	);
 	expect(seal.title).toBe("scope_return");
 	expect(seal.prompt).toBe("seal");
+
+	const cont = describeToolCall(
+		...call(
+			"scope_return",
+			{ dafny: "more to do", signed_sealed_hands_off_nothing_left_on_the_table: "continue" },
+			"Rewound.",
+		),
+	);
+	expect(cont.title).toBe("scope_return");
+	expect(cont.prompt).toBe("continue");
+
+	// `break` publishes early, so its card must not read as a rewind.
+	const degraded = describeToolCall(
+		...call(
+			"scope_return",
+			{ dafny: "stopping short", signed_sealed_hands_off_nothing_left_on_the_table: "break" },
+			"Sealed.",
+		),
+	);
+	expect(degraded.prompt).toBe("break");
+
+	const resume = describeToolCall(
+		...call(
+			"scope_return",
+			{ dafny: "keep going", signed_sealed_hands_off_nothing_left_on_the_table: "continue" },
+			"Rewound.",
+		),
+	);
+	expect(resume.prompt).toBe("continue");
+
+	const broke = describeToolCall(
+		...call(
+			"scope_return",
+			{ dafny: "stopping short", signed_sealed_hands_off_nothing_left_on_the_table: "break" },
+			"Sealed.",
+		),
+	);
+	expect(broke.prompt).toBe("break");
 });
 
 test("extractArtifacts deduplicates file changes for the artifact drawer", async () => {
@@ -384,4 +422,13 @@ test("the scope control plane gets question, answer and subtask cards", async ()
 		),
 	);
 	expect(seal.prompt).toBe("seal");
+
+	const resume = describeToolCall(
+		...call("scope_return", { dafny: "keep going", signed_sealed_hands_off_nothing_left_on_the_table: "continue" }, "rewound"),
+	);
+	expect(resume.prompt).toBe("continue");
+	const broke = describeToolCall(
+		...call("scope_return", { dafny: "stopping short", signed_sealed_hands_off_nothing_left_on_the_table: "break" }, "sealed"),
+	);
+	expect(broke.prompt).toBe("break");
 });

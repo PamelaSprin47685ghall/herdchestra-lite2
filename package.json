@@ -1,6 +1,6 @@
 {
 	"name": "herdchestra-lite2",
-	"version": "10.3.2",
+	"version": "11.0.0",
 	"description": "Herdchestra: parallel work scopes, autopilot, and a handoff relay — an integration workbench built on DeerFlow",
 	"type": "module",
 	"license": "SEE LICENSE IN LICENSE",

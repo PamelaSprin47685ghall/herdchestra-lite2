@@ -97,10 +97,24 @@ describe("hook wiring", () => {
 			{},
 		);
 		expect(result).toBe("station-answer");
-		expect(seen).toEqual([{ signal, reason: "aborted" }]);
+		expect(seen).toEqual([
+			{
+				signal,
+				reason: "aborted",
+				messages: null,
+				officialGoalActive: false,
+				officialContinuationPrompt: null,
+			},
+		]);
 
 		handler({ last_assistant_message: { stopReason: "error" } }, {});
-		expect(seen[1]).toEqual({ signal: null, reason: "error" });
+		expect(seen[1]).toMatchObject({
+			signal: null,
+			reason: "error",
+			messages: null,
+			officialGoalActive: false,
+			officialContinuationPrompt: null,
+		});
 	});
 
 	test("agent_end never infers a user abort from assistant message shape", () => {

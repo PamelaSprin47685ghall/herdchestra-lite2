@@ -257,7 +257,7 @@ export function registerFork(ledger, spec, options = {}) {
     // Return nudges already given. One field, because the station's in-turn
     // steer and the spawn ticket's out-of-turn prompt both spend it.
     returnNudges: 0,
-    // Small self-handoff count on this scope (oath `unfinished`).
+    // Small self-handoff count on this scope (oath `continue`).
     handoffCount: 0,
     // Graceful abandon flags.
     abandonRequested: false,

@@ -64,6 +64,16 @@ test("one scope-and-relay section serves root and child, manual and autopilot", 
 	}
 });
 
+test("a host goal spec cannot change the managed prompt bytes", () => {
+	const without = injectSystemPrompt("Host instructions", { toolSpecs: [] });
+	const withGoal = injectSystemPrompt("Host instructions", {
+		toolSpecs: [
+			{ name: "goal", description: "Host goal tool.", parameters: { type: "object" } },
+		],
+	});
+	expect(withGoal).toEqual(without);
+});
+
 test("the control plane's contract travels inside the managed block", () => {
 	const prompt = injectSystemPrompt("Host instructions");
 	const text = Array.isArray(prompt) ? prompt.join("\n") : prompt;
@@ -196,6 +206,11 @@ test("the scope_return documentation explains the return-only script and fresh r
 	expect(doc).toMatch(/replaces the old one on a rewind/);
 	expect(doc).toMatch(/carry forward evidence/);
 	expect(doc).toMatch(/appended to the published record/);
+	// Three oath values, and no fourth: `unfinished` is gone, so a model that
+	// remembers it gets refused rather than quietly rewound.
+	expect(doc).toMatch(/`continue`/);
+	expect(doc).toMatch(/`break`/);
+	expect(doc).not.toMatch(/[`\"]unfinished[`\"]/);
 });
 
 test("the scope_fork documentation explains path resolution and fail-closed duplicates", () => {

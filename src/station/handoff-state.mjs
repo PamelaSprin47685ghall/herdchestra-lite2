@@ -62,6 +62,9 @@ export function syncRootUserPrompts(station, messages = null) {
 	if (merged.length === current.length && merged.every((text, i) => text === current[i])) {
 		return false;
 	}
+	// A brand-new user message outranks an official fallback: the herd nudge and
+	// rewind rules return to Phase 1 for the requirement that just arrived.
+	station.clearGoalFallbackOnUserMessage?.();
 	const reset = resetRootPromotion({ ...station.state.relay, userPrompts: merged });
 	station.state.relay = reset.relay;
 	station.persist?.();
@@ -80,6 +83,7 @@ export function pendingRootRewindPlan(station) {
 		pending,
 		generation: pending.generation,
 		big: pending.big === true,
+		downgraded: pending.downgraded === true,
 		id: pending.id ?? null,
 		startPrompt: rebornStartPrompt(),
 	};
@@ -155,6 +159,7 @@ export function commitRootRewind(station, ctx, plan = null) {
 	);
 	const summary = formatRebornPrompt({
 		report: pending.report,
+		downgraded: pending.downgraded === true,
 	});
 	const manager = station.manager ?? null;
 	let firstRestoredId = "";

@@ -137,14 +137,51 @@ describe("the control-plane documents", () => {
 		expect(loadDoc("tools/fork-join")["fork.time"]).toContain("Do not pass `time`");
 	});
 
+	test("a rewind is documented as context-only, never a refund", () => {
+		// The tempting cheat: spend the budget, rewind, expect a fresh allowance.
+		// The prose must close that door where the model reads it.
+		const prose = [
+			persistentOperatingSkill,
+			Object.values(loadDoc("tools/fork-join")).join("\n"),
+			Object.values(loadDoc("receipts/scope")).join("\n"),
+		].join("\n");
+		expect(prose).toContain("rewind");
+		expect(prose).toMatch(/(never|does not|doesn't|no)\s+(refund|restore|re-?mint|replenish|refill|reset)/i);
+	});
+
+	test("the oath carries three values, and the retired fourth is refused", () => {
+		const text = Object.values(loadDoc("tools/fork-join")).join("\n");
+		expect(text).toMatch(/`continue`/);
+		expect(text).toMatch(/`break`/);
+		expect(text).toContain("a_ferocious_audacious_master_would_change_nothing");
+		// A quoted `unfinished` would be an instruction the parser rejects.
+		for (const doc of ["tools/fork-join", "system", "receipts/scope", "errors"]) {
+			expect(Object.values(loadDoc(doc)).join("\n")).not.toMatch(/[`\"]unfinished[`\"]/);
+		}
+	});
+
+	test("break is documented as a confessing early exit that root cannot take", () => {
+		const fork = Object.values(loadDoc("tools/fork-join")).join("\n");
+		expect(fork).toMatch(/shortfall|confession|candor|critique/i);
+		// At root, `break` is `continue`: the work rewinds instead of ending.
+		expect(fork).toMatch(/root[\s\S]{0,600}?break[\s\S]{0,600}?rewind/i);
+	});
+
 	test("the relay receipts carry the return report, not pins", () => {
 		const relay = loadDoc("receipts/relay");
 		expect(relay["reborn.pins"]).toBeUndefined();
 		expect(relay["reborn.review"]).toBeUndefined();
 		expect(placeholderNames(relay["reborn.report"])).toEqual(["report"]);
-		for (const key of ["reborn.continue", "reborn.start"]) {
+		for (const key of ["reborn.continue", "reborn.downgraded", "reborn.start"]) {
 			expect(placeholderNames(relay[key])).toEqual([]);
 		}
+	});
+
+	test("a degraded continuation carries the dissatisfaction notice verbatim", () => {
+		// A root `break` rewind is a downgraded delivery: the successor must be
+		// told, in the user's own words, that the predecessor settled for less.
+		const copy = loadDoc("receipts/relay")["reborn.downgraded"];
+		expect(copy).toContain("上一任选择了降级交付，用户不满意，请你做到满级交付为止。");
 	});
 
 	test("the scope receipts print remaining, not budget", () => {
@@ -202,6 +239,13 @@ describe("the control-plane documents", () => {
 		]) {
 			expect(typeof errors[key]).toBe("string");
 		}
+		// The oath is three-valued: a degraded `break` and a `continue` rewind
+		// are both legal, so the refusal text must name every accepted value.
+		const oathError = loadDoc("errors")["invalid-return-oath"];
+		for (const value of ["continue", "break", "a_ferocious_audacious_master_would_change_nothing"]) {
+			expect(oathError).toContain(value);
+		}
+
 		for (const key of [
 			"scope-context-empty",
 			"amend-reflection",
@@ -270,6 +314,20 @@ describe("the capabilities block", () => {
 		}
 		expect(dts).toContain("ScopeReturnArgs");
 		expect(dts).toContain("dafny");
+	});
+
+	test("declares the wrapped goal tool once, statically, with its args", () => {
+		const dts = renderCapabilitiesDts([]);
+		expect(dts).toContain("interface GoalArgs");
+		expect(dts).toContain('"goal"(args: GoalArgs): Promise<unknown>;');
+	});
+
+	test("a host goal spec cannot change the declaration bytes", () => {
+		const withGoal = renderCapabilitiesDts([
+			{ name: "goal", description: "Host goal tool.", parameters: { type: "object" } },
+		]);
+		const without = renderCapabilitiesDts([]);
+		expect(withGoal).toBe(without);
 	});
 
 	test("the js tool description points at the probe for the live surface", () => {

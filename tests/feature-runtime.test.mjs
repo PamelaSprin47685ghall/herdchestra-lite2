@@ -278,14 +278,34 @@ describe("onHerdCommand", () => {
 		expect(first.relay.pendingRewind).toBeNull();
 	});
 
-	test("unfinished rewinds root and keeps completion closed", () => {
+	test("continue rewinds root and keeps completion closed", () => {
 		const out = decide(createRelay(), {
 			dafny: "still working",
-			signed_sealed_hands_off_nothing_left_on_the_table: "unfinished",
+			signed_sealed_hands_off_nothing_left_on_the_table: "continue",
 		});
 		expect(out.kind).toBe("rewind");
 		expect(out.relay.canStop).toBe(false);
 		expect(out.relay.pendingRewind).not.toBeNull();
+		expect(out.relay.pendingRewind.downgraded).toBeUndefined();
+	});
+
+	test("break at root rewinds like continue, marked degraded", () => {
+		const out = decide(createRelay(), {
+			dafny: "handing back a degraded result",
+			signed_sealed_hands_off_nothing_left_on_the_table: "break",
+		});
+		expect(out.kind).toBe("rewind");
+		expect(out.downgraded).toBe(true);
+		expect(out.relay.canStop).toBe(false);
+		expect(out.relay.pendingRewind.downgraded).toBe(true);
+	});
+
+	test("the retired unfinished value is refused", () => {
+		const out = decide(createRelay(), {
+			dafny: "stale caller",
+			signed_sealed_hands_off_nothing_left_on_the_table: "unfinished",
+		});
+		expect(out).toEqual({ ok: false, code: "INVALID_RETURN_OATH" });
 	});
 
 	test("open children still refuse the seal", () => {

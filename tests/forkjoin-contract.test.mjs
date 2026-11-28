@@ -13,12 +13,12 @@ import {
 } from "../src/station/fork-controls.mjs";
 import {
   RETURN_OATH_KEY,
-  RETURN_OATH_UNFINISHED,
+  RETURN_OATH_CONTINUE,
   RETURN_OATH_VALUE,
 } from "../src/station/domain/handoff.mjs";
 
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
-const UNFINISHED = { [RETURN_OATH_KEY]: RETURN_OATH_UNFINISHED };
+const CONTINUE = { [RETURN_OATH_KEY]: RETURN_OATH_CONTINUE };
 
 function state() {
   return { scopes: [], features: { autopilot: "off" }, relay: { generation: 0, fullFlow: false } };
@@ -97,7 +97,7 @@ describe("a return without a closing text is refused", () => {
     const ledger = createBracketLedger();
     registerFork(ledger, { forkId: "p", ownerId: "root", fsm: "parent", depth: 0 });
     const station = stationFor(ledger, { forkId: "p", parentOwnerId: "root" });
-    const out = handleReturnCall(station, { id: "r1", arguments: UNFINISHED });
+    const out = handleReturnCall(station, { id: "r1", arguments: CONTINUE });
     expect(out.isError).toBe(true);
     expect(out.details.code).toBe("MISSING_DAFNY");
     // Nothing moved: the caller can retry with the field filled in.
@@ -109,7 +109,7 @@ describe("a return without a closing text is refused", () => {
     const ledger = createBracketLedger();
     registerFork(ledger, { forkId: "p", ownerId: "root", fsm: "parent", depth: 0 });
     const station = stationFor(ledger, { forkId: "p", parentOwnerId: "root" });
-    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: " \n\t ", ...UNFINISHED } });
+    const out = handleReturnCall(station, { id: "r1", arguments: { dafny: " \n\t ", ...CONTINUE } });
     expect(out.isError).toBe(true);
     expect(out.details.code).toBe("MISSING_DAFNY");
     expect(forkOf(ledger, "p").status).toBe("running");

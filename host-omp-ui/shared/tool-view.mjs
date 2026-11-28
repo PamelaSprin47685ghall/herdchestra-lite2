@@ -157,9 +157,11 @@ export function describeScopeCall(name, args, output) {
       name === "scope_return"
         ? oath === "a_ferocious_audacious_master_would_change_nothing"
           ? "seal"
-          : oath === "unfinished"
+          : oath === "continue"
             ? "continue"
-            : "rewind"
+            : oath === "break"
+              ? "break"
+              : "rewind"
         : "";
     return {
       kind: "task",

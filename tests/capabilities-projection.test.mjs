@@ -166,6 +166,60 @@ describe("the state object", () => {
 	});
 });
 
+describe("official /goal exposure", () => {
+	// Root's `api.goal` is static. Binding it per phase would rewrite the system
+	// prompt when goal mode enters or exits and drop the provider prefix cache.
+	test("root keeps goal in manual and autopilot, even with an empty host list", () => {
+		for (const [autopilot, mode] of [
+			[false, "ROOT_MANUAL"],
+			[true, "ROOT_AUTOPILOT"],
+		]) {
+			const projection = projectCapabilities({
+				isChild: false,
+				autopilot,
+				goalFallback: false,
+				hostToolNames: [],
+			});
+			expect(projection.mode).toBe(mode);
+			expect(projection.tools).toContain("goal");
+			expect(projection.tools).not.toContain("read");
+		}
+	});
+
+	test("the fallback phase binds goal once and still withholds ask and read", () => {
+		const projection = projectCapabilities({
+			isChild: false,
+			role: "manager",
+			autopilot: true,
+			goalFallback: true,
+			hostToolNames: ["read", "goal"],
+		});
+		expect(projection.tools.filter((name) => name === "goal")).toHaveLength(1);
+		expect(projection.tools).not.toContain("ask");
+		expect(projection.tools).not.toContain("read");
+	});
+
+	test("FINAL_ANSWER stays empty", () => {
+		const projection = projectCapabilities({
+			isChild: false,
+			autopilot: true,
+			goalFallback: true,
+			canStop: true,
+			hostToolNames: ["read", "goal"],
+		});
+		expect(projection.mode).toBe("FINAL_ANSWER");
+		expect(projection.tools).toEqual([]);
+	});
+
+	test("a child never inherits goal even when the host lists it", () => {
+		const projection = projectCapabilities({
+			...SUBSCOPE,
+			hostToolNames: [...SUBSCOPE.hostToolNames, "goal"],
+		});
+		expect(projection.tools).not.toContain("goal");
+	});
+});
+
 describe("the signature", () => {
 	test("changes with the mode, abandoned info, the tools, and the stop flag", () => {
 		const abandoned = projectCapabilities({

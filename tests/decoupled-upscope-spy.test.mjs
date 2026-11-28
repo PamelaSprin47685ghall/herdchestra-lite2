@@ -485,12 +485,12 @@ describe("graceful scope_abandon", () => {
 		expect(cap.tools).toEqual(["scope_return"]);
 		expect(cap.state.abandoned).toEqual({ by: "/", reason: "pivot to v2" });
 
-		// Abandoned /api calls scope_return with oath="unfinished" -> NO rewind, immediate deliver, orphans reparented to Root!
+		// Abandoned /api calls scope_return with oath="continue" -> NO rewind, immediate deliver, orphans reparented to Root!
 		const ret = handleReturnCall(apiStation, {
 			id: "r1",
 			arguments: {
 				dafny: "partial findings",
-				[RETURN_OATH_KEY]: "unfinished",
+				[RETURN_OATH_KEY]: "continue",
 			},
 		});
 		expect(ret.isError).toBeUndefined();

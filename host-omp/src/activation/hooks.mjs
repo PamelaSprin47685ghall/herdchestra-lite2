@@ -6,6 +6,15 @@ import {
 	stopAfterScopeReturn,
 } from "../host/branch-context.mjs";
 import { sessionFor } from "../host/capture.mjs";
+import { confiscateContext } from "../host/tool-confiscation.mjs";
+import {
+activatePrintGoalFromPrompt,
+handleGoalInput,
+needsGoalPreload,
+observeOfficialGoalForStop,
+preloadOfficialGoalTool,
+shouldActivatePrintGoal,
+} from "../host/tickets/goal.mjs";
 import { record } from "../host/diagnostics.mjs";
 import { installContextPreparation } from "../host/context-preparation.mjs";
 import { wireProviderObservation } from "../host/provider-observer.mjs";
@@ -80,6 +89,44 @@ export function wireHooks(pi, engine) {
   	// `engine.station` is the one entry the core exposes. A second spelling for a
   	// station-shaped double only made every call site guess which one answered.
   	const stationOf = (ctx) => engine.station(ctx);
+	// Official mode observation never mints a station: a goal event for a context
+	// nobody owns must not race the root station hook.
+	const observedStation = (ctx) => {
+		try {
+			return typeof engine.peekStation === "function" ? engine.peekStation(ctx) : null;
+		} catch {
+			return null;
+		}
+	};
+	/** A mode snapshot may spell the goal as a status string or a record. */
+	const goalStatusOf = (mode) => {
+		const goal = mode?.goal ?? null;
+		if (typeof goal === "string") return goal;
+		if (goal && typeof goal.status === "string") return goal.status;
+		return null;
+	};
+	const syncOfficialGoal = (ctx, station) => {
+		try {
+			const mode = ctx?.sessionModes?.getState?.() ?? null;
+			const runtime = (() => {
+				try {
+					return sessionFor(ctx)?.goalRuntime ?? null;
+				} catch {
+					return null;
+				}
+			})();
+			const runtimeState = runtime?.getState?.() ?? null;
+			const status = goalStatusOf(mode) ?? goalStatusOf(runtimeState?.goal ?? null);
+			if (!status) return;
+			station.syncOfficialGoalState?.(
+				status,
+				status === "active",
+				runtimeState?.goal?.id ?? null,
+			);
+		} catch (error) {
+			record("hooks", error, { phase: "goal-sync" });
+		}
+	};
 	// Native Esc is consumed by the host before any terminal event is emitted.
 	// Capture the user's own ctx.abort at the entry point and turn it into the
 	// same typed USER_ABORT gate the web stop button uses. USER_ABORT must never
@@ -120,14 +167,32 @@ export function wireHooks(pi, engine) {
   		return stationOf(ctx);
   	};
 	wireProviderObservation(pi, engine);
+	// `/herd-goal` is the alias path. In a TUI `/goal` keeps its built-in
+	// command, so the official grammar stays the only one there is.
+	try {
+		pi.on("input", (event, ctx) => handleGoalInput(event, ctx, stationOf(ctx), pi));
+	} catch (error) {
+		record("hooks", error, { missing: ["input"], optional: true });
+	}
 	pi.on("before_provider_request", (_event, ctx) => {
 		const station = stationOf(ctx);
 		station.noteScopeRequest?.();
 		station.beginRequestSample?.(Date.now());
 	});
-  	pi.on("session_start", (_event, ctx) => {
-  		bindSession(ctx);
-  	});
+	pi.on("session_start", (_event, ctx) => {
+		const station = bindSession(ctx);
+		if (!needsGoalPreload(ctx)) {
+			syncOfficialGoal(ctx, station);
+			return undefined;
+		}
+		// Add `goal` to the live roster before the first request, then hide it
+		// again at once: the model sees `api.goal`, never a second top-level tool.
+		return (async () => {
+			const changed = await preloadOfficialGoalTool(ctx);
+			if (changed) confiscateContext(() => engine, ctx);
+			syncOfficialGoal(ctx, station);
+		})();
+	});
 	let transitionsBound = false;
 	try {
   		pi.on("assistant_message", (event, ctx) =>
@@ -183,7 +248,19 @@ export function wireHooks(pi, engine) {
 		const session = dispatchSession(ctx);
 		releaseScopeReturnDrain(session);
 		releaseScopeReturnRunHold(session);
-  		return ensureBound(ctx).onBeforeAgentStart(event, ctx);
+  		const station = ensureBound(ctx);
+		// Print mode has no `input` hook: the first prompt may itself carry
+		// `/goal set ...`, and the normal path must stay synchronous.
+		const printGoal = shouldActivatePrintGoal(event, ctx, station);
+		if (!printGoal) {
+			syncOfficialGoal(ctx, station);
+			return station.onBeforeAgentStart(event, ctx);
+		}
+		return (async () => {
+			await activatePrintGoalFromPrompt(printGoal, ctx, station);
+			syncOfficialGoal(ctx, station);
+			return station.onBeforeAgentStart(event, ctx);
+		})();
 	});
 	pi.on("agent_end", (event, ctx) => {
 		// Only the typed abort entry proves USER_ABORT. This frame says what
@@ -207,8 +284,31 @@ export function wireHooks(pi, engine) {
 		stationOf(ctx).onSessionStop(ctx, {
 			signal: event?.signal ?? null,
 			reason: event?.last_assistant_message?.stopReason ?? null,
+			messages: event?.messages ?? null,
+			...observeOfficialGoalForStop(ctx),
 		}),
 	);
+	// The official goal may complete on its own (its goal tool) or be dropped by
+	// the user. The station learns it here; it never polls a mode it does not own.
+	try {
+		pi.on("goal_updated", (event, ctx) => {
+			const station = observedStation(ctx);
+			station?.onOfficialGoalUpdated?.(event?.goal ?? null, event?.state ?? null);
+		});
+	} catch (error) {
+		record("hooks", error, { missing: ["goal_updated"], optional: true });
+	}
+	try {
+		pi.on("mode_changed", (event, ctx) => {
+			const station = observedStation(ctx);
+			station?.onOfficialModeChanged?.(
+				goalStatusOf(event?.previous),
+				goalStatusOf(event?.state),
+			);
+		});
+	} catch (error) {
+		record("hooks", error, { missing: ["mode_changed"], optional: true });
+	}
 	pi.on("session_switch", (event, ctx) => {
 		const session = dispatchSession(ctx);
 		releaseScopeReturnDrain(session);

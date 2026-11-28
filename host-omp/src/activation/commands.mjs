@@ -1,9 +1,10 @@
 // Activation commands: bind user commands to the current session station.
 //
-// Every handler is a plain function: a station call returns synchronously, so the
-// command never waits, and marking it `async` would only make the host treat a
-// finished result as pending. One handler also prints; it asks the diagnostics
-// ring to render, because the ring owns both the records and their fields.
+// Most handlers are plain functions: their station call returns synchronously.
+// `/herd-goal` is the one exception — it awaits the host's official `/goal`
+// transition before it reports, so the host sees a pending command exactly when
+// one is pending. One handler also prints; it asks the diagnostics ring to
+// render, because the ring owns both the records and their fields.
 
 import { formatDiagnostics, snapshot } from "../host/diagnostics.mjs";
 import { providerDiagnostics } from "../host/provider-observer.mjs";
@@ -23,8 +24,9 @@ export function wireCommands(pi, engine) {
 	});
 	pi.registerCommand?.("herd-goal", {
 		description:
-			"Start one goal session: /herd-goal <instruction> (bare /herd-goal turns goal mode off)",
-		handler: (args, ctx) => notify(ctx, stationOf(ctx).onGoalCommand(args)),
+			"Start one goal session: /herd-goal <instruction> (alias for the official /goal; works in TUI, RPC, print, and headless. Bare /herd-goal turns goal mode off)",
+		handler: async (args, ctx) =>
+			notify(ctx, await stationOf(ctx).onGoalCommand(args, ctx)),
 	});
 	pi.registerCommand?.("herd-diag", {
 		description: "Print the last host diagnostics",

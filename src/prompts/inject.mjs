@@ -69,12 +69,15 @@ let cachedToolDts = "";
 
 function capabilitiesSection(options = {}) {
 	const specs = Array.isArray(options.toolSpecs) ? options.toolSpecs : [];
-	if (specs.length === 0) return "";
 	const key = specs
 		.map((spec) => String(spec?.name ?? ""))
 		.sort()
 		.join("|");
-	if (key !== cachedToolKey) {
+	// The control-plane methods live in the block itself, so it is always
+	// emitted: an empty roster and a roster holding only the statically
+	// declared `goal` must produce the same bytes. Only the host-derived
+	// methods follow the roster.
+	if (key !== cachedToolKey || cachedToolDts === "") {
 		cachedToolDts = renderCapabilitiesDts(specs);
 		cachedToolKey = key;
 	}

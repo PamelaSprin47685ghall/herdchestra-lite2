@@ -14,6 +14,17 @@
  */
 
 export { sendSteerTicket } from "./tickets/steer.mjs";
+export {
+	activatePrintGoalFromPrompt,
+	executeWrappedGoalTool,
+	goalSessionTicket,
+	handleGoalInput,
+	needsGoalPreload,
+	observeOfficialGoalForStop,
+	parseGoalSlash,
+	preloadOfficialGoalTool,
+	shouldActivatePrintGoal,
+} from "./tickets/goal.mjs";
 export { sendUserMessageTicket } from "./tickets/prompt.mjs";
 export { canRewindRoot, rewindRootTicket } from "./tickets/rewind.mjs";
 export {

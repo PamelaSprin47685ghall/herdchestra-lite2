@@ -291,10 +291,10 @@ test("an interrupted turn keeps goal mode on until a bare command or the sealed 
 	station.state.relay.canStop = true;
 	expect(station.onSessionStop({}, null)).toBeUndefined();
 	expect(station.state.relay.goal).toBe(false);
-});
+  });
 
-test("a refused port or feature switch throws at the composition root", () => {
-	// An empty table would wire every port to its fallback and hide the typo.
+  test("a refused port or feature switch throws at the composition root", () => {
+  	// An empty table would wire every port to its fallback and hide the typo.
 	// The engine owns port resolution now, so the refusal surfaces there.
 	expect(() => createEngine({ host: {}, tickets: {}, env: { HERD_CLOCK: "bogus" } })).toThrow(
 		/PORT_UNAVAILABLE port=clock wanted=bogus/,

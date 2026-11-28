@@ -1,8 +1,9 @@
 // Pure handoff and scope_return decisions for the Station.
 //
 // Owns the oath contract (`RETURN_OATH_KEY` / `RETURN_OATH_VALUE` /
-// `RETURN_OATH_UNFINISHED`), the unified Root + Subscope `scope_return` state
-// transition table, and the reborn prompt / generation-report formatting.
+// `RETURN_OATH_CONTINUE` / `RETURN_OATH_BREAK`), the unified Root + Subscope
+// `scope_return` state transition table, and the reborn prompt /
+// generation-report formatting.
 // Pure functions only: no Station import, no host import, no mutation, no I/O.
 
 import { copyRelay } from "../../relay/state.mjs";
@@ -11,7 +12,8 @@ import { loadDoc, render } from "../../prompts/index.mjs";
 
 export const RETURN_OATH_KEY = "signed_sealed_hands_off_nothing_left_on_the_table";
 export const RETURN_OATH_VALUE = "a_ferocious_audacious_master_would_change_nothing";
-export const RETURN_OATH_UNFINISHED = "unfinished";
+export const RETURN_OATH_CONTINUE = "continue";
+export const RETURN_OATH_BREAK = "break";
 
 function relayDoc() {
 	return loadDoc("receipts/relay");
@@ -23,23 +25,35 @@ function trimString(value) {
 
 /**
  * Read the required oath field strictly (never truthy coercion).
+ *
+ * Three values only: `continue` rewinds, `break` is a degraded delivery, and the
+ * seal value finishes at full standard. `big` survives for callers that only
+ * need the seal/not-seal split.
  */
 export function parseReturnOath(args) {
 	const oath = args && typeof args === "object" ? args[RETURN_OATH_KEY] : undefined;
-	if (oath === RETURN_OATH_VALUE) return { ok: true, big: true };
-	if (oath === RETURN_OATH_UNFINISHED) return { ok: true, big: false };
+	if (oath === RETURN_OATH_VALUE) return { ok: true, mode: "seal", big: true };
+	if (oath === RETURN_OATH_CONTINUE) return { ok: true, mode: "continue", big: false };
+	if (oath === RETURN_OATH_BREAK) return { ok: true, mode: "break", big: false };
 	return { ok: false, code: "INVALID_RETURN_OATH" };
 }
 
 /**
  * Unified `scope_return` decision across Root and Subscope.
  *
- * Both depths share one rule: the `unfinished` oath rewinds, and the seal oath
- * finishes the scope. At root, finishing sets `canStop` so the next turn is
- * FINAL_ANSWER; root joins every outstanding child before a seal.
+ * The oath is exactly one of three values:
+ * - `continue` rewinds and carries the latest `dafny` forward. A rewind replays
+ *   context only; it never refunds or re-mints a spent turn, budget, or clock.
+ * - `break` is a degraded delivery. A non-root scope seals and delivers exactly
+ *   like the seal value and owns its shortfall in `dafny`; Root rewinds instead,
+ *   because a downgrade cannot seal Root.
+ * - The seal value finishes the scope at full standard. At root, finishing sets
+ *   `canStop` so the next turn is FINAL_ANSWER; root joins every outstanding
+ *   child before a seal.
  *
  * When a non-root subscope has `record.abandonRequested === true`:
- * - Any oath (missing, invalid, `unfinished`, or seal) is accepted and NEVER rewinds.
+ * - Any oath (missing, invalid, `continue`, `break`, or seal) is accepted and
+ *   NEVER rewinds.
  * - Immediately delivers to `receiverId` with `abandoned: true`.
  */
 export function decideScopeReturn({
@@ -57,7 +71,7 @@ export function decideScopeReturn({
 } = {}) {
 	const isAbandoned = !isRoot && record?.abandonRequested === true;
 
-	const oath = isAbandoned ? { ok: true, big: true } : parseReturnOath(args);
+	const oath = isAbandoned ? { ok: true, mode: "seal", big: true } : parseReturnOath(args);
 	if (!oath.ok) return { ok: false, code: oath.code };
 
 	const dafny = trimString(args?.dafny);
@@ -82,7 +96,7 @@ export function decideScopeReturn({
 				status: record.status,
 			};
 		}
-		if (!isAbandoned && !oath.big) {
+		if (!isAbandoned && oath.mode === "continue") {
 			return {
 				ok: true,
 				kind: "rewind",
@@ -99,7 +113,8 @@ export function decideScopeReturn({
 			ok: true,
 			kind: "deliver",
 			scope: "child",
-			big: true,
+			big: oath.mode === "seal",
+			degraded: !isAbandoned && oath.mode === "break",
 			abandoned: isAbandoned,
 			dafny,
 			receiverId,
@@ -111,10 +126,10 @@ export function decideScopeReturn({
 	// Root scope (depth === 0)
 	const current = copyRelay(relay);
 	const openCount = Number.isInteger(unreceived) && unreceived > 0 ? unreceived : 0;
-	if (oath.big && openCount > 0) {
+	if (oath.mode === "seal" && openCount > 0) {
 		return { ok: false, code: "UNRECEIVED_CHILDREN", unreceived: openCount };
 	}
-	if (oath.big) {
+	if (oath.mode === "seal") {
 		return {
 			ok: true,
 			kind: "promote",
@@ -133,9 +148,11 @@ export function decideScopeReturn({
 		return { ok: false, code: "ROOT_REWIND_UNAVAILABLE" };
 	}
 	const nextGeneration = current.generation + 1;
+	const downgraded = oath.mode === "break";
 	const pendingRewind = {
 		report: "",
 		generation: nextGeneration,
+		...(downgraded ? { downgraded: true } : {}),
 		...(typeof callId === "string" && callId !== "" ? { id: callId } : {}),
 	};
 	return {
@@ -143,6 +160,7 @@ export function decideScopeReturn({
 		kind: "rewind",
 		scope: "root",
 		big: false,
+		downgraded,
 		dafny,
 		relay: {
 			...current,
@@ -165,6 +183,7 @@ export function formatGenerationReport(messages, start = 0, dafny = "") {
 export function formatRebornPrompt({
 	birth = "",
 	report = "",
+	downgraded = false,
 } = {}) {
 	const R = relayDoc();
 	const sections = [];
@@ -177,6 +196,10 @@ export function formatRebornPrompt({
 	}
 
 	sections.push(R["reborn.continue"]);
+	// A Root `break` cannot seal, so the reborn turn must end on the user's
+	// verdict. This is the last line the next generation reads.
+	const downgradedText = trimString(R["reborn.downgraded"]);
+	if (downgraded === true && downgradedText !== "") sections.push(downgradedText);
 	return sections.join("\n\n---\n\n");
 }
 

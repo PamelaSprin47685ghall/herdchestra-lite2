@@ -154,7 +154,7 @@ describe("scope_abandon", () => {
       id: "ret-1",
       arguments: {
         dafny: "Partial findings before abandon.",
-        signed_sealed_hands_off_nothing_left_on_the_table: "unfinished",
+        signed_sealed_hands_off_nothing_left_on_the_table: "continue",
       },
     });
     expect(ret?.isError).toBeUndefined();

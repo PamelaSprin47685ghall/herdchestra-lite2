@@ -9,19 +9,21 @@
  * - Through `js`, the scope protocol keeps its contracts: `scope_fork` without
  *   a spawner is refused, `scope_join` on an idle root is refused, and the
  *   `scope_return` oath is validated strictly.
- * - `scope_return` enforces the strict oath contract, supports small rewind and
- *   two-consecutive-oath promotion at Root, resets the streak on a small handoff
- *   or new fork, blocks Root big oath while children are unreceived, and preserves
- *   verbatim user prompts & steers across `agent_end` Root rewind + resume.
+ * - `scope_return` enforces the strict three-value oath contract: `continue`
+ *   rewinds, `break` seals a subscope early or rewinds Root with a downgrade
+ *   notice, and the seal value finishes. The Root seal is blocked while children
+ *   are unreceived, and verbatim user prompts & steers survive an `agent_end`
+ *   Root rewind + resume.
  *
  *   bun scripts/smoke-relay.mjs
  */
 
 import { activate } from "../host-omp/src/main.mjs";
-import { RETURN_OATH_KEY, RETURN_OATH_UNFINISHED, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+import { RETURN_OATH_BREAK, RETURN_OATH_CONTINUE, RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
 
 const OATH = { [RETURN_OATH_KEY]: RETURN_OATH_VALUE };
-const SMALL = { [RETURN_OATH_KEY]: RETURN_OATH_UNFINISHED };
+const CONTINUE = { [RETURN_OATH_KEY]: RETURN_OATH_CONTINUE };
+const BREAK = { [RETURN_OATH_KEY]: RETURN_OATH_BREAK };
 
 function memoryManager(idPrefix = "smoke-session") {
 	const entries = [];
@@ -219,16 +221,18 @@ await check("scope_join refuses an idle root", async () => {
 	expect(out.text.includes("NO_UNRECEIVED_WORK"), `got ${out.text.split("\n")[1] ?? out.text}`);
 });
 
-await check("scope_return refuses non-matching oath values strictly", async () => {
-	const out = await callJs("await api.scope_return(inputs.args)", {
-		args: { dafny: "trying boolean false", [RETURN_OATH_KEY]: false },
-	});
-	expect(out.isError, "boolean oath must be rejected");
-	expect(out.text.includes("INVALID_RETURN_OATH"), `got ${out.text.split("\n")[1] ?? out.text}`);
-});
+  await check("scope_return refuses non-matching oath values strictly", async () => {
+	for (const oath of [false, "unfinished", "a_ferocious", undefined]) {
+		const out = await callJs("await api.scope_return(inputs.args)", {
+			args: { dafny: "trying an invalid oath", [RETURN_OATH_KEY]: oath },
+		});
+		expect(out.isError, `oath ${String(oath)} must be rejected`);
+		expect(out.text.includes("INVALID_RETURN_OATH"), `got ${out.text.split("\n")[1] ?? out.text}`);
+	}
+  });
 
-await check("root small handoff rewinds via agent_end ticket preserving verbatim user prompt", async () => {
-	const out = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "gen 0 progress", ...SMALL } });
+  await check("root continue rewinds via agent_end ticket preserving verbatim user prompt", async () => {
+	const out = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "gen 0 progress", ...CONTINUE } });
 	expect(!out.isError, `small handoff failed: ${out.text}`);
 	expect(out.details?.rewind === true && out.details?.stopLoop === true, "expected rewind + stopLoop");
 	expect(station.state.relay.generation === 1, `expected gen 1, got ${station.state.relay.generation}`);
@@ -252,7 +256,29 @@ await check("root small handoff rewinds via agent_end ticket preserving verbatim
 	expect(rebuilt[0].summary.includes("gen 0 progress"), "report missing from summary");
 	expect(rebuilt[1]?.role === "user" && rebuilt[1].content?.[0]?.text === "Ship the refactor cleanly.", "user prompt lost");
 	expect(prompts.length === 1 && prompts[0].options?.synthetic === true, "reborn start prompt did not dispatch");
-});
+  });
+
+	await check("root break rewinds under the degraded-delivery notice", async () => {
+		const out = await callJs("await api.scope_return(inputs.args)", {
+			args: { dafny: "gen 1 degraded attempt", ...BREAK },
+		});
+		expect(!out.isError, `root break failed: ${out.text}`);
+		expect(out.details?.rewind === true && out.details?.stopLoop === true, "expected rewind + stopLoop");
+		expect(out.details?.result?.downgraded === true, "expected the downgraded marker");
+		expect(station.state.relay.canStop === false, "root break must keep root open");
+		for (const handler of host.handlers.get("agent_end") ?? []) {
+			handler({ messages: manager.buildSessionContext().messages }, ctx);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const branch = manager.getBranch();
+		const compactAt = branch.findLastIndex((entry) => entry.type === "compaction");
+		expect(
+			branch[compactAt]?.summary.includes("上一任选择了降级交付，用户不满意，请你做到满级交付为止。"),
+			"degraded notice missing from the reborn summary",
+		);
+		expect(prompts.length === 2, `expected a second reborn dispatch, got ${prompts.length}`);
+	});
+
 
   await check("root seal promotes on the first oath without a rewind", async () => {
   	const sealed = await callJs("await api.scope_return(inputs.args)", { args: { dafny: "verified nothing left", ...OATH } });

@@ -4,7 +4,35 @@ All notable changes to this extension. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [11.0.0] — 2026-11-28
+
+### Added — the host official `/goal` bridge
+
+- `/herd-goal` is now an alias of the host's official `/goal` in every mode,
+  including print and headless runs, where the first prompt activates the goal
+  instead of waiting for a slash command. One goal owns the run, so the two
+  spellings cannot drift into two competing modes.
+- The official goal tool loads on demand and is confiscated after its first
+  request: the model sees `api.goal` and nothing else, so the bridge cannot
+  become a second, richer copy of the host tool.
+- The official goal state syncs into the station (`syncOfficialGoalState`) and a
+  stop consults it, so a finished, abandoned, or interrupted goal closes the
+  station the same way a `scope_return` would. `goal-fallback.mjs` decides the
+  route when the official tool is absent.
+
+### Changed — the return oath splits into three values
+
+- `scope_return` now takes `continue`, `break`, or
+  `a_ferocious_audacious_master_would_change_nothing`. `continue` is the old
+  `unfinished` rewind. `break` is a degraded early exit: a forked scope
+  publishes like the seal value on the extra duty that `dafny` states why the
+  work fell short of standard seal quality, what stays unresolved, and what the
+  caller must handle or redo; at root `break` cannot end the work, so it rewinds
+  like `continue` and stamps the reborn context with the predecessor's degraded
+  delivery and the user's dissatisfaction.
+- The persistent rules now state outright that a rewind re-baselines context
+  only: it never restores spent turns, tool budget, wall clock, or the
+  `panhandled` count, so a plan to refill budget by rewinding fails.
 
 ## [10.3.2] — 2026-11-28
 

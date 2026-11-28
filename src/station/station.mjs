@@ -66,7 +66,15 @@ import {
 	READ_WRITE_SUBAGENT,
 } from "../core/policy.mjs";
 import { PORT_NAMES } from "../core/ports/registry.mjs";
-import { mergeFeatures } from "../features/herd/features.mjs";
+	import { mergeFeatures } from "../features/herd/features.mjs";
+import { createRelay } from "../relay/state.mjs";
+import {
+	decideFallbackAgentEnd,
+	decideGoalToolCall,
+	decideOfficialGoalChange,
+	decideSelfDrivenFallbackStop,
+	isOfficialGoalStatusActive,
+} from "./domain/goal-fallback.mjs";
 import { IMPLEMENTATION_KEYS, missingPortsError } from "./ports-contract.mjs";
 import { forkRemaining } from "./domain/capabilities.mjs";
 import {
@@ -243,6 +251,15 @@ export class SessionStation {
 		// are properties of functions instead of conventions re-derived at every
 		// call site. `domain/rewind.mjs` owns the transitions.
 		this.rewind = createRewindState();
+		// Goal-session facts: the epoch rejects a late ticket commit, the flag
+		// mirrors the official goal's own status, and the activity key lets a
+		// silent official continuation release the herd session.
+		this.goalEpoch = 0;
+		this.officialGoalActive = false;
+		this.lastFallbackActivity = null;
+		this.lastOfficialGoalId = null;
+		this.fallbackMessageCursor = null;
+		this.selfDrivenFallback = false;
 		// The bracket ledger is session-wide: parent and child live in
 		// different agents and must see the same pairing. The scope state owns
 		// the tree so a reload restores it, while the registry indexes the live
@@ -882,6 +899,7 @@ export class SessionStation {
 		return {
 			isChild,
 			autopilot: this.state?.relay?.goal === true,
+			goalFallback: this.state?.relay?.goalFallback === true,
 			chinese: this.state?.features?.chinese ?? "on",
 			featureScope: this.state?.features?.scope ?? "hard",
 			unreceived: ledger ? unreceivedChildren(ledger, ownerId ?? "root").length : 0,
@@ -1382,16 +1400,266 @@ export class SessionStation {
 		return onHerdCommand(this, args);
 	}
 
-	onGoalCommand(args) {
-		return onGoalCommand(this, args);
+	onGoalCommand(args, ctx = null) {
+		return onGoalCommand(this, args, ctx);
 	}
 
-	/** Clear the one-shot goal flag after a sealed delivery. */
-	endGoalSession() {
-		if (this.state?.relay?.goal !== true) return false;
-		this.state.relay.goal = false;
+	/**
+	 * The host's official-goal ticket, or null when this station was built
+	 * without one (a bare test double). Naming the contract verb here is what
+	 * proves `goalSession` has a consumer; `goalSession` resolves lazily so a
+	 * double that predates the verb still answers.
+	 */
+	goalSessionTicketOrNull() {
+		const tickets = this.tickets ?? {};
+		const goalSession = tickets.goalSession;
+		return typeof goalSession === "function" ? goalSession : null;
+	}
+
+	/**
+	 * The relay object, created on first use.
+	 *
+	 * A public command may reach a station whose relay was never restored; the
+	 * goal session must still be able to open instead of throwing on a missing
+	 * field. `createRelay` owns the shape so the codec keeps accepting it.
+	 */
+	ensureGoalRelay() {
+		if (!this.state.relay || typeof this.state.relay !== "object") {
+			this.state.relay = createRelay();
+		}
+		return this.state.relay;
+	}
+
+	/** A new goal attempt; every older ticket commit becomes stale. */
+	nextGoalEpoch() {
+		this.goalEpoch += 1;
+		return this.goalEpoch;
+	}
+
+	/**
+	 * Commit a herd goal session after the official `/goal` accepted it.
+	 *
+	 * The ticket obtained the epoch synchronously, before its await. A newer
+	 * command (bare off, another goal, a user message) bumps the epoch, so the
+	 * late success cannot resurrect a session the operator already cancelled.
+	 */
+	commitGoalSession({ epoch, officialActive, goalId = null } = {}) {
+		if (epoch !== this.goalEpoch) return { committed: false, stale: true };
+		const relay = this.ensureGoalRelay();
+		relay.goal = true;
+		relay.canStop = false;
+		relay.goalFallback = false;
+		this.officialGoalActive = officialActive === true;
+		this.lastOfficialGoalId = goalId ?? null;
+		this.lastFallbackActivity = null;
+		this.fallbackMessageCursor = null;
+		this.selfDrivenFallback = false;
+		this.persist();
+		return { committed: true };
+	}
+
+	/**
+	 * Adopt an official goal that was created outside this command
+	 * (`/goal`, `--goal`, or a restored one the host reports as active).
+	 * Phase 1 starts here; the instruction already lives in omp's own goal.
+	 */
+	activateGoalFromOfficial({ goalId = null } = {}) {
+		const relay = this.ensureGoalRelay();
+		relay.goal = true;
+		relay.canStop = false;
+		relay.goalFallback = false;
+		this.officialGoalActive = true;
+		this.lastOfficialGoalId = goalId ?? null;
+		this.lastFallbackActivity = null;
+		this.fallbackMessageCursor = null;
+		this.selfDrivenFallback = false;
 		this.persist();
 		return true;
+	}
+
+	/**
+	 * Phase 2: the herd seal ended, so the official goal continues with the
+	 * ordinary tool set. `selfDriven` means the next beat comes from this
+	 * extension's own `session_stop` block, not from omp's continuation timer.
+	 */
+	enterGoalFallback({ selfDriven = false, messageCursor = null } = {}) {
+		const relay = this.ensureGoalRelay();
+		relay.goal = true;
+		relay.canStop = false;
+		relay.goalFallback = true;
+		this.lastFallbackActivity = null;
+		this.selfDrivenFallback = selfDriven === true;
+		this.fallbackMessageCursor =
+			typeof messageCursor === "number" ? messageCursor : null;
+		this.persist();
+		return true;
+	}
+
+	/** Release the one-shot goal session (goal and fallback phases alike). */
+	endGoalSession() {
+		const relay = this.state?.relay;
+		if (relay?.goal !== true && relay?.goalFallback !== true) return false;
+		relay.goal = false;
+		relay.goalFallback = false;
+		this.lastFallbackActivity = null;
+		this.fallbackMessageCursor = null;
+		this.selfDrivenFallback = false;
+		this.lastOfficialGoalId = null;
+		this.persist();
+		return true;
+	}
+
+	/**
+	 * A brand-new user message outranks an official fallback: herd returns to
+	 * Phase 1 and the nudge/rewind rules own the next turn again.
+	 */
+	clearGoalFallbackOnUserMessage() {
+		const relay = this.state?.relay;
+		this.lastFallbackActivity = null;
+		this.fallbackMessageCursor = null;
+		this.selfDrivenFallback = false;
+		if (relay?.goalFallback !== true) return false;
+		relay.goalFallback = false;
+		return true;
+	}
+
+	/** Record the official goal's own status without deciding anything else. */
+	syncOfficialGoalState(status, enabled, goalId = null) {
+		this.officialGoalActive = isOfficialGoalStatusActive(status, enabled);
+		if (typeof goalId === "string" && goalId !== "") {
+			this.lastOfficialGoalId = goalId;
+		}
+		return this.officialGoalActive;
+	}
+
+	/** One `goal_updated` report from the host. */
+	onOfficialGoalUpdated(goal, state) {
+		const status = goal?.status ?? state?.goal?.status ?? null;
+		const goalId = goal?.id ?? state?.goal?.id ?? null;
+		const decision = decideOfficialGoalChange({
+			herdEnabled: this.portTable?.herd === "on",
+			relayGoal: this.state?.relay?.goal === true,
+			goalFallback: this.state?.relay?.goalFallback === true,
+			officialGoalActive: this.officialGoalActive === true,
+			lastOfficialGoalId: this.lastOfficialGoalId,
+			goalId,
+			status,
+			enabled: state?.enabled,
+		});
+		this.officialGoalActive = decision.officialActive;
+		this.lastOfficialGoalId = decision.nextGoalId;
+		if (decision.enterHerdGoal) this.activateGoalFromOfficial({ goalId: decision.nextGoalId });
+		else if (decision.exitHerdGoal) this.endGoalSession();
+		return decision;
+	}
+
+	/** One `mode_changed` report: goal state is `inactive | active | paused`. */
+	onOfficialModeChanged(_previousGoal, nextGoal) {
+		const status = nextGoal?.status ?? nextGoal ?? null;
+		const goalId = nextGoal?.id ?? null;
+		const decision = decideOfficialGoalChange({
+			herdEnabled: this.portTable?.herd === "on",
+			relayGoal: this.state?.relay?.goal === true,
+			goalFallback: this.state?.relay?.goalFallback === true,
+			officialGoalActive: this.officialGoalActive === true,
+			lastOfficialGoalId: this.lastOfficialGoalId,
+			goalId,
+			status,
+			enabled: status === "active",
+		});
+		this.officialGoalActive = decision.officialActive;
+		this.lastOfficialGoalId = decision.nextGoalId;
+		if (decision.enterHerdGoal) this.activateGoalFromOfficial({ goalId: decision.nextGoalId });
+		else if (decision.exitHerdGoal) this.endGoalSession();
+		return decision;
+	}
+
+	/**
+	 * One `agent_end` beat inside the official fallback.
+	 *
+	 * Only a goal-continuation turn is judged; a self-driven fallback evaluates
+	 * inside `session_stop`, because the continuation it starts is its own block.
+	 */
+	noteFallbackAgentEnd(messages) {
+		if (this.selfDrivenFallback === true) {
+			return {
+				isContinuation: false,
+				activity: null,
+				exitHerdGoal: false,
+				nextActivity: this.lastFallbackActivity,
+			};
+		}
+		const decision = decideFallbackAgentEnd({
+			relayGoal: this.state?.relay?.goal === true,
+			goalFallback: this.state?.relay?.goalFallback === true,
+			messages,
+			previousActivity: this.lastFallbackActivity,
+		});
+		this.lastFallbackActivity = decision.nextActivity;
+		if (decision.exitHerdGoal) this.endGoalSession();
+		return decision;
+	}
+
+	/** The herd phase the wrapped `api.goal` receipt prints. */
+	goalPhase() {
+		const relay = this.state?.relay;
+		if (relay?.goal !== true) return "manual";
+		return relay?.goalFallback === true ? "official_fallback" : "herd_priority";
+	}
+
+	/**
+	 * Gate one official `goal` tool call.
+	 *
+	 * `unreceivedChildren` is the same count the projection prints, so the tool
+	 * guard and the stop nudge cannot disagree about open work.
+	 */
+	checkGoalToolCall(op) {
+		const ledger = this.forkLedgerPort?.() ?? null;
+		const ownerId = this.forkOwnerId?.() ?? null;
+		const unreceived = ledger
+			? unreceivedChildren(ledger, ownerId ?? "root").length
+			: 0;
+		return decideGoalToolCall({
+			op,
+			unreceived,
+			relayGoal: this.state?.relay?.goal === true,
+			goalFallback: this.state?.relay?.goalFallback === true,
+		});
+	}
+
+	/**
+	 * One self-driven Phase 2 beat.
+	 *
+	 * Returns the continuation prompt to block the stop with, or null when the
+	 * goal is spent (the session has already been released).
+	 */
+	stepSelfDrivenFallbackStop({ officialGoalActive, continuationPrompt, messages } = {}) {
+		const decision = decideSelfDrivenFallbackStop({
+			relayGoal: this.state?.relay?.goal === true,
+			goalFallback: this.state?.relay?.goalFallback === true,
+			officialGoalActive: officialGoalActive === true,
+			continuationPrompt,
+			messages,
+			messageCursor: this.fallbackMessageCursor,
+			previousActivity: this.lastFallbackActivity,
+		});
+		if (decision.action === "exit") {
+			this.endGoalSession();
+			return null;
+		}
+		if (decision.action !== "continue") return null;
+		this.lastFallbackActivity = decision.activity;
+		this.fallbackMessageCursor = decision.nextCursor;
+		return decision.prompt;
+	}
+
+	/** A session switch restores its own modes; this process's mirror is stale. */
+	resetGoalFallbackState() {
+		this.officialGoalActive = false;
+		this.lastFallbackActivity = null;
+		this.lastOfficialGoalId = null;
+		this.fallbackMessageCursor = null;
+		this.selfDrivenFallback = false;
 	}
 
 	onAssistantMessage(message, ctx) {

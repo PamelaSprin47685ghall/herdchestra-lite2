@@ -21,10 +21,12 @@ export const BASE_TOOLS = Object.freeze([
 	"wait",
 ]);
 
-// Host tools that never reach a subscope's `api`: `ask` is the root's own
-// user channel, `todo` is retired, `wait` is already a base tool, and `js` is
-// the executor itself.
-export const EXCLUDED_HOST_TOOLS = Object.freeze(new Set(["ask", "todo", "wait", "js"]));
+  // Host tools that never reach a subscope's `api`: `ask` is the root's own
+  // user channel, `todo` is retired, `wait` is already a base tool, `js` is the
+  // executor itself, and `goal` belongs to the root's goal fallback only.
+  export const EXCLUDED_HOST_TOOLS = Object.freeze(
+  	new Set(["ask", "todo", "wait", "js", "goal"]),
+  );
 
 /** Join present role phrases as "3+ managers, 10+ editors and 1 devops". */
 function joinRoleList(parts) {
@@ -80,15 +82,20 @@ function idleHandsSummary(runningByRole) {
  * - Normal family (`SUBSCOPE` / `ROOT_MANUAL` / `ROOT_AUTOPILOT`): full set.
  *   `ROOT_AUTOPILOT` names an active goal session (`/herd-goal`): no `ask`,
  *   and root cannot stop before `scope_return`. The name is kept for the
- *   projection's stability; there is no user-facing toggle.
+ *   projection's stability; there is no user-facing toggle. Root also keeps
+ *   `goal` in every non-terminal phase: the tool is declared statically and the
+ *   wrapped `api.goal` enforces the phase, so the system prompt never changes
+ *   when official goal mode enters or exits. `goalFallback` stays accepted for
+ *   callers that still pass it; the surface no longer depends on it.
  *
  * Returns a frozen `{ mode, tools, state, signature }`.
  */
 export function projectCapabilities({
 	isChild = false,
 	role = null,
-	autopilot = false,
-	unreceived = 0,
+  	autopilot = false,
+  	goalFallback = false,
+  	unreceived = 0,
 	canStop = false,
 	contextOverHalf = false,
 	abandoned = null,
@@ -123,9 +130,15 @@ export function projectCapabilities({
 		tools = [];
 	} else {
 		mode = isChild ? "SUBSCOPE" : autopilot ? "ROOT_AUTOPILOT" : "ROOT_MANUAL";
-		const set = new Set(BASE_TOOLS);
-		if (!isChild && autopilot !== true) set.add("ask");
-		if (isChild) {
+  		const set = new Set(BASE_TOOLS);
+  		if (!isChild && autopilot !== true) set.add("ask");
+    		// Root keeps `api.goal` in every non-terminal phase. The tool is declared
+    		// statically in the `.d.ts` block, so binding it here never changes the
+    		// system prompt when official goal mode enters or exits. The wrapped
+    		// `api.goal` enforces Phase 1 vs Phase 2 semantics, and a child never
+    		// receives it because `goal` is in EXCLUDED_HOST_TOOLS.
+    		if (!isChild) set.add("goal");
+  		if (isChild) {
 			// The role decides which host tools exist at all; the projection only
 			// removes the executor and the root's own channels.
 			for (const name of roleTools(role, hostToolNames)) {

@@ -22,10 +22,13 @@ export function createProjectionState() {
 	};
 }
 
-/** The frozen projection for this beat. */
-export function project(snapshot) {
-	return projectCapabilities(snapshot);
-}
+  /** The frozen projection for this beat. */
+  export function project(snapshot) {
+  	return projectCapabilities({
+  		...snapshot,
+  		goalFallback: snapshot?.goalFallback === true,
+  	});
+  }
 
 /** Record the directory snapshot the projection printed. */
 export function stageDirMeta(state, snapshot) {

@@ -20,7 +20,7 @@ Required: the identity of the LLM in the new subscope. Start with "You are " and
 
 ## fork.budget
 
-One unit is one turn, meaning one LLM request; the calls in that request split the turn between them. Use tool names as keys, with non-negative integer turn budgets. An unlisted tool has zero budget; a call whose budget falls short still runs, and the record marks it panhandled. A budget may only fund tools the target role can hold: a `manager` must pass `{}` or omit it, an `inspector` may fund only its read-only tools, and an `editor` may not fund `bash`, `shell`, `eval`, `python`, `task`, or `manage_skill`. Free tools need no entry, so an empty budget `{}` is valid for a manager, a pure-reasoning subscope, or a spy; a `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free too. Size the budget for the work, not for individual calls; `state.remaining` reports it as `remaining/budget` per tool, and its clock entry as `<left> left of <budget>`.
+One unit is one turn, meaning one LLM request; the calls in that request split the turn between them. Use tool names as keys, with non-negative integer turn budgets. An unlisted tool has zero budget; a call whose budget falls short still runs, and the record marks it panhandled. A budget may only fund tools the target role can hold: a `manager` must pass `{}` or omit it, an `inspector` may fund only its read-only tools, and an `editor` may not fund `bash`, `shell`, `eval`, `python`, `task`, or `manage_skill`. Free tools need no entry, so an empty budget `{}` is valid for a manager, a pure-reasoning subscope, or a spy; a `read` or `write` of a built-in protocol URI (`skill://`, `local://`, `ssh://`, `agent://`, `xd://`, `omp://`…) is free too. Size the budget for the work, not for individual calls; `state.remaining` reports it as `remaining/budget` per tool, and its clock entry as `<left> left of <budget>`. Rewinding never refunds any of it: a scope that plans to refill its budget by rewinding fails.
 
 ## fork.time
 
@@ -44,15 +44,15 @@ Receive one finished record from a subscope you forked (FIFO). If none is ready 
 
 ## return.tool
 
-Call `scope_return` alone in its script. The oath field is required (except when abandoned): `unfinished` rewinds and continues; the seal value seals the record for your caller to receive with `scope_join`, and any unreceived subscopes you own transfer to your caller or the nearest live receiver above it. When this scope has been abandoned, `scope_return` never rewinds and delivers immediately regardless of the oath field. The call ends the turn: any later `api.*` call throws.
+Call `scope_return` alone in its script. The oath field is required (except when abandoned): `continue` rewinds and continues; `break` leaves early — a subscope publishes only after the candor demanded below, while root rewinds instead; the seal value seals the record for your caller to receive with `scope_join`, and any unreceived subscopes you own transfer to your caller or the nearest live receiver above it. When this scope has been abandoned, `scope_return` never rewinds and delivers immediately regardless of the oath field. The call ends the turn: any later `api.*` call throws.
 
 ## return.dafny
 
-Required. A fresh, dense report: reliable deductions, verification evidence, unresolved work, and results the caller cannot recover. The new report replaces the old one on a rewind; carry forward evidence that still matters. On a seal, this text is appended to the published record. When your caller differs from your upscope, your caller does not share your upscope's context — include every fact the caller needs.
+Required. A fresh, dense report: reliable deductions, verification evidence, unresolved work, and results the caller cannot recover. The new report replaces the old one on a rewind; carry forward evidence that still matters. On a seal, this text is appended to the published record. When your caller differs from your upscope, your caller does not share your upscope's context — include every fact the caller needs. A `break` report carries one extra duty: say plainly why the work stopped short of standard seal quality, what stays unresolved, and what the caller must handle or redo.
 
 ## return.oath
 
-Required in normal mode, and exactly one of two values. `unfinished`: rewind and continue, with `dafny` replacing the record. `a_ferocious_audacious_master_would_change_nothing`: seal the record; take it only when nothing remains worth changing. At root, receive every subscope you forked first. In `ABANDONED` mode, any value (including omitted) is accepted and never rewinds.
+Required in normal mode, one of three values. `continue`: rewind and continue, with `dafny` replacing the record; the rewind re-baselines context and never restores budget or clock. `break`: an early exit. In a subscope it publishes to the caller exactly as the seal value does, and its `dafny` carries the shortfall confession. At root `break` does not end the work: it rewinds like `continue` and stamps the reborn context with the predecessor's degraded delivery, the user's dissatisfaction, and the demand for full-standard delivery. `a_ferocious_audacious_master_would_change_nothing`: seal the record; take it only when nothing remains worth changing. At root, receive every subscope you forked first. In `ABANDONED` mode, any value (including omitted) is accepted and never rewinds.
 
 ## abandon.tool
 

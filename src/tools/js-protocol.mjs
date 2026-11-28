@@ -8,6 +8,12 @@
 // schemas are never described twice, and a host adding a tool updates the
 // declarations for free.
 //
+// `goal` is the exception the host adds and removes at runtime. It is omitted
+// from the dynamic `toolSpecs` rendering and declared statically in the
+// control-plane block instead, so entering or leaving omp's official goal mode
+// never mutates the system prompt and never busts the provider prefix cache.
+// Whether `api.goal` is callable this turn is stated by the REPL probe alone.
+//
 // Pure functions only: no Station import, no host import, no mutation, no I/O.
 
 /** The wire schema of the one registered tool. */
@@ -230,13 +236,20 @@ interface ScopeAbandonArgs {
 
 interface ScopeReturnArgs {
 	dafny: string;
-	/** Required in normal mode: "unfinished" rewinds; the seal value publishes. Ignored in ABANDONED mode (always publishes without rewinding). */
+	/** Required in normal mode. "continue" rewinds with fresh dafny; a rewind replays context only and never restores budget or clock. "break" is a degraded delivery: a non-root scope seals and must own its shortfall in dafny, while root rewinds and carries the user's dissatisfaction note. The seal value publishes a finished record, and at root ends the work. Ignored in ABANDONED mode (always publishes without rewinding). */
 	signed_sealed_hands_off_nothing_left_on_the_table?:
 		| "a_ferocious_audacious_master_would_change_nothing"
-		| "unfinished";
+		| "continue"
+		| "break";
 }
 
-interface ScopeState {
+  interface GoalArgs {
+	op: "create" | "get" | "complete" | "pause" | "resume" | "drop";
+	objective?: string;
+	token_budget?: number;
+  }
+
+  interface ScopeState {
 	mode: "SUBSCOPE" | "ROOT_MANUAL" | "ROOT_AUTOPILOT" | "FINAL_ANSWER" | "CONTEXT_LIMIT" | "ABANDONED";
 	role: ScopeRole;
 	scope: string;
@@ -266,7 +279,7 @@ interface ScopeState {
 export function renderCapabilitiesDts(toolSpecs = []) {
 	const specs = (Array.isArray(toolSpecs) ? toolSpecs : [])
 		.filter((spec) => spec && typeof spec.name === "string" && spec.name !== "")
-		.filter((spec) => spec.name !== "js" && spec.name !== "todo")
+		.filter((spec) => spec.name !== "js" && spec.name !== "todo" && spec.name !== "goal")
 		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
 	const sections = [
@@ -292,8 +305,9 @@ export function renderCapabilitiesDts(toolSpecs = []) {
 		`\t"scope_fork"(args: ScopeForkArgs): Promise<ScopeForkResult>;`,
 		`\t"scope_join"(): Promise<ScopeJoinResult>;`,
 		`\t"scope_return"(args: ScopeReturnArgs): Promise<never>;`,
-		`\t"scope_abandon"(args: ScopeAbandonArgs): Promise<ScopeAbandonResult>;`,
-	];
+  		`\t"scope_abandon"(args: ScopeAbandonArgs): Promise<ScopeAbandonResult>;`,
+  		`\t"goal"(args: GoalArgs): Promise<unknown>;`,
+  	];
 
 	sections.push(`/**
  * Host-managed live capability binding. It behaves like a DevTools host

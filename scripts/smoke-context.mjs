@@ -17,7 +17,7 @@ import { installContextPreparation, splitRequestHistory } from "../host-omp/src/
 import { contextHeaderOf } from "../host-omp/src/host/adapter.mjs";
 import { stopAfterScopeReturn } from "../host-omp/src/host/branch-context.mjs";
 import { activate } from "../host-omp/src/main.mjs";
-import { RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
+import { RETURN_OATH_CONTINUE, RETURN_OATH_KEY, RETURN_OATH_VALUE } from "../src/station/domain/handoff.mjs";
 import { borrowStaleAddon } from "./host-native.mjs";
 
 const HOST = resolve(process.env.OMP_HOST ?? "/home/kunweiz/Desktop/vibe/oh-my-pi");
@@ -253,7 +253,7 @@ async function checkRootRewindE2E({ createMockModel }) {
 			{
 				content: [
 					{ type: "text", text: "Gen 0 investigating." },
-					{ type: "toolCall", id: "root-ret-0", name: "js", arguments: { code: 'await api.scope_return({ dafny: "gen 0 report: narrowed root cause" })' } },
+					{ type: "toolCall", id: "root-ret-0", name: "js", arguments: { code: `await api.scope_return({ dafny: "gen 0 report: narrowed root cause", ${RETURN_OATH_KEY}: ${JSON.stringify(RETURN_OATH_CONTINUE)} })` } },
 				],
 			},
   		{

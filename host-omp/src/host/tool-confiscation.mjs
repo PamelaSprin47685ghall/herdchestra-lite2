@@ -25,6 +25,7 @@
 import { sessionOf, jsonSchemaOf, cwdOf } from "./adapter.mjs";
 import { abortedError, isWriteTool, serializeWrite } from "./write-serialization.mjs";
 import { record } from "./diagnostics.mjs";
+import { executeWrappedGoalTool } from "./tickets/goal.mjs";
 
 const JS_TOOL_NAME = "js";
 // `src/core/policy.mjs` classifies an omp builtin read-only subagent as this.
@@ -171,12 +172,22 @@ function confiscate(agent, allowed) {
 		snapshot = new Map();
 		CONFISCATED.set(agent, snapshot);
 	}
-	for (const tool of tools) {
-		if (tool === jsTool || typeof tool?.name !== "string" || tool.name === "") continue;
-		wrapWriteTool(tool);
-		if (!snapshot.has(tool.name)) snapshot.set(tool.name, tool);
+	// More than one tool means the host rebuilt this turn's roster: an official
+	// goal transition adds or removes `goal`. Reconcile the snapshot with that
+	// roster so a tool the host withdrew cannot stay callable through `api`.
+	if (tools.length > 1) {
+		const visible = new Set();
+		for (const tool of tools) {
+			if (tool === jsTool || typeof tool?.name !== "string" || tool.name === "") continue;
+			visible.add(tool.name);
+			wrapWriteTool(tool);
+			snapshot.set(tool.name, tool);
+		}
+		for (const name of [...snapshot.keys()]) {
+			if (!visible.has(name)) snapshot.delete(name);
+		}
+		agent.state.tools = [jsTool];
 	}
-	if (tools.length > 1) agent.state.tools = [jsTool];
 	return snapshot;
 }
 
@@ -197,19 +208,29 @@ function snapshotFor(getEngine, ctx) {
  * reappear. Registering on both makes the hiding idempotent per turn instead of
  * hoping one event always precedes the request.
  */
+/**
+ * Re-run confiscation for one context. A preload that adds `goal` to the live
+ * roster grows the snapshot immediately, so no later hook can observe a
+ * half-updated tool list.
+ */
+export function confiscateContext(getEngine, ctx) {
+	try {
+		const agent = agentOf(ctx);
+		const allowed = policyAllows(getEngine, ctx);
+		// Wrap before hiding: a managed agent's write tools leave the visible
+		// list but stay reachable through the snapshot and through the host's
+		// own bridge, and both must find the queue.
+		wrapWriteTools(agent);
+		return confiscate(agent, allowed);
+	} catch (error) {
+		record("activation", error, { phase: "tool-confiscation" });
+		return null;
+	}
+}
+
 export function installToolConfiscation(pi, getEngine = () => null) {
 	const apply = (_event, ctx) => {
-		try {
-			const agent = agentOf(ctx);
-			const allowed = policyAllows(getEngine, ctx);
-			// Wrap before hiding: a managed agent's write tools leave the visible
-			// list but stay reachable through the snapshot and through the host's
-			// own bridge, and both must find the queue.
-			wrapWriteTools(agent);
-			confiscate(agent, allowed);
-		} catch (error) {
-			record("activation", error, { phase: "tool-confiscation" });
-		}
+		confiscateContext(getEngine, ctx);
 		return undefined;
 	};
 	for (const event of ["session_start", "before_agent_start", "context"]) {
@@ -266,6 +287,18 @@ export function createToolGateway(getEngine = () => null) {
 		// error, so it is reported as an unavailable tool rather than a crash.
 		const control = name.startsWith("scope_") ? engine?.coreTools?.[name] ?? null : null;
 		const tool = control ?? toolFor(ctx, name);
+		// The official goal is one host tool with a runtime-backed surface. It
+		// stays inside the `js` call: the model reaches it as `api.goal`, never
+		// as a second top-level tool.
+		if (name === "goal" && !control) {
+			return executeWrappedGoalTool(
+				args,
+				ctx,
+				engine?.peekStation?.(ctx) ?? null,
+				tool && typeof tool.execute === "function" ? tool : null,
+				{ callId, signal, onUpdate },
+			);
+		}
 		if (!tool || typeof tool.execute !== "function") {
 			throw new Error(`Tool "${name}" is not available in this turn.`);
 		}

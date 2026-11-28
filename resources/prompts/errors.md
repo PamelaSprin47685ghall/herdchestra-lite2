@@ -102,7 +102,7 @@ The record stays ready; use a model with a larger window or shorten the record, 
 
 ## invalid-return-oath
 
-Pass `signed_sealed_hands_off_nothing_left_on_the_table` as exactly one of two values: `unfinished` to rewind, or `a_ferocious_audacious_master_would_change_nothing` to seal. A missing or other value is refused.
+Pass `signed_sealed_hands_off_nothing_left_on_the_table` as one of three values: `continue` to rewind and continue, `break` to leave early (a subscope publishes with a candid shortfall report; root rewinds under a dissatisfaction notice and cannot end its work), or `a_ferocious_audacious_master_would_change_nothing` to seal. A missing or other value is refused.
 
 ## mixed-return
 

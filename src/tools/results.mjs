@@ -28,3 +28,14 @@ export function continueFeedback(text) {
 	return { continue: true, additionalContext: text };
 }
 
+/**
+ * A `session_stop` block. The stop hook uses it when the official goal
+ * continuation must run as the next turn instead of letting the session stop:
+ * unlike `continueFeedback`, the host counts a block, not one of its own capped
+ * continuations.
+ */
+export function blockFeedback(reason) {
+	if (!reason) return undefined;
+	return { decision: "block", reason };
+}
+

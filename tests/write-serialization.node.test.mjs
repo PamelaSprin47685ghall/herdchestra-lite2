@@ -135,7 +135,7 @@ test("footprint classification never under-locks", () => {
 
 	const dir = scratch();
 	const named = targetKeys("write", { path: path.join(dir, "x.txt") }, dir);
-	assert.deepEqual(named, { exclusive: false, keys: [path.join(dir, "x.txt")] });
+	assert.deepEqual(named, { exclusive: false, keys: [path.join(fs.realpathSync(dir), "x.txt")] });
 
 	for (const args of [{}, { path: "" }, { input: "not a patch" }, { paths: ["*"] }]) {
 		const name = "paths" in args ? "ast_edit" : "edit";

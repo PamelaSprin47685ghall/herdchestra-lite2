@@ -210,7 +210,7 @@ describe("multi-engine shared ForkRegistry isolation and poka-yoke", () => {
 			rootCtx,
 		);
 		expect(joinResult.isError).toBeUndefined();
-		expect(joinResult.details.joined).toBe(true);
+		expect(joinResult.details.result).toBeDefined();
 		expect(forkOf(ledger, spawnedSpec.forkId).status).toBe("joined");
 		expect(outcomeOf(wiring.registry, spawnedSpec.forkId).record).toBe("child completed its work");
 	});

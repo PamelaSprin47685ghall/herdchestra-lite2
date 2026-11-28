@@ -32,7 +32,7 @@ Role-dependent. An `editor` must pass a non-empty array of concrete file paths (
 
 ## fork.forks
 
-Include the whole plan you are ready to run now; order carries no dependency, and any invalid, colliding, role-escalating, or second-`devops` item rejects the entire batch before anything starts. Forking stops two levels below you; a third is too far. Resolves to `{ ok, started: [{ path, role, upscope, depth, fsm }], failed: [{ index, error }], unreceived }`.
+Include the whole plan you are ready to run now; order carries no dependency, and any invalid, colliding, role-escalating, or second-`devops` item rejects the entire batch before anything starts. Forking stops two levels below you; a third is too far. Resolves to `{ depth?, started: number[], failed: [{ index, error? }], unreceived }`. `started` lists the successful items by their position in `forks`; `depth` is the child's depth, present only when something started. The result never repeats what you supplied, so resolve each path with the `fork.path` rule above. A successful control result carries its facts only in `details.result`; its content text is a constant.
 
 ## fork.model
 
@@ -56,7 +56,7 @@ Required in normal mode, and exactly one of two values. `unfinished`: rewind and
 
 ## abandon.tool
 
-`scope_abandon({ target, reason? })` interrupts one `running` scope at exact path `target` — never `/`, never yourself, and never a role wider than yours — and forces its next turn into `ABANDONED` mode where only `scope_return` is bound. It stays `running` briefly while writing its final `dafny`, then turns `done` without rewinding; it does not cascade to other scopes (any subscopes it owned transfer to its caller when it returns). Pass `reason` so the target knows what to preserve in `dafny` and its caller knows why it was stopped.
+`scope_abandon({ target, reason? })` interrupts one `running` scope at exact path `target` — never `/`, never yourself, and never a role wider than yours — and forces its next turn into `ABANDONED` mode where only `scope_return` is bound. It stays `running` briefly while writing its final `dafny`, then turns `done` without rewinding; it does not cascade to other scopes (any subscopes it owned transfer to its caller when it returns). Pass `reason` so the target knows what to preserve in `dafny` and its caller knows why it was stopped. The result reports only whether the request is new or was already pending; it does not repeat the target or the reason. When resolution changed the path (a relative or differently cased name), `resolvedTarget` reports the exact path; otherwise it is absent.
 
 ## join.interrupted
 

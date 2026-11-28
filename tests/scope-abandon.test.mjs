@@ -69,7 +69,7 @@ describe("scope_abandon", () => {
       arguments: { target: "/devops.probe", reason: "pivot" },
     });
     expect(first?.isError).toBeUndefined();
-    expect(first?.details?.result).toEqual({ ok: true, target: "/devops.probe" });
+    expect(first?.details?.result).toEqual({ ok: true });
     const record = forkOf(ledger, "f1");
     expect(record.status).toBe("running");
     expect(record.abandonRequested).toBe(true);
@@ -88,7 +88,6 @@ describe("scope_abandon", () => {
     expect(second?.isError).toBeUndefined();
     expect(second?.details?.result).toEqual({
       ok: true,
-      target: "/devops.probe",
       alreadyAbandoning: true,
     });
     expect(interrupted).toEqual(["f1"]);
@@ -159,7 +158,7 @@ describe("scope_abandon", () => {
       },
     });
     expect(ret?.isError).toBeUndefined();
-    expect(ret?.details?.returned).toBe(true);
+		expect(ret?.details?.result?.sealed).toBe(true);
     expect(ret?.details?.rewind).toBeUndefined();
     expect(ret?.details?.stopLoop).toBe(true);
     const record = forkOf(ledger, "f1");

@@ -177,14 +177,14 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 	const current = launch("editor.latest", "Check the harbor lights");
 	expect(current.isError).toBeUndefined();
 	const text = current.content[0].text;
-	// The batch is described once, with the assignment attached to the scope
-	// that owns it, and the earlier batch is not restated.
-	expect(text).toMatch(/\/editor.latest \(upscope \/, depth \d+\): Check the harbor lights/);
-	expect(text.match(/Check the harbor lights/g)).toHaveLength(1);
-	expect(text).not.toContain("Measure the tide");
-	expect(text).toContain("Still unreceived: /editor.earlier, /editor.latest.");
-	// The machine channel carries the same facts without the prose.
-	expect(current.details.result.started.map((entry) => entry.path)).toEqual(["/editor.latest"]);
+	// Successful control content is a constant; the facts live once, in result.
+	expect(text).toBe("scope_fork processed.");
+	expect(current.details.result).toEqual({
+		depth: 1,
+		started: [0],
+		failed: [],
+		unreceived: ["/editor.earlier", "/editor.latest"],
+	});
 });
 
 test("the scope_return documentation explains the return-only script and fresh report", () => {

@@ -102,7 +102,7 @@ describe("scope_join as a ticket", () => {
 
     const result = await pending;
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain("the child read the parser");
+    expect(result.details.result.record).toContain("the child read the parser");
     expect(ledger.forks.j1.status).toBe("joined");
   });
 
@@ -138,8 +138,8 @@ describe("scope_return as a ticket", () => {
     // record waits in the parent's queue for whatever join comes later.
     const result = await returnTicket(station, "call-r1", { dafny: "the child returns its record", ...OATH }, {});
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain("delivered to Root");
-    expect(result.details.accepted).toBe(true);
+    expect(result.details.result.receiver).toBe("Root");
+    expect(result.details.result.sealed).toBe(true);
     expect(result.details.awaitingReceipt).toBeUndefined();
     expect(ledger.forks.c1.status).toBe("ready");
 
@@ -165,7 +165,7 @@ describe("scope_return as a ticket", () => {
     // sealed before any signal could matter.
     const result = await pending;
     expect(result.isError).toBeUndefined();
-    expect(result.details.accepted).toBe(true);
+    expect(result.details.result.sealed).toBe(true);
     expect(ledger.forks.c2.status).toBe("ready");
   });
 });

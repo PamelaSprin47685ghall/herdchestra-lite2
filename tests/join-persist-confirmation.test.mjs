@@ -2,8 +2,8 @@
 //
 // `station.persist()` is the durable-write signal. When it reports false the
 // join still succeeds (the receipt is in the in-memory chain), but the result
-// carries `details.persisted === false` and a warning the model can read.
-// A station double without `persist` is not judged and keeps the old shape.
+// carries `result.persisted === false`. A station double without `persist` is
+// not judged and reports persisted true.
 
 import { describe, expect, test } from "bun:test";
 
@@ -52,9 +52,9 @@ describe("an immediate join and its durable receipt", () => {
     const out = handleJoinCall(station, joinCall());
 
     expect(out.isError).toBeUndefined();
-    expect(out.details.joined).toBe(true);
-    expect(out.details.persisted).toBe(false);
-    expect(out.content[0].text).toContain("Persistence warning");
+    expect(out.details.result.scope).toBe("/f1");
+    expect(out.details.result.persisted).toBe(false);
+    expect(out.content[0].text).toBe("scope_join processed.");
   });
 
   test("a successful write carries persisted true and no warning", () => {
@@ -62,8 +62,8 @@ describe("an immediate join and its durable receipt", () => {
     const station = stationFor(ledger, { persist: () => true });
     const out = handleJoinCall(station, joinCall("j2"));
 
-    expect(out.details.persisted).toBe(true);
-    expect(out.content[0].text).not.toContain("Persistence warning");
+    expect(out.details.result.persisted).toBe(true);
+    expect(out.content[0].text).toBe("scope_join processed.");
   });
 
   test("a station without persist is not judged", () => {
@@ -71,9 +71,9 @@ describe("an immediate join and its durable receipt", () => {
     const station = stationFor(ledger);
     const out = handleJoinCall(station, joinCall("j3"));
 
-    expect(out.details.joined).toBe(true);
-    expect("persisted" in out.details).toBe(false);
-    expect(out.content[0].text).not.toContain("Persistence warning");
+    expect(out.details.result.scope).toBe("/f3");
+    expect(out.details.result.persisted).toBe(true);
+    expect(out.content[0].text).toBe("scope_join processed.");
   });
 });
 
@@ -101,8 +101,8 @@ describe("a wait-finalized join and its durable receipt", () => {
       return false;
     });
 
-    expect(out.details.persisted).toBe(false);
-    expect(out.content[0].text).toContain("Persistence warning");
+    expect(out.details.result.persisted).toBe(false);
+    expect(out.content[0].text).toBe("scope_join processed.");
     // `confirmJoinPersistence` and the final control-state write each report.
     expect(writes).toBe(2);
   });
@@ -111,8 +111,8 @@ describe("a wait-finalized join and its durable receipt", () => {
     const ledger = ledgerWithReady("g2");
     const out = finalizeOn(ledger, () => true);
 
-    expect(out.details.persisted).toBe(true);
-    expect(out.content[0].text).not.toContain("Persistence warning");
+    expect(out.details.result.persisted).toBe(true);
+    expect(out.content[0].text).toBe("scope_join processed.");
   });
 });
 

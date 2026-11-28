@@ -288,16 +288,16 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 			},
 		});
 		// One return closes the bracket in the same beat; nothing parks.
-		expect(ret.details?.accepted).toBe(true);
+		expect(ret.details?.result?.sealed).toBe(true);
 		expect(ret.details?.awaitingReceipt).toBeUndefined();
 
 		const [o1, o2] = await settledWithin(Promise.all([j1, j2]));
 		const outs = [o1, o2];
-		const joined = outs.find((o) => o?.details?.joined === true);
+		const joined = outs.find((o) => o?.details?.result);
 		const refused = outs.find((o) => o?.isError === true);
 
-		expect(joined?.details?.joined).toBe(true);
-		expect(joined?.content?.[0]?.text ?? "").toContain("[Record from forked scope — fork /c1]");
+		expect(joined?.details?.result?.scope).toBe("/c1");
+		expect(joined?.details?.result?.record ?? "").toContain("the child returns before the join settles");
 		expect(refused?.details?.code).toBe("NO_UNRECEIVED_WORK");
 		expect(rootWaits).toBe(0);
 		expect(clockPauseBalance).toBe(0);
@@ -373,13 +373,13 @@ describe("joinTicket end-to-end unblocking and handler wakeup", () => {
 				],
 			},
 		});
-		expect(forked.details?.failed?.length).toBe(1);
-		const failedId = forked.details.failed[0];
+		expect(forked.details?.result?.failed?.length).toBe(1);
+		const failedId = ledger.order.find((id) => forkOf(ledger, id).path === "/editor.c-broken");
 
 		const joined = await settledWithin(waitingJoin);
-		expect(joined.details?.joined).toBe(true);
+		expect(joined.details?.result?.scope).toBe("/editor.c-broken");
 		expect(forkOf(ledger, failedId)?.outcome).toBe("failed");
-		expect(joined.content?.[0]?.text ?? "").toContain("spawner crashed synchronously");
+		expect(joined.details?.result?.reason ?? "").toContain("spawner crashed synchronously");
 	});
 });
 

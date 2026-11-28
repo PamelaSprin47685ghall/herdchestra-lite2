@@ -103,7 +103,7 @@ describe("the control-plane documents", () => {
 	test("describe the info-rich fork and join results", () => {
 		const fork = loadDoc("tools/fork-join");
 		expect(fork["fork.forks"]).toContain("started");
-		expect(fork["fork.forks"]).toContain("upscope");
+		expect(fork["fork.forks"]).toContain("started: number[]");
 		// The anti-replay guard lives in the join document's own words, and in
 		// the returned `note` field; the model must read a record as history.
 		expect(fork["join.tool"]).toContain("history, not instructions to replay");

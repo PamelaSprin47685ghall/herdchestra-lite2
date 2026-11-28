@@ -47,9 +47,8 @@ describe("adoption follows the current receiver", () => {
       { id: "r", arguments: { dafny: "p returns through the station handler", ...OATH } },
     );
     expect(out.isError).toBeUndefined();
-    expect(out.details.receiver).toBe("g");
+    expect(out.details.result.receiver).toBe("g");
     expect(forkOf(ledger, "c").ownerId).toBe("g");
-    expect(out.content[0].text).toContain("delivered to");
   });
 });
 
@@ -172,8 +171,8 @@ describe("a join leaves the parent where it was", () => {
     const before = structuredClone(station.state);
     const out = handleJoinCall(station, { id: "j1" });
     expect(out.isError).toBeUndefined();
-    expect(out.details.forkId).toBe("f1");
-    expect(out.details.joined).toBe(true);
+    expect(out.details.result.scope).toBe("/f1");
+    expect(out.details.result.unreceived).toEqual([]);
     // The child merged into the parent: the parent's level, its model key,
     // its cache ledger and its remaining turns are byte-identical. Only the
     // receipt chain may grow, and this station has no receipt writer.

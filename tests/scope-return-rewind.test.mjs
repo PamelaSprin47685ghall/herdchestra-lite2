@@ -250,7 +250,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 
 									const res = executeReturn(childStation, "ret-1", { dafny: "gen1 distilled summary", ...UNFINISHED }, {});
 									expect(res.isError).toBeUndefined();
-									expect(res.details.rewind).toBe(true);
+									expect(res.details.result.rewind).toBe(true);
 									expect(res.details.stopLoop).toBe(true);
 									expect(record.status).toBe(RUNNING);
 									expect(record.handoffCount).toBe(1);
@@ -273,7 +273,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 									config.sessionManager.appendMessage(work2);
 									session.agent.state.messages.push(work2);
 									const res2 = executeReturn(childStation, "ret-2", { dafny: "gen2 distilled summary", ...UNFINISHED }, {});
-									expect(res2.details.rewind).toBe(true);
+									expect(res2.details.result.rewind).toBe(true);
 									expect(record.handoffCount).toBe(2);
 									return;
 								}
@@ -297,7 +297,7 @@ describe("child scope_return rewind (O(1) stack depth + identity preservation)",
 									{},
 								);
 								expect(finalRes.isError).toBeUndefined();
-								expect(finalRes.details.returned).toBe(true);
+								expect(finalRes.details.result.sealed).toBe(true);
 								expect(finalRes.details.stopLoop).toBe(true);
 							},
 						};
@@ -477,10 +477,10 @@ describe("mixed tool-call batch refusal and stopAfterScopeReturn", () => {
 			id: "cr-1",
 			arguments: { dafny: "sub done", ...OATH },
 		});
-		expect(childRet.details.returned).toBe(true);
+		expect(childRet.details.result.sealed).toBe(true);
 		expect(forkOf(ledger, "f-root-1").status).toBe(READY);
 		const joined = handleJoinCall(root, { id: "j-1", arguments: {} });
-		expect(joined.details.joined).toBe(true);
+		expect(joined.details.result).toBeDefined();
 
 		// Root seal -> promote immediately without a rewind (stopLoop = false, canStop = true).
 		const sealed = handleReturnCall(root, {
@@ -488,8 +488,8 @@ describe("mixed tool-call batch refusal and stopAfterScopeReturn", () => {
 			arguments: { dafny: "verified nothing left", ...OATH },
 		});
 		expect(sealed.isError).toBeUndefined();
-		expect(sealed.details.promoted).toBe(true);
-		expect(sealed.details.stopLoop).toBe(false);
+		expect(sealed.details.result.promoted).toBe(true);
+		expect(sealed.details.stopLoop).toBeUndefined();
 		expect(root.state.relay.canStop).toBe(true);
 
 		// Opening a new fork resets completion (canStop = false).

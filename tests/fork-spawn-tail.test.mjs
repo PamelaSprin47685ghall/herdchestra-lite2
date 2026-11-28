@@ -62,8 +62,8 @@ describe("a batch whose first spawner throws", () => {
     });
 
     expect(out.isError).toBeUndefined();
-    expect(out.details.started).toEqual(["batch:1"]);
-    expect(out.details.failed).toEqual(["batch:0"]);
+    expect(out.details.result.started).toEqual([1]);
+    expect(out.details.result.failed.map((entry) => entry.index)).toEqual([0]);
 
     // The decisive proof: at the first spawn call, both forks already exist
     // and are running, so the failing start cannot strand the second one.
@@ -84,5 +84,27 @@ describe("a batch whose first spawner throws", () => {
     const startedFork = forkOf(ledger, "batch:1");
     expect(startedFork.status).toBe(RUNNING);
     expect(startedFork.fsm).toBe("audit the second seam");
+  });
+
+  test("returns a plain receipt when every spawner throws", () => {
+    const ledger = createBracketLedger();
+    const station = stationFor(ledger, {
+      childSpawnPort: () => () => {
+        throw new Error("spawn refused");
+      },
+    });
+
+    const out = handleForkCall(station, {
+      id: "doomed",
+      arguments: { forks: [forkArgs()] },
+    });
+
+    expect(out.isError).toBeUndefined();
+    expect(out.details.result).toEqual({
+      started: [],
+      failed: [{ index: 0, error: "spawn refused" }],
+      unreceived: ["/editor.one"],
+    });
+    expect(out.content[0].text).toBe("scope_fork processed.");
   });
 });

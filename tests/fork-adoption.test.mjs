@@ -95,9 +95,9 @@ describe("scope_return after the receiver returned", () => {
 			arguments: { dafny: "adoption probe: child b returns after the receiver moved", ...OATH },
 		});
 
-		expect(out.details.accepted).toBe(true);
+		expect(out.details.result.sealed).toBe(true);
 		expect(out.details.awaitingReceipt).toBeUndefined();
-		expect(out.details.receiver).toBe("root");
+		expect(out.details.result.receiver).toBe("Root");
 		expect(ledger.forks.fork_b.ownerId).toBe("root");
 		expect(ledger.forks.fork_b.status).toBe("ready");
 		expect(ledger.queues.root).toContain("fork_b");

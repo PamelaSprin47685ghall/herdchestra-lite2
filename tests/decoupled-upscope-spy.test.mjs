@@ -169,12 +169,9 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 			},
 		});
 		expect(okSpy.isError).toBeUndefined();
-		expect(okSpy.details.result.started[0]).toMatchObject({
-			path: "/inspector.api/inspector.spy",
-			upscope: "/inspector.api",
-		});
-
 		const spySpec = spawned.at(-1);
+		expect(okSpy.details.result.started).toEqual([0]);
+		expect(okSpy.details.result.depth).toBe(spySpec.childDepth);
 		expect(spySpec.upscopePath).toBe("/inspector.api");
 		expect(spySpec.callerPath).toBe("/inspector.ui");
 		expect(spySpec.upscopeSnapshotLeafId).toBe("api-closed-leaf-4");
@@ -198,7 +195,7 @@ describe("decoupled upscope / caller & spy subscopes", () => {
 			},
 		});
 		expect(ret.isError).toBeUndefined();
-		expect(ret.details.receiver).toBe(uiRec.forkId);
+		expect(ret.details.result.receiver).toBe(uiRec.path);
 
 		// /ui joins /api/spy directly
 		const joined = handleJoinCall(uiStation, { id: "join-ui" });
@@ -469,7 +466,7 @@ describe("graceful scope_abandon", () => {
 			arguments: { target: "/inspector.api", reason: "pivot to v2" },
 		});
 		expect(ab1.isError).toBeUndefined();
-		expect(ab1.details.result).toEqual({ ok: true, target: "/inspector.api" });
+  		expect(ab1.details.result).toEqual({ ok: true });
 		expect(interruptedCount).toBe(1);
 		expect(forkOf(ledger, "f-api").status).toBe("running");
 
@@ -497,8 +494,8 @@ describe("graceful scope_abandon", () => {
 			},
 		});
 		expect(ret.isError).toBeUndefined();
-		expect(ret.details.returned).toBe(true);
-		expect(ret.details.abandoned).toBe(true);
+		expect(ret.details.result.sealed).toBe(true);
+		expect(ret.details.result.abandoned).toBe(true);
 		expect(forkOf(ledger, "f-sub").ownerId).toBe("root");
 
 		// Root joins /api and sees abandoned metadata

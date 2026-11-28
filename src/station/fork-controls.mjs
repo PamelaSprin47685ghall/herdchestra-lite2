@@ -174,9 +174,8 @@ export function handleForkCall(station, call, options = {}) {
     }, { clock });
     if (!registered.ok) {
       failed.push({
+        index,
         forkId,
-        path: item.path,
-        fsm: item.fsm,
         reason: render(E["fork-register-failed"], { code: registered.code }),
       });
       continue;
@@ -185,10 +184,8 @@ export function handleForkCall(station, call, options = {}) {
     const spec = specOf(fork, item);
     spec.receipt = receiptFor(item);
     pending.push({
+      index,
       forkId: fork.forkId,
-      path: fork.path,
-      upscope: fork.upscopePath,
-      fsm: item.fsm,
       childDepth: fork.childDepth,
       spec,
     });
@@ -198,18 +195,15 @@ export function handleForkCall(station, call, options = {}) {
     try {
       spawner(entry.spec);
       started.push({
+        index: entry.index,
         forkId: entry.forkId,
-        path: entry.path,
-        upscope: entry.upscope,
-        fsm: entry.fsm,
         childDepth: entry.childDepth,
       });
     } catch (error) {
       const reason = String(error?.message ?? error);
       failed.push({
+        index: entry.index,
         forkId: entry.forkId,
-        path: entry.path,
-        fsm: entry.fsm,
         reason,
       });
       markReady(ledger, entry.forkId, { ok: false, reason: `did not start: ${reason}` });
@@ -221,47 +215,14 @@ export function handleForkCall(station, call, options = {}) {
     if (reset.changed) station.state.relay = reset.relay;
   }
 
-  const sections = [];
-  if (started.length > 0) {
-    sections.push(
-      [
-        `Started (${started.length}) at depth ${depth}:`,
-        ...started.map(
-          (entry) =>
-            `- ${publicScopeId(forkOf(ledger, entry.forkId))} (upscope ${entry.upscope}, depth ${entry.childDepth}): ${entry.fsm}`,
-        ),
-      ].join("\n"),
-    );
-  }
-  if (failed.length > 0) {
-    sections.push(
-      [
-        `Failed to start (${failed.length}):`,
-        ...failed.map((entry) => `- ${entry.path}: ${entry.fsm} — ${entry.reason}`),
-      ].join("\n"),
-    );
-  }
   const unreceived = unreceivedChildren(ledger, callerOwnerId)
     .map((id) => publicScopeId(forkOf(ledger, id)));
-  if (unreceived.length > 0) {
-    sections.push(
-      `Still unreceived: ${unreceived.join(", ")}. Join them with scope_join before returning.`,
-    );
-  }
-
-  return textResult(sections.join("\n\n"), {
-    started: started.map((entry) => entry.forkId),
-    failed: failed.map((entry) => entry.forkId),
+  return textResult("scope_fork processed.", {
     result: {
-      ok: failed.length === 0,
-      started: started.map((entry) => ({
-        path: entry.path,
-        upscope: entry.upscope,
-        depth: entry.childDepth,
-        fsm: entry.fsm,
-      })),
-      failed: failed.map((entry, index) => ({
-        index,
+      ...(started.length > 0 ? { depth: started[0].childDepth } : {}),
+      started: started.map((entry) => entry.index),
+      failed: failed.map((entry) => ({
+        index: entry.index,
         error: entry.reason,
       })),
       unreceived,

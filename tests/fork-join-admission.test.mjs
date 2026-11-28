@@ -170,6 +170,6 @@ describe("the join handler refuses before the take", () => {
     const station = stationFor(ledger, { currentContextTokens: () => 900 });
     const out = handleJoinCall(station, { id: "j1" });
     expect(out.isError).toBeUndefined();
-    expect(out.details.joined).toBe(true);
+    expect(out.details.result.scope).toBe("/f1");
   });
 });

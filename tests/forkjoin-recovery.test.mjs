@@ -193,7 +193,7 @@ describe("the scope state owns the tree", () => {
     const out = handleReturnCall(station, { id: "r1", arguments: { dafny: "persisted return", ...OATH } });
     expect(out.isError).toBeUndefined();
     expect(persisted).toBe(1);
-    expect(out.content[0].text).not.toContain("Persistence warning");
+    expect(out.details.result.persisted).toBe(true);
     expect(forkOf(ledger, "c1").status).toBe("ready");
     expect(forkOf(ledger, "c1").record).toBe("child work\n\npersisted return");
   });
@@ -214,7 +214,7 @@ describe("the scope state owns the tree", () => {
     };
     const out = handleReturnCall(station, { id: "r1", arguments: { dafny: "persisted return", ...OATH } });
     expect(out.isError).toBeUndefined();
-    expect(out.content[0].text).toContain("Persistence warning");
+    expect(out.details.result.persisted).toBe(false);
     // The domain fact still stands: the parent can take it this run.
     expect(forkOf(ledger, "c1").status).toBe("ready");
   });

@@ -50,17 +50,18 @@ export function handleAbandonCall(station, call) {
   }
 
   const exactPath = record.path ?? targetPath;
+  // The request already names the target; only a resolution the caller could
+  // not perform itself (a relative path, a differently cased name) is news.
+  const resolvedTarget = exactPath === raw ? null : exactPath;
+  const resolved = resolvedTarget === null ? {} : { resolvedTarget };
   if (decision.alreadyAbandoning) {
-    return textResult(
-      `Scope ${exactPath} is already winding down to scope_return.`,
-      {
-        result: {
-          ok: true,
-          target: exactPath,
-          alreadyAbandoning: true,
-        },
+    return textResult("scope_abandon processed.", {
+      result: {
+        ok: true,
+        alreadyAbandoning: true,
+        ...resolved,
       },
-    );
+    });
   }
 
   const req = requestAbandon(ledger, record.forkId, { by: callerPath, reason });
@@ -73,13 +74,10 @@ export function handleAbandonCall(station, call) {
   // Tail position: interrupt the target's live session (never USER_ABORT).
   station.interruptScopePort?.(record.forkId);
 
-  return textResult(
-    `Abandoned ${exactPath}${reason ? ` (${reason})` : ""}; awaiting its scope_return.`,
-    {
-      result: {
-        ok: true,
-        target: exactPath,
-      },
+  return textResult("scope_abandon processed.", {
+    result: {
+      ok: true,
+      ...resolved,
     },
-  );
+  });
 }

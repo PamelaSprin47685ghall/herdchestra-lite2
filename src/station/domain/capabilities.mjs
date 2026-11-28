@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto";
 import { deadlineInfo } from "../../scope/clock.mjs";
-import { roleTools } from "../../scope/roles.mjs";
+import { ROLE_CAPACITY, ROLE_MANAGER, roleTools } from "../../scope/roles.mjs";
 import { renderYamlView } from "../../format/yaml-view.mjs";
 import { formatUnits as formatAmount } from "../../core/primitives.mjs";
 
@@ -25,6 +25,47 @@ export const BASE_TOOLS = Object.freeze([
 // user channel, `todo` is retired, `wait` is already a base tool, and `js` is
 // the executor itself.
 export const EXCLUDED_HOST_TOOLS = Object.freeze(new Set(["ask", "todo", "wait", "js"]));
+
+/** Join present role phrases as "3+ managers, 10+ editors and 1 devops". */
+function joinRoleList(parts) {
+	if (parts.length === 1) return parts[0];
+	return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+/**
+ * The idle-hands conclusion printed beside a manager's directory delta.
+ *
+ * Capacity is fixed per role; `runningByRole` counts the scopes now running,
+ * root included. A role at or over capacity is dropped, and the whole line
+ * disappears when every role is full. `+` marks a count as a lower bound;
+ * `devops` is a single slot and takes no `+`.
+ */
+function idleHandsSummary(runningByRole) {
+	if (!runningByRole || typeof runningByRole !== "object") return null;
+	const roles = [
+		{ key: ROLE_MANAGER, label: "managers", plus: true },
+		{ key: "inspector", label: "inspectors", plus: true },
+		{ key: "editor", label: "editors", plus: true },
+		{ key: "devops", label: "devops", plus: false },
+	];
+	const present = [];
+	let hands = 0;
+	for (const { key, label, plus } of roles) {
+		const capacity = ROLE_CAPACITY[key];
+		const running = Number.isInteger(runningByRole[key]) ? runningByRole[key] : 0;
+		const idle = Math.max(0, capacity - running);
+		if (idle === 0) continue;
+		present.push({ label, idle, text: plus ? `${idle}+ ${label}` : `${idle} ${label}` });
+		hands += idle;
+	}
+	if (present.length === 0) return null;
+	const list = joinRoleList(present.map((role) => role.text));
+	const verb =
+		present.length === 1 && present[0].label === "devops" && present[0].idle === 1
+			? "is"
+			: "are";
+	return `${list} ${verb} on the clock with nothing to do. ${hands}+ paid-for hands sit idle while you work alone; parallel capacity burns, and nobody will assign them work for you. You are the bottleneck; every hour you serialize is a choice. Give them the next slices now, before your successor inherits a roster of spectators.`;
+}
 
 /**
  * Project the current capability set from persisted session state.
@@ -53,6 +94,7 @@ export function projectCapabilities({
 	remaining = null,
 	selfPath = "/",
 	scopesDelta = null,
+	runningByRole = null,
 	hostToolNames = [],
 	chinese = "on",
 } = {}) {
@@ -95,6 +137,8 @@ export function projectCapabilities({
 
 	const hasDelta =
 		scopesDelta && typeof scopesDelta === "object" && Object.keys(scopesDelta).length > 0;
+	const summary =
+		hasDelta && role === ROLE_MANAGER ? idleHandsSummary(runningByRole) : null;
 
 	const state = {
 		mode,
@@ -106,6 +150,7 @@ export function projectCapabilities({
 			: { autopilot: autopilot === true, canStop: canStop === true }),
 		unreceived: Number.isInteger(unreceived) ? unreceived : 0,
 		...(hasDelta ? { scopes_delta: { ...scopesDelta } } : {}),
+		...(summary ? { scopes_summary: summary } : {}),
 	};
 
 	const projected = JSON.stringify({ api: tools, ...state, chinese });

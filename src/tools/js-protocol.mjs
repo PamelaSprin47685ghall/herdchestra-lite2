@@ -188,17 +188,19 @@ interface ScopeForkArgs {
 	forks: ScopeForkItem[];
 }
 
-interface ScopeForkResult {
-	ok: boolean;
-	started: Array<{ path: string; role: ScopeRole; upscope: string; depth: number; fsm: string }>;
-	failed: Array<{ index: number; error?: string }>;
-	unreceived: string[];
-}
+  interface ScopeForkResult {
+  	/** Child depth, present only when at least one fork started. */
+  	depth?: number;
+  	/** Successful items, named by their position in ScopeForkArgs.forks. */
+  	started: number[];
+  	/** index shares the forks coordinate of started, so a failure maps back to the caller's own item. */
+  	failed: Array<{ index: number; error?: string }>;
+  	unreceived: string[];
+  }
 
-interface ScopeJoinResult {
-	ok: boolean;
-	scope: string;
-	role: ScopeRole;
+  interface ScopeJoinResult {
+  	scope: string;
+  	role?: ScopeRole;
 	failed: boolean;
 	abandoned?: boolean;
 	abandonedBy?: string | null;
@@ -218,11 +220,12 @@ interface ScopeAbandonArgs {
 	reason?: string;
 }
 
-interface ScopeAbandonResult {
-	ok: boolean;
-	target: string;
-	alreadyAbandoning?: boolean;
-}
+  interface ScopeAbandonResult {
+  	ok: boolean;
+  	alreadyAbandoning?: boolean;
+  	/** Present only when the resolved target differs from the target you supplied. */
+  	resolvedTarget?: string;
+  }
 
 interface ScopeReturnArgs {
 	dafny: string;
@@ -243,6 +246,8 @@ interface ScopeState {
 	unreceived: number;
 	/** Global directory delta since your previous turn (overwrite semantics per path): "running | model | base+ / window" or "done | model | ctx / window". Omitted when unchanged. */
 	scopes_delta?: Record<string, string>;
+	/** Manager only, when scopes_delta appears: idle capacity by role, phrased as a nudge. Omitted when no role is free. */
+	scopes_summary?: string;
 	/** Present only in ABANDONED mode. */
 	abandoned?: { by: string; reason?: string };
 }`;

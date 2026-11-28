@@ -25,7 +25,6 @@ import { decideScopeReturn, formatGenerationReport } from "./domain/handoff.mjs"
 import { parseArgs } from "./messages.mjs";
 import { childRecordStart, frameOf, identityOf, ledgerOf } from "./fork-reads.mjs";
 
-const F = loadDoc("tools/fork-join");
 const E = loadDoc("errors");
 
 const messagesOf = (station) =>
@@ -119,29 +118,18 @@ export function handleReturnCall(station, call, options = {}) {
       generation,
       id: typeof call?.id === "string" ? call.id : "",
     });
-    return textResult(
-      render(F["return.rewind"], { generation }),
-      {
-        forkId: selfForkId,
-        scopeId: publicScopeId(record),
-        accepted: true,
-        rewind: true,
-        generation,
-        stopLoop: true,
-      },
-    );
+    return textResult("scope_return processed.", {
+      stopLoop: true,
+      result: { rewind: true, generation },
+    });
   }
 
   // Root promotion (seal): allow the final answer in place, same as a child
   // seal ends the child's work.
   if (decision.kind === "promote") {
     station.state.relay = decision.relay;
-    return textResult(F["return.finish"], {
-      scope: "root",
-      accepted: true,
-      promoted: true,
-      canStop: true,
-      stopLoop: false,
+    return textResult("scope_return processed.", {
+      result: { promoted: true },
     });
   }
 
@@ -159,25 +147,15 @@ export function handleReturnCall(station, call, options = {}) {
       ...decision.relay,
       pendingRewind,
     };
-    return textResult(
-      render(F["return.rewind"], { generation: pendingRewind.generation }),
-      {
-        scope: "root",
-        accepted: true,
-        rewind: true,
+    return textResult("scope_return processed.", {
+      scope: "root",
+      rewind: true,
+      stopLoop: true,
+      result: {
         big: decision.big,
         generation: pendingRewind.generation,
-        stopLoop: true,
-        result: {
-          ok: true,
-          scope: "root",
-          rewind: true,
-          sealed: false,
-          big: decision.big,
-          generation: pendingRewind.generation,
-        },
       },
-    );
+    });
   }
 
   // Child seal handoff: seal the bracket and deliver to receiver.
@@ -245,33 +223,17 @@ export function handleReturnCall(station, call, options = {}) {
       phase: "return",
     });
   }
+  const receiverRecord =
+    decision.receiverId === "root" ? null : forkOf(ledger, decision.receiverId);
   const receiverText =
     decision.receiverId === "root"
       ? "Root"
-      : publicScopeId(forkOf(ledger, decision.receiverId));
-  const lines = [`Sealed ${publicScopeId(record)}; delivered to ${receiverText}.`];
-  if (decision.orphans.length > 0) {
-    lines.push(
-      `Reparented to ${receiverText}: ${decision.orphans.map((id) => publicScopeId(forkOf(ledger, id))).join(", ")}.`,
-    );
-  }
-  if (!persisted) {
-    lines.push(
-      "Persistence warning: this ready record exists in memory, but the shared tree was not written.",
-    );
-  }
-  return textResult(lines.join("\n"), {
-    forkId: selfForkId,
-    scopeId: publicScopeId(record),
-    returned: true,
-    ...(isAbandoned ? { abandoned: true } : {}),
-    reparented: decision.orphans,
-    receiver: decision.receiverId,
-    receiverText,
-    accepted: true,
+      : receiverRecord
+        ? publicScopeId(receiverRecord)
+        : decision.receiverId;
+  return textResult("scope_return processed.", {
     stopLoop: true,
     result: {
-      ok: true,
       scope: publicScopeId(record),
       sealed: true,
       ...(isAbandoned ? { abandoned: true } : {}),

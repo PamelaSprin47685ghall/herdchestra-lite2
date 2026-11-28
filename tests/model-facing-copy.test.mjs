@@ -177,14 +177,14 @@ test("the fork receipt describes new work once and lists all unreceived scopes b
 	const current = launch("editor.latest", "Check the harbor lights");
 	expect(current.isError).toBeUndefined();
 	const text = current.content[0].text;
-	// The batch is described once, with the assignment attached to the scope
-	// that owns it, and the earlier batch is not restated.
-	expect(text).toMatch(/\/editor.latest \(upscope \/, depth \d+\): Check the harbor lights/);
-	expect(text.match(/Check the harbor lights/g)).toHaveLength(1);
-	expect(text).not.toContain("Measure the tide");
-	expect(text).toContain("Still unreceived: /editor.earlier, /editor.latest.");
-	// The machine channel carries the same facts without the prose.
-	expect(current.details.result.started.map((entry) => entry.path)).toEqual(["/editor.latest"]);
+	// Successful control content is a constant; the facts live once, in result.
+	expect(text).toBe("scope_fork processed.");
+	expect(current.details.result).toEqual({
+		depth: 1,
+		started: [0],
+		failed: [],
+		unreceived: ["/editor.earlier", "/editor.latest"],
+	});
 });
 
 test("the scope_return documentation explains the return-only script and fresh report", () => {
@@ -221,6 +221,24 @@ test("the root receipt reports unreceived work until the root joins it", () => {
 	expect(takeReady(ledger, { ownerId: "root" }).ok).toBe(true);
 	// The work is received: the count drops, though the scope stays addressable.
 	expect(probeOf(receipt()).unreceived).toBe(0);
+});
+
+test("a manager probe counts root and running forks before printing the nudge", () => {
+	const station = createTestStation(SessionStation, null, {}, {}, null, null);
+	const ledger = createBracketLedger();
+	station.forkLedgerPort = () => ledger;
+	station.forkOwnerId = () => null;
+	expect(registerFork(ledger, {
+		forkId: "worker-1",
+		scopeId: "inspector.worker-1",
+		path: "/inspector.worker-1",
+		ownerId: "root",
+		fsm: "inspect the sample",
+		depth: 0,
+	}).ok).toBe(true);
+	const view = probeOf(station.skillReceipt({ agent: { kind: "main" } }).content[0].text);
+	expect(view.scopes_summary).toContain("2+ managers, 9+ inspectors");
+	expect(view.scopes_summary).toContain("22+ paid-for hands");
 });
 
 function relayRequest({ features = {}, keepHook = false } = {}) {

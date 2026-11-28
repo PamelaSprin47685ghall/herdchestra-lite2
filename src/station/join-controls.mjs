@@ -6,7 +6,6 @@
 import { forkOf } from "../scope/ledger-charge.mjs";
 import { releaseRecordText, takeReady, unreceivedChildren } from "../scope/ledger-brackets.mjs";
 import { publicScopeId } from "../scope/scope-id.mjs";
-import { joinReceipt } from "../transcript/replay.mjs";
 import { errorResult, textResult } from "../tools/results.mjs";
 import { loadDoc, render } from "../prompts/index.mjs";
 import {
@@ -121,35 +120,13 @@ export function renderJoinResult(station, record, options = {}) {
   const abandonedBy = envelope.abandonedBy;
   const abandonReason = envelope.abandonReason;
   const childReason = envelope.reason;
-  const text = joinReceipt({
-    forkId: publicScopeId(record),
-    record: rendered,
-    failed: childFailed,
-    abandoned,
-    abandonedBy,
-    abandonReason,
-    reason: childReason,
-    remaining: remaining.map((entry) => entry.scopeId),
-  });
   if (envelope.releasesRecord) releaseRecordText(envelope.ledger, record.forkId);
   const persisted = options.persisted;
-  const notes = [];
-  if (persisted === false) {
-    notes.push(
-      "Persistence warning: this join receipt exists in memory, but the shared tree was not written.",
-    );
-  }
-  const body = notes.length === 0 ? text : `${text}${text.endsWith("\n") ? "" : "\n"}${notes.join("\n")}`;
-  return textResult(body, {
-    forkId: record.forkId,
-    joined: true,
-    remaining,
-    ...(persisted === undefined ? {} : { persisted }),
+  return textResult("scope_join processed.", {
     result: {
-      ok: !childFailed,
       scope: publicScopeId(record),
-      failed: childFailed,
       ...(record.role ? { role: record.role } : {}),
+      failed: childFailed,
       ...(abandoned ? { abandoned: true, abandonedBy, abandonReason } : {}),
       reason: childReason,
       record: rendered,

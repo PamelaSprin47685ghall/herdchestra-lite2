@@ -161,9 +161,9 @@ describe("adoption files the result at the receiver's level", () => {
 
 		const root = rootStation(ledger, state);
 		const first = handleJoinCall(root, { id: "j1", arguments: {} });
-		expect(first.details.joined).toBe(true);
+		expect(first.details.result).toBeDefined();
 		const second = handleJoinCall(root, { id: "j2", arguments: {} });
-		expect(second.details.joined).toBe(true);
+		expect(second.details.result).toBeDefined();
 
 		expect(ledger.levels["root|0|0"]).toEqual(["p", "c1"]);
 	});

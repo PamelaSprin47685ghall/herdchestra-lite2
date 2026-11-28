@@ -50,7 +50,7 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 		const wait = station.forkWaitPort?.() ?? null;
 		const first = station.executeJoin(toolCallId, params, ctx, frameId);
 		if (first?.details?.code !== "NO_READY_CHILD") {
-			if (first?.details?.joined && wait) notifyWaiters?.(wait.registry);
+			if (first?.details?.result && wait) notifyWaiters?.(wait.registry);
 			return first;
 		}
 		if (!wait) return first;
@@ -82,7 +82,7 @@ export async function joinTicket(station, toolCallId, params, ctx, signal = null
 			});
 		}
 		const taken = station.finalizeJoin(toolCallId, waited.fork, ctx, frameId);
-		if (taken?.details?.joined) notifyWaiters?.(wait.registry);
+		if (taken?.details?.result) notifyWaiters?.(wait.registry);
 		return taken;
 	} catch (error) {
 		host?.report?.record?.("fork", error, { phase: "join", toolCallId, stack: error?.stack });

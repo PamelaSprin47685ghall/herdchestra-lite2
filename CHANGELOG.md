@@ -6,6 +6,41 @@ All notable changes to this extension. The format follows
 
 ## [Unreleased]
 
+## [10.1.0] — 2026-11-28
+
+### Added
+
+- `state.scopes_summary`: a `manager` probe with a fresh `scopes_delta` reports
+  idle hands by role — `ROLE_CAPACITY` (3 managers, 1 devops, 10 editors, 10
+  inspectors) minus the scopes now `running` — and names the next action. Root
+  counts as one running manager, zero-idle roles are omitted, and the line is a
+  nudge, not an admission gate.
+
+## [10.0.0] — 2026-11-28
+
+### Changed
+
+- **Breaking: a control result never repeats its own request, and each fact has
+  one owner.** `scope_fork` no longer echoes each item's `fsm`, `path`, or
+  `upscope`, and `scope_abandon` no longer echoes `target`; a relative or
+  differently cased `target` is named only when resolution changed it
+  (`resolvedTarget`). `started` is the list of successful `forks` indexes and
+  `depth` appears once at the top; `failed` carries `{ index, error }`. Every
+  successful control result keeps its facts only in `details.result`; the
+  content text is a constant, and the machine channel keeps only what the host
+  reads (`stopLoop`, and root `scope`/`rewind`). Removed duplicate copies:
+  `details.started`/`failed`, `details.joined`/`forkId`/`remaining`/`persisted`,
+  `details.scopeId`/`returned`/`receiver`/`receiverText`/`reparented`/`accepted`/
+  `generation`/`promoted`/`canStop`, and `result.ok`.
+
+### Fixed
+
+- `started[].index` and `failed[].index` now share the `forks` coordinate, so a
+  failed item maps back to the caller's own request instead of the failed
+  list's position.
+- The fork receipt's `at depth` header printed the caller's depth while each
+  entry printed the child's; the header now prints the child depth once.
+
 ## [9.1.0] — 2026-11-28
 
 ### Added — a tool card shows what the call actually did
